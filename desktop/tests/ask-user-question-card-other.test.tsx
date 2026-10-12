@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const askTool = (multiSelect = false): ToolCallState => ({
-  id: 'tool-q',
+  toolUseId: 'tool-q',
   toolName: 'AskUserQuestion',
   input: { questions: [{ question: 'Which color?', header: 'Color', multiSelect, options: [{ label: 'Blue' }, { label: 'Red' }] }] },
   status: 'awaiting-approval',

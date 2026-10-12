@@ -33,6 +33,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveProfile, CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { ReadTool } from '../src/main/harness/tools/read';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 
 // 1x1 PNG.
 const PNG = Buffer.from(
@@ -174,10 +180,10 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const model = new MockLanguageModelV4({
       doStream: async (o: any) => {
         seen = o.prompt;
-        return { stream: simulateReadableStream({ chunks: [
+        return { stream: simulateReadableStream({ chunks: asParts([
           { type: 'stream-start', warnings: [] },
           { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-        ] }) };
+        ]) }) };
       },
     });
     const session = new HarnessSession({
@@ -200,11 +206,11 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const prompts: any[] = [];
     const model = new MockLanguageModelV4({ doStream: async (req: any) => {
       prompts.push(req.prompt);
-      return { stream: simulateReadableStream({ chunks: [
+      return { stream: simulateReadableStream({ chunks: asParts([
         { type: 'stream-start', warnings: [] },
         { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
         { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-      ] }) };
+      ]) }) };
     } });
     const events: any[] = [];
     let queued = true;

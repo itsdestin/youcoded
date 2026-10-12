@@ -43,7 +43,7 @@ function getHandler() {
     install: vi.fn(), installMany: vi.fn(),
     ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
   };
-  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
+  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider, undefined as any);
   return mockIpcMain.handle.mock.calls.find((c: any) => c[0] === 'artifacts:get')[1];
 }
 

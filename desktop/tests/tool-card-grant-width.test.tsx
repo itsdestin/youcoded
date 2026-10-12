@@ -28,7 +28,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 const askTool = (command: string, over: Partial<ToolCallState> = {}): ToolCallState => ({
-  id: 'tool-1',
+  toolUseId: 'tool-1',
   toolName: 'Bash',
   input: { command },
   status: 'awaiting-approval',
@@ -148,7 +148,7 @@ describe('grant width — surfaces that must not change', () => {
       <ChatProvider>
         <ToolCard
           tool={{
-            id: 't', toolName: 'Bash', input: { command: 'npm run build' },
+            toolUseId: 't', toolName: 'Bash', input: { command: 'npm run build' },
             status: 'awaiting-approval', requestId: 'hook-1',
             permissionSuggestions: ['Bash(npm run build:*)'],
           } as ToolCallState}
@@ -166,7 +166,7 @@ describe('grant width — surfaces that must not change', () => {
       <ChatProvider>
         <ToolCard
           tool={{
-            id: 't', toolName: 'Write', input: { file_path: 'src/a.ts', content: 'x' },
+            toolUseId: 't', toolName: 'Write', input: { file_path: 'src/a.ts', content: 'x' },
             status: 'awaiting-approval', requestId: 'native-1', denyListed: false,
           } as ToolCallState}
           sessionId="s1"

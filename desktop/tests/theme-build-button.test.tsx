@@ -41,7 +41,8 @@ function renderScreen(props: Partial<React.ComponentProps<typeof ThemeScreen>>) 
   return render(
     <SkillProvider>
       <MarketplaceProvider>
-        <ThemeScreen onClose={() => {}} {...props} />
+        // WHY defaults: onClose and showInfo are required Props; the old call left showInfo unset (falsy), so false keeps behaviour.
+        <ThemeScreen {...props} onClose={props.onClose ?? (() => {})} showInfo={props.showInfo ?? false} />
       </MarketplaceProvider>
     </SkillProvider>,
   );

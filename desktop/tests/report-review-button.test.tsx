@@ -17,8 +17,13 @@ function mockAuth(signedIn: boolean) {
     signedIn,
     user: signedIn ? { id: 'github:1', login: 'alice', avatar_url: '' } : null,
     signInPending: false,
+    signInError: null,
     startSignIn: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
     signOut: vi.fn().mockResolvedValue(undefined),
+    updateProfile: vi.fn().mockResolvedValue(undefined),
+    setHandle: vi.fn().mockResolvedValue(undefined),
+    deleteAccount: vi.fn().mockResolvedValue(undefined),
   });
 }
 

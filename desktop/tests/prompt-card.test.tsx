@@ -59,10 +59,10 @@ function resumePrompt(): InteractivePrompt {
 afterEach(cleanup);
 
 describe('PromptCard — Resume Session', () => {
-  let onSelect: ReturnType<typeof vi.fn>;
+  let onSelect: ReturnType<typeof vi.fn<(button: InteractivePrompt['buttons'][number], label: string) => void>>;
 
   beforeEach(() => {
-    onSelect = vi.fn();
+    onSelect = vi.fn<(button: InteractivePrompt['buttons'][number], label: string) => void>();
   });
 
   it('sends each option its own keystroke', () => {

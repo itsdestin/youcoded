@@ -15,6 +15,12 @@ import { ASSISTANT_PRESET } from '../src/shared/harness-manifest';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import type { TranscriptEvent } from '../src/shared/types';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 
 const OPTS = { skillCatalog: EMPTY_SKILL_CATALOG, sessionId: 's-1', cwd: '/tmp/x', harness: ASSISTANT_PRESET, binding: { providerId: 'openrouter', modelId: 'm' } };
 
@@ -22,13 +28,13 @@ function textModel(text: string) {
   return new MockLanguageModelV4({
     doStream: async () => ({
       stream: simulateReadableStream({
-        chunks: [
+        chunks: asParts([
           { type: 'stream-start', warnings: [] },
           { type: 'text-start', id: 'p1' },
           { type: 'text-delta', id: 'p1', delta: text },
           { type: 'text-end', id: 'p1' },
           { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 5 }, outputTokens: { total: 3 } } },
-        ],
+        ]),
       }),
     }),
   });
@@ -272,13 +278,13 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     ['length', 'length'],
     ['tool-call', 'tool-calls'],
   ])('does not commit a summary when stream finishes with %s', async (_name, finishReason) => {
-    const stream = simulateReadableStream({ chunks: [
+    const stream = simulateReadableStream({ chunks: asParts([
       { type: 'stream-start', warnings: [] },
       { type: 'text-start', id: 'p' },
       { type: 'text-delta', id: 'p', delta: 'not complete' },
       { type: 'text-end', id: 'p' },
       { type: 'finish', finishReason: { unified: finishReason, raw: finishReason }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-    ] });
+    ]) });
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream }) });
     const session = seeded(4, model);
     const events = collect(session);
@@ -288,12 +294,12 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
   });
 
   it('does not commit partial text when the summary stream errors', async () => {
-    const stream = simulateReadableStream({ chunks: [
+    const stream = simulateReadableStream({ chunks: asParts([
       { type: 'stream-start', warnings: [] },
       { type: 'text-start', id: 'p' },
       { type: 'text-delta', id: 'p', delta: 'partial' },
       { type: 'error', error: new Error('summary provider failed') },
-    ] });
+    ]) });
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream }) });
     const session = seeded(4, model);
     const events = collect(session);

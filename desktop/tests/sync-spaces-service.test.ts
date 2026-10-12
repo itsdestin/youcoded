@@ -701,8 +701,8 @@ describe('sync-spaces service transition serialization', () => {
     await svc.syncSpacesEnable(true);
     const st = await svc.syncSpacesStatus();
     const row = st.spaces.find((s: any) => s.id === 'project:app');
-    expect(row.displayName).toBe('Cool App');
-    expect(row.state).toBe('active');
+    expect(row!.displayName).toBe('Cool App');
+    expect(row!.state).toBe('active');
   });
 
   // ---- Lease bridge (Task 8): hubLeaseRequest passthrough + lease-event facade ----

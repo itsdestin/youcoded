@@ -62,7 +62,8 @@ describe('a rematch is a different match', () => {
       { type: 'ROOM_CREATED', code: 'ABCD', seat: 0, opponentId: 'acct-jake' });
     s = start(s);
     const first = matchIdOf(s);
-    s = gameReducer(s, { type: 'GAME_OVER', outcome: { winnerSeat: 0 } });
+    // WHY: the reducer has no 'GAME_OVER' action (it was a silent no-op here); a game ends via GAME_STATE carrying an outcome.
+    s = gameReducer(s, { type: 'GAME_STATE', play: {}, turnSeat: 0, outcome: { winnerSeat: 0 } });
     s = start(s);                              // the rematch, same room
     const second = matchIdOf(s);
 

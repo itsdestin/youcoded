@@ -9,6 +9,12 @@ import { runCase, STEP_GATE_ALLOWANCE, BATTERY_MAX_OUTPUT_TOKENS, BATTERY_STEP_B
 import { collectRunFacts, claimedTools, renderRunFacts, MIN_TOOL_CALLS } from '../src/main/harness/eval/run-facts';
 import { scriptModel, type ScriptStep } from './helpers/harness-fakes';
 import { textChunks, toolCallChunk, finishChunk, stream } from './helpers/scripted-model';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 
 // runCase's OWN wall-clock deadline, for the tests where the deadline is not the
 // subject — which is all of them but one (the `timeoutMs: 200` case below, whose
@@ -959,7 +965,7 @@ describe('wrap-up turn', () => {
               toolCallChunk(`c${call}`, 'Read', { file_path: 'README.md', offset: call }),
               finishChunk('tool-calls'),
             );
-        return { stream: simulateReadableStream({ chunks }) };
+        return { stream: simulateReadableStream({ chunks: asParts(chunks) }) };
       },
     });
 
@@ -1002,15 +1008,15 @@ describe('what the model actually receives', () => {
         // Turn 1: one tool call, then a bare stop with no text ('stopped-early').
         if (call === 1) {
           return { stream: simulateReadableStream({
-            chunks: [toolCallChunk('c1', 'Read', { file_path: 'README.md' }), finishChunk('tool-calls')],
+            chunks: asParts([toolCallChunk('c1', 'Read', { file_path: 'README.md' }), finishChunk('tool-calls')]),
           }) };
         }
         // Calls 2 AND 3 are empty: the harness silently retries a single empty
         // step (empty-step recovery, spec 2026-08-21), so "a bare stop" now
         // takes a consecutive pair to actually end the testing turn.
-        if (call === 2 || call === 3) return { stream: simulateReadableStream({ chunks: [finishChunk('stop')] }) };
+        if (call === 2 || call === 3) return { stream: simulateReadableStream({ chunks: asParts([finishChunk('stop')]) }) };
         return { stream: simulateReadableStream({
-          chunks: [...textChunks('t', 'The review.'), finishChunk('stop')],
+          chunks: asParts([...textChunks('t', 'The review.'), finishChunk('stop')]),
         }) };
       },
     });

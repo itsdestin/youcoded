@@ -5,7 +5,11 @@ import { tmpdir } from 'os';
 import { readSidecar, writeSidecar, appendVersion, appendVersionsDirect, removeArtifactRecord, runSidecarMigration, renameArtifact, repairRelativeExternals } from '../../src/main/artifacts/artifact-store';
 import type { ProjectSidecar } from '../../src/shared/artifacts/types';
 import { SIDECAR_SCHEMA_VERSION } from '../../src/shared/artifacts/types';
-import sample from '../../../shared-fixtures/artifacts/sample-sidecar.json';
+import sampleJson from '../../../shared-fixtures/artifacts/sample-sidecar.json';
+
+// WHY cast: the JSON import widens `$schema`/`kind`/`status` to number/string, so it
+// can't satisfy ProjectSidecar's literal unions even though the runtime shape matches.
+const sample = sampleJson as unknown as ProjectSidecar;
 
 // The 60-iteration concurrency loop below does real fs work (mkdtemp, fsync,
 // rename, rm x60) and takes ~1.3s locally — under vitest's default 5000ms
@@ -29,8 +33,10 @@ describe('readSidecar', () => {
   it('parses a well-formed sidecar', async () => {
     writeFileSync(join(projectRoot, '.youcoded/artifacts.json'), JSON.stringify(sample));
     const sidecar = await readSidecar(projectRoot);
-    expect(sidecar?.projectId).toBe('01HXAB000000000000000000');
-    expect(sidecar?.artifacts).toHaveLength(1);
+    // WHY cast: readSidecar returns ProjectSidecar | {corrupted:true}; this fixture is well-formed.
+    const parsed = sidecar as ProjectSidecar | null;
+    expect(parsed?.projectId).toBe('01HXAB000000000000000000');
+    expect(parsed?.artifacts).toHaveLength(1);
   });
 
   it('returns {corrupted: true} on parse failure and backs up the file', async () => {
@@ -505,7 +511,7 @@ describe('runSidecarMigration', () => {
 
   it('does not write, or back up, a sidecar with nothing to repair', async () => {
     const clean = legacy();
-    clean.artifacts[0] = { ...clean.artifacts[0], kind: 'internal' as any, absolutePath: null };
+    clean.artifacts[0] = { ...clean.artifacts[0], kind: 'internal' as any, absolutePath: null as unknown as string };
     await writeSidecar(projectRoot, null, clean as any);
 
     const res = await runSidecarMigration(projectRoot);

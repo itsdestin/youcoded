@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const listInstalledPluginDirs = vi.fn<[], string[]>();
+const listInstalledPluginDirs = vi.fn<() => string[]>();
 const postInstalls = vi.fn();
 
 vi.mock('../src/main/claude-code-registry', () => ({ listInstalledPluginDirs: () => listInstalledPluginDirs() }));

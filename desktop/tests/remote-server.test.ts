@@ -90,7 +90,8 @@ const mockConversationsService = {
 vi.mock('../src/main/conversations/service', () => mockConversationsService);
 
 const mockSessionBrowser = {
-  listPastSessions: vi.fn(async () => [] as any[]),
+  // Typed with the real (activeIds, nativeEntries) args so call-arg tuples are readable.
+  listPastSessions: vi.fn<(activeSessionIds: Set<string>, nativeEntries?: unknown[]) => Promise<any[]>>(async () => []),
   loadHistory: vi.fn(async () => ({ events: [] })),
 };
 // Spread the REAL module first so remote-server's SAFE_ID_RE import is the
@@ -533,7 +534,8 @@ describe('RemoteServer auth flow', () => {
       verifyPassword: vi.fn(async () => false),
     };
     const { RemoteServer } = await import('../src/main/remote-server');
-    const server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    // WHY cast: the stub only implements the few methods the auth flow touches.
+    const server = new RemoteServer(mockSessionManager as unknown as import('../src/main/session-manager').SessionManager, mockHookRelay as unknown as import('../src/main/hook-relay').HookRelay, config as unknown as import('../src/main/remote-config').RemoteConfig);
     expect(server).toBeDefined();
     // Can start even with no password — connections will be rejected at auth handshake
     await server.start();

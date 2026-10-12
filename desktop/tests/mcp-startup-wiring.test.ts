@@ -192,7 +192,7 @@ describe('McpManager startup wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -235,7 +235,7 @@ describe('McpManager startup wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     // MCP construction alone must not write mcp.json (or create it fresh) —
@@ -289,7 +289,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
     expect(capturedCtorArgs).toBeDefined();
     return capturedCtorArgs![4] as (binding: { providerId: string; modelId: string }) => Promise<boolean | null>;
@@ -313,7 +313,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -399,7 +399,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -427,7 +427,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -449,7 +449,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -477,7 +477,7 @@ describe('pricingFor', () => {
 // the fix pass 2 report). This describe block now tests the collapsed
 // design: ONE closure (contextAndSlotsFor, the 3rd positional constructor
 // arg) returns both values, so there is no shared state left to race.
-const effectiveContextWindowSpy = vi.fn(async () => ({ contextLength: 999, totalSlots: 3 }));
+const effectiveContextWindowSpy = vi.fn<(modelId: string) => Promise<{ contextLength: number; totalSlots: number }>>(async () => ({ contextLength: 999, totalSlots: 3 }));
 vi.mock('../src/main/engine/engine-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/engine/engine-manager')>();
   class SpyEngineManager extends actual.EngineManager {
@@ -504,7 +504,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -525,7 +525,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -561,7 +561,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();

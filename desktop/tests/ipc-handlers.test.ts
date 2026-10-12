@@ -77,7 +77,7 @@ describe('IPC Handlers', () => {
       getCuratedDefaults: vi.fn(() => []),
     };
 
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
+    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any, undefined as any);
 
     const registeredChannels = mockIpcMain.handle.mock.calls.map((c: any) => c[0]);
     expect(registeredChannels).toContain('session:create');
@@ -121,7 +121,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
-      mockSkillProvider as any,
+      mockSkillProvider as any, undefined as any,
     );
     const handler = (mockIpcMain.handle as any).mock.calls.find(
       (c: any) => c[0] === 'skills:uninstall',
@@ -146,6 +146,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
       mockSessionManager as any,
       mockWindow as any,
       mockSkillProvider as any,
+      undefined as any, // commandProvider: not used by this handler
     );
     const handler = (mockIpcMain.handle as any).mock.calls.find(
       (c: any) => c[0] === 'skills:uninstall',
@@ -222,7 +223,7 @@ describe('session:create resumed admission', () => {
       const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
       await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       acquire.mockClear();
-      const exit = manager.on.mock.calls.findLast((c: any) => c[0] === 'session-exit')[1];
+      const exit = [...manager.on.mock.calls].reverse().find((c: any) => c[0] === 'session-exit')![1];
       exit(info.id);
       const retry = open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       expect(release).not.toHaveBeenCalled();
@@ -595,7 +596,7 @@ describe('tags:update / tags:delete signal chatsearch', () => {
   });
 
   function handlerFor(channel: string) {
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
+    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any, undefined as any);
     return (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === channel)[1];
   }
 
@@ -672,7 +673,7 @@ describe('transcript:read-meta path containment', () => {
       install: vi.fn(), installMany: vi.fn(),
       ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
     };
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager, mockWindow, mockSkillProvider);
+    registerIpcHandlers(mockIpcMain as any, mockSessionManager, mockWindow, mockSkillProvider, undefined as any);
     return (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === channel)[1];
   }
 
@@ -717,7 +718,7 @@ describe('dialog:open-file attachment picker filters', () => {
     const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) } };
     registerIpcHandlers(
-      mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
+      mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any, undefined as any,
     );
     const { dialog } = await import('electron');
     (dialog.showOpenDialog as any).mockResolvedValue({ canceled: true, filePaths: [] });
@@ -1423,10 +1424,10 @@ describe('Welcome back tracking hooks', () => {
   it('the first user-message transcript event tracks a brand-new session, once', async () => {
     const { TranscriptWatcher } = await import('../src/main/transcript-watcher');
     const listeners: Record<string, Array<(...args: any[]) => void>> = {};
-    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string, cb: any) {
-      (listeners[event] ??= []).push(cb);
+    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string | symbol, cb: any) {
+      (listeners[event as string] ??= []).push(cb);
       return this;
-    });
+    } as any); // WHY cast: a `this`-returning stub cannot satisfy the EventEmitter overload
     try {
       const ipc = { handle: vi.fn(), on: vi.fn() };
       const hookRelay = { on: vi.fn(), start: vi.fn() };

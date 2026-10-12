@@ -9,11 +9,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createTerminalKeyHandler, type ClipboardTerminal } from '../src/renderer/components/terminal-key-handler';
 
-function fakeTerminal(selection = ''): ClipboardTerminal & { paste: ReturnType<typeof vi.fn> } {
+function fakeTerminal(selection = ''): ClipboardTerminal & { paste: ReturnType<typeof vi.fn<(text: string) => void>> } {
   return {
     hasSelection: () => selection.length > 0,
     getSelection: () => selection,
-    paste: vi.fn(),
+    paste: vi.fn<(text: string) => void>(),
   };
 }
 

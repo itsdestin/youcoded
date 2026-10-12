@@ -24,7 +24,7 @@ function fetchServing(bodies: Record<string, Buffer>): typeof fetch {
     const range = init?.headers?.Range as string | undefined;
     if (range) start = Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0);
     const body = buf.subarray(start);
-    return new Response(new Blob([body]).stream(), {
+    return new Response(new Blob([new Uint8Array(body)]).stream(), {
       status: start > 0 ? 206 : 200,
       headers: { 'content-length': String(body.length) },
     });

@@ -12,11 +12,13 @@ import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { CROSS_PROJECT_SLUG } from '../src/shared/permission-types';
 import type { PermissionRule } from '../src/shared/permission-types';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { scriptedModel, stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
 import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
+import type { DelegationRecord } from '../src/main/harness/specialists/delegation-ledger';
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
@@ -107,13 +109,15 @@ function waitForEvent(h: NativeSessionHost, match: (e: any) => boolean): Promise
 }
 
 // RAW V4 stream-part shapes (see harness-session.test.ts): deltas carry `delta`, usage is nested.
-const CHUNKS = [
+// WHY the cast: the finish part is deliberately minimal (no `raw` finish reason, no cache/text token
+// split) — the host must cope with exactly this sparse shape, so the fixture is not padded to the full type.
+const CHUNKS = ([
   { type: 'stream-start', warnings: [] },
   { type: 'text-start', id: 'p1' },
   { type: 'text-delta', id: 'p1', delta: 'Hi there' },
   { type: 'text-end', id: 'p1' },
   { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 3 }, outputTokens: { total: 2 } } },
-];
+] as unknown) as LanguageModelV4StreamPart[];
 const factory = async () => new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: CHUNKS }) }) }) as any;
 
 // Fix pass 2 (Task 13): the constructor's 3rd param collapsed from a bare
@@ -319,7 +323,8 @@ describe('NativeSessionHost', () => {
     const cascadeEntered = new Promise<void>((resolve) => { enteredCascade = resolve; });
     const cascadeGate = new Promise<void>((resolve) => { releaseCascade = resolve; });
     const cascade = (host as any).destroyChildrenOf.bind(host);
-    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (id: string) => {
+    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (...args: unknown[]) => {
+      const id = args[0] as string; // WHY: spyOn on an `any` host types the stub's args as unknown[]
       await cascade(id);
       if (id === 'root-1') { enteredCascade(); await cascadeGate; }
     });
@@ -459,7 +464,7 @@ describe('NativeSessionHost', () => {
     expect((guarded as any).live.get('stored').session.opts.harness.limits.maxSteps).toBe(14);
     await guarded.destroyAll();
 
-    const headerBase = { v: 1, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
+    const headerBase = { v: 1 as const, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
     await store.create({ ...headerBase, sessionId: 'old' });
     await new NativeHome(root).appendSessionLine(nativeStoreSlug(root), 'bad', { ...headerBase, sessionId: 'bad', stepGuard: 'oops' });
     for (const id of ['old', 'bad']) {
@@ -828,7 +833,7 @@ describe('NativeSessionHost', () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
         undefined, undefined, undefined, undefined,
-        { destroyAll: mcpDestroyAll },
+        { destroyAll: mcpDestroyAll, acquire: vi.fn() }, // WHY acquire: required by the manager type; this test never opens a session
       );
       await h.destroyAll();
       expect(mcpDestroyAll).toHaveBeenCalledTimes(1);
@@ -2043,8 +2048,9 @@ describe('NativeSessionHost', () => {
     it('consumes ready input at a second empty response without host-draining another turn', async () => {
       let requests = 0;
       const prompts: any[] = [];
-      const empty = [{ type: 'stream-start', warnings: [] },
-        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } }];
+      // WHY cast: same deliberately sparse finish part as CHUNKS.
+      const empty = ([{ type: 'stream-start', warnings: [] },
+        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } }] as unknown) as LanguageModelV4StreamPart[];
       const modelFactory = async () => new MockLanguageModelV4({ doStream: async (req: any) => {
         const index = requests++;
         prompts.push(req.prompt);
@@ -2915,7 +2921,7 @@ describe('NativeSessionHost', () => {
         // second, differently-typed specialist attempting Bash isn't possible;
         // this is the mechanism the end-to-end tests above rely on, isolated.
         const store = {
-          rulesFor: async () => [{ tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker' }],
+          rulesFor: async () => [{ tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow' as const, specialist: 'worker' }],
           remember: async () => { /* no-op */ }, remove: async () => false, removeProject: async () => false,
         };
         const h = new NativeSessionHost(
@@ -3093,14 +3099,14 @@ describe('NativeSessionHost', () => {
       // narrowed to a subdirectory must still read the rules the user granted
       // for the PROJECT — grants follow the project, not the subtree — so the
       // lookup has to use the parent's cwd even though the child runs in `sub`.
-      const rulesFor = vi.fn(async () => []);
+      const rulesFor = vi.fn<(cwd: string) => Promise<PermissionRule[]>>(async () => []);
       const store = new SessionStore(new NativeHome(root));
       const globOnce = async () => scriptedModel([
         stream(toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
       ]) as any;
       const h = new NativeSessionHost(store, globOnce, NO_CONTEXT, async () => null, async () => null, undefined,
-        { rulesFor, remember: async () => { /* no-op */ } });
+        { rulesFor, remember: async () => { /* no-op */ }, remove: async () => false, removeProject: async () => false });
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
       const sub = path.join(root, 'sub-perms');
       fs.mkdirSync(sub, { recursive: true });
@@ -3147,7 +3153,7 @@ describe('NativeSessionHost', () => {
       // which IS this child's report — a one-shot specialist that says its
       // piece and is torn down.
       const { childId, report } = await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         // Task 1 (plan 1b): spawnSpecialist now binds a caller-supplied
         // reservation rather than reserving one itself — this test drives the
         // run loop directly (below tools/task.ts), so it hands a plain reader
@@ -5235,7 +5241,7 @@ describe('NativeSessionHost', () => {
       });
 
       const { childId, report } = await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         token: { parentId: 'root-1', writer: false },
       });
       expect(report).toContain('Hi there'); // the suite's default `factory`'s one text step
@@ -5287,7 +5293,7 @@ describe('NativeSessionHost', () => {
       });
 
       await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -5314,7 +5320,7 @@ describe('NativeSessionHost', () => {
   // mergeChildEvents (Task 9, plan 1b) — the pure splice function, tested
   // directly per the brief rather than only through getHistory() above.
   describe('mergeChildEvents (pure function)', () => {
-    const rec = (over: Partial<any> = {}) => ({
+    const rec = (over: Partial<DelegationRecord> = {}): DelegationRecord => ({
       childId: 'child-1', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
       workDir: '/x', description: 'd', background: false, status: 'completed',
       startedAt: 0, delivered: true, owner: OWNER, missedSteers: [], ...over,

@@ -18,7 +18,7 @@ import sample from '../../../shared-fixtures/artifacts/sample-sidecar.json';
 // callers ask at once, and to ZERO extra parses after a write the app itself
 // just made. Full evidence: docs/active/investigations/2026-08-27-artifacts-sidecar-oom-crash.md.
 
-const sidecarReads = (spy: ReturnType<typeof vi.spyOn>) =>
+const sidecarReads = (spy: { mock: { calls: unknown[][] } }) =>
   spy.mock.calls.filter((c) => String(c[0]).endsWith('artifacts.json')).length;
 
 describe('readSidecarShared — one parsed copy per project', () => {

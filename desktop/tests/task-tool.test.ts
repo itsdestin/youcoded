@@ -47,6 +47,13 @@ const subjectDir = (workDir: string, sessionCwd?: string): string =>
   path.resolve(sessionCwd ?? process.cwd(), workDir).replace(/\\/g, '/');
 
 
+// WHY: ToolServices.specialists has ~10 members, but each test only wires the
+// ones the code path under test actually calls (e.g. a refusal test never
+// reaches spawn). The cast is deliberate and lives in this one place; vi.fn()
+// mocks also don't match the strict member signatures without it.
+type Specialists = NonNullable<NonNullable<ToolContext['services']>['specialists']>;
+const fakeSpecialists = (partial: Record<string, unknown>): Specialists => partial as unknown as Specialists;
+
 interface RunOpts {
   slotFree?: boolean;
   writerBusy?: boolean;
@@ -76,7 +83,8 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
   const release = opts.release ?? vi.fn();
   const defaultBinding: ModelBinding = { providerId: 'openrouter', modelId: 'openai/gpt-5.6-fable' };
   const defaultModels = {
-    designated: { get: () => null } as DelegatedModels,
+    // WHY: only designated.get() is consulted; the real class needs a NativeHome.
+    designated: { get: () => null } as unknown as DelegatedModels,
     catalog: async (): Promise<CatalogModel[]> => [
       { id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DeepSeek V4 Flash 0731' },
     ],
@@ -89,7 +97,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
     todos: [],
     binding: opts.binding ?? defaultBinding,
     services: {
-      specialists: {
+      specialists: fakeSpecialists({
         reserve: (parentId: string, reserveOpts: { writer: boolean }) => {
           if (reserveOpts.writer && opts.writerBusy) return { ok: false, reason: 'writer-busy' } as const;
           // Task 13: the real reserveSpecialist() now carries the RESOLVED
@@ -104,7 +112,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
         listStatus: () => opts.listStatus ?? null,
         spawn,
         ...(opts.spawnBackground ? { spawnBackground: opts.spawnBackground } : {}),
-      },
+      }),
       models: opts.models ?? defaultModels,
     },
   };
@@ -303,7 +311,7 @@ describe('Task tool — typed refusals', () => {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
       try {
         const tool = createTaskTool();
-        const subject = tool.permissionSubject({ agent: 'wizard', work_dir: '/Proj/MixedCase', description: 'd', prompt: 'p' } as any);
+        const subject = tool.permissionSubject!({ agent: 'wizard', work_dir: '/Proj/MixedCase', description: 'd', prompt: 'p' } as any)!;
         expect(subject).toContain('MixedCase');
         expect(subject).not.toBe(subject.toLowerCase());
       } finally {
@@ -326,7 +334,7 @@ describe('Task tool — typed refusals', () => {
       const ctx: ToolContext = {
         sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
         readRegistry: new Map(), todos: [],
-        services: { specialists: { reserve: () => ({ ok: true, token }), release, spawn, spawnBackground, trySpendSpawnBudget: () => true } },
+        services: { specialists: fakeSpecialists({ reserve: () => ({ ok: true, token }), release, spawn, spawnBackground, trySpendSpawnBudget: () => true }) },
       };
       const r = await tool.execute(
         { description: 'find the bug', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
@@ -353,7 +361,7 @@ describe('Task tool — typed refusals', () => {
       const ctx: ToolContext = {
         sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
         readRegistry: new Map(), todos: [],
-        services: { specialists: { reserve: () => ({ ok: true, token }), release, spawn: vi.fn(), spawnBackground, trySpendSpawnBudget: () => true } },
+        services: { specialists: fakeSpecialists({ reserve: () => ({ ok: true, token }), release, spawn: vi.fn(), spawnBackground, trySpendSpawnBudget: () => true }) },
       };
       const r = await tool.execute(
         { description: 'x', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
@@ -376,12 +384,12 @@ describe('Task tool — typed refusals', () => {
       readRegistry: new Map(),
       todos: [],
       services: {
-        specialists: {
+        specialists: fakeSpecialists({
           reserve: () => ({ ok: true, token }),
           release,
           trySpendSpawnBudget: () => true,
           spawn: async () => { throw new Error('boom'); },
-        },
+        }),
       },
     };
     await tool.execute({ description: 'x', prompt: 'a'.repeat(50), agent: 'explorer', work_dir: '.', model: 'parent' } as any, ctx);
@@ -616,15 +624,15 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
     const subject = tool.permissionSubject!(ARGS as any);
     expect(subject).toBe(`read-write:${subjectDir('/proj')}:file:docs-writer@aaaaaaaaaaaa`);
 
-    const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
+    const spawn = vi.fn<Specialists['spawn']>(async () => ({ childId: 'child-1', report: 'done' }));
     const ctx: ToolContext = {
       sessionId: 'parent-1', cwd: '/work', signal: new AbortController().signal,
       readRegistry: new Map(), todos: [],
       services: {
-        specialists: {
+        specialists: fakeSpecialists({
           reserve: () => ({ ok: true, token: { parentId: 'parent-1', writer: true } }),
           release: vi.fn(), trySpendSpawnBudget: () => true, spawn,
-        },
+        }),
       },
     };
     const r = await tool.execute(ARGS as any, ctx);
@@ -865,7 +873,7 @@ describe('Task tool — task_id management surface', () => {
       todos: [],
       toolCallId: 'tc-manage',
       services: {
-        specialists: {
+        specialists: fakeSpecialists({
           reserve: overrides.reserve ?? vi.fn(() => ({ ok: true, token: { parentId: 'parent-1', writer: false } })),
           release: overrides.release ?? vi.fn(),
           trySpendSpawnBudget: () => true,
@@ -874,7 +882,7 @@ describe('Task tool — task_id management surface', () => {
           steerSpecialist: overrides.steerSpecialist ?? vi.fn(() => ({ status: 'not-yours' })),
           interruptSpecialist: overrides.interruptSpecialist ?? vi.fn(() => ({ status: 'not-yours' })),
           resumeSpecialist: overrides.resumeSpecialist ?? vi.fn(async () => ({ status: 'not-yours' })),
-        },
+        }),
       },
     };
   }
@@ -984,7 +992,7 @@ describe('Task tool — task_id management surface', () => {
       const ctxFor = (parentId: string): ToolContext => ({
         sessionId: parentId, cwd: root, signal: new AbortController().signal, readRegistry: new Map(), todos: [],
         services: {
-          specialists: {
+          specialists: fakeSpecialists({
             reserve: (pid: string, opts: { writer: boolean }) => host.reserveSpecialist(pid, opts),
             release: (token: any) => host.releaseReservation(token),
             trySpendSpawnBudget: (pid: string) => host.trySpendSpecialistSpawnBudget(pid),
@@ -993,7 +1001,7 @@ describe('Task tool — task_id management surface', () => {
             steerSpecialist: (pid: string, cid: string, text: string) => host.steerSpecialist(pid, cid, text),
             interruptSpecialist: (pid: string, cid: string) => host.interruptSpecialist(pid, cid),
             resumeSpecialist: (pid: string, opts: any) => host.resumeSpecialist(pid, opts),
-          },
+          }),
         },
       });
 

@@ -15,7 +15,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { ImportFileDialog } from '../src/renderer/components/project-view/ImportFileDialog';
 
-vi.mock('../src/renderer/platform', () => ({ getPlatform: vi.fn(() => 'desktop') }));
+vi.mock('../src/renderer/platform', () => ({ getPlatform: vi.fn(() => 'electron') }));
 import { getPlatform } from '../src/renderer/platform';
 
 const base = {
@@ -54,7 +54,7 @@ describe('ImportFileDialog', () => {
     render(<ImportFileDialog {...base} />);
     expect(screen.queryByRole('button', { name: /^Move$/ })).toBeNull();
     expect(screen.getByRole('button', { name: /^Copy$/ })).toBeTruthy();
-    vi.mocked(getPlatform).mockReturnValue('desktop');
+    vi.mocked(getPlatform).mockReturnValue('electron');
   });
 
   it('confirms with the chosen mode', async () => {

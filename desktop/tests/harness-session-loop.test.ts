@@ -17,6 +17,7 @@ import { isContextOverflow } from '../src/main/providers/context-overflow';
 import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { TranscriptEvent } from '../src/shared/types';
+import type { NativeTool } from '../src/main/harness/tools/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import type { AskRequest, AskDecision } from '../src/main/harness/permission-broker';
 // Scripted-mock builders live in a shared helper — the history-rebuild test
@@ -273,7 +274,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(events.filter(e => e.type === 'tool-use').map(e => e.data.toolUseId)).toEqual(['c1', 'c2']);
     const results = events.filter(e => e.type === 'tool-result');
     expect(results.map(e => e.data.toolUseId)).toEqual(['c1', 'c2']);
-    expect(results.every(e => e.data.isError && !/user declined|user interrupted/i.test(e.data.toolResult))).toBe(true);
+    expect(results.every(e => e.data.isError && !/user declined|user interrupted/i.test(e.data.toolResult ?? ''))).toBe(true);
     expect(results[0].data.toolResult).toContain('permission store EACCES');
     expect(events.find(e => e.type === 'session-error')?.data.text).toContain('permission store EACCES');
     expect((read as any).calls).toHaveLength(0);
@@ -672,7 +673,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     // Scenario B: ask → deny → refusal, not executed.
     {
       const write = fakeTool('Write');
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'deny' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'Write', { file_path: 'x.ts' }), finishChunk('tool-calls')),
         stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -696,7 +697,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       stream(toolCallChunk('c2', 'Edit', { file_path: outsideB }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'done'), finishChunk('stop')),
     ]);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
     const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser }), async () => model as any);
     await session.send('go');
     expect(askUser).toHaveBeenCalledTimes(1);
@@ -720,7 +721,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       stream(toolCallChunk('c2', 'Edit', { file_path: outside }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'done'), finishChunk('stop')),
     ]);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', allowExternalEditsForSession: true }));
     const session = new HarnessSession(makeOpts({ tools: [edit], decide: async () => ALLOW, askUser, isSpecialistChild: true }), async () => model as any);
     await session.send('go');
     expect(askUser).toHaveBeenCalledTimes(2);
@@ -856,7 +857,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
   it('root sessions without an explicit maxSteps run beyond the former 50-step boundary without asking', async () => {
     const read = fakeTool('Read');
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
     const scripts = Array.from({ length: 51 }, (_, index) =>
       stream(toolCallChunk(`c${index}`, 'Read', { file_path: 'x.ts' }), finishChunk('tool-calls')),
     );
@@ -980,7 +981,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...textChunks('abandoned', 'ABANDONED_ATTEMPT'), ...reasoningChunks('thought', 'old reasoning'),
-        ...toolInputChunks('pending', 'Read', { file_path: 'pending' }), { type: 'error', error: failure }),
+        ...toolInputChunks('pending', 'Read', JSON.stringify({ file_path: 'pending' })), { type: 'error', error: failure }),
       stream(...textChunks('replacement', 'SUCCESSFUL_ATTEMPT'), finishChunk('stop')),
     ], seen);
     const session = new HarnessSession(makeOpts({ retryDelays: [1], tools: [fakeTool('Read')] }), async () => model as any);
@@ -990,7 +991,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const replacementIndex = events.findIndex(e => e.type === 'assistant-text' && e.data.text === 'SUCCESSFUL_ATTEMPT');
     expect(dropIndex).toBeGreaterThanOrEqual(0);
     expect(dropIndex).toBeLessThan(replacementIndex);
-    expect(events[dropIndex].data.dropPart.partIds).toEqual(expect.arrayContaining(['abandoned', 'thought']));
+    expect(events[dropIndex].data.dropPart!.partIds).toEqual(expect.arrayContaining(['abandoned', 'thought']));
     expect(events.some(e => e.data.toolPreparing?.toolCallId === 'pending' && e.data.toolPreparing.cleared)).toBe(true);
     expect(JSON.stringify(session.acceptedHistory())).not.toContain('ABANDONED_ATTEMPT');
     expect(JSON.stringify((session as any).history)).not.toContain('ABANDONED_ATTEMPT');
@@ -1064,7 +1065,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
     it('Read: no ask at all — the model is told the real workspace path', async () => {
       const read = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'Read', { file_path: `/${path.basename(root)}/ROADMAP.md` }), finishChunk('tool-calls')),
         stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1085,7 +1086,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       // "Doesn't exist yet" is normal for Write, so nonexistence cannot mean
       // "the model must have meant the workspace copy". This one still asks.
       const write = fakeTool('Write', { permissionSubject: (a: any) => a.file_path });
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'Write', { file_path: `/${path.basename(root)}/ROADMAP.md` }), finishChunk('tool-calls')),
         stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1108,7 +1109,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       fs.writeFileSync(target, '# a real external file');
       try {
         const read = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
-        const askRead = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+        const askRead = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
         const readModel = scriptedModel([
           stream(toolCallChunk('c1', 'Read', { file_path: target }), finishChunk('tool-calls')),
           stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1120,7 +1121,7 @@ describe('HarnessSession — multi-step turn driver', () => {
         expect((read as any).calls).toHaveLength(1);     // and it really ran
 
         const edit = fakeTool('Edit', { permissionSubject: (a: any) => a.file_path });
-        const askEdit = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+        const askEdit = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
         const editModel = scriptedModel([
           stream(toolCallChunk('c1', 'Edit', { file_path: target }), finishChunk('tool-calls')),
           stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1141,7 +1142,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     // Edit proves the ask still fires for the same unmatched outside path.
     it('an outside path with NO workspace match is not diverted — no guessing', async () => {
       const read = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
-      const askRead = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askRead = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const readModel = scriptedModel([
         stream(toolCallChunk('c1', 'Read', { file_path: '/nowhere-at-all/NOPE.md' }), finishChunk('tool-calls')),
         stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1155,7 +1156,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       expect(res.data.toolResult).not.toMatch(/inside the workspace — retry/); // no invented replacement
 
       const edit = fakeTool('Edit', { permissionSubject: (a: any) => a.file_path });
-      const askEdit = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askEdit = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const editModel = scriptedModel([
         stream(toolCallChunk('c1', 'Edit', { file_path: '/nowhere-at-all/NOPE.md' }), finishChunk('tool-calls')),
         stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1206,7 +1207,7 @@ describe('HarnessSession — multi-step turn driver', () => {
           permissionSubject: (a: any) => a.file_path ?? a.path,
         });
         const decide = vi.fn(async () => ({ action: 'deny', denyListed: false } as PermissionDecision));
-        const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+        const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
         const model = scriptedModel([
           stream(toolCallChunk('c1', c.name, c.input), finishChunk('tool-calls')),
           stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1221,7 +1222,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
     it('a credential path is STILL hard-denied for Read — the secret block is untouched', async () => {
       const read = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const secret = path.join(os.homedir(), '.ssh', 'id_rsa');
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'Read', { file_path: secret }), finishChunk('tool-calls')),
@@ -1248,7 +1249,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       permissionSubject: (a: any) => a.url,
     });
     const decide = vi.fn(async () => ALLOW);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
     const model = scriptedModel([
       stream(toolCallChunk('c1', 'WebFetch', { url: 'https://example.com/docs/.env.example' }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1335,7 +1336,7 @@ describe('HarnessSession — multi-step turn driver', () => {
   // 'C:/etc/x'.
   it('tool-layer guard: Task is exempt (NON_PATH_SUBJECT_TOOLS) — its subject is a consent key, not a path', async () => {
     const decide = vi.fn(async () => ALLOW);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
     const model = scriptedModel([
       stream(toolCallChunk('c1', 'Task', { agent: 'worker', work_dir: '/etc/x' }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1692,7 +1693,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
     /** Drive one gated Bash call answered with "Always allow" at `grantScope`. */
     async function rulesFor(command: string, grantScope?: 'exact' | 'wide'): Promise<unknown[]> {
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', always: true, grantScope }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true, grantScope }));
       const session = new HarnessSession(
         makeOpts({
           tools: [bashTool()],
@@ -1755,7 +1756,7 @@ describe('HarnessSession — multi-step turn driver', () => {
   // width (rulesFor('git push', ...) above).
   it('never remembers a tool-wide rule for a Task call with no subject (task_id management)', async () => {
     const task = fakeTool('Task', { permissionSubject: () => undefined, schema: z.object({ task_id: z.string() }) });
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow', always: true }));
     const model = scriptedModel([
       stream(toolCallChunk('c1', 'Task', { task_id: 'abc' }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1776,7 +1777,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     // C:/x/.env is a dotenv file → isSensitivePath → checkPathGuard 'deny'.
     const write = fakeTool('Write', { permissionSubject: (a: any) => a.file_path });
     const decide = vi.fn(async () => ALLOW);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
     const model = scriptedModel([
       stream(toolCallChunk('c1', 'Write', { file_path: 'C:/x/.env' }), finishChunk('tool-calls')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
@@ -1915,7 +1916,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       const ask = fakeInteractive();
       // `dismissed` is what PermissionBroker.respond stamps on a HUMAN "no" —
       // the flag that separates a person closing the card from a policy refusal.
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'deny', dismissed: true }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny', dismissed: true }));
       const seen: any[] = [];
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'AskUserQuestion', oneQuestion()), finishChunk('tool-calls')),
@@ -1990,7 +1991,7 @@ describe('HarnessSession — multi-step turn driver', () => {
       // it denies AskUserQuestion so the model answers instead, and ending the
       // turn there loses the review outright.
       const ask = fakeInteractive();
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'deny' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
       const seen: any[] = [];
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'AskUserQuestion', oneQuestion()), finishChunk('tool-calls')),
@@ -2070,7 +2071,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
     it('invalid questions shape → corrective validation result; askUser NOT called', async () => {
       const ask = fakeInteractive();
-      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
       const model = scriptedModel([
         stream(toolCallChunk('c1', 'AskUserQuestion', { questions: [] }), finishChunk('tool-calls')),  // zero questions
         stream(...textChunks('b', 'fixed'), finishChunk('stop')),
@@ -2087,7 +2088,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
   it('no tools configured (tools absent) → v0 plain-text turn; no tool plumbing invoked', async () => {
     const decide = vi.fn(async () => ALLOW);
-    const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'allow' }));
     const model = scriptedModel([stream(...textChunks('a', 'Hi there'), finishChunk('stop'))]);
     const session = new HarnessSession(makeOpts({ decide, askUser }), async () => model as any); // no `tools`
     const events = collect(session);
@@ -2923,7 +2924,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
     // The dead attempt's preparing card was explicitly withdrawn.
     const cleared = events.filter((e) => e.type === 'assistant-thinking' && e.data.toolPreparing?.cleared);
-    expect(cleared.map((e) => e.data.toolPreparing.toolCallId)).toEqual(['c1']);
+    expect(cleared.map((e) => e.data.toolPreparing!.toolCallId)).toEqual(['c1']);
   });
 
   it('ROADMAP L241: an orphan preparing card is withdrawn on a step that ALSO ran a real tool', async () => {
@@ -2947,7 +2948,7 @@ describe('HarnessSession — empty final step recovery', () => {
     await session.send('go');
 
     const cleared = events.filter((e) => e.type === 'assistant-thinking' && e.data.toolPreparing?.cleared);
-    expect(cleared.map((e) => e.data.toolPreparing.toolCallId)).toEqual(['c2']);
+    expect(cleared.map((e) => e.data.toolPreparing!.toolCallId)).toEqual(['c2']);
 
     // …and the withdrawal lands BEFORE the real card goes up, so the two never
     // share the screen.
@@ -2965,7 +2966,7 @@ describe('HarnessSession — empty final step recovery', () => {
     const poll = fakeTool('BashOutput', { schema: z.object({ shell_id: z.string().optional() }).strict(), onExecute: () => ({ text: 'sh-1 · running · 1s\nline' }) });
     const calls = Array.from({ length: 9 }, (_, i) => stream(toolCallChunk(`c${i}`, 'BashOutput', { shell_id: 'sh-1' }), finishChunk('tool-calls')));
     const model = scriptedModel([...calls, stream(...textChunks('b', 'done'), finishChunk('stop'))]);
-    const askUser = vi.fn(async () => ({ behavior: 'allow' as const }));
+    const askUser = vi.fn(async (_r: AskRequest) => ({ behavior: 'allow' as const }));
     const session = new HarnessSession(makeOpts({ tools: [poll], decide: async () => ALLOW, askUser }), async () => model as any);
     const events = collect(session);
     await session.send('go');

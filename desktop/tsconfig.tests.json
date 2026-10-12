@@ -20,14 +20,10 @@
 //   * lib DOM.Iterable — `for (const el of document.querySelectorAll(...))` is
 //     everywhere in the .tsx suites and is not in the base's lib list.
 //
-// THE EXCLUDE LIST IS TECHNICAL DEBT, NOT A DESIGN. These 57 files hold the 201
-// errors this gate found on the day it was written; they are excluded so the gate
-// ships GREEN (see .oxlintrc.json's green-gate rule — a gate with known
-// violations trains everyone to ignore it), NOT because they are exempt. Deleting
-// a line here and fixing that file is the intended way to pay it down, and
-// `scripts/verify.sh` prints the remaining count on every run so it cannot go
-// quiet. Roadmap: docs/roadmap/dev-workspace.md, the "neither type-checked nor
-// linted" entry.
+// THE EXCLUDE LIST WAS TECHNICAL DEBT, and it is paid (2026-10-12, close-session friction
+// proposal 19): the last 47 files and their 203 errors were fixed — a required prop added to a
+// shared card had broken a skipped test only at run time. Every test file is checked now; do not
+// add one back to `exclude` — fix its types instead.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -43,53 +39,6 @@
   "include": ["src/**/*", "tests/**/*", "vitest.config.ts", "vite.config.ts"],
   "exclude": [
     "node_modules",
-    "dist",
-    "tests/artifacts-get-over-cap.test.ts",
-    "tests/artifacts/artifact-store.test.ts",
-    "tests/artifacts/central-index.test.ts",
-    "tests/artifacts/html-viewer-stale-content.test.tsx",
-    "tests/artifacts/sidecar-cache.test.ts",
-    "tests/ask-user-question-card-other.test.tsx",
-    "tests/chatsearch-meta-builder.test.ts",
-    "tests/chatview-prepend-scroll-anchor.test.tsx",
-    "tests/conversation-store.test.ts",
-    "tests/harness-eval-judge.test.ts",
-    "tests/harness-eval-orchestrator.test.ts",
-    "tests/harness-review-runner.test.ts",
-    "tests/harness-sdk-toolcall-contract.test.ts",
-    "tests/harness-session-loop.test.ts",
-    "tests/harness-session.test.ts",
-    "tests/harness-tools-core.test.ts",
-    "tests/import-file-dialog.test.tsx",
-    "tests/install-reconcile.test.ts",
-    "tests/ipc-handlers.test.ts",
-    "tests/like-button.test.tsx",
-    "tests/marketplace-auth-store.test.ts",
-    "tests/match-report.test.ts",
-    "tests/materialization-planner.test.ts",
-    "tests/mcp-startup-wiring.test.ts",
-    "tests/model-downloader.test.ts",
-    "tests/native-compact.test.ts",
-    "tests/native-image-attachments.test.ts",
-    "tests/native-session-host.test.ts",
-    "tests/native-skill-invoke.test.ts",
-    "tests/native-tools-polish-skill.test.ts",
-    "tests/project-registry.test.ts",
-    "tests/prompt-card.test.tsx",
-    "tests/remote-server.test.ts",
-    "tests/report-review-button.test.tsx",
-    "tests/session-title.test.ts",
-    "tests/skill-tool-gating.test.ts",
-    "tests/skill-tool.test.ts",
-    "tests/slug-repair-sweep-keying.test.ts",
-    "tests/specialist-catalog.test.ts",
-    "tests/specialist-run.test.ts",
-    "tests/sync-spaces-service.test.ts",
-    "tests/task-tool.test.ts",
-    "tests/terminal-key-handler.test.ts",
-    "tests/theme-build-button.test.tsx",
-    "tests/tool-card-grant-width.test.tsx",
-    "tests/tool-registry-manifest.test.ts",
-    "tests/use-any-attention-needed.test.ts"
+    "dist"
   ]
 }

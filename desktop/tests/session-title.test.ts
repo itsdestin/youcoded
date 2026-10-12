@@ -32,7 +32,7 @@ describe('session-title placeholders', () => {
     [' Resuming… ', 'padded native resume placeholder'],
     [undefined, 'undefined'],
     [null, 'null'],
-  ])('treats %j as a placeholder (%s)', (name) => {
+  ])('treats %j as a placeholder (%s)', (name: string | null | undefined, _label: string) => {
     expect(isPlaceholderSessionName(name as any)).toBe(true);
     expect(isRealSessionName(name as any)).toBe(false);
   });
