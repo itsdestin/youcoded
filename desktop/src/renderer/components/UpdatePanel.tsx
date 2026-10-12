@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
-import { Button, Dialog, FieldError, LoadingState, ProgressBar } from './ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
 import { BetaChannelRow } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
@@ -274,11 +274,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   //   otherwise       → full markdown, rendered as one block
   let body: React.ReactNode;
   if (data?.error || (!loading && data !== null && !data.markdown && !data.entries?.length)) {
+    // WHY the notice box (guide: a problem is the one tinted box, its button inside at the
+    // right; never underlined text as a button): was a centred grey line with an underlined link.
     body = (
-      <div className="text-fg-dim text-sm py-8 text-center">
-        Couldn't load changelog.{' '}
-        <button onClick={handleOpenOnGithub} className="underline hover:text-fg">Open on GitHub</button>
-      </div>
+      <Callout tone="danger" actions={<Button size="sm" variant="secondary" onClick={handleOpenOnGithub}>Open on GitHub</Button>}>
+        Couldn't load the release notes.
+      </Callout>
     );
   } else if (loading || !data) {
     body = <LoadingState what="changelog" />;
@@ -302,21 +303,28 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     } else {
       shown = data.entries.slice(0, currentIdx);
     }
+    // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
+    // the popup — a group is a small label and a card): the notes sat bare on the popup under
+    // an 18px heading the guide's three levels don't have. The version and date are the label;
+    // the notes are reading text in a first-level card (About's Disclaimer / Privacy cards).
     body = (
-      <div className="space-y-6">
+      <>
         {shown.map(e => (
           <section key={e.version}>
-            <h2 className="text-lg font-semibold mb-2">
-              v{e.version}
-              {e.date && <span className="text-fg-dim font-normal ml-2">{e.date}</span>}
-            </h2>
-            <MarkdownContent content={e.body} />
+            <SectionLabel className="mb-2">v{e.version}{e.date ? ` · ${e.date}` : ''}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3`}><MarkdownContent content={e.body} /></div>
           </section>
         ))}
-      </div>
+      </>
     );
   } else if (data.markdown) {
-    body = <MarkdownContent content={data.markdown} />;
+    // The whole changelog (no update waiting): one card under one label, the same recipe.
+    body = (
+      <section>
+        <SectionLabel className="mb-2">Release notes</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3`}><MarkdownContent content={data.markdown} /></div>
+      </section>
+    );
   }
 
   return createPortal(
@@ -332,7 +340,9 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
         // in view and the notes fade see-through under it.
         footer={updateStatus.update_available ? (
-          <div className="flex flex-col items-end">
+          // WHY full width (Destin, close-session-4#CS4-1: "the button should be full width as
+          // well"; guide: a lone button is full width): it hugged its label at the right.
+          <div className="flex flex-col">
             {/* Change 46: download progress gets a real bar. It used to live only
                 as a percentage inside the (disabled, therefore dimmed) button
                 label, which is the one place a user is least likely to watch.
@@ -349,6 +359,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             )}
             <Button
               size="lg"
+              className="w-full"
               onClick={handleUpdate}
               disabled={
                 installState.kind === 'downloading' ||
@@ -421,12 +432,11 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                   // amber sentences are in scope too)
                   <FieldError as="p" size="2xs">{updateErrorMessage('signature-invalid')}</FieldError>
                 ) : (
-                  <button
-                    onClick={handleFallbackBrowser}
-                    className="text-fg-dim underline hover:text-fg"
-                  >
+                  // WHY an outlined full-width button (guide: never underlined text as a
+                  // button; a follow-up action is a full-width outlined button).
+                  <Button variant="secondary" className="w-full" onClick={handleFallbackBrowser}>
                     Open in browser instead
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -441,10 +451,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             Android and a remote browser refuse the call — so no gate is needed
             here. Inside the scroll rather than the footer: the footer only exists
             in the update-available mode, and it belongs to the Update button. */}
-        <div>
-          {body}
-          <BetaChannelRow separated />
-        </div>
+        {body}
+        <BetaChannelRow card />
       </Dialog>
     </>,
     document.body,

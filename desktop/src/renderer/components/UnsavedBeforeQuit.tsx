@@ -10,7 +10,8 @@
 // on. Once nothing is left unsaved the prompt says "All saved." and offers to go on (fix round 14)
 // — never automatically.
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
-import { Button, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError } from './ui';
+import { workbenchUnsavedListRows } from '../unsaved-practice';
 import { useScreenOpen } from '../shoot-mode';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
 import { DRAFT_READ_FAILED } from './artifact-views/edit-permission';
@@ -46,6 +47,7 @@ export function UnsavedBeforeQuit() {
   const anySaving = edits.some((e) => rowStates.get(e)?.kind === 'saving');
 
   const n = edits.length;
+  const rowsLook = workbenchUnsavedListRows();
   const files = n === 1 ? '1 file' : `${n} files`;
   const goOn = r?.mode === 'close' ? 'close' : 'quit';
   // Main held the quit (or close) for this prompt: go on now (main/unsaved-quit.ts).
@@ -72,35 +74,43 @@ export function UnsavedBeforeQuit() {
       // own layout so the choices stay pinned under a list that scrolls in whatever height is
       // left. The footer slot does exactly that: the body (intro + list) scrolls under the shared
       // see-through fade — the list's old painted fade is gone — and the buttons never move.
+      // WHY stacked, full width, main action on top (close-session-4#CS4-2, "a more comprehensive
+      // restyling"; guide: two buttons in a narrow popup stack full width, filled on top; a
+      // destructive confirm's red button takes the main action's place): this is a 340-point
+      // popup, and its pairs sat side by side at the right.
       footer={allSaved ? (
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={dismiss}>Cancel</Button>
-          <Button variant="primary" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
+        <div className="flex flex-col gap-2">
+          <Button variant="primary" className="w-full" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
+          <Button variant="secondary" className="w-full" onClick={dismiss}>Cancel</Button>
         </div>
       ) : r?.confirming ? (
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
-          <div className="flex gap-2 justify-end">
-            <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
-            <Button variant="danger" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
-          </div>
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-fg-2 pb-1">Discard unsaved changes to {files}?</p>
+          <Button variant="danger" className="w-full" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
+          <Button variant="secondary" className="w-full" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
         </div>
       ) : (
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
-          <Button variant="primary" onClick={dismiss}>OK</Button>
+        <div className="flex flex-col gap-2">
+          <Button variant="primary" className="w-full" onClick={dismiss}>OK</Button>
+          <Button variant="secondary" className="w-full" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
         </div>
       )}
     >
+      {/* WHY one card with the list inside it (Destin, close-session-4#CS4-2: "we don't use bare
+          lines on the modal like this, there should be some kind of cards/container"; guide:
+          nothing bare on the popup, text that describes a card lives inside it). A single-card
+          popup, so no label above it. Two looks on close-session-5's pick slide: a box per file
+          (Games' friend rows, shipped until he picks) or plain rows in one box (Backup & sync's
+          saved devices) — `?unsavedList=rows`. */}
       {allSaved ? (
-        restartNote ? <p className="text-sm text-fg-2">{restartNote.trim()}</p> : null
+        restartNote ? <div className={`${CARD_LEVEL_1} p-3`}><p className="text-sm text-fg-2">{restartNote.trim()}</p></div> : null
       ) : (
-        <>
+        <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
           <p className="text-sm text-fg-2">{intro}{restartNote}</p>
-          <ul className="flex flex-col gap-2">
-            {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
+          <ul className={rowsLook ? `${CARD_LEVEL_2} px-3 py-1 flex flex-col` : 'flex flex-col gap-2'}>
+            {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} boxed={!rowsLook} onRetry={() => setRecheck((x) => x + 1)} />)}
           </ul>
-        </>
+        </div>
       )}
     </Dialog>
   );
@@ -145,7 +155,7 @@ async function saveRow(e: UnsavedEdit, o: { force?: boolean; confirmed?: boolean
   setRow(e, { kind: 'error', message: r.error });
 }
 
-function UnsavedRow({ edit: e, status, onRetry }: { edit: UnsavedEdit; status: DraftFileStatus | undefined; onRetry: () => void }) {
+function UnsavedRow({ edit: e, status, onRetry, boxed }: { edit: UnsavedEdit; status: DraftFileStatus | undefined; onRetry: () => void; boxed: boolean }) {
   useRowVersion();
   const st = rowStates.get(e) ?? null;
   // A per-row Discard asks first, in place (fix round 14), then comes back to where it was.
@@ -169,7 +179,9 @@ function UnsavedRow({ edit: e, status, onRetry }: { edit: UnsavedEdit; status: D
     note = text('(file no longer available)', true);
     actions = small('Discard', askDiscard);
   } else if (status && typeof status === 'object') {
-    note = text(status.error); // the check itself failed: say why, and let it be tried again
+    // The check itself failed: say why (the guide's short error line — never loose text), and
+    // let it be tried again.
+    note = <FieldError as="p">{status.error}</FieldError>;
     actions = <>{small('Retry', onRetry)}{small('Discard', askDiscard)}</>;
   } else if (st?.kind === 'conflict') {
     note = text(st.unknown ? 'YouCoded can’t tell whether this file changed on disk — save anyway or discard.' : 'Changed on disk since — save anyway or discard.');
@@ -181,13 +193,14 @@ function UnsavedRow({ edit: e, status, onRetry }: { edit: UnsavedEdit; status: D
     note = text('This is a settings file. Save anyway?');
     actions = <>{small('Cancel', () => setRow(e, null))}{small('Save anyway', () => void saveRow(e, { confirmed: true }), 'danger')}</>;
   } else if (st?.kind === 'error') {
-    note = text(st.message);
+    note = <FieldError as="p">{st.message}</FieldError>;
     actions = <>{small('Save', () => void saveRow(e))}{small('Discard', askDiscard)}</>;
   } else if (status === 'editable') {
     actions = small(st?.kind === 'saving' ? 'Saving…' : 'Save', () => void saveRow(e), 'secondary', st?.kind === 'saving');
   }
   return (
-    <li className="flex flex-col gap-1 text-sm text-fg">
+    // A box per file (the nested look inside the card), or a plain row in the shared box.
+    <li className={`flex flex-col gap-1 text-sm text-fg ${boxed ? `${CARD_LEVEL_2} px-3 py-2` : 'py-2'}`}>
       <div className="flex items-center gap-2">
         <span className="flex-1 min-w-0 truncate">{e.name}</span>
         {!e.parked ? note : null}
