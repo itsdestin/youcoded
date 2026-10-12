@@ -20,7 +20,7 @@
 // columns (marketplace-detail-1#MD-1): the reading on the left, the short facts on the
 // right, one column at phone width. The one-column and folded drafts were removed.
 import React from 'react';
-import { CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import './DetailPage.css';
 
@@ -257,5 +257,23 @@ export function DetailActions({ children }: { children: React.ReactNode }) {
         ? items.map((child, i) => <div key={i} className="flex flex-col">{child}</div>)
         : items}
     </div>
+  );
+}
+
+/** A failed install, said inside the item's card with its own Retry (guide "Status and
+ *  notices": a notice about one thing sits inside it, its buttons inside the notice at
+ *  the right). WHY: the reason used to live only in the Install button's hover title, so
+ *  touch screens never saw it.
+ *  WHY here, in the shared detail shell (small-fixes-1): the integration detail page showed
+ *  its failed install as a notice with no button of its own; both pages now use this one. */
+export function InstallFailed({ message, onRetry }: { message: string; onRetry(): void }) {
+  return (
+    // WHY no title (games-social round 5; Destin: the red title "seems to be unique styling not
+    // used elsewhere"): one plain sentence that still names the real reason.
+    <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Try installing again</Button>}>
+      {/* The reason usually already says what failed ("Couldn't download it: …"); prefix only a
+          bare one, so the sentence never reads "Couldn't install: Couldn't…". */}
+      {/^(couldn't|can't|could not|cannot)\b/i.test(message.trim()) ? message : `Couldn't install: ${message}`}
+    </Callout>
   );
 }

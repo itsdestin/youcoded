@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { TaskState } from '../state/task-state';
-import { Button, Dialog, FoldRow, SectionLabel } from './ui';
+import { Button, Dialog, FoldRow, Pill, SectionLabel } from './ui';
 
 // L2 popup opened by OpenTasksChip in the StatusBar. Groups tasks by status:
 // In progress → Pending → Completed (collapsible). A separate "Marked inactive"
@@ -25,15 +25,11 @@ function groupOf(t: TaskState): Group {
   return 'pending';
 }
 
+// WHY no blue dot for a running task any more (small-fixes-1): it was a hard-coded blue beside
+// blue italic words, and the guide keeps status colours out of text and hand-typed colours out
+// of the app (guide principle 2). A running task now says so with the live status pill, below;
+// its mark here is the same open circle as any task not yet done, a filled one is done.
 function StatusDot({ group }: { group: Group }) {
-  if (group === 'in_progress') {
-    return (
-      <span
-        className="inline-block w-2 h-2 rounded-full"
-        style={{ background: '#60a5fa', boxShadow: '0 0 0 2px rgba(96,165,250,0.25)' }}
-      />
-    );
-  }
   if (group === 'completed') {
     return <span className="inline-block w-2 h-2 rounded-full bg-fg-muted" />;
   }
@@ -57,9 +53,15 @@ function Row({ t, group, onMarkInactive, onUnhide }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1.5">
           <span className="text-2xs font-mono text-fg-muted">#{t.id}</span>
-          <span className={`text-xs ${group === 'in_progress' ? 'text-blue-400 italic' : 'text-fg'} ${group === 'completed' ? 'line-through' : ''}`}>
+          {/* Normal text colour, upright, for every task (guide principle 2: status hues never in
+              text). The running one carries the live status pill the session list uses — a
+              green "Working" with its dot inside (guide "Status and notices"). */}
+          <span className={`text-xs text-fg ${group === 'completed' ? 'line-through' : ''}`}>
             {title}
           </span>
+          {/* Centred on the title's FIRST line (a long title wraps under it), like the name + pill
+              rows elsewhere (NameWithPill): a box one text line tall, the pill centred in it. */}
+          {group === 'in_progress' && <span className="self-start flex items-center h-4 shrink-0"><Pill tone="ok" dot>Working</Pill></span>}
           {isDeleted && <span className="text-3xs px-1 rounded bg-inset text-fg-muted">deleted</span>}
         </div>
         {showDesc && <div className="text-2xs text-fg-muted mt-0.5 leading-tight">{t.description}</div>}

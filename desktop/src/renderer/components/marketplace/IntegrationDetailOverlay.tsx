@@ -10,7 +10,7 @@ import type { IntegrationEntry, IntegrationState } from "../../../shared/types";
 import { platformListDisplay } from "../../../shared/platform-display";
 import { Button, Callout, Chip, Pill, SettingRow } from "../ui";
 import type { PillTone } from "../ui/Pill";
-import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, InstallFailed, type DetailSection } from "./DetailPage";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
@@ -57,7 +57,10 @@ export function IntegrationDetailOverlay({
   let actions: React.ReactNode = null;
   if (!unavailable) {
     if (!s.installed) {
-      actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>{s.error ? 'Try installing again' : 'Install'}</Button></DetailActions>;
+      // WHY no button while it failed (small-fixes-1, guide "A failed action replaces the
+      // buttons it came from"): the failure notice below carries Try installing again inside
+      // it — the plugin and theme detail pages' InstallFailed, shared.
+      if (!s.error) actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>Install</Button></DetailActions>;
     } else if (!s.connected) {
       actions = (
         <DetailActions>
@@ -93,10 +96,13 @@ export function IntegrationDetailOverlay({
       actions={actions}
     >
       {/* The error is a notice inside the item's card, words in the normal text colour
-          (guide "Status and notices"), not a red line clipped to 40 characters. */}
-      {/* WHY no title (games-social round 5): the plain error box — the message itself is the
-          specific cause; "Something went wrong" above it added nothing. */}
-      {s.error && <Callout tone="danger">{s.error}</Callout>}
+          (guide "Status and notices"), not a red line clipped to 40 characters.
+          WHY InstallFailed (small-fixes-1): this box had no button — a dead end
+          (error-message-standards "Every error state offers an action"). The installer only
+          records an error from install(), so its action is the install again. An installed
+          integration with an error (none today) keeps its own buttons and a plain notice. */}
+      {s.error && !s.installed && !unavailable && <InstallFailed message={s.error} onRetry={() => { void onInstall(); }} />}
+      {s.error && (s.installed || unavailable) && <Callout tone="danger">{s.error}</Callout>}
       {setupHint && (
         <SetupHint command={setupHint.command} onDismiss={onDismissSetupHint} onOpenSetupSession={onOpenSetupSession} />
       )}

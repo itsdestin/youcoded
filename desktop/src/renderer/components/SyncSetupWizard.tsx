@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, ErrorState, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
 import { isAndroid as checkIsAndroid } from '../platform';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -524,10 +524,10 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             </div>
           </div>
 
-          {/* Error message */}
-          {error && (
-            <Callout tone="danger">{error}</Callout>
-          )}
+          {/* The failed save, said where Start backup was, with Try again inside it (small-fixes-1:
+              this box had nothing to press; guide "A failed action replaces the buttons it came
+              from", Submit a ticket's failed send). The fields above stay editable — Try again
+              uses what they say now. Rendered below, in the button's place. */}
 
           {/* Duplicate destination heads-up — informational only.
               The sync engine uses a global lock and backend-safe write strategies
@@ -569,6 +569,11 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
               The three-way saving/empty/ready className is gone: both the saving and the
               empty-label states are just `disabled` now (spec decision 72), and the spinner
               goes with the shared busy state later rather than being re-hardcoded here. */}
+          {/* Only while the fields are complete: emptied after a failure, the plain (disabled)
+              button comes back, as before. */}
+          {error && !saving && label.trim() && !(backendType === 'github' && repoMode === 'existing' && !repoUrl.trim()) ? (
+            <ErrorState mode="recoverable" message={error} onRetry={() => void handleStartBackup()} />
+          ) : (
           <Button
             size="lg"
             onClick={handleStartBackup}
@@ -584,6 +589,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             )}
             {saving ? 'Setting up...' : 'Start backup'}
           </Button>
+          )}
           </div>
         </div>
       </div>
@@ -757,6 +763,8 @@ function PrereqCheckStep({
                 but the spinner stays: this install advertises "about a minute" right
                 below it, and a minute of a motionless disabled button reads as hung.
                 currentColor so it tracks the label on every theme. */}
+            {/* Hidden once the install failed: its notice below carries Try again (small-fixes-1). */}
+            {!installError && <>
             <Button size="lg" onClick={handleInstall} disabled={installing}>
               {installing && (
                 <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
@@ -764,6 +772,7 @@ function PrereqCheckStep({
               {installing ? 'Installing...' : 'Install now'}
             </Button>
             <div className="text-3xs text-fg-muted">This usually takes about a minute.</div>
+            </>}
           </div>
         )}
 
@@ -777,20 +786,13 @@ function PrereqCheckStep({
           <IcloudMissingHelp onRecheck={runCheck} />
         )}
 
-        {/* Install error */}
+        {/* Install error. WHY ErrorState (small-fixes-1): the box offered only an underlined
+            "Install manually" link — no way to try the install again, and underlined text is not
+            a button (guide "Buttons"). Now the shared error box: Install manually (outlined) and
+            Try again (filled) inside it, in place of the Install now button. */}
         {installError && (
-          // The "Install manually" link stays INSIDE the callout, which does not
-          // make this a K5 status strip: K5 is for a laid-out action that
-          // resolves the state, and this is an inline link inside the sentence
-          // that explains it. A dot-message-button row would read worse here.
-          <Callout tone="danger">
-            {installError}
-            <div className="mt-1">
-              <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://rclone.org/install/')}>
-                Install manually
-              </button>
-            </div>
-          </Callout>
+          <ErrorState mode="recoverable" message={installError} onRetry={() => void handleInstall()}
+            moreActions={[{ label: 'Install manually', onClick: () => claude.openExternal('https://rclone.org/install/') }]} />
         )}
         </div>
       </div>

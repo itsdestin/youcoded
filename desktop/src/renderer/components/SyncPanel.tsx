@@ -34,22 +34,29 @@ import { RemovedProjectsCard } from './RemovedProjectsCard';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
+// WHY these words (small-fixes-1): the old intro said "your conversations, projects, and files"
+// live in GitHub, which reads as every project and file on the computer. Only the two folders
+// inside YouCoded's own folder are copied (sync-spaces/managed-roots.ts: Personal, and each
+// folder in Projects); memory, instructions, skills and settings ride only the Drive/iCloud
+// daily copy (sync-service.ts pushDrive/pushiCloud). Say exactly that, in plain words.
 const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "YouCoded keeps your work safe in two layers. Cross-device sync is the main one: your conversations, projects, and files live in your own private GitHub, so they're backed up AND kept up to date on every device you use. Extra cloud backups (Google Drive, iCloud) are an optional second copy on top of that.",
+    "YouCoded can keep two kinds of copy. Sync across devices is the main one: it copies the YouCoded folder in your home folder — your Personal folder, which holds your conversations, and each project in its Projects folder — to your own private GitHub, and keeps them the same on every device you use. Extra backups (Google Drive, iCloud) keep a daily copy on top of that. Folders anywhere else on your computer are not copied.",
   sections: [
     {
       heading: 'Cross-device backup & sync (the main one)',
       paragraphs: [
-        "Turn this on and YouCoded stores your conversations, project folders, and personal files in private GitHub repositories — one per space. That's your primary backup and the way your work follows you from computer to computer.",
+        "Turn this on and YouCoded copies your Personal folder and each project in YouCoded's Projects folder to private GitHub repositories — one per folder. That's your primary backup and the way your work follows you from computer to computer.",
+        "Your assistant's memory, instructions, skills and settings are not part of this sync. Extra backups (below) copy those.",
         "It needs a GitHub connection (a one-time sign-in). Changes sync automatically in the background, usually within seconds.",
       ],
     },
     {
       heading: 'Spaces',
       bullets: [
-        { term: 'Personal', text: 'Your conversations, memory, skills, and anything in your Personal folder — carried to every device.' },
-        { term: 'Projects', text: 'Each folder you turn sync on for becomes its own space, kept in step across your devices.' },
+        { term: 'Personal', text: 'Your conversations with their names and tags, your list of devices, your Pages, and any file you put in your Personal folder — carried to every device.' },
+        { term: 'Projects', text: "Each project in YouCoded's Projects folder is its own space, kept in step across your devices. A project folder somewhere else on your computer is not copied." },
+        { term: 'Never copied', text: 'Secret files (such as .env files and keys) and the folders programs rebuild themselves (such as node_modules).' },
         { term: 'Instant sync', text: '"Connected" means changes cross devices almost immediately. If it\'s reconnecting, changes still sync every couple of minutes.' },
       ],
     },
@@ -57,6 +64,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'Additional backups (optional)',
       paragraphs: [
         "You can add Google Drive or iCloud as a second, independent copy on top of GitHub — belt and suspenders. These don't replace GitHub; cross-device sync still needs it as the primary.",
+        "Once a day each one copies the same YouCoded folders, plus your assistant's memory, instructions, your own skills and its settings, into a dated folder. They are copies to keep: nothing is brought back from them automatically.",
       ],
       bullets: [
         { term: 'Google Drive', text: 'Keeps a copy in a Drive folder. You can connect multiple Google accounts, each backing up independently.' },

@@ -156,7 +156,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
   });
 
   it('a backup that could not be saved keeps the wizard open and says why', async () => {
-    stub({
+    const api = stub({
       addBackend: vi.fn(async () => {
         throw new Error("Error invoking remote method 'sync:add-backend': Error: EACCES: permission denied, open '/home/me/.claude/toolkit-state/config.json'");
       }),
@@ -167,7 +167,11 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     // The transport wrapper is machinery, not part of the reason.
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
     expect(screen.queryByText("You're all set!")).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start backup' })).toBeInTheDocument();
+    // small-fixes-1: the failure takes Start backup's place, with Try again inside it (it used
+    // to be a box with nothing to press, above the button), and Try again saves again.
+    expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(api.addBackend).toHaveBeenCalledTimes(2));
   });
 
   it('a first backup that failed is reported as failed, for the new destination only', async () => {

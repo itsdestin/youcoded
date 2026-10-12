@@ -24,6 +24,8 @@ import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useScreenOpen } from '../shoot-mode';
+import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
@@ -522,18 +524,19 @@ export function RepoCard({
           </svg>
         </div>
         {/* Inline row action -> sm, matching EngineCard's Install/Restart. */}
-        {chosen && !dl && (
+        {/* Hidden while its failure shows: that notice carries Try again (small-fixes-1). */}
+        {chosen && !dl && !dlError && (
           <Button size="sm" onClick={() => void startDefault()} className="shrink-0">
             Download
           </Button>
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
-          explanatory failure text is the shared tinted box; the Download
-          button just above is already the retry action, so no second one is
-          added here. */}
-      {dlError && <Callout tone="danger" className="mt-1.5">{dlError}</Callout>}
+      {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press. The guide's
+          rule is that a failed action's notice takes the place of the button it came from and
+          carries Try again itself (guide "Status and notices"; the plugin page's failed
+          install is the same shape), so Download hides while it shows. */}
+      {dlError && <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={dlError} onRetry={() => void startDefault()} />}
 
       {/* Expanded: the full quant list. */}
       {expanded && (
@@ -640,6 +643,12 @@ export function LocalModelRow({
   const [busy, setBusy] = useState(false);
   // Failures of the buttons on this row (resume refused, delete failed).
   const [actionError, setActionError] = useState<string | null>(null);
+  // Which button failed, so its notice can carry Try again for that same thing (small-fixes-1:
+  // the box used to have nothing to press). Resume's failure already sits in the interrupted
+  // notice, beside its own Resume button.
+  const [failedAction, setFailedAction] = useState<'vision' | 'delete' | 'resume' | null>(null);
+  // A download failure with no button to retry it opens the bug report (never a guessed fix).
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Per-model Settings disclosure (deck Q-2 pick a) — collapsed by default so a
   // non-developer sees the row exactly as before; the controls inside each carry
   // an (i). Only a complete model has settings to offer.
@@ -659,7 +668,7 @@ export function LocalModelRow({
     // operating system's own words about a file it could not move — which the
     // user needs, and cannot find behind the prefix.
     try { await window.claude.models.addVision(model.id); await onRefresh(); }
-    catch (e) { setActionError(plainMessage(e, 'Could not add vision to this model.')); }
+    catch (e) { setActionError(plainMessage(e, 'Could not add vision to this model.')); setFailedAction('vision'); }
     finally { setBusy(false); }
   };
 
@@ -699,6 +708,7 @@ export function LocalModelRow({
       // Surface the real refusal (disk guard, already downloading, no manifest).
       // A resume that silently did nothing was the original PartialRow bug.
       setActionError(plainMessage(e, 'Could not resume the download.'));
+      setFailedAction('resume');
     } finally {
       setBusy(false);
     }
@@ -728,6 +738,7 @@ export function LocalModelRow({
       await onRefresh();
     } catch (e) {
       setActionError(plainMessage(e, 'Could not delete the model.'));
+      setFailedAction('delete');
     } finally {
       setBusy(false);
     }
@@ -794,7 +805,7 @@ export function LocalModelRow({
             {/* WHY a small outlined Button (fix batch 2 — decisions.md "Follow-up
                 actions"): underlined text is only for a link inside a sentence,
                 never for an action. Still under the name, for the same reason. */}
-            {model.status === 'complete' && model.vision === 'available' && !live && !confirming && (
+            {model.status === 'complete' && model.vision === 'available' && !live && !confirming && !(failedAction === 'vision' && actionError) && (
               <Button variant="secondary" size="sm" onClick={() => void addVision()} disabled={busy} className="mt-1">
                 {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
               </Button>
@@ -891,23 +902,40 @@ export function LocalModelRow({
                 ? `This removes the model file (${gb(model.sizeBytes)}) from this computer. Re-downloading it later will take a while.`
                 : `Delete ${gb(model.sizeBytes)}? This removes every downloaded piece of this model.`}
             </Callout>
-            <div className="flex gap-2">
+            {/* A failed delete's notice takes these buttons' place, Keep and Try again inside it
+                (guide "A failed action replaces the buttons it came from"; small-fixes-1). */}
+            {!(failedAction === 'delete' && actionError) && <div className="flex gap-2">
               <Button variant="secondary" onClick={() => setConfirming(false)} className="flex-1">
                 Keep
               </Button>
               <Button variant="danger" onClick={() => void remove()} disabled={busy} className="flex-1">
                 {busy ? 'Removing…' : model.status === 'complete' ? 'Delete model' : 'Delete download'}
               </Button>
-            </div>
+            </div>}
           </div>
         )}
-        {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
-            explanatory failure text is the shared tinted box. No separate
-            Retry button is added — the Delete/Add vision/Pause control that
-            triggered this error is already visible on the row above, and is
-            the retry action. A stopped download's error is shown inside its
-            own notice box above instead (fix batch 2), not twice. */}
-        {error && !(problem && !confirming) && <Callout tone="danger" className="mt-1.5">{error}</Callout>}
+        {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press — a dead end
+            (error-message-standards "Every error state offers an action"). Each failure carries
+            Try again for the button it came from, which hides meanwhile (the plugin page's failed
+            install is the same shape). A download that failed later, with no button to repeat
+            it, offers Report bug. A stopped download's error is shown inside its own notice box
+            above instead (fix batch 2), not twice. */}
+        {error && !(problem && !confirming) && (() => {
+          const retry = actionError && failedAction === 'vision' ? () => void addVision()
+            : actionError && failedAction === 'delete' ? () => void remove()
+            : actionError && failedAction === 'resume' ? () => void resume()
+            // A download that failed after it started: which download it was is not known here,
+            // so no Try again is guessed — the row's own buttons stay, plus Report bug.
+            : null;
+          const keep = actionError && failedAction === 'delete' && confirming
+            ? [{ label: 'Keep', onClick: () => { setConfirming(false); setActionError(null); setFailedAction(null); } }]
+            : undefined;
+          return retry
+            ? <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={error} onRetry={retry} moreActions={keep} />
+            : <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={error}
+                onReportBug={() => setReportContext({ surface: 'Local models' })} />;
+        })()}
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
 
         {/* Round 2 P-14 (Destin): the settings open in a small dialog on its own layer,
             not inline under the row. */}
@@ -1283,17 +1311,17 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
             <span className={fitColor(q.fit.fit)}>{q.fit.label}</span>
           </p>
         </div>
-        {!dl && (
+        {/* Hidden while its failure shows: that notice carries Try again (small-fixes-1). */}
+        {!dl && !dlError && (
           <Button size="sm" onClick={() => void startDownload()} className="shrink-0">
             Download
           </Button>
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {/* WHY Callout (fix batch 1 addendum, 2026-09-24): same reasoning as the
-          repo card's own start-download failure above — the Download button
-          right there is the retry action. */}
-      {dlError && <Callout tone="danger" className="mt-1.5">{dlError}</Callout>}
+      {/* Same as the repo card's own failed start above (small-fixes-1): the notice carries
+          Try again in place of the hidden Download button. */}
+      {dlError && <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={dlError} onRetry={() => void startDownload()} />}
     </div>
   );
 }

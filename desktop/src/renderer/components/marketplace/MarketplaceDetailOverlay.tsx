@@ -28,7 +28,7 @@ import UpdateButton from "./UpdateButton";
 import { Button, Callout, CARD_LEVEL_1, Chip, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
-import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, InstallFailed, type DetailSection } from "./DetailPage";
 import { workbenchThemeLiked } from "../../workbench-mode";
 
 export type DetailTarget =
@@ -217,22 +217,6 @@ function InstallingButton() {
       <span className="inline-block w-3 h-3 border-2 border-on-accent border-t-transparent rounded-full animate-spin" aria-hidden />
       Installing…
     </Button>
-  );
-}
-
-/** A failed install, said inside the item's card with its own Retry (guide "Status and
- *  notices": a notice about one thing sits inside it, its buttons inside the notice at
- *  the right). WHY: the reason used to live only in the Install button's hover title, so
- *  touch screens never saw it. */
-function InstallFailed({ message, onRetry }: { message: string; onRetry(): void }) {
-  return (
-    // WHY no title (games-social round 5; Destin: the red title "seems to be unique styling not
-    // used elsewhere"): one plain sentence that still names the real reason.
-    <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Try installing again</Button>}>
-      {/* The reason usually already says what failed ("Couldn't download it: …"); prefix only a
-          bare one, so the sentence never reads "Couldn't install: Couldn't…". */}
-      {/^(couldn't|can't|could not|cannot)\b/i.test(message.trim()) ? message : `Couldn't install: ${message}`}
-    </Callout>
   );
 }
 

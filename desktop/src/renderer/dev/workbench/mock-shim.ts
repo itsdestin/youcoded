@@ -198,6 +198,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // because the catch-all's `[]` is a truthy non-status that crashed the panel.
   'sync.getStatus', 'sync.getLog', 'sync.force', 'sync.dismissWarning',
   'sync.pushBackend', 'sync.updateBackend', 'sync.removeBackend', 'sync.addBackend',
+  // The add-a-backup wizard's steps (small-fixes-1), so its two failures can be photographed.
+  'sync.setup.checkPrereqs', 'sync.setup.installRclone', 'sync.setup.authGdrive', 'sync.setup.createRepo',
   'folders.list', 'folders.rename', 'folders.setDescription', 'folders.remove',
   'project.listConversations', 'project.listContext', 'project.readContextFile',
   'project.writeContextFile', 'project.repoInfo',
@@ -2010,11 +2012,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // catch-all rather than hand-written for no behavioural gain.
   const shell: Ns<'shell'> = {
     openPath: async () => '',
-    // Real open so workbench clicks visibly do something: mirror the remote
-    // shim's browser behaviour (window.open in a new tab) instead of silently
-    // resolving [] through the catch-all. Only called on a user click (never
-    // by the model), so the new tab/popup is not a surprise.
-    openExternal: async (url: string) => { window.open(url, '_blank', 'noopener'); },
+    // WHY nothing opens (small-fixes-1): this used to call window.open, so a practice screen
+    // that pressed "Continue in GitHub" (settings/development/bug-report#browser) opened a real
+    // github.com sign-in page in the screenshot browser — it took the front of the window, hid
+    // the app's tab, and the next screens hung (shoot --check, 2026-10-07; the engine now also
+    // closes such pages). The practice app must never reach the internet on its own: the URL is
+    // remembered on `window.__workbenchOpenedUrls` for a test or a curious reader, and a line
+    // in the console says what would have opened.
+    openExternal: async (url: string) => {
+      const w = globalThis as unknown as { __workbenchOpenedUrls?: string[] };
+      (w.__workbenchOpenedUrls ??= []).push(url);
+      console.info(`[workbench] would open ${url} (the practice app opens no outside pages)`);
+    },
   };
 
   // Specialists 1c — roster, model tiers, and the two card actions. Real
@@ -2224,6 +2233,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // failed to start" the moment anyone opened Backup & Sync, including on the
   // public landing page's live demo (reproduced 2026-09-04). Same failure shape
   // the syncSpaces comment above warns about; this is its second instance.
+  const syncSetupMode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('syncSetup') : null;
   const sync = {
     getStatus: async () => ({
       backends: [
@@ -2271,6 +2281,22 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),
     addBackend: async (instance: { type: string; label: string }) => ({ ...instance, id: `${instance.type}-new` }),
+    // The add-a-backup wizard (small-fixes-1). WHY: on the catch-all's `[]` every prerequisite
+    // read as missing and no step past the first could be reached. `?syncSetup=install-failed`
+    // makes Drive's helper tool missing and its install fail; `?syncSetup=save-failed` makes
+    // GitHub's new private repository fail to be made. The reasons are practice words.
+    setup: {
+      checkPrereqs: async (backend: string) => (backend === 'github'
+        ? { ghInstalled: true, ghAuthenticated: true, ghUsername: 'you' }
+        : { rcloneInstalled: syncSetupMode !== 'install-failed', gdriveConfigured: true, gdriveRemoteName: 'gdrive' }),
+      installRclone: async () => (syncSetupMode === 'install-failed'
+        ? { success: false, error: 'The download of the helper tool stopped part way (workbench practice failure).' }
+        : { success: true }),
+      authGdrive: async () => ({ success: true, remoteName: 'gdrive2' }),
+      createRepo: async (name: string) => (syncSetupMode === 'save-failed'
+        ? { success: false, error: `GitHub refused to make the repository ${name}: name already exists on this account (workbench practice failure).` }
+        : { success: true, repoUrl: `https://github.com/you/${name}` }),
+    },
   };
 
   // Real channel (folders:set-description) — the LOCAL-folder half of the same
@@ -3713,6 +3739,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // so the popup's buttons show their real next state; `connect` hands back the setup command
   // the way the real handler does, so the "finish setup" notice can be seen too.
   let integrationList: WorkbenchIntegration[] = marketplaceEmpty ? [] : WORKBENCH_INTEGRATIONS.map((i) => ({ ...i, state: { ...i.state } }));
+  // `?integration=failed` (small-fixes-1): Google Workspace's install failed, the way the real
+  // installer records it (installed false, the reason in `error`) — so the integration page's
+  // failure notice and its Try installing again can be photographed.
+  const integrationFailed = mpParams.get('integration') === 'failed';
+  const INTEGRATION_FAILURE = 'Plugin not found in marketplace: google-workspace (workbench practice failure)';
+  if (integrationFailed) {
+    integrationList = integrationList.map((i) => (i.slug === 'google-workspace'
+      ? { ...i, state: { slug: i.slug, installed: false, connected: false, error: INTEGRATION_FAILURE } } : i));
+  }
   const setIntegration = (slug: string, patch: Partial<WorkbenchIntegration['state']>) => {
     integrationList = integrationList.map((i) => (i.slug === slug ? { ...i, state: { ...i.state, ...patch } } : i));
   };
@@ -3720,6 +3755,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     list: async () => integrationList.map((i) => ({ ...i, state: { ...i.state } })),
     status: async (slug: string) => integrationList.find((i) => i.slug === slug)?.state ?? null,
     install: async (slug: string) => {
+      if (integrationFailed) return { slug, installed: false, connected: false, error: INTEGRATION_FAILURE };
       setIntegration(slug, { installed: true });
       return { ok: true, postInstallCommand: integrationList.find((i) => i.slug === slug)?.setup.postInstallCommand };
     },

@@ -60,6 +60,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud', 'dialog'),
   settings('settings/assistant/local', 'dialog'),
   settings('settings/assistant/local/engine-advanced', 'dialog'),
+  // Failures with their Try again (small-fixes-1): the engine's set-up check, and a model download
+  // that could not start — each was a red box with nothing to press.
+  { ...settings('settings/assistant/local/engine-advanced#check-failed', 'dialog', 'error-state'), params: { fail: 'engine.prereqs' }, open: ['Set up'] },
+  { ...settings('settings/assistant/local#download-failed', 'dialog', 'error-state'), params: { fail: 'models.download' }, open: ['Download'] },
   // The one installed model with a load-failure state (mock-shim switch by model id).
   settings('settings/assistant/local/model-settings', 'dialog'),
   settings('settings/assistant/cloud/claude-code/sign-out', 'dialog'),
@@ -95,6 +99,14 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
   { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // The (i) explainer: what Backup & sync copies, and what it does not (small-fixes-1).
+  { ...settings('settings/sync#explainer', 'dialog'), open: ['What is this?'] },
+  // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making
+  // the GitHub repository on Start backup — each a notice with Try again in its button's place.
+  { ...settings('settings/sync#add-install-failed', 'dialog', 'error-state'), params: { syncSetup: 'install-failed' },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Install now'] },
+  { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '⌂ GitHub…', 'Start backup'] },
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),

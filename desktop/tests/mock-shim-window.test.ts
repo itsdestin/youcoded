@@ -124,6 +124,23 @@ describe('engine states', () => {
 // jsdom (rather than this suite's default `node`) because the voice-fake block below
 // RUNS the workbench's voice fake, which schedules its scripted words with
 // `window.setTimeout`. Every other test in this section is a static scan.
+// WHY (small-fixes-1): the practice backend's openExternal called window.open, so a practice
+// screen pressing "Continue in GitHub" opened a real github.com sign-in page inside the
+// screenshot browser, which hid the app's tab and hung the screens after it. The practice app
+// must never open an outside page; it only remembers the address.
+describe('outside pages', () => {
+  afterEach(() => { vi.restoreAllMocks(); delete (globalThis as any).__workbenchOpenedUrls; });
+
+  it('openExternal opens nothing and remembers the address', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const shim = createMockShim(createStore('default')) as any;
+    await shim.shell.openExternal('https://github.com/itsdestin/youcoded/issues/new');
+    expect(open).not.toHaveBeenCalled();
+    expect((globalThis as any).__workbenchOpenedUrls).toEqual(['https://github.com/itsdestin/youcoded/issues/new']);
+  });
+});
+
 describe('mock contract', () => {
   // WHY the channel checks below still read preload.ts and remote-shim.ts as text
   // (Plan B source-grep sweep, 2026-09-16, row "channel parity stays"): they compare

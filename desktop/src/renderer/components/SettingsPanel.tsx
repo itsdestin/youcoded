@@ -37,6 +37,7 @@ import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
 import { Button, CARD_LEVEL_1, CloseButton, Slider, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
+import { plainMessage } from '../utils/ipc-error';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -2292,7 +2293,11 @@ export function ConnectToDesktopButton() {
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [connectedDeviceName, setConnectedDeviceName] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  // The failed connection AND the computer it was for, so its notice can try that one again.
+  // WHY (small-fixes-1): the message used to be a red box with nothing to press — a dead end
+  // (error-message-standards "Every error state offers an action"); deviceError below is the
+  // same shape.
+  const [connectError, setConnectError] = useState<{ message: string; device: PairedDevice } | null>(null);
   // A saved computer that could not be saved or removed, with the action to try again.
   // WHY: while paired, Save and Remove really ask the phone's own runtime now, and that can
   // fail or time out; before, the failure went nowhere and the row just stayed.
@@ -2349,7 +2354,7 @@ export function ConnectToDesktopButton() {
       setConnectedDeviceName(device.name);
       setOpen(false);
     } catch (err: any) {
-      setConnectError(err?.message || 'Connection failed');
+      setConnectError({ message: plainMessage(err, "Couldn't connect to this computer."), device });
     } finally {
       setConnecting(false);
     }
@@ -2500,11 +2505,9 @@ export function ConnectToDesktopButton() {
 
               {/* Error */}
               {connectError && (
-                // Was raw `red-500` around text that already used the destructive
-                // TOKEN — the surface and its own body disagreed about which red
-                // they were. Change 17 moved the app's reds onto the token so
-                // theme packs can restyle them; this one survived that sweep.
-                <Callout tone="danger">{connectError}</Callout>
+                // The shared error box with Try again for the same computer (small-fixes-1),
+                // as the saved-computer error just below.
+                <ErrorState mode="recoverable" message={connectError.message} onRetry={() => void doConnect(connectError.device)} variant="inline" />
               )}
 
               {deviceError && (

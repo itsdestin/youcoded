@@ -93,7 +93,11 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   const [status, setStatus] = useState<EngineStatusView | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The failure AND how to try that same thing again. WHY (small-fixes-1): the message used to be
+  // a red box with nothing to press — the comment beside it said the button above was the retry,
+  // but the guide's rule is that a failed action's notice carries its own Try again
+  // (error-message-standards "Every error state offers an action").
+  const [error, setError] = useState<{ message: string; retry: () => void } | null>(null);
 
   useEffect(() => {
     // Fetch once, then keep live via the two push subscriptions. `alive` guards
@@ -136,7 +140,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   const run = async (fn: () => Promise<any>) => {
     setBusy(true); setError(null);
     try { setStatus(await fn()); }
-    catch (e: any) { setError(plainMessage(e)); }
+    catch (e: any) { setError({ message: plainMessage(e), retry: () => void run(fn) }); }
     finally { setBusy(false); setProgress(null); }
   };
 
@@ -188,7 +192,15 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       if (next) {
         setPrereqs(null);
         try { setPrereqs(await window.claude.engine.prereqs(opt.backend)); }
-        catch (e: any) { setError(plainMessage(e)); }
+        catch (e: any) {
+          // Try again re-reads what is missing; the set-up box is already open.
+          const retry = async () => {
+            setError(null);
+            try { setPrereqs(await window.claude.engine.prereqs(opt.backend)); }
+            catch (e2: any) { setError({ message: plainMessage(e2), retry: () => void retry() }); }
+          };
+          setError({ message: plainMessage(e), retry: () => void retry() });
+        }
       }
       return;
     }
@@ -202,7 +214,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       const p = await window.claude.engine.prereqs(backend);
       setPrereqs(p);
       if (p.satisfied) { setSetupOpen(false); await run(() => window.claude.models.setBackend(backend)); }
-    } catch (e: any) { setError(plainMessage(e)); }
+    } catch (e: any) { setError({ message: plainMessage(e), retry: () => void recheck(backend) }); }
   };
 
   const copyCommand = async (cmd: string) => {
@@ -409,15 +421,17 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
     <div className={`${CARD_LEVEL_1} mt-2 px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          {/* Not marked data-centres-agree on purpose: shoot's "centres agree" check found the
-              pill riding the words' baseline 1.4px low at 1.5x (2026-10-05). Reported, not fixed
-              in that round; mark the row once the pill is centred on it. */}
-          <p className="text-xs text-fg font-medium">
-            Local engine
+          {/* WHY a flex row (small-fixes-1): the pill sat INSIDE the title's line of text, so it
+              rode the words' baseline and came out 1.4px low at 1.5x (shoot's "centres agree",
+              2026-10-05). The cause was the inline placement, not the shared pill: the detail
+              pages' name + status row (DetailPage.tsx) centres the two as flex items, and this
+              copies it — and is now checked by the same mark. */}
+          <div className="flex items-center gap-2" data-centres-agree="engine name and status">
+            <span className="text-xs text-fg font-medium">Local engine</span>
             {/* WHY a pill (status pills trial, 2026-09-29): a live state — the
                 word stays, green tint while it runs, grey otherwise. */}
-            <Pill tone={status.state === 'running' ? 'ok' : 'neutral'} className="ml-2 font-normal">{stateWord}</Pill>
-          </p>
+            <Pill tone={status.state === 'running' ? 'ok' : 'neutral'}>{stateWord}</Pill>
+          </div>
           {factLine && <p className="text-3xs text-fg-muted" data-testid="engine-fact-line">{factLine}</p>}
         </div>
         {/* Primary row action via the shared primitive — drops the hand-rolled
@@ -467,11 +481,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       {busy && (progress?.kind === 'verify' || progress?.kind === 'unpack') && (
         <p className="mt-2 text-3xs text-fg-dim">{progress.kind === 'verify' ? 'Verifying download…' : 'Unpacking…'}</p>
       )}
-      {/* WHY Callout, not a bare red line (fix batch 1 addendum, 2026-09-24):
-          explanatory failure text is the shared tinted box; the Install/
-          Restart/Switch button that triggered this is already visible above
-          and is the retry action. */}
-      {error && <Callout tone="danger" className="mt-2">{error}</Callout>}
+      {/* The shared error box with Try again for the action that failed (small-fixes-1).
+          `inline`: a notice about this card, inside it (guide "Status and notices"). */}
+      {error && <ErrorState mode="recoverable" variant="inline" className="mt-2" message={error.message} onRetry={error.retry} />}
       {/* Say WHY the button is there. "A newer engine is available" alone tells a
           non-developer nothing about whether they need it. */}
       {updateAvailable && !busy && (
@@ -653,7 +665,14 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                   change silently never lands. */}
               {/* WHY Callout (fix batch 1 addendum, 2026-09-24): same reasoning
                   as the card-level error above. */}
-              {status.configApplyError && <Callout tone="danger">{status.configApplyError}</Callout>}
+              {/* WHY Report bug (small-fixes-1): this box had nothing to press. The engine's own
+                  words say what failed, but nothing here can re-apply a saved setting (the next
+                  engine start reads it), so the honest action is reporting it — never a guessed
+                  fix (error-message-standards). */}
+              {status.configApplyError && (
+                <ErrorState mode="recoverable" variant="inline" message={status.configApplyError}
+                  onReportBug={() => setReportContext({ surface: 'Local engine settings' })} />
+              )}
 
               {/* The optional engine builds (ROCm). Deliberately down HERE, inside
                   a section that is shut by default, rather than in the card body

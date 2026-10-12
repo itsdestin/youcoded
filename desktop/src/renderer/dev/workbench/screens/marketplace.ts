@@ -21,6 +21,8 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/theme-detail', 'dialog'),
   mp('marketplace/theme-detail/not-installed', 'dialog'),
   mp('marketplace/integration-detail', 'dialog'),
+  // A failed install: the reason and Try installing again in one notice (small-fixes-1).
+  { ...mp('marketplace/integration-detail#failed', 'dialog', 'error-state'), params: { integration: 'failed' } },
   // The same pages at phone width and in a small window — they must fit and resize.
   { ...mp('marketplace/detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
