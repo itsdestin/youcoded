@@ -95,7 +95,9 @@ export function UnsavedBeforeQuit() {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <Button variant="primary" className="w-full" onClick={dismiss}>OK</Button>
+          {/* WHY "Keep editing" (Destin, close-session-6#CS6-4): "OK" could read as "OK, quit"; the
+              label says what happens — back to YouCoded, nothing quits. */}
+          <Button variant="primary" className="w-full" onClick={dismiss}>Keep editing</Button>
           <Button variant="secondary" className="w-full" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
         </div>
       )}

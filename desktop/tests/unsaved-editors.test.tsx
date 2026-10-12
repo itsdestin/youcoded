@@ -291,7 +291,7 @@ describe('the refused-quit prompt', () => {
     holdUnsavedEditor({ name: 'notes.md', discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
-    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect((office as unknown as { dismissPrompt: () => void }).dismissPrompt).toHaveBeenCalled();
   });
 });
