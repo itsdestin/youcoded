@@ -168,6 +168,9 @@ export function ErrorState(props: ErrorStateProps) {
   // Retry → Diagnose → Report bug that was actually supplied.
   // Fixed, not per-caller: three-button errors that each ordered themselves would
   // look like three different apps.
+  // WHY "Try again", not "Retry" (Destin, error-notices-1#EN-Q1, 2026-10-12): the guide and
+  // every screen redesigned since (Games offline, a failed ticket, Contribute) say "Try
+  // again"; two words for one button read as two different apps. The prop stays `onRetry`.
   const primary = props.onRetry ? 'retry' : props.onDiagnose ? 'diagnose' : 'report';
   const actions = (
     <>
@@ -186,7 +189,7 @@ export function ErrorState(props: ErrorStateProps) {
       )}
       {props.onRetry && (
         <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry} disabled={props.busy}>
-          Retry
+          Try again
         </Button>
       )}
     </>

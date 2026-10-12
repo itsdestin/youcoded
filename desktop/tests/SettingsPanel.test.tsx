@@ -165,7 +165,7 @@ describe('SettingsPanel — remote access panel', () => {
   it('reports a failed check without inventing a cause', () => {
     const action = mount('conflict');
     expect(screen.getByText(/another service/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(action).toHaveBeenCalledWith({ type: 'check' });
     cleanup();
     mount('error');
@@ -333,7 +333,7 @@ describe('SettingsPanel — the Android app\'s saved computers', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
     expect(await screen.findByText("Couldn't remove Desk: The phone did not answer.")).toBeTruthy();
     expect(screen.getByText('Desk')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await vi.waitFor(() => expect(screen.queryByText('Desk')).toBeNull());
     expect(removePairedDevice).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/Couldn't remove/)).toBeNull();

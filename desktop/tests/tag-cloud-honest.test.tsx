@@ -60,7 +60,7 @@ describe.each(['cloud', 'details'] as const)('%s — a read that failed is not "
     expect(await screen.findByText(/couldn.t load your tags/i)).toBeInTheDocument();
     expect(screen.getByText(/EACCES: permission denied/)).toBeInTheDocument();
     expect(screen.queryByText(/No tags yet/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 
   it('a rejected call says so too, without the transport wrapper', async () => {
@@ -77,7 +77,7 @@ describe.each(['cloud', 'details'] as const)('%s — a read that failed is not "
     stub(list);
     render(<Harness />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: '+ New tag' })).toBeInTheDocument();
     expect(screen.queryByText(/couldn.t load your tags/i)).toBeNull();
     expect(list).toHaveBeenCalledTimes(2);

@@ -165,7 +165,11 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
           title-only notice ("Download interrupted" + Delete/Resume) sat at the top
           edge beside the taller buttons and read as not vertically centred. With a
           body, items-start still keeps the buttons level with the title. */}
-      <div className={`flex flex-wrap ${children ? 'items-start' : 'items-center'} gap-x-3 gap-y-2`}>
+      {/* WHY items-center when there is no TITLE (error-notices-1#EN-1, 2026-10-12: "the
+          spacing is very odd"): a notice that is one sentence beside its button sat at the
+          top edge while the taller button hung lower, so the words looked misaligned. Only
+          a title + body keeps items-start, so the buttons stay level with the title. */}
+      <div className={`flex flex-wrap ${title && children ? 'items-start' : 'items-center'} gap-x-3 gap-y-2`}>
         <div className="flex-1 min-w-48">{text}</div>
         <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>

@@ -99,6 +99,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
       [RETRY_WARNING],
     );
     render(<SyncSection autoOpen />);
+    // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('drive-1'));
@@ -112,6 +113,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
   async function retryAndFindAlert(pushBackend: ReturnType<typeof vi.fn>, text: RegExp) {
     const api = stub({ pushBackend }, [RETRY_WARNING]);
     render(<SyncSection autoOpen />);
+    // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     const alert = await waitFor(() => {
       const hit = screen.getAllByRole('alert').find((a) => text.test(a.textContent ?? ''));
@@ -126,7 +128,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
       vi.fn(async () => ({ success: false, error: "Some files didn't upload." })),
       /Upload failed: Some files didn.t upload\./,
     );
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
     // settle (negative assertion): the alert must still be there after its old 2 s auto-clear.
     await new Promise((r) => setTimeout(r, 2300));
@@ -134,13 +136,13 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     expect(screen.queryByText('Error')).toBeNull();
 
     // Retry in the block runs the upload again.
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledTimes(2));
   });
 
   it('an upload that was skipped offers Retry only — nothing to report', async () => {
     const { alert } = await retryAndFindAlert(vi.fn(async () => ({ success: false, error: '' })), /upload hasn.t run yet/i);
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).queryByRole('button', { name: 'Report bug' })).toBeNull();
   });
 
@@ -149,7 +151,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
       vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }),
       /couldn.t confirm the upload finished/i,
     );
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
   });
 

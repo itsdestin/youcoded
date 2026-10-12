@@ -1853,10 +1853,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   )}
                 </div>
               ) : loadError !== null ? (
+                // WHY mx-4 (error-notices-1#EN-2, 2026-10-12: "spacing on left/right margins might
+                // be a bit odd"): the list has no side padding of its own, so the box ran edge to
+                // edge of the pane. It now lines up with the search box and filters above (px-4).
                 loadError ? (
-                  <ErrorState mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
+                  <ErrorState className="mx-4" mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
                 ) : (
-                  <ErrorState mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
+                  <ErrorState className="mx-4" mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
                 )
               ) : filtered.length === 0 ? (
                 <EmptyState

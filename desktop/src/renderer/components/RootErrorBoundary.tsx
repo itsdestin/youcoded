@@ -44,7 +44,7 @@ export class RootErrorBoundary extends React.Component<
               cursor: 'pointer', fontSize: 12,
             }}
           >
-            Retry
+            Try again
           </button>
         </div>
       );

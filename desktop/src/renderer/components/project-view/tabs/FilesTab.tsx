@@ -970,8 +970,10 @@ function FilesTabImpl({
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
+      {/* WHY full width, not a narrow centred card (error-notices-1#EN-8, 2026-10-12: "full
+          width"): the notice takes the place of the whole file list, so it spans that list. */}
       {flat && !allLoading && allError !== null && (
-        <div className="max-w-md mt-4 mx-auto">
+        <div className="mt-4">
           <ErrorState
             mode="recoverable"
             message={allError ? `Couldn’t load your files: ${allError}` : 'Couldn’t load your files.'}
@@ -983,7 +985,7 @@ function FilesTabImpl({
           never an empty folder (spec 2026-09-18 §8). The breadcrumb above
           stays, so the way back out is always one click. */}
       {!flat && !folderLoading && folderError !== null && (
-        <div className="max-w-md mt-4 mx-auto">
+        <div className="mt-4">
           <ErrorState
             mode="recoverable"
             message={folderErrorMessage(folderError.error, folderError.detail, currentDir === '', project.path)}

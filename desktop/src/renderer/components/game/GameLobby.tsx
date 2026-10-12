@@ -44,7 +44,7 @@ function classifyPartyError(msg: string | null): { hint: string } {
     return { hint: 'The game server is taking a breather. This usually fixes itself in a minute.' };
   }
   if (text.includes('code 1006') || text.includes('code 1015') || text.includes('lost the connection') || text.includes('lost connection')) {
-    return { hint: "Looks like the internet hiccuped. We'll keep trying — you can also hit Retry." };
+    return { hint: "Looks like the internet hiccuped. We'll keep trying — you can also hit Try again." };
   }
   if (text.includes('code 4000')) {
     return { hint: 'Something got mixed up signing in. Try reloading the app.' };

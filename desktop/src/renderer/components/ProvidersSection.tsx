@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Button, FieldError, InputGroup, Select, SectionLabel, TextInput, Toggle } from './ui';
+import { Button, ErrorState, FieldError, InputGroup, Select, SectionLabel, TextInput, Toggle } from './ui';
 import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ProviderType } from '../../shared/provider-types';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 
@@ -196,17 +196,17 @@ export default function ProvidersSection({ embedded = false }: { embedded?: fals
               failure (including a HARD initial-load failure that leaves rows
               empty) doesn't strand the user: the Add-provider affordance below
               still renders, and Retry re-runs list(). */}
+          {/* WHY ErrorState, not a field-error line beside a loose button (error-notices-2,
+              2026-10-12): an error with something to press is the notice box with its
+              button inside at the right. Same words; the button now reads "Try again". */}
           {listError && (
-            <div className="flex items-center gap-2 px-1">
-              <FieldError as="p" size="2xs" className="flex-1">
-                {visibleRows.length === 0
-                  ? `Couldn't load providers — ${listError}`
-                  : `Couldn't refresh — ${listError}`}
-              </FieldError>
-              <Button variant="secondary" size="sm" onClick={() => void refresh()} className="shrink-0">
-                Retry
-              </Button>
-            </div>
+            <ErrorState
+              variant="inline"
+              message={visibleRows.length === 0
+                ? `Couldn't load providers — ${listError}`
+                : `Couldn't refresh — ${listError}`}
+              onRetry={() => void refresh()}
+            />
           )}
 
           {visibleRows.map((p) => (

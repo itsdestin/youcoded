@@ -172,7 +172,7 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     expect(screen.getByText('Speak your messages')).toBeInTheDocument();
     expect(screen.getByText(REASON)).toBeInTheDocument();
 
-    const retry = screen.getByRole('button', { name: 'Retry' });
+    const retry = screen.getByRole('button', { name: 'Try again' });
     fireEvent.click(retry);
     expect(h.onDownload).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument();

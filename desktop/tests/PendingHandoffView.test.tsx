@@ -40,7 +40,7 @@ describe('pending handoff chat frame', () => {
     const { container } = render(<PendingHandoffView tab={{ ...tab, phase: 'failed' }} visible onRetry={retry} onContinue={vi.fn()}
       drawerOpen={false} expanded={false} gamePane={null} />);
     expect(screen.queryByText('This conversation may have newer messages on your other computer.')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(retry).toHaveBeenCalledOnce();
     expect(screen.queryByText('This conversation may have newer messages on your other computer.')).toBeNull();
   });

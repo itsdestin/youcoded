@@ -146,7 +146,7 @@ describe('roster status: loading / failed / unavailable', () => {
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('ENOENT: could not read the specialists folder')).toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 
@@ -160,7 +160,7 @@ describe('roster status: loading / failed / unavailable', () => {
     // Whole-section takeover, not a per-widget fallback: the tier pickers
     // above the roster must not render alongside this message either.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.queryByLabelText('Model')).toBeNull();
   });
 });
@@ -269,7 +269,7 @@ describe('model tiers: load and write failures are shown, never swallowed into "
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('Could not reach the harness.')).toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(getDelegatedModels).toHaveBeenCalledTimes(2));
   });
 });
@@ -297,7 +297,7 @@ describe('desktop-only takeover: the tier-call signal, independent of the roster
     // Whole-section takeover — the roster that DID load must not show through.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
     expect(screen.queryByText('Explorer')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

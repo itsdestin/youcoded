@@ -9,7 +9,7 @@ vi.mock('../src/renderer/components/ui', () => ({
   Button: (props: any) => <button {...props} />,
   TextInput: (props: any) => <input {...props} />,
   LoadingState: () => <span>Loading</span>,
-  ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Retry</button></div>,
+  ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Try again</button></div>,
 }));
 afterEach(cleanup);
 it('keeps a manual name protected with no automatic-name reset action', async () => {
@@ -78,7 +78,7 @@ it('does not expose an old failed load retry on the next identity', async () => 
   const view = render(<SessionRenameDialog id="a" name="A" onClose={() => {}} />);
   view.rerender(<SessionRenameDialog id="b" name="B" onClose={() => {}} />);
   await act(async () => { rejectOld(new Error('old failure')); });
-  expect(screen.queryByText('Retry')).toBeNull();
+  expect(screen.queryByText('Try again')).toBeNull();
   expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('B');
   expect(title.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
 });

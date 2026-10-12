@@ -276,13 +276,17 @@ function TagsBody({ t }: { t: ReturnType<typeof useTagEditor> }) {
  *  (backlog row 17: it was the last surface on the older tag editor). */
 export function SessionTagsCard(p: TagsProps) {
   const t = useTagEditor(p);
-  if (t.failed) return t.failed;
+  // WHY the label stays when the load fails (error-notices-1#EN-3, 2026-10-12: "should still
+  // keep the tags section header"; guide: a problem replaces the card — same spot, same label
+  // above it). Only the card is swapped for the notice.
   return (
     <section>
       <SectionLabel className="mb-2">Tags</SectionLabel>
-      <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-        <TagsBody t={t} />
-      </div>
+      {t.failed ?? (
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+          <TagsBody t={t} />
+        </div>
+      )}
     </section>
   );
 }

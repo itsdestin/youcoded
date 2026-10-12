@@ -45,7 +45,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     expect(await screen.findByText(/couldn.t load your models/i)).toBeInTheDocument();
     expect(screen.queryByText('You have not set up any model providers.')).toBeNull();
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 
   it('a catalog that failed says so too', async () => {
@@ -66,7 +66,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
     await openPanel();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
   });
 

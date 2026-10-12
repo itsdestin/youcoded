@@ -601,7 +601,7 @@ describe('FirstRunView — Retry is offered only when something actually failed'
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText("OpenRouter didn't accept this key. Check that you copied all of it.")).toBeTruthy());
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.queryByText('Setup stopped')).toBeNull();
     expect(screen.getByText('Choose how your assistant runs')).toBeTruthy();
   });
@@ -621,7 +621,7 @@ describe('FirstRunView — Retry is offered only when something actually failed'
 
     await waitFor(() => expect(screen.getByText('Setup stopped')).toBeTruthy());
     expect(screen.getByText("Signing in didn't finish.")).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     showDetails();
     expect(screen.getByText('Sign-in timed out. Try again?')).toBeTruthy();
   });
@@ -636,7 +636,7 @@ describe('FirstRunView — Retry is offered only when something actually failed'
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText("This step didn't finish.")).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     showDetails();
     expect(screen.getByText(/Insufficient disk space/)).toBeTruthy();
   });
@@ -653,7 +653,7 @@ describe('FirstRunView — Retry is offered only when something actually failed'
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText("Node.js couldn't be installed.")).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     // The bar steps aside while stopped (deck L-2).
     expect(screen.queryByRole('progressbar')).toBeNull();
   });

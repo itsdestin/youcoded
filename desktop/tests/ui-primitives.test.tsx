@@ -638,7 +638,7 @@ describe('state family', () => {
     // Explicit review correction from secondary — secondary reads as a dim
     // outline on dark themes.
     render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Retry' }).className).toContain('bg-accent');
+    expect(screen.getByRole('button', { name: 'Try again' }).className).toContain('bg-accent');
   });
 
   it('general errors ship the two documented actions', () => {

@@ -45,7 +45,7 @@ describe('the approval screen', () => {
     expect(screen.getByRole('button', { name: 'Allow and open' })).toBeEnabled();
 
     // Retry is a real second attempt, not a dismissal.
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(2));
   });
 
@@ -56,6 +56,6 @@ describe('the approval screen', () => {
     // The host swaps this screen for the page; until it does, the button must
     // not invite a second press.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Allowing…' })).toBeDisabled());
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });

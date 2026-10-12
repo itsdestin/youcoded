@@ -93,7 +93,7 @@ describe('LibraryScreen — a load that did not finish is not "nothing installed
     // Retry really reloads: once the list answers (empty, this time), the true empty
     // state is allowed to appear.
     list.mockResolvedValue([]);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Try again' })); });
     expect(await screen.findByText('Nothing installed yet.')).toBeInTheDocument();
   });
 

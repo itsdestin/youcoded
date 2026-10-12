@@ -154,7 +154,7 @@ describe('AttentionBanner — the stalled card', () => {
     const { container } = render(
       <AttentionBanner state="stalled" stalledSince={Date.now()} onRetry={onRetry} onStop={onStop} />,
     );
-    const retry = buttonByText(container, 'Retry');
+    const retry = buttonByText(container, 'Try again');
     const stop = buttonByText(container, 'Stop');
     expect(retry).not.toBeNull();
     expect(stop).not.toBeNull();

@@ -402,7 +402,11 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   // drawerSkills is [] both when nothing is installed and when loading the
                   // skills failed. A failed load is its own answer, with Retry — never
                   // "No skills installed yet." and a trip to the Marketplace.
-                  <ErrorState className="mx-4" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
+                  // WHY mx-2 mt-3 (error-notices-1#EN-1, 2026-10-12: "the spacing is very odd"):
+                  // the box sat flush against the line under the filter chips and inset
+                  // further than the list. It now takes the skill sections' own px-2 pt-3,
+                  // so it starts where the cards would and leaves the same gap under the chips.
+                  <ErrorState className="mx-2 mt-3" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
                 ) : drawerSkills.length === 0 ? (
                   // Truly nothing installed: the standard empty state with the
                   // marketplace as the way out (same action Add skills has).

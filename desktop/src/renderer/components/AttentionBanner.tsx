@@ -188,7 +188,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
             onClick={onRetry}
             className="ml-auto shrink-0"
           >
-            Retry
+            Try again
           </Button>
         )}
         {showStop && (

@@ -83,7 +83,7 @@ describe('CommandDrawer — a skills load that failed is not "No skills installe
     stub(list);
     await renderDrawer();
 
-    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Retry' })); });
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Try again' })); });
     expect(await screen.findByText('No skills installed yet.')).toBeInTheDocument();
     expect(list).toHaveBeenCalledTimes(2);
   });

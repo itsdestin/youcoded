@@ -163,7 +163,7 @@ function SetupStopped({ sentence, detail, busy, onRetry }: { sentence: string; d
         </div>
       </div>
       <Button variant="primary" size="lg" className="brand-primary w-full" onClick={onRetry} disabled={busy}>
-        {busy ? 'Retrying…' : 'Retry'}
+        {busy ? 'Trying again…' : 'Try again'}
       </Button>
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="self-center text-sm text-fg-muted hover:text-fg transition-colors">
         {open ? 'Hide details' : 'Show details'}
