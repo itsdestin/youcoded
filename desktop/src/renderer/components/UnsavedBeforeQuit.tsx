@@ -182,7 +182,8 @@ function UnsavedRow({ edit: e, status, onRetry, boxed }: { edit: UnsavedEdit; st
     // The check itself failed: say why (the guide's short error line — never loose text), and
     // let it be tried again.
     note = <FieldError as="p">{status.error}</FieldError>;
-    actions = <>{small('Retry', onRetry)}{small('Discard', askDiscard)}</>;
+    // "Try again", not "Retry" (Destin, app-wide: error-notices-1#EN-Q1).
+    actions = <>{small('Try again', onRetry)}{small('Discard', askDiscard)}</>;
   } else if (st?.kind === 'conflict') {
     note = text(st.unknown ? 'YouCoded can’t tell whether this file changed on disk — save anyway or discard.' : 'Changed on disk since — save anyway or discard.');
     actions = <>{small('Save anyway', () => setRow(e, { kind: 'confirm-overwrite', unknown: st.unknown, confirmed: st.confirmed }))}{small('Discard', askDiscard)}</>;

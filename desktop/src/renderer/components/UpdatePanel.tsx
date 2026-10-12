@@ -312,7 +312,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         {shown.map(e => (
           <section key={e.version}>
             <SectionLabel className="mb-2">v{e.version}{e.date ? ` · ${e.date}` : ''}</SectionLabel>
-            <div className={`${CARD_LEVEL_1} p-3`}><MarkdownContent content={e.body} /></div>
+            {/* text-fg text-sm: the notes set no colour of their own (in chat they inherit
+                the bubble's); here they inherited the page default, near-invisible on dark
+                themes like Halftone Dimension (seen on close-session-5's preview). */}
+            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={e.body} /></div>
           </section>
         ))}
       </>
@@ -322,7 +325,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     body = (
       <section>
         <SectionLabel className="mb-2">Release notes</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3`}><MarkdownContent content={data.markdown} /></div>
+        <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={data.markdown} /></div>
       </section>
     );
   }

@@ -89,7 +89,7 @@ describe('the refused-quit prompt', () => {
     expect(await screen.findByText('YouCoded couldn’t read this file: permission denied.')).toBeInTheDocument();
     expect(screen.queryByText('(file no longer available)')).toBeNull();
     answer = 'editable';
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument();
   });
 
@@ -101,7 +101,7 @@ describe('the refused-quit prompt', () => {
     prompt();
     expect(await screen.findByText("YouCoded couldn't read this file.")).toBeInTheDocument();
     expect(screen.queryByText(/secret|remote method/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(quiet).toHaveBeenCalled();
     quiet.mockRestore();
   });
@@ -163,7 +163,7 @@ describe('the refused-quit prompt', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save' })); // key.txt: main refuses it as protected
     await waitFor(() => expect(screen.getAllByText('(file can’t be saved here)')).toHaveLength(2));
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Discard' })).toHaveLength(2);
   });
 
