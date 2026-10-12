@@ -50,6 +50,4 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('library#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   { ...mp('library#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
   { ...mp('library/themes#load-failed', 'view', 'error-state'), params: { fail: 'theme.marketplace.list' } },
-  // error-notices-1 (2026-10-12): the Marketplace itself when its list can't be read.
-  { ...mp('marketplace#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
 ];

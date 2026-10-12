@@ -9,8 +9,6 @@ const PHONE = { width: 390, height: 844 };
 export const PAGES: readonly ScreenEntry[] = [
   pg('pages', 'view'),
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
-  // error-notices-1 (2026-10-12): the Pages list when it can't be read.
-  { ...pg('pages#load-failed', 'view', 'error-state'), params: { fail: 'pages.list' } },
   pg('pages/page/page-week-planner', 'view'),
   // The paint studio sample: the Pages kit's slider (`.yc-range`, Brush size/Opacity) — shown when
   // the kit took the app's slider look (submit-ticket-6#ST6-Q1).
