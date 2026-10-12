@@ -28,6 +28,10 @@ export type ScreenEntry = {
    *  hands over to another (the ticket → Contribute) shows the OTHER one's mark. `shoot`
    *  checks this mark instead (submit-ticket friction, proposal 18). */
   mark?: string;
+  /** `'after'`: a state that opens something only the new code has (a switch just added), so a
+   *  before/after skips it on the before side instead of reporting it NOT TAKEN (close-session
+   *  friction, proposal 20). Remove it once the before side has the state too. */
+  newIn?: 'after';
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };
