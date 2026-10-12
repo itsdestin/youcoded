@@ -202,7 +202,7 @@ export class McpRegistry {
       // Discard partially decrypted maps; a later resolve retries this server.
       return {
         ...entry, missingSecrets,
-        credentialError: error instanceof Error ? error.message : 'Could not read saved MCP credentials. Retry.',
+        credentialError: error instanceof Error ? error.message : 'Could not read saved MCP credentials. Try again.',
       };
     }
   }

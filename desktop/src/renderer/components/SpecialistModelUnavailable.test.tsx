@@ -67,7 +67,7 @@ describe('SpecialistModelUnavailable', () => {
     window.dispatchEvent(new CustomEvent(SPECIALIST_DEFAULTS_CHANGED_EVENT, { detail: { tier: 'budget' } }));
 
     expect(await screen.findByRole('button', { name: 'Resume specialist' })).toBeTruthy();
-    expect(screen.getByText(/couldn’t start the retry turn/i)).toBeTruthy();
+    expect(screen.getByText(/couldn’t start the new try/i)).toBeTruthy();
   });
 
   it('keeps a rejected send outcome unknown so it cannot offer a duplicate retry', async () => {
@@ -78,7 +78,7 @@ describe('SpecialistModelUnavailable', () => {
 
     window.dispatchEvent(new CustomEvent(SPECIALIST_DEFAULTS_CHANGED_EVENT, { detail: { tier: 'budget' } }));
 
-    expect(await screen.findByText('Couldn’t confirm the specialist retry.')).toBeTruthy();
+    expect(await screen.findByText('Couldn’t confirm the specialist is trying again.')).toBeTruthy();
     expect(screen.getByText(/may still have been accepted/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Resume specialist' })).toBeNull();
   });
@@ -91,7 +91,7 @@ describe('SpecialistModelUnavailable', () => {
 
     window.dispatchEvent(new CustomEvent(SPECIALIST_DEFAULTS_CHANGED_EVENT, { detail: { tier: 'budget' } }));
 
-    expect(await screen.findByText('Specialist retry queued.')).toBeTruthy();
+    expect(await screen.findByText('Specialist will try again.')).toBeTruthy();
     expect(screen.queryByText('Resuming specialist…')).toBeNull();
   });
 

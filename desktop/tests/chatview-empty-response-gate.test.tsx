@@ -91,7 +91,7 @@ function renderWithTurn(stopReason: string | null) {
 describe('ChatView timeline gate — segment-less turns (empty-step recovery)', () => {
   it('renders the empty_response footer for a segment-less turn (end-to-end through the gate)', () => {
     const { container } = renderWithTurn('empty_response');
-    expect(container.textContent).toContain('The model returned an empty response twice. Retrying may help.');
+    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
   });
 
   it('still drops a segment-less turn that completed normally', () => {

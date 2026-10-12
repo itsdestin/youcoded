@@ -384,7 +384,7 @@ class MainActivity : ComponentActivity() {
                                                 serviceBinder.startService(bootstrap)
                                             }
                                         }) {
-                                            Text("Retry")
+                                            Text("Try again")
                                         }
                                     }
                                 }

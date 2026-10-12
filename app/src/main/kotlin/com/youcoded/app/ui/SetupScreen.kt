@@ -164,7 +164,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(onClick = { onRetry?.invoke() }) {
-                    Text("Retry")
+                    Text("Try again")
                 }
             }
             is Bootstrap.Progress.TierUpgradeComplete -> {

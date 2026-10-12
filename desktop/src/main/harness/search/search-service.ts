@@ -40,7 +40,7 @@ export class SearchService {
         // WHY: an unreadable saved key is not absent and is not a network error.
         // Keep trying independent backends, especially keyless DuckDuckGo.
         keyReadFailed = true;
-        failures.push(`${entry.backend}: ${error instanceof Error ? error.message : 'Could not read saved search credentials. Retry.'}`);
+        failures.push(`${entry.backend}: ${error instanceof Error ? error.message : 'Could not read saved search credentials. Try again.'}`);
         continue;
       }
       if (key) anyKey = true;

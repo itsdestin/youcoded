@@ -390,26 +390,26 @@ describe('ThinkingIndicator in a hidden chat', () => {
     const stallWarning = { ...stall };
     const r = render(inPane(true, { stallWarning }));
     act(() => { vi.advanceTimersByTime(2_000); });
-    expect(screen.getByText(/Retrying in 13s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 13s/)).toBeTruthy();
     r.rerender(inPane(false, { stallWarning }));
     act(() => { vi.advanceTimersByTime(5_000); });
     r.rerender(inPane(true, { stallWarning }));
-    expect(screen.getByText(/Retrying in 8s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 8s/)).toBeTruthy();
     act(() => { vi.advanceTimersByTime(1_000); });
-    expect(screen.getByText(/Retrying in 7s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 7s/)).toBeTruthy();
   });
 
   it('counts on the same whole seconds after the stall began as before', () => {
     vi.useFakeTimers();
     const base = spinnerTimers();
     render(inPane(true, { stallWarning: { retryInMs: 4_500, willRetry: true } }));
-    expect(screen.getByText(/Retrying in 5s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 5s/)).toBeTruthy();
     act(() => { vi.advanceTimersByTime(999); });
-    expect(screen.getByText(/Retrying in 5s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 5s/)).toBeTruthy();
     act(() => { vi.advanceTimersByTime(1); });
-    expect(screen.getByText(/Retrying in 4s/)).toBeTruthy();
+    expect(screen.getByText(/Trying again in 4s/)).toBeTruthy();
     act(() => { vi.advanceTimersByTime(4_000); });
-    expect(screen.getByText(/Retrying\.\.\./)).toBeTruthy();
+    expect(screen.getByText(/Trying again\.\.\./)).toBeTruthy();
     expect(vi.getTimerCount()).toBe(base);   // nothing left to count
   });
 });

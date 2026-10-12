@@ -956,7 +956,7 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
           success: false,
           error:
             'Git comes with Apple\'s developer tools, which didn\'t finish ' +
-            'installing. Click Retry to bring back the macOS window, then ' +
+            'installing. Click Try again to bring back the macOS window, then ' +
             'click Install in it.',
         };
       }

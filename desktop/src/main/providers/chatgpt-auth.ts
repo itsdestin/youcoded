@@ -857,7 +857,7 @@ export class ChatGptAuth {
     const blob = parseTokenBlob(raw);
     // Unreadable is not absent: retain the account and saved value for retry,
     // and never include the token JSON (or its parser exception) in the error.
-    if (!blob) throw new Error('Saved ChatGPT credentials could not be read. Retry, or reconnect ChatGPT in Settings → Model Providers if this continues.');
+    if (!blob) throw new Error('Saved ChatGPT credentials could not be read. Try again, or reconnect ChatGPT in Settings → Model Providers if this continues.');
     return blob;
   }
 

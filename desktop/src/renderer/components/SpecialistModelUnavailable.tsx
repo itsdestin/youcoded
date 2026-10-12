@@ -96,11 +96,11 @@ export default function SpecialistModelUnavailable({
       <StatusStrip
         tone="warn"
         detail={retryStatus === 'failed'
-          ? 'Your model was saved, but YouCoded couldn’t start the retry turn. Resume when the conversation is ready.'
+          ? 'Your model was saved, but YouCoded couldn’t start the new try. Resume when the conversation is ready.'
           : retryStatus === 'unknown'
-            ? 'The retry may still have been accepted. Check the conversation before trying it again.'
+            ? 'The new try may still have been accepted. Check the conversation before trying it again.'
             : retryStatus === 'queued'
-            ? 'Your model was saved. The retry will start after the conversation’s current turn finishes.'
+            ? 'Your model was saved. It will try again after the conversation’s current turn finishes.'
             : retryStatus === 'sending' || retryStatus === 'resumed'
               ? 'Your model was saved. The assistant is automatically trying this specialist again.'
               : `This specialist wasn’t started. Choose a ${tier} specialist model so YouCoded doesn’t fall back to an expensive conversation model.`}
@@ -109,9 +109,9 @@ export default function SpecialistModelUnavailable({
         {retryStatus === 'failed'
           ? 'Specialist still paused.'
           : retryStatus === 'unknown'
-            ? 'Couldn’t confirm the specialist retry.'
+            ? 'Couldn’t confirm the specialist is trying again.'
             : retryStatus === 'queued'
-            ? 'Specialist retry queued.'
+            ? 'Specialist will try again.'
             : retryStatus === 'sending' || retryStatus === 'resumed'
               ? 'Resuming specialist…'
               : 'A safe automatic model wasn’t available.'}

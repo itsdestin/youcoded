@@ -93,7 +93,7 @@ export function summarizeSpaceSyncError(raw: string | null | undefined, errorCod
   return {
     interrupted: false,
     summary:
-      'Sync hit an unexpected problem. It will keep retrying automatically; if it ' +
+      'Sync hit an unexpected problem. It will keep trying automatically; if it ' +
       'keeps failing, report it from Settings → Help & feedback.',
   };
 }

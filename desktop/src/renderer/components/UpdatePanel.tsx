@@ -49,7 +49,7 @@ function downloadErrorCode(e: unknown): string {
 // instead of the generic launch error.
 function updateErrorMessage(code: string): string {
   if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
-  if (code === 'verify-failed') return 'The download looked corrupted — Retry';
+  if (code === 'verify-failed') return 'The download looked corrupted — Try again';
   // Installing a Linux system package needs an administrator password (2026-09-20).
   if (code === 'install-cancelled') return 'The password prompt was closed, so nothing was installed.';
   if (code === 'install-failed') return "Your package manager wouldn't install the update.";
@@ -386,13 +386,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 // (security review #7, 2026-09-10). Every other failure names the step
                 // that failed. WHY the stage picks the WORD (error inventory 2026-09-10,
                 // false message 17): retriability alone chose between "Download failed —
-                // Retry" and "Launch failed", so a download that retry could not fix
+                // Try again" and "Launch failed", so a download that retry could not fix
                 // (busy, url-rejected) was reported as a launch that never happened.
                 installState.code === 'signature-invalid' ? 'Update blocked'
-                  : installState.code === 'verify-failed' ? 'Retry download'
+                  : installState.code === 'verify-failed' ? 'Try the download again'
                   : installState.stage === 'launch'
-                    ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Retry' : 'Launch failed')
-                    : (isRetriableErrorCode(installState.code) ? 'Download failed — Retry' : 'Download failed')
+                    ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Try again' : 'Launch failed')
+                    : (isRetriableErrorCode(installState.code) ? 'Download failed — Try again' : 'Download failed')
               )}
             </Button>
             {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser

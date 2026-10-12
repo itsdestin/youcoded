@@ -53,12 +53,12 @@ function stopReasonCopy(reason: string, provider: SessionProvider | undefined): 
     // Empty-step recovery (spec 2026-08-21): the harness already retried once
     // silently; this is the honest end after a SECOND contentless step —
     // "twice" states that verified fact (error-message standards: specific
-    // and accurate). "Retrying may help" stays: it refers to a LATER manual
+    // and accurate). "Trying again may help" stays: it refers to a LATER manual
     // nudge, which recovered all three observed live incidents — distinct
     // from the immediate auto-retry that just failed.
     // Deliberately provider-neutral ("The model") — the failure belongs to
     // the model, not the assistant persona.
-    empty_response: 'The model returned an empty response twice. Retrying may help.',
+    empty_response: 'The model returned an empty response twice. Trying again may help.',
   };
   return map[reason] ?? `Response ended: ${reason}.`;
 }

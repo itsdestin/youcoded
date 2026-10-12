@@ -57,7 +57,7 @@ export function IntegrationDetailOverlay({
   let actions: React.ReactNode = null;
   if (!unavailable) {
     if (!s.installed) {
-      actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>{s.error ? 'Retry install' : 'Install'}</Button></DetailActions>;
+      actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>{s.error ? 'Try installing again' : 'Install'}</Button></DetailActions>;
     } else if (!s.connected) {
       actions = (
         <DetailActions>

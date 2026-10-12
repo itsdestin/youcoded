@@ -97,7 +97,7 @@ export default function MarketplaceDetailOverlay({
         installed={installed}
         favorited={favorited}
         isInstalling={mp.installingIds.has(installTrackingKey('skill', target.id))}
-        // Only an INSTALL failure feeds "Retry install" — the key is shared with
+        // Only an INSTALL failure feeds "Try installing again" — the key is shared with
         // uninstall and update (error inventory 2026-09-10, false message 14).
         installError={errEntry?.op === 'install' ? errEntry.message : null}
         updateAvailable={!!mp.updateAvailable[target.id]}
@@ -121,7 +121,7 @@ export default function MarketplaceDetailOverlay({
       screen={screen ?? 'marketplace/theme-detail'}
       onClose={onClose}
       isInstalling={mp.installingIds.has(installTrackingKey('theme', target.slug))}
-      // Same rule as SkillDetail above: only an INSTALL failure feeds "Retry install".
+      // Same rule as SkillDetail above: only an INSTALL failure feeds "Try installing again".
       installError={errEntry?.op === 'install' ? errEntry.message : null}
       updateAvailable={!!mp.updateAvailable[target.slug]}
       isActive={activeThemeSlug === target.slug}
@@ -228,7 +228,7 @@ function InstallFailed({ message, onRetry }: { message: string; onRetry(): void 
   return (
     // WHY no title (games-social round 5; Destin: the red title "seems to be unique styling not
     // used elsewhere"): one plain sentence that still names the real reason.
-    <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Retry install</Button>}>
+    <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Try installing again</Button>}>
       {/* The reason usually already says what failed ("Couldn't download it: …"); prefix only a
           bare one, so the sentence never reads "Couldn't install: Couldn't…". */}
       {/^(couldn't|can't|could not|cannot)\b/i.test(message.trim()) ? message : `Couldn't install: ${message}`}

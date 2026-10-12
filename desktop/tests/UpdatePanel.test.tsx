@@ -189,7 +189,7 @@ describe('UpdatePanel — the version pill popup', () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      const retry = await screen.findByRole('button', { name: /retry download/i });
+      const retry = await screen.findByRole('button', { name: /try the download again/i });
       expect(retry).toBeEnabled();
       // The "Open in browser instead" link opens the raw installer — the very file
       // that failed verification — so it must be absent here.
@@ -261,7 +261,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('network-failed', 'getaddrinfo ENOTFOUND github.com'));
       await clickUpdate();
 
-      const button = await screen.findByRole('button', { name: 'Download failed — Retry' });
+      const button = await screen.findByRole('button', { name: 'Download failed — Try again' });
       expect(button).toBeEnabled();
       expect(screen.queryByText(/launch failed/i)).toBeNull();
     });
@@ -314,7 +314,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       await launchWith({ success: false, error: 'install-cancelled', command: COMMAND });
 
       // Retry raises the password dialog again — dismissing it was a choice.
-      expect(await screen.findByRole('button', { name: /retry/i })).toBeEnabled();
+      expect(await screen.findByRole('button', { name: /try again/i })).toBeEnabled();
       expect(screen.getByText(COMMAND)).toBeInTheDocument();
     });
 
