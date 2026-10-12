@@ -23,7 +23,7 @@ import { MARKETPLACE } from './marketplace';
 import { PROJECTS } from './projects';
 import { PAGES } from './pages';
 import { APP } from './app';
-import { BACKUP_NOTE } from './backup-note';
+import { TOUR } from './tour';
 
 export type { ScreenEntry } from './types';
 
@@ -34,6 +34,5 @@ export const SCREENS: readonly ScreenEntry[] = [
   ...PROJECTS,
   ...PAGES,
   ...APP,
-  // Practice: backlog row 18's candidate homes (remove with the switch).
-  ...BACKUP_NOTE,
+  ...TOUR,
 ];

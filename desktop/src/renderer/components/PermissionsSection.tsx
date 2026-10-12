@@ -23,7 +23,7 @@ import {
   type RuleKind,
 } from './permissions/describe-rule';
 import { CROSS_PROJECT_SLUG } from '../../shared/permission-types';
-import { backupNoteHome, BACKUP_NOTE_TEXT } from './backup-note-practice';
+import { BACKUP_WARNING } from './backup-warning-copy';
 import type {
   NativePermissionMode,
   PermissionRule,
@@ -419,6 +419,17 @@ export default function PermissionsSection() {
             wrapper replaces the two-band `border-t` split — no full-width
             line inside a card; spacing separates the closing note instead. */}
         <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2.5`}>
+          {/* The backup warning, always shown, at the TOP of the modes card
+              (backup-warning-1#BW-1 note "a persistent warning at the top of the
+              permission modes card", #BW-4 "top of card"). It is about what every
+              mode below lets the assistant do, so it sits in this card (guide: a
+              notice about one thing sits inside it). No button: this block stays
+              free of controls (native-permissions rule). The words are shared
+              with the tour's stop, so the two never disagree. */}
+          <Callout tone="info">
+            {/* The card's own reading size, so the notice doesn't shout over the modes. */}
+            <span className="text-2xs leading-relaxed">{BACKUP_WARNING}</span>
+          </Callout>
             {MODES.map((m) => (
               <div key={m.id}>
                 <p className="text-2xs text-fg-2 leading-relaxed">
@@ -456,18 +467,6 @@ export default function PermissionsSection() {
           <p className="text-3xs text-fg-muted">
             Each conversation has its own mode. Change it from the bar at the bottom of the chat.
           </p>
-          {/* Backlog row 18 (deck backup-warning-1), PRACTICE: the backup warning
-              taken off setup, as an info notice inside the modes card — the
-              warning is about what every mode lets the assistant do, so it sits
-              in that card (guide: a notice about one thing sits inside it). No
-              button: this block stays free of controls (native-permissions
-              rule). Only under `?backupNote=permissions` in the workbench. */}
-          {backupNoteHome() === 'permissions' && (
-            <Callout tone="info">
-              {/* The card's own reading size, so the notice doesn't shout over the modes. */}
-              <span className="text-2xs leading-relaxed">{BACKUP_NOTE_TEXT}</span>
-            </Callout>
-          )}
         </div>
       </div>
 

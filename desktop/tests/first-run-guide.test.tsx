@@ -99,14 +99,21 @@ const STOPS: GuideStop[] = [
   { id: 'b', text: 'Second stop.', screen: 'projects', anchor: 'nothing-here', pose: 'inquisitive' },
 ];
 
-describe('the eight stops', () => {
-  it('walk forward through the app in the order Destin approved (S-1, reordered under U6)', async () => {
+describe('the nine stops', () => {
+  it('walk forward through the app in the order Destin approved, the backup warning right after Files', async () => {
     const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
-    expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'models', 'themes', 'help']);
+    expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'backups', 'models', 'themes', 'help']);
     expect(GUIDE_STOPS.map((s) => s.screen)).toEqual([
-      'welcome', 'welcome-form', 'welcome-form', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
+      'welcome', 'welcome-form', 'welcome-form', 'projects', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
     ]);
     for (const s of GUIDE_STOPS) expect(s.text.split(' ').length).toBeLessThan(45);
+  });
+
+  it('the backup stop and Settings → Permissions say the same words, Destin\'s own', async () => {
+    const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
+    const { BACKUP_WARNING } = await import('../src/renderer/components/backup-warning-copy');
+    expect(BACKUP_WARNING).toBe('With your permission, the assistant may create, change, or delete files on your device. Create backups for anything you cannot replace.');
+    expect(GUIDE_STOPS.find((s) => s.id === 'backups')?.text).toBe(BACKUP_WARNING);
   });
 });
 

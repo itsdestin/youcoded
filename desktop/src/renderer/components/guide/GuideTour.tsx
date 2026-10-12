@@ -13,7 +13,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import GuideBubble, { type GuideBubbleButton } from './GuideBubble';
 import GuideRing, { findGuideAnchor } from './GuideRing';
 import { useGuideAdvance } from './guide-events';
-import { tourStops, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
+import { GUIDE_STOPS, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
 import { ScreenMark } from '../../shoot-mode';
 import { takeTourStart } from './guide-state';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -28,10 +28,7 @@ interface Props {
   onMarketplace?: () => void;
 }
 
-export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarketplace }: Props) {
-  // WHY tourStops() and not the constant: the backup-warning practice (backlog
-  // row 18) adds a stop in the workbench; everywhere else it IS GUIDE_STOPS.
-  const [stops] = useState(() => given ?? tourStops());
+export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, onMarketplace }: Props) {
   // The photo-only build may ask for a later stop (guide-state takeTourStart).
   const [index, setIndex] = useState(() => { const at = takeTourStart(); return Math.max(0, at ? stops.findIndex((s) => s.id === at) : 0); });
   const stop = stops[index];

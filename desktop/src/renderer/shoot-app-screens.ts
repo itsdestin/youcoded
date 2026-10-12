@@ -6,7 +6,7 @@
 // Like every useScreenOpen, each call is a no-op outside the photo-only build.
 import type { Dispatch, SetStateAction } from 'react';
 import { useScreenOpen } from './shoot-mode';
-import { tourStops } from './components/guide/guide-stops';
+import { GUIDE_STOPS } from './components/guide/guide-stops';
 import { setTourStart } from './components/guide/guide-state';
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
@@ -62,7 +62,7 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('settings', () => s.setSettingsOpen(true));
   // The buddy's tour on one stop: `tour/<stop id>`. WHY (backup-warning-1): the
   // tour had no picture at all, so a change to one of its stops could not be shown.
-  useScreenOpen('tour', (stop) => { setTourStart(stop); s.setTourOpen(true); }, tourStops().map((t) => t.id));
+  useScreenOpen('tour', (stop) => { setTourStart(stop); s.setTourOpen(true); }, GUIDE_STOPS.map((t) => t.id));
   // Not a screen: the driver selects an entry's practice session through this first.
   useScreenOpen('_select-session', (id) => { if (id) s.selectSession(id); });
   // The chat itself: nothing to open, it is where the app starts.

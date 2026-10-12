@@ -1,4 +1,0 @@
-{"type":"user_message","text":"tighten the intro of my cover letter"}
-{"type":"assistant_text","text":"I'll shorten the first paragraph and keep your closing line."}
-{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/home/destin/Documents/cover-letter.md","old_string":"I am writing to express my strong interest in the position of Policy Analyst at your organization, which I learned about through a friend.","new_string":"I'd like to apply for the Policy Analyst role."}}
-{"type":"permission_request","tool_use_id":"e1","requestId":"req-e1"}

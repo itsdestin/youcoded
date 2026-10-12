@@ -1,16 +1,17 @@
 // src/renderer/components/guide/guide-stops.ts
 //
-// The tour as DATA: eight stops, each naming what the buddy says, which screen
+// The tour as DATA: nine stops, each naming what the buddy says, which screen
 // the app opens while it says it, which control gets ringed, and what "Do it
 // now" does. Reordering or dropping a stop is an edit here, never in the tour.
-// The list is Destin's (2026-09-10 deck, S-1 holds); the sentences are the
-// builder's and go to him on the review deck.
+// The list is Destin's (2026-09-10 deck, S-1 holds; the backup stop added
+// 2026-10-12, backup-warning-1#BW-1); the sentences are the builder's and go
+// to him on the review deck, except the backup stop's, which is his own.
 //
 // Order (UX tester run 1, U6): the stops walk FORWARD through the app — the
 // form, then the Projects screen twice in a row, then Settings twice in a row,
 // then Help — instead of zig-zagging back to screens already visited.
 
-import { backupNoteHome, BACKUP_NOTE_TEXT } from '../backup-note-practice';
+import { BACKUP_WARNING } from '../backup-warning-copy';
 
 /** A screen the app opens for a stop. App.tsx maps these onto its own
  *  open/close state; the tour never touches that state directly. */
@@ -86,8 +87,19 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     anchor: ['files-tab', 'projects-empty'],
     pose: 'inquisitive',
   },
-  // `backups` (practice, backlog row 18) is spliced in HERE, after Files, by
-  // tourStops() below — only under `?backupNote=tour` in the workbench.
+  {
+    // The backup warning that used to end setup's sign-in step (moved off it
+    // 2026-10-04, first-run-4#P4-2). Destin picked the tour as its home
+    // (backup-warning-1#BW-1, #BW-2) right after Files — the stop that has
+    // just shown where the assistant's files land — in his own words (#BW-5).
+    // The ring stays on the Files tab. The same words sit at the top of
+    // Settings → Permissions' modes card (backup-warning-copy.ts).
+    id: 'backups',
+    text: BACKUP_WARNING,
+    screen: 'projects',
+    anchor: ['files-tab', 'projects-empty'],
+    pose: 'inquisitive',
+  },
   {
     id: 'models',
     text: 'The account you signed in with is what answers you, and it is already set up. If you ever want a different AI service, or one that runs free on your own computer, you add it here.',
@@ -111,22 +123,3 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
 ];
 
-/** PRACTICE (backlog row 18, deck backup-warning-1): the backup warning taken
- *  off setup, as a tour stop right after Files — the stop that has just shown
- *  where the assistant's files land. Destin's own words (2026-09-10, Z-1); the
- *  ring stays on the Files tab the previous stop pointed at. */
-const BACKUP_STOP: GuideStop = {
-  id: 'backups',
-  text: BACKUP_NOTE_TEXT,
-  screen: 'projects',
-  anchor: ['files-tab', 'projects-empty'],
-  pose: 'inquisitive',
-};
-
-/** The stops the tour walks: the shipped eight, plus the practice backup stop
- *  when `?backupNote=tour` (backup-note-practice.ts; 'none' outside the workbench). */
-export function tourStops(): readonly GuideStop[] {
-  if (backupNoteHome() !== 'tour') return GUIDE_STOPS;
-  const at = GUIDE_STOPS.findIndex((s) => s.id === 'files') + 1;
-  return [...GUIDE_STOPS.slice(0, at), BACKUP_STOP, ...GUIDE_STOPS.slice(at)];
-}

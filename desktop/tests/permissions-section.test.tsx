@@ -212,6 +212,15 @@ describe('PermissionsSection — the modes block is reference content', () => {
       .parentElement as HTMLElement;
   }
 
+  it('opens the modes card with the backup warning, before the first mode', async () => {
+    list.mockResolvedValue([]);
+    render(<PermissionsSection />);
+    const block = modesBlock();
+    const text = block.textContent ?? '';
+    expect(text).toContain('Create backups for anything you cannot replace.');
+    expect(text.indexOf('Create backups')).toBeLessThan(text.indexOf('Ask first'));
+  });
+
   it('contains no interactive element at all', async () => {
     // A folder open below it, so the page genuinely HAS buttons — otherwise a
     // zero here would prove only that nothing rendered.
