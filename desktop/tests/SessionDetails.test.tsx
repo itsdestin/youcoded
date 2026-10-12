@@ -35,14 +35,15 @@ describe('Session details — "In your lists"', () => {
     expect(screen.getByText('Tags').parentElement).not.toContainElement(screen.getByRole('switch', { name: 'Mark complete' }));
   });
 
-  it('Mark complete shows its state and reports a change; its hint speaks for an open session', () => {
+  it('Mark complete shows its state and reports a change; both switches carry their hints', () => {
     const { onComplete, onPin } = mount({ done: true });
     const sw = screen.getByRole('switch', { name: 'Mark complete' });
     expect(sw).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(sw);
     expect(onComplete).toHaveBeenCalledWith(false);
     expect(onPin).not.toHaveBeenCalled();
-    // Resume never lists an open session, so the hint says when the flag takes effect.
-    expect(screen.getByText(/once it's closed/)).toBeInTheDocument();
+    // Destin's wording for both popups (close-session-3#CS3-3).
+    expect(screen.getByText('Hides this session from your resumable sessions list')).toBeInTheDocument();
+    expect(screen.getByText('Keeps this session at the top of your active sessions list')).toBeInTheDocument();
   });
 });
