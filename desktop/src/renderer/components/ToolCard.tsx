@@ -24,6 +24,9 @@ import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
 import { floorAskNote } from './permissions/deny-list-copy';
 import { AdminPasswordPrompt } from './permissions/AdminPasswordPrompt';
 import { AdminRunStrip } from './permissions/AdminRunStrip';
+// Backlog row 18 practice: the backup warning's "first file change" home.
+import { FileChangeNotice } from './FileChangeNotice';
+import { backupNoteHome, FILE_CHANGE_TOOLS } from './backup-note-practice';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
@@ -1401,6 +1404,15 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         </button>
       )}
 
+
+      {/* Backlog row 18 (deck backup-warning-1), PRACTICE: the backup warning
+          as a one-time notice on the first card that creates or changes a
+          file. Only under `?backupNote=first-change` in the workbench until
+          Destin picks a home (backup-note-practice.ts); the real app never
+          reaches it. */}
+      {backupNoteHome() === 'first-change' && FILE_CHANGE_TOOLS.has(tool.toolName) && !tool.specialist && (
+        <FileChangeNotice id={tool.toolUseId} live={tool.status === 'awaiting-approval' || tool.status === 'running'} />
+      )}
 
       {/* Specialists 1c: the consent envelope for a hire / note / resume /
           stop — what Yes allows, in plain words, ABOVE the buttons and visible

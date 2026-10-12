@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Button,
+  Callout,
   CARD_LEVEL_1,
   CARD_LEVEL_2,
   EmptyState,
@@ -22,6 +23,7 @@ import {
   type RuleKind,
 } from './permissions/describe-rule';
 import { CROSS_PROJECT_SLUG } from '../../shared/permission-types';
+import { backupNoteHome, BACKUP_NOTE_TEXT } from './backup-note-practice';
 import type {
   NativePermissionMode,
   PermissionRule,
@@ -454,6 +456,15 @@ export default function PermissionsSection() {
           <p className="text-3xs text-fg-muted">
             Each conversation has its own mode. Change it from the bar at the bottom of the chat.
           </p>
+          {/* Backlog row 18 (deck backup-warning-1), PRACTICE: the backup warning
+              taken off setup, as an info notice inside the modes card — the
+              warning is about what every mode lets the assistant do, so it sits
+              in that card (guide: a notice about one thing sits inside it). No
+              button: this block stays free of controls (native-permissions
+              rule). Only under `?backupNote=permissions` in the workbench. */}
+          {backupNoteHome() === 'permissions' && (
+            <Callout tone="info">{BACKUP_NOTE_TEXT}</Callout>
+          )}
         </div>
       </div>
 

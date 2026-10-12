@@ -13,7 +13,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import GuideBubble, { type GuideBubbleButton } from './GuideBubble';
 import GuideRing, { findGuideAnchor } from './GuideRing';
 import { useGuideAdvance } from './guide-events';
-import { GUIDE_STOPS, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
+import { tourStops, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
+import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
   stops?: readonly GuideStop[];
@@ -22,10 +23,16 @@ interface Props {
   /** `done` is true on the last Next, false on Skip. */
   onExit: (done: boolean) => void;
   onMarketplace?: () => void;
+  /** Start on this stop instead of the first. Only the photo-only build passes
+   *  it (shoot's `tour/<stop>` screens, App.tsx); a person always starts at 1. */
+  startAt?: string;
 }
 
-export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, onMarketplace }: Props) {
-  const [index, setIndex] = useState(0);
+export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarketplace, startAt }: Props) {
+  // WHY tourStops() and not the constant: the backup-warning practice (backlog
+  // row 18) adds a stop in the workbench; everywhere else it IS GUIDE_STOPS.
+  const [stops] = useState(() => given ?? tourStops());
+  const [index, setIndex] = useState(() => Math.max(0, startAt ? stops.findIndex((s) => s.id === startAt) : 0));
   const stop = stops[index];
   const last = index === stops.length - 1;
 
@@ -79,6 +86,9 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
       {stop.anchor && <GuideRing anchor={stop.anchor} />}
       <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour">
         {!anchorPresent && stop.textWhenMissing ? stop.textWhenMissing : stop.text}
+        {/* shoot's `tour/<stop>` screens prove the bubble is showing that stop
+            (renders nothing outside the photo-only build). */}
+        <ScreenMark name={`tour/${stop.id}`} />
       </GuideBubble>
     </>
   );

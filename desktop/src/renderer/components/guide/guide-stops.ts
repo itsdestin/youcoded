@@ -10,6 +10,8 @@
 // form, then the Projects screen twice in a row, then Settings twice in a row,
 // then Help — instead of zig-zagging back to screens already visited.
 
+import { backupNoteHome, BACKUP_NOTE_TEXT } from '../backup-note-practice';
+
 /** A screen the app opens for a stop. App.tsx maps these onto its own
  *  open/close state; the tour never touches that state directly. */
 export type GuideScreen =
@@ -84,6 +86,8 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     anchor: ['files-tab', 'projects-empty'],
     pose: 'inquisitive',
   },
+  // `backups` (practice, backlog row 18) is spliced in HERE, after Files, by
+  // tourStops() below — only under `?backupNote=tour` in the workbench.
   {
     id: 'models',
     text: 'The account you signed in with is what answers you, and it is already set up. If you ever want a different AI service, or one that runs free on your own computer, you add it here.',
@@ -106,3 +110,23 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     pose: 'welcome',
   },
 ];
+
+/** PRACTICE (backlog row 18, deck backup-warning-1): the backup warning taken
+ *  off setup, as a tour stop right after Files — the stop that has just shown
+ *  where the assistant's files land. Destin's own words (2026-09-10, Z-1); the
+ *  ring stays on the Files tab the previous stop pointed at. */
+const BACKUP_STOP: GuideStop = {
+  id: 'backups',
+  text: BACKUP_NOTE_TEXT,
+  screen: 'projects',
+  anchor: ['files-tab', 'projects-empty'],
+  pose: 'inquisitive',
+};
+
+/** The stops the tour walks: the shipped eight, plus the practice backup stop
+ *  when `?backupNote=tour` (backup-note-practice.ts; 'none' outside the workbench). */
+export function tourStops(): readonly GuideStop[] {
+  if (backupNoteHome() !== 'tour') return GUIDE_STOPS;
+  const at = GUIDE_STOPS.findIndex((s) => s.id === 'files') + 1;
+  return [...GUIDE_STOPS.slice(0, at), BACKUP_STOP, ...GUIDE_STOPS.slice(at)];
+}
