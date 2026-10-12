@@ -24,7 +24,7 @@ describe('EditorFrame opening a document', () => {
     const { findByText, queryByRole } = render(<EditorFrame file={FILE} />);
     expect(await findByText(/Office isn't available/)).toBeTruthy();
     // Retrying can never help here, so there is nothing to press.
-    expect(queryByRole('button', { name: /retry/i })).toBeNull();
+    expect(queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
   it("shows main's own reason when it declines to open the file", async () => {

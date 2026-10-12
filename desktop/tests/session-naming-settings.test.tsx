@@ -71,7 +71,7 @@ describe('Session naming settings card', () => {
     await act(async () => { fireEvent.click(tab('Off')); });
     expect(selected().textContent).toBe('Basic');
     expect(screen.getByText('Settings were not saved.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
   });
 
   it('a second click wins over the first one failing', async () => {
