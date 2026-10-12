@@ -91,27 +91,30 @@ export default function SpecialistModelUnavailable({
     <Button size="sm" onClick={openSettings}>Choose specialist models</Button>
   ) : undefined;
 
+  // WHY these sentences (small-fixes-1): the "Retry" → "Try again" sweep (38efb4786) turned
+  // "retry turn" into "the new try" — words nobody says. Each line now says what actually
+  // happens: Resume sends the assistant a message asking it to start the specialist again.
   return (
     <div role="alert">
       <StatusStrip
         tone="warn"
         detail={retryStatus === 'failed'
-          ? 'Your model was saved, but YouCoded couldn’t start the new try. Resume when the conversation is ready.'
+          ? 'Your model was saved, but YouCoded couldn’t ask the assistant to start the specialist again. Resume when the conversation is ready.'
           : retryStatus === 'unknown'
-            ? 'The new try may still have been accepted. Check the conversation before trying it again.'
+            ? 'The request to start it again may have gone through. Check the conversation before resuming it.'
             : retryStatus === 'queued'
-            ? 'Your model was saved. It will try again after the conversation’s current turn finishes.'
+            ? 'Your model was saved. The specialist starts again when the assistant finishes its current reply.'
             : retryStatus === 'sending' || retryStatus === 'resumed'
-              ? 'Your model was saved. The assistant is automatically trying this specialist again.'
+              ? 'Your model was saved. The assistant is starting this specialist again.'
               : `This specialist wasn’t started. Choose a ${tier} specialist model so YouCoded doesn’t fall back to an expensive conversation model.`}
         action={action}
       >
         {retryStatus === 'failed'
           ? 'Specialist still paused.'
           : retryStatus === 'unknown'
-            ? 'Couldn’t confirm the specialist is trying again.'
+            ? 'Couldn’t tell whether the specialist restarted.'
             : retryStatus === 'queued'
-            ? 'Specialist will try again.'
+            ? 'Specialist starts again soon.'
             : retryStatus === 'sending' || retryStatus === 'resumed'
               ? 'Resuming specialist…'
               : 'A safe automatic model wasn’t available.'}
