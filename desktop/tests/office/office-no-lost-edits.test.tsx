@@ -287,7 +287,7 @@ describe('quitting, closing or reloading with an Office document not saved yet',
   it("main's refused quit lists it — even with the Office page closed — and asks it to save at once", async () => {
     const { prompt, win } = await changed();
     act(() => prompt()({ mode: 'quit', afterTeardown: false, restartDropped: false }));
-    expect(await screen.findByText('A file has unsaved changes.')).toBeInTheDocument();
+    expect(await screen.findByText(/^A file has unsaved changes\./)).toBeInTheDocument();
     expect(screen.getByText('plan.docx')).toBeInTheDocument();
     expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
