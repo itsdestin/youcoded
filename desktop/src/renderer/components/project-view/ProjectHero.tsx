@@ -402,14 +402,19 @@ export function ProjectHero({
           // mount and on every keystroke. Enter still COMMITS (matching rename)
           // — the wrap is for layout parity, not for multi-line values.
           <Textarea
-            size="sm"
             ref={autoGrowDesc}
             value={descDraft}
             rows={1}
             autoFocus
             aria-label="Project description"
             placeholder="What is this project?"
-            className="mt-1.5 -ml-2.5 w-full max-w-[46rem] text-sm italic overflow-hidden"
+            // WHY no hang and upright (close-session-friction proposal 13; Destin on Session
+            // details' identical box, close-session-1#CS-3: "a bit odd"): the -ml-2.5 pulled the
+            // box into the card's left margin, so its right edge stopped short, and the italics
+            // made the field read as the saved quote rather than a box you type in. Now the
+            // app's plain text box, inside the card's own margins. The saved description below
+            // keeps its quotes and italics.
+            className="mt-1.5 w-full max-w-[46rem] overflow-hidden"
             // Cap at the keystroke, not just on commit — PROJECT_DESCRIPTION_MAX
             // is the shared source of truth (shared/artifacts/types.ts), not a
             // re-typed 200 that could drift from the main-process limit.
@@ -427,10 +432,10 @@ export function ProjectHero({
           <button
             type="button"
             onClick={() => setEditingDesc(true)}
-            // Geometry MUST match the Textarea below exactly -- same padding,
-            // radius, negative margin, and a transparent 1px border standing in
-            // for the field's real one. Otherwise clicking to edit shifts the
-            // text and resizes the box under the cursor.
+            // The saved description hangs into the card's margin so its WORDS line up with the
+            // name above (the read state, kept as approved). The box you type in no longer
+            // copies that (above), so a click now moves the words in by the box's padding —
+            // the same as Session details' note since close-session-2.
             className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
             title="Edit description"
           >
@@ -440,13 +445,12 @@ export function ProjectHero({
           // Dashed-outline add affordance, matching QuickChips' "+ Add Chip" and
           // ModelPicker's freeform row. Bare hover-only text read as a label,
           // not a control -- there was nothing to see until the cursor was
-          // already on it. `-ml-2 px-2` keeps the LABEL aligned with the name
-          // and path above, so the box hangs into the card's gutter instead of
-          // indenting the text.
+          // already on it. WHY no -ml-2 hang any more (close-session-friction proposal 13): a
+          // control keeps the card's margins; the label now starts at the card's edge.
           <button
             type="button"
             onClick={() => setEditingDesc(true)}
-            className="mt-1.5 -ml-2 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors"
+            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors"
           >
             <span aria-hidden="true" className="text-sm leading-none">+</span>
             Add a description

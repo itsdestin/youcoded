@@ -165,6 +165,19 @@ describe('CloseSessionPrompt', () => {
     expect(store.get('youcoded-close-prompt-disabled')).toBe('1');
   });
 
+  it('Enter honours "Don\'t show again", the same as the button', async () => {
+    // Enter used to call onConfirm directly and skip the suppress write.
+    mockWindowClaude({ tags: [], note: '', supported: true, flags: {} });
+    const store = new Map<string, string>();
+    const stub = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, String(v)), removeItem: (k: string) => void store.delete(k), clear: () => store.clear() };
+    Object.defineProperty(globalThis, 'localStorage', { value: stub, configurable: true, writable: true });
+    const onConfirm = mount();
+    fireEvent.click(await screen.findByRole('switch', { name: "Don't show again" }));
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(store.get('youcoded-close-prompt-disabled')).toBe('1');
+  });
+
   it('marks complete from the toggle at the bottom', async () => {
     mockWindowClaude({ tags: [], note: '', supported: true, flags: {} });
     const onConfirm = mount();

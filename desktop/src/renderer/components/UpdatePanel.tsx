@@ -327,22 +327,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         onClose={onClose}
         size="document"
         title={updateStatus.update_available ? 'Update available' : "What's new"}
-        scrollBody={false}
-      >
-        {/* The beta switch rides at the END of the scrolling body, so it appears
-            in BOTH modes — under "what's new" when you are current, and under the
-            release notes when an update is waiting (Destin, 2026-09-13 deck, S-1:
-            "should also appear somewhere on the version chip popup modal with the
-            changelog"). It renders nothing where the channel is unavailable —
-            Android and a remote browser refuse the call — so no gate is needed
-            here. Inside the scroll rather than the footer: the footer only exists
-            in the update-available mode, and it belongs to the Update button. */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-          {body}
-          <BetaChannelRow separated />
-        </div>
-        {updateStatus.update_available && (
-          <footer className="px-5 py-3 border-t border-edge-dim flex flex-col items-end">
+        // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
+        // notes with no fade and drew a full-width line above its footer (guide: no full-width
+        // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
+        // in view and the notes fade see-through under it.
+        footer={updateStatus.update_available ? (
+          <div className="flex flex-col items-end">
             {/* Change 46: download progress gets a real bar. It used to live only
                 as a percentage inside the (disabled, therefore dimmed) button
                 label, which is the one place a user is least likely to watch.
@@ -440,8 +430,21 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 )}
               </div>
             )}
-          </footer>
-        )}
+          </div>
+        ) : undefined}
+      >
+        {/* The beta switch rides at the END of the scrolling body, so it appears
+            in BOTH modes — under "what's new" when you are current, and under the
+            release notes when an update is waiting (Destin, 2026-09-13 deck, S-1:
+            "should also appear somewhere on the version chip popup modal with the
+            changelog"). It renders nothing where the channel is unavailable —
+            Android and a remote browser refuse the call — so no gate is needed
+            here. Inside the scroll rather than the footer: the footer only exists
+            in the update-available mode, and it belongs to the Update button. */}
+        <div>
+          {body}
+          <BetaChannelRow separated />
+        </div>
       </Dialog>
     </>,
     document.body,

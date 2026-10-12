@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useEscClose } from '../hooks/use-esc-close';
-import { useScrollFade } from '../hooks/useScrollFade';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { SessionHeaderCard, SessionListsCard, SessionTagsCard } from './tags/SessionDetails';
@@ -8,7 +6,6 @@ import SessionRenameDialog from './SessionRenameDialog';
 import { Button, Callout, Dialog, FoldRow, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
 import { plainMessage } from '../utils/ipc-error';
-import { isTypingTarget } from '../utils/is-typing-target';
 
 // The two reserved flags, serialised in this order into buildResult's `flags`.
 // Priority shows as "Pin to top" (pick-menus-2#PM2-3); Complete is the prompt's own question.
@@ -73,13 +70,6 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
   // A failed read's own words, shown only under Details (submit-ticket-5#ST5-9: the
   // operation's text is for a bug report, not the message). Null when the read worked.
   const [readError, setReadError] = useState<string | null>(null);
-  // WHY its own fade: this dialog owns its scroll band (scrollBody={false}, so its footer stays
-  // put), and Dialog's fade only reaches the body it owns. With a tag's edit box open the band
-  // scrolls, and without this it ended in a hard cut under the footer (guide: the content
-  // fades at the hidden edge, never a solid strip). The masked fade (`.scroll-mask`, the
-  // content itself fading), never the painted band — scroll-mask.test.ts. Declared before the
-  // early return.
-  const bodyRef = useScrollFade<HTMLDivElement>();
   const [note, setNote] = useState('');
   // The session's tags/note as loaded on open — the baseline for the delta, so
   // Cancel changes nothing and Confirm only writes what the user toggled.
@@ -172,28 +162,13 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     noteChanged: note !== original.note,
   }), [sel, tagIds, note, original]);
 
-  // ESC is routed through the central useEscClose stack so overlay LIFO and
-  // chat-passthrough preventDefault work uniformly. Enter still needs its own
-  // window listener because it submits rather than closes.
-  useEscClose(open, onCancel);
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter') return;
-      // Don't hijack Enter while the user is typing in the tag search or the note.
-      if (isTypingTarget(e.target as Element)) return;
-      // WHY a focused control keeps its own Enter: the cards are now full of buttons (a tag
-      // opens its edit box, "+ New tag", "+ Add a note", a tag's ×). Enter on one of them used
-      // to reach this listener too and close the session mid-edit — and Enter on Close session
-      // itself fired it twice (its click and this). The rename popup sits on top: its Enter
-      // is its own.
-      const el = e.target as Element | null;
-      if (renaming || e.defaultPrevented || el?.closest?.('button, [role="button"], [role="switch"], a, select')) return;
-      onConfirm(buildResult());
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, buildResult, onConfirm, renaming]);
+  // WHY one confirm for the button and Enter: Enter used to call onConfirm directly and so
+  // skipped "Don't show again" — the prompt came back next time although the switch was on.
+  const confirm = () => {
+    // Persist the suppress preference first so the caller can skip the prompt on the next close.
+    if (dontShowAgain) localStorage.setItem(SUPPRESS_KEY, '1');
+    onConfirm(buildResult());
+  };
 
   if (!open) return null;
 
@@ -209,15 +184,27 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
           titled by what it does. The session's name moved from the subtitle into its own
           card, as on Session details and the detail pages (guide: the item's name is in the
           top card, not the title). */}
-      <Dialog screen="chat/close-session" open onClose={onCancel} size="panel" title="Close session" scrollBody={false}>
-          {/* min-h-0 + overflow-y-auto: this dialog passes scrollBody={false}
-              because it renders its own footer, and Dialog's own doc is explicit
-              that doing so makes the SCROLL REGION the caller's job — "the symptom
-              is a dialog that clips with no way to reach the bottom". The header
-              and footer are fixed, so only this middle band may grow; without
-              min-h-0 a flex child refuses to shrink below its content and pushes
-              "Close session" off the panel on a short window. */}
-          <div ref={bodyRef} className="scroll-mask px-4 py-4 flex flex-col gap-4 min-h-0">
+      {/* WHY the shared body, footer and Enter (close-session-friction proposals 1 and 2): this
+          prompt wired its own scroll band (it had a hard cut under the footer until round 1) and
+          its own window Enter listener (it closed the session from a focused tag). The Dialog
+          now owns both: the body scrolls under the see-through fade, the footer stays put, and
+          Enter is `onEnter` — only when this is the top popup and no control has the keyboard.
+          No useEscClose of its own: the Dialog's entry must be the top one for Enter. */}
+      <Dialog screen="chat/close-session" open onClose={onCancel} size="panel" title="Close session"
+        onEnter={confirm}
+        footer={
+          // P-15 (review 2026-08-26): the dialog has a ✕, so no Cancel. "Don't show again" sits
+          // bottom-left beside the one filled button — allowed by the guide because the button
+          // balances it on the same line (principle 6).
+          <div className="flex items-center justify-between gap-3">
+            {/* Persists the suppress flag so App.tsx skips this prompt on future closes. */}
+            <label className="flex items-center gap-2 text-2xs text-fg-muted whitespace-nowrap cursor-pointer">
+              <Toggle checked={dontShowAgain} onChange={setDontShowAgain} aria-label="Don't show again" />
+              Don't show again
+            </label>
+            <Button size="sm" className="whitespace-nowrap" onClick={confirm}>Close session</Button>
+          </div>
+        }>
             {!metaLoaded ? null : !metaSupported ? (
               <>
                 {/* Name only: the note could not be read (or cannot be stored here), so
@@ -255,32 +242,6 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
                   complete={{ done: sel.complete, onComplete: (next) => setSel((prev) => ({ ...prev, complete: next })) }} />
               </>
             )}
-          </div>
-          {/* P-15 (review 2026-08-26): the dialog has a ✕, so no Cancel. "Don't show
-              again" sits bottom-left beside the one filled button — allowed by the guide
-              because the button balances it on the same line (principle 6). */}
-          <div className="px-4 pb-4 flex items-center justify-between gap-3">
-            {/* Don't show again — persists suppress flag to localStorage so App.tsx
-                skips this prompt on future closes and destroys sessions directly. */}
-            <label className="flex items-center gap-2 text-2xs text-fg-muted whitespace-nowrap cursor-pointer">
-              <Toggle checked={dontShowAgain} onChange={setDontShowAgain} aria-label="Don't show again" />
-              Don't show again
-            </label>
-            <Button
-              size="sm"
-              className="whitespace-nowrap"
-              onClick={() => {
-                // Persist suppress preference before confirming so the caller
-                // can immediately skip the prompt on the next close.
-                if (dontShowAgain) {
-                  localStorage.setItem(SUPPRESS_KEY, '1');
-                }
-                onConfirm(buildResult());
-              }}
-            >
-              Close session
-            </Button>
-          </div>
       </Dialog>
       {renaming && sessionId && <SessionRenameDialog id={sessionId} name={name} onClose={() => setRenaming(false)} />}
     </>

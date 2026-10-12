@@ -22,23 +22,29 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
     // layer={3}: L3 Critical (Overlay.tsx) — the same stacking layer as the
     // app's other destructive confirmations (ModelSwitchPrompt); this is a
     // z-index-only change, not the dictated copy/layout above.
-    <Dialog open onClose={onCancel} size="panel" title="Close window" scrollBody={false} layer={3} screen="chat/quit-sessions">
-      <div className="px-4 pt-4 pb-3 flex flex-col gap-1.5">
+    // WHY the shared body + footer (close-session-friction proposal 1): it opted out of the
+    // shared body only to place its own button row; the footer slot does that, and keeps the
+    // row in view on a short window. No Enter-to-confirm: Close window ends sessions, so it
+    // takes a click.
+    <Dialog open onClose={onCancel} size="panel" title="Close window" layer={3} screen="chat/quit-sessions"
+      footer={
+        <div className="flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs text-fg cursor-pointer select-none whitespace-nowrap">
+            <Toggle checked={reopen} onChange={setReopen} aria-label="Resume on Next Launch?" />
+            Resume on Next Launch?
+          </label>
+          <Button size="sm" variant="danger" className="whitespace-nowrap" onClick={() => onConfirm(reopen)}>
+            Close window
+          </Button>
+        </div>
+      }>
+      <div className="flex flex-col gap-1.5">
         <p className="text-xs font-bold text-fg">
           You have {count} active session{count === 1 ? '' : 's'} - proceed?
         </p>
         <p className="text-2xs text-fg-muted leading-snug">
           Closing this window will end your active sessions. Would you like an offer to resume these sessions the next time you launch YouCoded?
         </p>
-      </div>
-      <div className="px-4 pb-4 flex items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-xs text-fg cursor-pointer select-none whitespace-nowrap">
-          <Toggle checked={reopen} onChange={setReopen} aria-label="Resume on Next Launch?" />
-          Resume on Next Launch?
-        </label>
-        <Button size="sm" variant="danger" className="whitespace-nowrap" onClick={() => onConfirm(reopen)}>
-          Close window
-        </Button>
       </div>
     </Dialog>
   );

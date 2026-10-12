@@ -6,6 +6,7 @@ import { CloseButton } from './CloseButton';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { ScreenMark } from '../../shoot-mode';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useEnterToConfirm } from '../../hooks/use-enter-to-confirm';
 
 /**
  * D1 — the one dialog shell.
@@ -193,6 +194,22 @@ export type DialogProps = {
   /** While true the dialog cannot be dismissed: the ✕ is disabled, and Escape and outside
    *  clicks do nothing. For work that must finish with the dialog on screen (a restore). */
   busy?: boolean;
+  /**
+   * The popup's own buttons, pinned under the scrolling body — they never scroll away, and the
+   * body fades see-through where it meets them (guide: the content fades at the hidden edge).
+   * WHY a slot (close-session-friction proposal 1, approved 2026-10-12): four popups wired this
+   * themselves with `scrollBody={false}`, each a little differently — one had a hard cut under
+   * its footer, one a full-width line above it, one only scrolled its list. Needs the default
+   * `scrollBody`; ignored without it.
+   */
+  footer?: React.ReactNode;
+  /**
+   * What Enter does in this popup — its main action. Fires only when this popup is the top
+   * overlay and the keyboard is not on a control or in a text box (useEnterToConfirm has the
+   * rules and why). Never while `busy`. A caller must not ALSO register its own useEscClose for
+   * this popup: that entry would sit above the Dialog's and it would never be "on top".
+   */
+  onEnter?: () => void;
   children: React.ReactNode;
 };
 
@@ -212,6 +229,8 @@ export function Dialog({
   scrollBody = true,
   screen,
   busy = false,
+  footer,
+  onEnter,
   children,
   ...aria
 }: DialogProps) {
@@ -230,7 +249,8 @@ export function Dialog({
   // up (Donate, Assistant settings, Create a page…). A caller with its own
   // layered Escape keeps it: the caller renders this Dialog, so its entry
   // registers after this one and sits on top of the stack.
-  useEscClose(open, close);
+  const isTop = useEscClose(open, close);
+  useEnterToConfirm(open && !busy, isTop, onEnter);
 
   if (!open) return null;
 
@@ -302,6 +322,9 @@ export function Dialog({
           ) : (
             children
           )}
+          {/* No line above it (guide: no full-width line in a popup): the body's own fade
+              is the edge. The body's bottom padding is the gap, so the footer has none on top. */}
+          {scrollBody && footer && <div className="dialog-footer shrink-0 px-4 pb-4">{footer}</div>}
         </OverlayPanel>
       </div>
     </>,

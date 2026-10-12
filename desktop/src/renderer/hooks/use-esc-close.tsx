@@ -155,7 +155,7 @@ export function useEscClose(
   // For a panel that stays open beside the chat: true while its layered
   // peeling should apply (keyboard focus inside it). See EscStore.activeTop.
   opts?: { layeredWhile?: () => boolean },
-): void {
+): () => boolean {
   const store = useContext(EscStoreContext);
   const ref = useRef(onClose);
   useLayoutEffect(() => { ref.current = onClose; }, [onClose]);
@@ -168,12 +168,24 @@ export function useEscClose(
   // that gap closed the layer UNDER it (seen as a load-only failure of
   // ModelSwitchPrompt.test "Esc closes only the question"). Registering in the
   // same commit that shows it closes the gap.
+  // The entry's id, so the caller can ask "am I the top overlay?" (useEnterToConfirm).
+  const idRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!store || !open) return;
     const id = nextId++;
+    idRef.current = id;
     store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}) });
-    return () => store.remove(id);
+    return () => { store.remove(id); if (idRef.current === id) idRef.current = null; };
   }, [open, store, isPanel]);
+
+  // WHY returned (close-session-friction proposal 2): a popup's Enter-to-confirm must not fire
+  // while another overlay sits on top of it (the rename popup over the close prompt, a menu
+  // opened inside it). The stack already knows the order, so it answers that question — no
+  // second registry to drift. Stable identity; true without a provider (nothing to be under).
+  return useCallback(() => {
+    if (!store) return true;
+    return idRef.current !== null && store.top()?.id === idRef.current;
+  }, [store]);
 }
 
 export function useEscStackEmpty(): boolean {

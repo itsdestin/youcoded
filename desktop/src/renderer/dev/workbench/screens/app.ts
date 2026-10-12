@@ -7,6 +7,8 @@ const app = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['a
 export const APP: readonly ScreenEntry[] = [
   // An open editor, a parked draft that can be opened, one whose file is gone.
   app('app/unsaved-before-quit', 'dialog'),
+  // A short window: the list scrolls and the buttons stay put (close-session-4, the footer slot).
+  { ...app('app/unsaved-before-quit#short', 'dialog'), viewport: { width: 1440, height: 480 } },
   // Refused after teardown, when it was a restart: the chats have stopped; it will quit instead.
   app('app/unsaved-before-quit/after-restart', 'dialog'),
   // "Discard and quit" asks in place first.

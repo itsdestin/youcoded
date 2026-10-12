@@ -6,6 +6,8 @@ const pr = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['pr
 export const PROJECTS: readonly ScreenEntry[] = [
   { ...pr('projects/files', 'view'), sameAs: { name: 'projects', why: 'Projects opens on its Files tab' } },
   pr('projects/files/filter', 'popover'),
+  // The hero's description being written (close-session-4: the box keeps the card's margins).
+  { ...pr('projects/files#description-edit', 'view'), open: [{ do: 'click', target: { role: 'button', labelStarts: '“The desktop and Android app' } }] },
   pr('projects/conversations', 'view'),
   pr('projects/conversations/preview', 'dialog'),
   pr('projects/context', 'view'),

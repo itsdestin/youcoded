@@ -30,7 +30,6 @@ const STILL_PAINTED = new Set([
   'components/SyncPanel.tsx',
   'components/SyncSetupWizard.tsx',
   'components/ui/Dialog.tsx',
-  'components/UnsavedBeforeQuit.tsx',
 ]);
 // The class word itself, not `scroll-fade-x` (the sideways chip-row twin) or `--scroll-fade-pad`.
 const PAINTED = /['"` ]scroll-fade(?![-\w])/;

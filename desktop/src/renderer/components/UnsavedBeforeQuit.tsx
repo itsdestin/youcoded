@@ -12,7 +12,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button, Dialog } from './ui';
 import { useScreenOpen } from '../shoot-mode';
-import { useScrollFade } from '../hooks/useScrollFade';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
 import { DRAFT_READ_FAILED } from './artifact-views/edit-permission';
 import {
@@ -55,7 +54,6 @@ export function UnsavedBeforeQuit() {
   // Dismissed (Cancel, OK, Esc, ✕): main forgets the held quit/close (fix round 12).
   const dismiss = () => { clearQuitRefused(); window.claude?.office?.dismissPrompt?.(); };
   const allSaved = r !== null && n === 0;
-  const listRef = useScrollFade<HTMLDivElement>();
   const intro = r?.afterTeardown
     ? `Your chats have stopped. Save ${n > 1 ? 'the files' : 'the file'}, then quit again.`
     : `Save ${n > 1 ? 'them' : 'it'}, then ${goOn === 'close' ? 'close the window' : 'quit'} again.`;
@@ -70,45 +68,40 @@ export function UnsavedBeforeQuit() {
       layer={3}
       // Each state its own photo mark (shoot).
       screen={allSaved ? 'app/unsaved-before-quit/all-saved' : r?.confirming ? 'app/unsaved-before-quit/discard' : r?.afterTeardown ? 'app/unsaved-before-quit/after-restart' : 'app/unsaved-before-quit'}
-      // WHY its own layout (fix round 15): the list scrolls in whatever height is left (with the
-      // app's scroll fade as the "more below" cue) while the choices stay pinned under it, so the
-      // buttons are visible at any window height.
-      scrollBody={false}
+      // WHY the shared body + footer (close-session-friction proposal 1): fix round 15 gave it its
+      // own layout so the choices stay pinned under a list that scrolls in whatever height is
+      // left. The footer slot does exactly that: the body (intro + list) scrolls under the shared
+      // see-through fade — the list's old painted fade is gone — and the buttons never move.
+      footer={allSaved ? (
+        <div className="flex gap-2 justify-end">
+          <Button variant="secondary" onClick={dismiss}>Cancel</Button>
+          <Button variant="primary" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
+        </div>
+      ) : r?.confirming ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
+            <Button variant="danger" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2 justify-end">
+          <Button variant="secondary" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
+          <Button variant="primary" onClick={dismiss}>OK</Button>
+        </div>
+      )}
     >
-      <div className="flex flex-col flex-1 min-h-0 px-4 py-4 gap-3">
-        {allSaved ? (
-          <>
-            {restartNote && <p className="text-sm text-fg-2">{restartNote.trim()}</p>}
-            <div className="flex gap-2 justify-end">
-              <Button variant="secondary" onClick={dismiss}>Cancel</Button>
-              <Button variant="primary" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-sm text-fg-2">{intro}{restartNote}</p>
-            <div ref={listRef} className="scroll-fade flex-1">
-              <ul className="flex flex-col gap-2 py-1">
-                {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
-              </ul>
-            </div>
-            {r?.confirming ? (
-              <div className="flex flex-col gap-3 shrink-0">
-                <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
-                <div className="flex gap-2 justify-end">
-                  <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
-                  <Button variant="danger" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex gap-2 justify-end shrink-0">
-                <Button variant="secondary" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
-                <Button variant="primary" onClick={dismiss}>OK</Button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {allSaved ? (
+        restartNote ? <p className="text-sm text-fg-2">{restartNote.trim()}</p> : null
+      ) : (
+        <>
+          <p className="text-sm text-fg-2">{intro}{restartNote}</p>
+          <ul className="flex flex-col gap-2">
+            {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
+          </ul>
+        </>
+      )}
     </Dialog>
   );
 }
