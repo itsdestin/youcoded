@@ -58,9 +58,9 @@ export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string 
       </button>
       </Tooltip>
       {/* The shared popup (Dialog): standard header, ✕ and scrolling body. No Done
-          button — every change saves as you make it (pick-menus-11#PM11-1). Complete is
-          deliberately NOT offered here: a session you are sitting in is not finished,
-          and the close prompt owns that decision. */}
+          button — every change saves as you make it (pick-menus-11#PM11-1). Mark complete
+          is offered here too since close-session-2#CS2-5 ("also add the complete toggle
+          here"); it is safe on an open session — see SessionListsCard. */}
       <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Session details" size="panel">
         <SessionDetails
           name={sessionName || 'Untitled session'}
@@ -71,6 +71,7 @@ export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string 
           note={meta.note}
           onNote={meta.setNote}
           pin={{ pinned, onPin: (next) => meta.setFlag('priority', next) }}
+          complete={{ done: !!meta.flags.complete, onComplete: (next) => meta.setFlag('complete', next) }}
         />
       </Dialog>
       {renaming && sessionId && <SessionRenameDialog id={sessionId} name={sessionName || 'Untitled session'} onClose={() => setRenaming(false)} />}

@@ -1698,6 +1698,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             onNote={(text) => saveNote(organizeTarget.sessionId, text)}
             // Stored as the `priority` flag, not a registry tag — the sort reads one known key.
             pin={{ pinned: !!organizeTarget.flags?.priority, onPin: (next) => toggleFlag(organizeTarget.sessionId, 'priority', next) }}
+            // Resume's own toggle: a newly-completed row stays in view until the list changes (stickyComplete).
+            complete={{ done: !!organizeTarget.flags?.complete, onComplete: (next) => toggleFlag(organizeTarget.sessionId, 'complete', next) }}
           />
         </Dialog>
       )}

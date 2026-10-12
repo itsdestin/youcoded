@@ -44,7 +44,7 @@ function Harness() {
   const registry = useTagRegistry();
   return editor === 'cloud'
     ? <TagCloud registry={registry} appliedIds={new Set()} onToggle={() => {}} />
-    : <SessionDetails registry={registry} appliedIds={new Set()} onToggleTag={() => {}} note="" onNote={() => {}} pin={{ pinned: false, onPin: () => {} }} />;
+    : <SessionDetails registry={registry} appliedIds={new Set()} onToggleTag={() => {}} note="" onNote={() => {}} pin={{ pinned: false, onPin: () => {} }} complete={{ done: false, onComplete: () => {} }} />;
 }
 
 const tagShown = () => !!screen.queryByText('Research');

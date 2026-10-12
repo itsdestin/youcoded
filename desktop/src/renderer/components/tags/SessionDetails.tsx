@@ -3,7 +3,7 @@
 // Session details: a session's name and note, its tags and Pin to top — the editor every
 // surface uses (status bar popup, Resume's organize sheet, the side panel's sheet, a
 // project's conversation preview, and since close-session-1 the close prompt, which
-// composes the exported cards below with its own Mark complete).
+// composes the exported cards below).
 //
 // WHY this shape (tags-final#TF-1 → session-details-1…5, Destin 2026-10-04): the top card
 // mirrors a project's card — the name large (click to rename), then the note "in quotes and
@@ -11,7 +11,7 @@
 // (layout A): this session's tags first, larger and filled; then "Add a tag" with the search,
 // the other tags as grey outlines and archived ones flat grey. Clicking a tag opens its edit
 // box in the card. A surface whose header already shows the name passes no `name`.
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
@@ -31,6 +31,7 @@ type Props = {
   appliedIds: Set<string>;
   onToggleTag: (id: string, next: boolean) => void;
   pin: { pinned: boolean; onPin: (next: boolean) => void };
+  complete: { done: boolean; onComplete: (next: boolean) => void };
 };
 
 export function SessionDetails(p: Props) {
@@ -38,20 +39,52 @@ export function SessionDetails(p: Props) {
     <div className="flex flex-col gap-4">
       <SessionHeaderCard name={p.name} onRename={p.onRename} note={p.note} onNote={p.onNote} />
       <SessionTagsCard {...p} />
-      <div className={`${CARD_LEVEL_1} px-3 py-1`}>
-        <PinRow pin={p.pin} />
-      </div>
+      <SessionListsCard pin={p.pin} complete={p.complete} />
     </div>
   );
 }
 
-/** Pin to top as a setting row, for a card to hold. WHY exported (close-session-1): the close
- *  prompt puts it in one card with Mark complete — both are yes/no facts about the session. */
-export function PinRow({ pin }: { pin: Props['pin'] }) {
+/** "In your lists": Pin to top and Mark complete in one labelled card — the same in Session
+ *  details and the close prompt.
+ *
+ *  WHY a label (Destin, close-session-1#CS-1: "weird for them to fall under the "tags"
+ *  subheader, as they aren't exactly tags?"; picked close-session-2#CS2-2 "lists"): an
+ *  unlabelled card under the labelled Tags card read as part of Tags. ONE card because both
+ *  change how this session shows in your lists (pinned first; complete leaves Resume).
+ *  WHY Mark complete here too (close-session-2#CS2-5 "follow", "also add the complete toggle
+ *  here"): it used to be the close prompt's alone, on the idea that an open session isn't
+ *  finished. Marking an open session complete is safe: Resume never lists an open session
+ *  (ipc-handlers passes the running ids to listPastSessions, which skips them), and the tab,
+ *  the session lists and the chat ignore the flag — so nothing changes until it is closed;
+ *  then Resume leaves it out unless Show complete is on, and Welcome back offers it unticked.
+ *  The hint says exactly that, so it reads right for an open session and a closing one. */
+export function SessionListsCard({ pin, complete }: Pick<Props, 'pin' | 'complete'>) {
   return (
-    <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
-      description="Keeps this session first in your session lists"
-      control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
+    <section>
+      <SectionLabel className="mb-2">In your lists</SectionLabel>
+      <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+        <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
+          description="Keeps this session first in your session lists"
+          control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
+        <SettingRow header variant="item" title="Mark complete"
+          description="Leaves it out of the resume list once it's closed, unless you turn on Show complete."
+          icon={<CompleteGlyph done={complete.done} className={`w-3.5 h-3.5 transition-colors ${complete.done ? 'text-accent' : 'text-fg-muted'}`} />}
+          control={<Toggle checked={complete.done} onChange={complete.onComplete} aria-label="Mark complete" />} />
+      </div>
+    </section>
+  );
+}
+
+/** The Resume card's check-in-a-circle, so marking complete looks the same everywhere; its
+ *  words then start on the same edge as Pin to top's. The check knocks out with var(--canvas),
+ *  never a fixed white, so it survives dark and community themes. */
+function CompleteGlyph({ done, className = '' }: { done: boolean; className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
+      <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
+    </svg>
   );
 }
 
@@ -60,13 +93,10 @@ export function PinRow({ pin }: { pin: Props['pin'] }) {
  *  Exported for the close prompt (backlog row 17), whose top card is this same card.
  *  Without `onNote` the card shows the name alone — the close prompt's state where the
  *  note could not be read, so nothing may suggest it is empty or editable. */
-export function SessionHeaderCard({ name, onRename, note, onNote, children }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void; children?: ReactNode }) {
+export function SessionHeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void }) {
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
       <NoteBlock name={name} onRename={onRename} note={note} onNote={onNote} />
-      {/* More about this session inside its own card (a close-prompt design under review,
-          close-session-2: its switches at the card's foot). */}
-      {children && <div className="mt-3 -mx-1">{children}</div>}
     </div>
   );
 }

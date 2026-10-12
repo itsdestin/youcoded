@@ -1134,7 +1134,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     registry={previewTagRegistry}
                     note={previewMeta.note}
                     onNote={previewMeta.saveNote}
-                    pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }}
+                    pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }} complete={{ done: !!previewMeta.flags.complete, onComplete: (next) => void previewMeta.toggleFlag('complete', next) }}
                   />
                 )}
               </Dialog>

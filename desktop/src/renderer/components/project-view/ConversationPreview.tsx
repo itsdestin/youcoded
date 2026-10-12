@@ -133,6 +133,7 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
             note={meta.note}
             onNote={(text) => void meta.saveNote(text)}
             pin={{ pinned: !!row.flags?.priority, onPin: (next) => void meta.toggleFlag('priority', next) }}
+            complete={{ done: !!row.flags?.complete, onComplete: (next) => void meta.toggleFlag('complete', next) }}
           />
         )}
       </Dialog>
