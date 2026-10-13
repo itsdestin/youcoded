@@ -41,6 +41,7 @@ interface SeedCall {
   toolName: string;
   input: Record<string, unknown>;
   response?: string;
+  isError?: boolean;
 }
 
 /**
@@ -70,7 +71,7 @@ function useSeedTasks() {
           sessionId: SESSION_ID,
           toolUseId: call.toolUseId,
           result: call.response,
-          isError: false,
+          isError: call.isError ?? false,
         } as any);
       }
     }
@@ -182,5 +183,50 @@ describe('useSessionTasks', () => {
     expect(result.current.tasks[0].markedInactive).toBeFalsy();
     const stored = JSON.parse(localStorage.getItem(INACTIVE_STORAGE_KEY) ?? '{}');
     expect(stored[SESSION_ID] ?? []).not.toContain('1');
+  });
+
+  // WHY (Open tasks investigation, 2026-10-13): a native-harness session plans with TodoWrite
+  // (its only task tool). The event reaches the renderer as an ordinary TRANSCRIPT_TOOL_USE
+  // (harness-session.ts emits 'tool-use' -> native-session-host -> ipc-handlers -> App.tsx),
+  // so this drives the same reducer path the app does, and the chip's counts must follow.
+  it('counts a native session\'s TodoWrite list, and the next write replaces it', () => {
+    const { result } = renderHook(() => {
+      const seed = useSeedTasks();
+      return { seed, ...useSessionTasks(SESSION_ID) };
+    }, { wrapper: Providers });
+
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n1', toolName: 'TodoWrite',
+        input: { todos: [
+          { content: 'Read the file', status: 'in_progress', activeForm: 'Reading the file' },
+          { content: 'Fix it', status: 'pending', activeForm: 'Fixing it' },
+        ] },
+        response: 'Todo list updated: 2 items, 0 completed.',
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 1, completed: 0, inactive: 0 });
+
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n2', toolName: 'TodoWrite',
+        input: { todos: [
+          { content: 'Read the file', status: 'completed', activeForm: 'Reading the file' },
+          { content: 'Fix it', status: 'in_progress', activeForm: 'Fixing it' },
+        ] },
+        response: 'Todo list updated: 2 items, 1 completed.',
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 0, completed: 1, inactive: 0 });
+
+    // A write the tool rejected changes nothing (the harness never replaced its list).
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n3', toolName: 'TodoWrite',
+        input: { todos: [{ content: 'Fix it', status: 'completed', activeForm: 'Fixing it' }] },
+        response: 'Invalid input', isError: true,
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 0, completed: 1, inactive: 0 });
   });
 });

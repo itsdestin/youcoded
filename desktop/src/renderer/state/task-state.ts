@@ -1,8 +1,10 @@
 import { ToolCallState } from '../../shared/types';
 
-// Derived per-session task state built from Task* tool calls in chat state.
-// Scans toolCalls in insertion order. Pure function — memoize on the Map ref
-// (preserved across streams per chat-reducer invariants).
+// Derived per-session task state built from the session's to-do tool calls in chat state:
+// Claude Code's TaskCreate / TaskUpdate / TaskGet / TaskList, and TodoWrite — the native
+// harness's only task tool (main/harness/tools/todo-write.ts) and the one Claude Code uses in
+// its todo-list mode. Scans toolCalls in insertion order. Pure function — memoize on the Map
+// ref (preserved across streams per chat-reducer invariants).
 //
 // TaskCreate returns its numeric id ONLY in the response string (see
 // parseTaskCreateResult). TaskList response is the authoritative per-session
@@ -77,7 +79,72 @@ export function parseTaskListResult(text: string): Array<{ id: string; status: T
   return rows;
 }
 
-const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop', 'TaskList']);
+// WHY TaskStop is NOT here (Open tasks investigation, 2026-10-13): it is Claude Code's "stop a
+// background command or helper" tool, not a to-do tool. Listed here, a call written with
+// `taskId` (real transcripts carry {"taskId":"bwo1mm03m"}) became a nameless task that counted
+// as pending forever, so the chip said "1 pending" with nothing to do.
+const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']);
+
+/** Prefix for tasks that came from a TodoWrite list, so the next list can replace only those. */
+const TODO_ID_PREFIX = 'todo:';
+
+interface TodoItem { content: string; status: TaskStatus; activeForm?: string }
+
+/** The usable items of a TodoWrite input. Malformed items are skipped, never thrown on. */
+function readTodoItems(input: Record<string, unknown>): TodoItem[] {
+  const raw = input.todos;
+  if (!Array.isArray(raw)) return [];
+  const out: TodoItem[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const { content, status, activeForm } = item as Record<string, unknown>;
+    if (typeof content !== 'string' || content.trim() === '') continue;
+    const st = status === 'in_progress' || status === 'completed' ? status : 'pending';
+    out.push({ content, status: st, ...(typeof activeForm === 'string' && { activeForm }) });
+  }
+  return out;
+}
+
+/**
+ * Apply one TodoWrite to the task map. A TodoWrite REPLACES the whole list (the native tool
+ * empties and refills it; Claude Code's does the same), so earlier TodoWrite tasks that the new
+ * list leaves out are dropped.
+ *
+ * WHY ids come from the item's words, not its position: the "Marked inactive" flag is stored by
+ * id, and a model often inserts a step in front of others. A position id would move the flag
+ * onto a different task; the words stay with the task while its status changes. A repeated
+ * item gets "#2", "#3" so both show.
+ */
+function applyTodoWrite(tasks: Map<string, TaskState>, tool: ToolCallState, i: number): void {
+  const items = readTodoItems(tool.input || {});
+  const seen = new Map<string, number>();
+  const kept = new Set<string>();
+  items.forEach((item, pos) => {
+    const n = (seen.get(item.content) ?? 0) + 1;
+    seen.set(item.content, n);
+    const id = `${TODO_ID_PREFIX}${item.content}${n > 1 ? `#${n}` : ''}`;
+    kept.add(id);
+    const existing = tasks.get(id);
+    tasks.set(id, {
+      id,
+      subject: item.content,
+      activeForm: item.activeForm ?? existing?.activeForm,
+      status: item.status,
+      // The list's own order is the order to show. Fractions keep every item of this write
+      // between this tool call's index and the next one's.
+      orderIndex: i + pos / (items.length + 1),
+      events: [...(existing?.events ?? []), {
+        toolUseId: tool.toolUseId,
+        toolName: tool.toolName,
+        status: item.status,
+        patch: { ...item },
+      }],
+    });
+  });
+  for (const id of [...tasks.keys()]) {
+    if (id.startsWith(TODO_ID_PREFIX) && !kept.has(id)) tasks.delete(id);
+  }
+}
 
 export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
   const tasks = new Map<string, TaskState>();
@@ -86,7 +153,12 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
   let idx = 0;
   for (const tool of toolCalls.values()) {
     const i = idx++;
-    if (!TASK_TOOLS.has(tool.toolName)) continue;
+    const isTodoWrite = tool.toolName === 'TodoWrite';
+    if (!isTodoWrite && !TASK_TOOLS.has(tool.toolName)) continue;
+    // WHY: a call the tool rejected changed nothing (a TodoWrite that failed validation never
+    // replaced the list; a failed TaskUpdate never moved the status), so it must not here either.
+    if (tool.status === 'failed') continue;
+    if (isTodoWrite) { applyTodoWrite(tasks, tool, i); continue; }
     const input = tool.input || {};
 
     // --- TaskList: authoritative snapshot, overwrites current tasks ---
@@ -115,6 +187,9 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
       if (parsed) taskId = parsed.id;
     }
     if (!taskId) continue;
+    // WHY: TaskGet only reads a task. For an id never seen it would otherwise invent an empty
+    // "pending" task out of a lookup.
+    if (tool.toolName === 'TaskGet' && !tasks.has(taskId)) continue;
 
     const existing = tasks.get(taskId) || { id: taskId, events: [], orderIndex: i };
     const status = input.status as TaskStatus | undefined;
@@ -138,6 +213,11 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
       events: [...existing.events, event],
     });
   }
+
+  // WHY deleted tasks leave the list (Open tasks rework, 2026-10-13): Claude deleting a task
+  // means it is no longer part of the plan — Claude Code's own list drops it too. Shown, it sat
+  // under "Completed" with a hand-made "deleted" tag, reading as work that was done.
+  for (const [id, t] of tasks) if (t.status === 'deleted') tasks.delete(id);
 
   return tasks;
 }
