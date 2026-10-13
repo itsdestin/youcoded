@@ -100,7 +100,7 @@ const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> =
   // 2, not 1, since 2026-09-16: its green link-styled-as-a-button (the same <a> the
   // callout guard exempts) moved from text-emerald-500 to the status text-green-400,
   // which this pattern matches. Same element as before — it is a button, not a status line.
-  'ThemeShareSheet.tsx': { count: 1, why: 'theme share flow; the green open-link button' },
+  // ThemeShareSheet.tsx left the list 2026-10-13 (small-fixes-3#SF3-10): its Published link keeps its green tint, words in the text colour.
   // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
   // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
   // approved ticket screen replaced it for every user, so the exemption goes with
