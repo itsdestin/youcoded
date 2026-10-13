@@ -704,13 +704,13 @@ function FilesTabImpl({
         // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
         // same lift on desktop, guarded by @media (hover: hover) so a tap on the
         // Android WebView can't leave the card stuck at 1.02 (spec §9.E).
-        className={`layer-surface !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
+        // WHY card-raised (decisions "Card look" K-3, "Card shadow" F-3): file cards are raised
+        // cards with the one medium shadow. They were flat ("mixed elevation in one grid",
+        // 2026-07-08); the folder cards beside them stay flat for now — their tab-and-body
+        // shape has no single box to shadow (a known deviation in the design guide).
+        className={`layer-surface card-raised !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
           isActive ? 'border-accent' : ''
         } ${isDeleted ? 'opacity-60' : ''}`}
-        // No shadow: folder cards are flat, and mixed elevation in one grid read
-        // as inconsistent (user feedback 2026-07-08). Same override the seg
-        // control uses on its .layer-surface.
-        style={{ boxShadow: 'none' }}
         onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >

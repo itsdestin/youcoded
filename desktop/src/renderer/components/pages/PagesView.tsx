@@ -154,7 +154,8 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
-      className="relative bg-panel border border-edge rounded-lg p-4 text-left flex flex-col gap-3 cursor-pointer card-interactive focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
+      // WHY card-raised (decisions "Card look" K-6, "Card shadow" F-3): a page card is a raised card.
+      className="relative bg-panel border border-edge rounded-lg p-4 text-left flex flex-col gap-3 cursor-pointer card-interactive card-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
     >
       <div className="flex items-start gap-3">
         <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">

@@ -154,9 +154,8 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         title={!clickable ? entry.disabledReason : undefined}
         // Change 22: command cards share the drawer grid with SkillCard, so they
         // move to the same surface — migrating one and not the other splits the
-        // grid into two card species. Same !rounded-lg + flat-shadow overrides.
-        style={{ boxShadow: 'none' }}
-        className={`layer-surface !rounded-lg p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        // grid into two card species. Same !rounded-lg + raised card shadow (card-raised).
+        className={`layer-surface card-raised !rounded-lg p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           clickable
             ? 'card-interactive cursor-pointer'
             : 'opacity-50 cursor-not-allowed'
@@ -453,8 +452,7 @@ function AddSkillsCard({ onClick }: { onClick: () => void }) {
       // it KEEPS the dashed border — that's the action affordance ("add
       // something here"), not card chrome. .layer-surface's solid border is
       // overridden rather than inherited for exactly that reason.
-      style={{ boxShadow: 'none' }}
-      className="layer-surface !rounded-lg !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="layer-surface card-raised !rounded-lg !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <span className="text-lg font-medium leading-none">+</span>
       <span className="text-sm font-medium mt-1">Add skills</span>

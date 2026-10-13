@@ -320,7 +320,8 @@ function NewCard({ kind, onClick }: { kind: OfficeKind; onClick: () => void }) {
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
-      className="bg-panel border border-edge rounded-lg p-4 flex items-center gap-3 cursor-pointer card-interactive focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
+      // WHY card-raised: the Office card sits in the Pages grid, so it is the same raised card (K-6, F-3).
+      className="bg-panel border border-edge rounded-lg p-4 flex items-center gap-3 cursor-pointer card-interactive card-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
     >
       <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">
         <OfficeKindGlyph kind={kind} className="w-5 h-5" />

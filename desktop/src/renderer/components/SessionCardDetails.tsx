@@ -30,7 +30,9 @@ export function formatRelativeTime(epochMs: number): string {
 // drift the first time one is touched. The BASE is split out because the Resume
 // card swaps its border colour (accent when selected, no hover when inert), so
 // it cannot take the resting border + hover pair; everything else it shares.
-export const SESSION_CARD_SURFACE_BASE = 'rounded-lg border bg-inset transition-colors';
+// WHY card-raised (decisions "Card look" K-4, "Card shadow" F-3): a conversation card (Resume,
+// Projects → Conversations) is a raised card with the one medium shadow.
+export const SESSION_CARD_SURFACE_BASE = 'rounded-lg border bg-inset card-raised transition-colors';
 export const SESSION_CARD_SURFACE = `${SESSION_CARD_SURFACE_BASE} border-edge-dim hover:border-edge`;
 
 /** The card's bold one-line title (Conversations tab). */

@@ -18,7 +18,9 @@ import React from 'react';
  * chip has no border (accent fill carries it), the unlit one does.
  */
 
-export const FILTER_CHIP_BASE = 'px-3 py-1 rounded-full text-sm transition-colors';
+// WHY rounded-control (decisions "Control shape follows the theme"): filters take the theme's
+// control corner, never a hard-coded pill.
+export const FILTER_CHIP_BASE = 'px-3 py-1 rounded-control text-sm transition-colors';
 export const FILTER_CHIP_ACTIVE = 'bg-accent text-on-accent';
 export const FILTER_CHIP_INACTIVE = 'bg-inset text-fg-2 hover:text-fg border border-edge hover:border-edge-dim';
 

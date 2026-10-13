@@ -247,7 +247,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
             onOpen(id);
           }
         }}
-        className="layer-surface flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="layer-surface card-raised flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         data-marketplace-card={id}
         data-marketplace-card-compact="true"
         style={accentColor ? { borderColor: accentColor } : undefined}
@@ -338,7 +338,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
       // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
       // same lift on desktop, but guarded by @media (hover: hover) so a tap on
       // Android doesn't leave the card stuck at 1.02 (spec §9.E).
-      className="relative layer-surface text-left flex flex-col overflow-hidden hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="relative layer-surface card-raised text-left flex flex-col overflow-hidden hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
       style={accentColor ? { borderColor: accentColor } : undefined}
     >

@@ -900,7 +900,9 @@ export function ProjectView(props: ProjectViewProps) {
                   overflow-x-auto stays as a backstop for a very long label at a
                   very small width; it should not normally engage. */}
               <div
-                className="flex items-center gap-1 p-1 layer-surface !rounded-full max-sm:w-full max-w-full overflow-x-auto no-scrollbar"
+                // WHY rounded-control-group / rounded-control (decisions "Control shape follows the
+                // theme"): the switcher takes the theme's control corner, not a fixed pill.
+                className="flex items-center gap-1 p-1 layer-surface !rounded-control-group max-sm:w-full max-w-full overflow-x-auto no-scrollbar"
                 style={{ boxShadow: 'none' }}
               >
                 {SEGMENTS.map((s) => {
@@ -913,7 +915,7 @@ export function ProjectView(props: ProjectViewProps) {
                       // the pill spans the screen exactly; inactive ones stay
                       // at their icon width. title= carries the label for the
                       // icon-only state (aria-label does the same for AT).
-                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-full text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
+                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
                         active
                           ? 'bg-accent text-on-accent'
                           : 'text-fg-2 hover:text-fg hover:bg-inset'

@@ -84,7 +84,10 @@ export function roundnessToShape(value: number) {
 /** A theme's roundness on the 0–1 scale, read back from its medium radius. */
 export function themeRoundness(theme: Pick<LoadedTheme, 'shape'>): number {
   const md = theme.shape?.['radius-md'];
-  if (!md) return 0.5;
+  // WHY 0.75: a theme with no shape of its own paints the app's default level, which is
+  // Round (globals.css: --radius-md 12px = 0.75 on this scale; decisions "Default roundness
+  // level"). 0.5 described the old 8px default and made "Auto" name the wrong level.
+  if (!md) return 0.75;
   return Math.min(parseInt(md) / 16, 1);
 }
 

@@ -46,7 +46,10 @@ export type SegmentedTabsProps = {
   className?: string;
 };
 
-const TAB_BASE = `px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${FOCUS_RING}`;
+// WHY rounded-control / rounded-control-group (decisions "Control shape follows the theme"):
+// tabs take the theme's control corner instead of a fixed pill or the medium corner; the
+// pill container's corner is the control corner plus its 2px inset, so the two stay concentric.
+const TAB_BASE = `px-3 py-1.5 rounded-control text-xs font-medium transition-colors ${FOCUS_RING}`;
 const TAB_ACTIVE = 'bg-accent text-on-accent';
 const TAB_INACTIVE = 'text-fg-2 hover:bg-inset';
 
@@ -59,8 +62,8 @@ const TAB_INACTIVE = 'text-fg-2 hover:bg-inset';
 // after-sweep, 2026-08-27).
 // Compact (Destin, 2026-08-27, review 2): segments are px-3 py-1 text-sm — the same box as
 // the marketplace filter chips — so the switch and the chips beside it read as one size.
-const PILL_CONTAINER = 'w-fit flex items-center gap-0.5 p-0.5 layer-surface !rounded-full';
-const PILL_TAB_BASE = `shrink-0 px-3 py-1 rounded-full text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${FOCUS_RING}`;
+const PILL_CONTAINER = 'w-fit flex items-center gap-0.5 p-0.5 layer-surface !rounded-control-group';
+const PILL_TAB_BASE = `shrink-0 px-3 py-1 rounded-control text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${FOCUS_RING}`;
 const PILL_TAB_INACTIVE = 'text-fg-2 hover:text-fg hover:bg-inset';
 
 export function SegmentedTabs({

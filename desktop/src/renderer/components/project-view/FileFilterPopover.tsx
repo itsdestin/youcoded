@@ -47,7 +47,8 @@ function Chip({ active, onClick, multi, children }: {
       aria-checked={multi ? undefined : active}
       aria-pressed={multi ? active : undefined}
       onClick={onClick}
-      className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+      // WHY rounded-control (decisions "Control shape follows the theme"): no hard-coded pill.
+      className={`px-2.5 py-1 rounded-control text-xs transition-colors ${
         active
           ? 'bg-accent text-on-accent'
           : 'bg-inset text-fg-2 hover:text-fg border border-edge hover:border-edge-dim'

@@ -30,13 +30,17 @@ export const FOCUS_RING =
   'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas';
 
 /** Always applied.
- *  rounded-lg is the one control radius (12px built-in / 24px on big-radius
- *  packs, since --radius-lg is a theme token). Rejected: sm, md, full-everywhere.
+ *  rounded-control is the one control radius — WHY (decisions "Control shape follows
+ *  the theme", "Default roundness level"): every button, tab, filter and search box
+ *  takes --radius-control (14px on the built-in Round level), derived from the theme's
+ *  own medium corner, so it moves with a pack's shape and the Appearance roundness
+ *  choice. It was rounded-lg (the CARD corner, 18px at Round). Rejected: sm, md,
+ *  full-everywhere.
  *  Pills survive only as a documented exception (first-run hero CTAs), as the
  *  xl size — which is why a size may replace the base radius and weight (see
  *  buttonClasses). */
 const BUTTON_BASE =
-  'inline-flex items-center justify-center gap-1.5 font-medium rounded-lg transition-colors ' +
+  'inline-flex items-center justify-center gap-1.5 font-medium rounded-control transition-colors ' +
   'disabled:opacity-50 disabled:cursor-not-allowed ' +
   FOCUS_RING;
 
