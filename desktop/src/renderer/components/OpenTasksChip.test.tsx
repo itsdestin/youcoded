@@ -44,3 +44,15 @@ describe('OpenTasksChip', () => {
     expect(btn.getAttribute('aria-label')).toContain('3 pending');
   });
 });
+
+// WHY (Open tasks rework, 2026-10-13; small-fixes-3#SF3-10): status hues stay out of the words —
+// the counts were hand-typed blue and amber. The running count's state is the green dot.
+describe('OpenTasksChip colours', () => {
+  it('draws no coloured text, and marks the running count with the green status dot', () => {
+    cleanup();
+    render(<OpenTasksChip running={1} pending={2} onOpen={() => {}} />);
+    const btn = screen.getByRole('button');
+    for (const el of [btn, ...btn.querySelectorAll('*')]) expect((el as HTMLElement).style.color).not.toMatch(/#|rgb\((96|251)/);
+    expect(btn.querySelectorAll('.bg-green-400')).toHaveLength(1);
+  });
+});
