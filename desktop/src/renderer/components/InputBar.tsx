@@ -1062,8 +1062,29 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   }, [addFiles]);
 
+  // WHY a file-drag highlight (decisions "Applied from earlier rules": dragging a file in gets
+  // the same highlight as dragging a session tab — one style per job). Nothing showed before, so
+  // there was no sign the box would take the file. Only drags carrying files light it (a session
+  // pill drag carries no Files, so SessionDropZone's own highlight never doubles up with this).
+  // The depth counter absorbs the enter/leave pairs every child element fires mid-drag.
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const fileDragDepth = useRef(0);
+  const carriesFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!carriesFiles(e)) return;
+    fileDragDepth.current += 1;
+    setFileDragOver(true);
+  }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!carriesFiles(e)) return;
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1);
+    if (fileDragDepth.current === 0) setFileDragOver(false);
+  }, []);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    fileDragDepth.current = 0;
+    setFileDragOver(false);
     const paths = Array.from(e.dataTransfer.files).map((f) => (f as any).path as string).filter(Boolean);
     if (paths.length > 0) addFiles(paths);
   }, [addFiles]);
@@ -1080,10 +1101,23 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // layer, attachment chips) is not highlightable or copyable (Destin,
       // 2026-09-10). The textarea itself stays selectable: globals.css
       // re-enables text fields.
-      className="input-bar-container shrink-0 select-none"
+      // `relative` holds the file-drag highlight below; nothing else in the box is
+      // positioned against this element.
+      className="input-bar-container relative shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
     >
+      {/* The session-tab drop highlight's own look (SessionDropZone.tsx): dashed accent
+          outline over a faint accent tint. No label — the drop needs no words here. */}
+      {fileDragOver && (
+        <div
+          aria-hidden="true"
+          data-file-drop-highlight
+          className="absolute inset-0 z-10 rounded-2xl outline-dashed outline-2 -outline-offset-2 outline-accent/70 bg-accent/10 pointer-events-none"
+        />
+      )}
       {/* Terminal view (minimal) renders the Esc/Tab/Ctrl/arrow helper row in
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}

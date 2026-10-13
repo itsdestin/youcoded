@@ -73,6 +73,20 @@ describe('InputBar — context-menu image paste', () => {
     return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
   }
 
+  // WHY (decisions "Applied from earlier rules"): dragging a file in shows the session-tab drop
+  // highlight; a drag carrying no files (a session pill) does not, and the drop clears it.
+  it('lights the file-drag highlight only for drags carrying files', () => {
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const files = { types: ['Files'], files: [] };
+    fireEvent.dragEnter(container, { dataTransfer: { types: ['text/plain'] } });
+    expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
+    fireEvent.dragEnter(container, { dataTransfer: files });
+    expect(container.querySelector('[data-file-drop-highlight]')).not.toBeNull();
+    fireEvent.drop(container, { dataTransfer: files });
+    expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
+  });
+
   it('stages the saved image path as a visible attachment', async () => {
     saveClipboardImage.mockResolvedValue('/tmp/context-paste.png');
     renderComposer();

@@ -232,8 +232,11 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
             onRetry={onDownload}
           />
         ) : (
+          // WHY secondary, not ghost (decisions "Secondary buttons", ui-element-review-final#F-2):
+          // the less-important action beside a main one is outlined, never bare text — the same
+          // outlined "Not now" this popover's own failed-download ErrorState already shows above.
           <div className="flex justify-end gap-2 mt-3">
-            <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
+            <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
             <Button variant="primary" size="sm" onClick={onDownload}>Download</Button>
           </div>
         )}
@@ -250,7 +253,9 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         <p className="text-xs font-semibold text-fg mb-1.5">Voice isn&rsquo;t available</p>
         <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? readiness.reason : 'Still checking whether this computer can listen.'}</p>
         <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={onRecheck}>Check again</Button>
+          {/* WHY secondary (decisions "Secondary buttons"; guide Buttons — nothing bare-text reads
+              as a button): a lone action here was ghost, i.e. bare words. Outlined, like Not now. */}
+          <Button variant="secondary" size="sm" onClick={onRecheck}>Check again</Button>
         </div>
       </>
     );
@@ -260,7 +265,8 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         <p className="text-xs font-semibold text-fg mb-1.5">Voice stopped</p>
         <p className="text-2xs text-fg-2 leading-snug">{error}</p>
         <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>OK</Button>
+          {/* WHY secondary: same rule as Check again above — never a bare-text button. */}
+          <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>OK</Button>
         </div>
       </>
     );
