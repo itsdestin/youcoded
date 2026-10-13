@@ -3156,6 +3156,30 @@ export function installShim(): void {
         return response?.text ?? '';
       },
     },
+    // The Browser — mirrors preload.ts. Every channel is desktopOnly on the host, which answers { unsupported:true },
+    // so a call from here rejects (screens gate on capabilities.assistantBrowser, false here).
+    // No pushes reach a phone, so the listeners never fire.
+    browser: {
+      state: (sessionId: string) => invoke('browser:state', { sessionId }),
+      info: () => invoke('browser:info'),
+      watch: (sessionId: string) => invoke('browser:watch', { sessionId }),
+      unwatch: (sessionId: string) => invoke('browser:unwatch', { sessionId }),
+      ackFrame: (_sessionId: string) => { /* no pictures reach a phone */ },
+      answer: (sessionId: string, promptId: string, answer: string) => invoke('browser:answer', { sessionId, promptId, answer }),
+      openWindowForHandoff: (sessionId: string) => invoke('browser:open-window-for-handoff', { sessionId }),
+      setShowWindow: (show: boolean) => invoke('browser:set-show-window', { show }),
+      updateSettings: (patch: Record<string, unknown>) => invoke('browser:update-settings', patch),
+      removeSite: (host: string) => invoke('browser:remove-site', { host }),
+      clearSignins: () => invoke('browser:clear-signins'),
+      stop: () => invoke('browser:stop'),
+      closeSession: (sessionId: string) => invoke('browser:close-session', { sessionId }),
+      download: () => invoke('browser:download'),
+      cancelDownload: () => invoke('browser:cancel-download'),
+      checkMyChrome: () => invoke('browser:check-my-chrome'),
+      onState: (_cb: (state: any) => void) => () => {},
+      onFrame: (_cb: (frame: any) => void) => () => {},
+      onInfoChanged: (_cb: () => void) => () => {},
+    },
     // GPU / performance preference — mirrors preload.ts performance namespace.
     // multiGpuDetected: false in the response means the UI section stays hidden.
     performance: {

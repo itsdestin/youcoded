@@ -27,6 +27,7 @@ import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
 import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
+import BrowserSettingsButton from './browser/BrowserSettingsButton';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
@@ -3132,6 +3133,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           autoOpenPage={specialistsAutoOpen ? 'specialists' : 'cloud'}
           onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
         />
+
+        {/* The Browser (2026-10-13): an assistant ability, so it sits under
+            Assistant settings. Renders nothing off the computer's own window. */}
+        <BrowserSettingsButton />
 
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 

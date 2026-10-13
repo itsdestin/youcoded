@@ -287,6 +287,25 @@ const IPC = {
   PERFORMANCE_GET_CONFIG: 'performance:get-config',
   PERFORMANCE_SET_CONFIG: 'performance:set-config',
   APP_RESTART: 'app:restart',
+  BROWSER_STATE: 'browser:state',
+  BROWSER_INFO: 'browser:info',
+  BROWSER_WATCH: 'browser:watch',
+  BROWSER_UNWATCH: 'browser:unwatch',
+  BROWSER_FRAME_ACK: 'browser:frame-ack',
+  BROWSER_ANSWER: 'browser:answer',
+  BROWSER_OPEN_WINDOW_FOR_HANDOFF: 'browser:open-window-for-handoff',
+  BROWSER_SET_SHOW_WINDOW: 'browser:set-show-window',
+  BROWSER_UPDATE_SETTINGS: 'browser:update-settings',
+  BROWSER_REMOVE_SITE: 'browser:remove-site',
+  BROWSER_CLEAR_SIGNINS: 'browser:clear-signins',
+  BROWSER_STOP: 'browser:stop',
+  BROWSER_CLOSE_SESSION: 'browser:close-session',
+  BROWSER_DOWNLOAD: 'browser:download',
+  BROWSER_CANCEL_DOWNLOAD: 'browser:cancel-download',
+  BROWSER_CHECK_MY_CHROME: 'browser:check-my-chrome',
+  BROWSER_STATE_CHANGED: 'browser:state-changed',
+  BROWSER_FRAME: 'browser:frame',
+  BROWSER_INFO_CHANGED: 'browser:info-changed',
   SYSTEM_NOTIFY_STACK_STATE: 'system:notify-stack-state',
   SYSTEM_BACK: 'system:back',
   NATIVE_SUPPORTED: 'native:supported',
@@ -563,6 +582,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   contentSearch: true,
   liveHandoff: true,
   sessionRecord: true,
+  assistantBrowser: true,
 } as const;
 // <<< GENERATED-CAPABILITIES
 
@@ -2005,6 +2025,41 @@ contextBridge.exposeInMainWorld('claude', {
     // audit W24); omitted = the handler's own default.
     getScreenText: (sessionId: string, tailRows?: number): Promise<string> =>
       ipcRenderer.invoke('terminal:get-screen-text', { sessionId, tailRows }),
+  },
+  // The Browser (2026-10-13; spec docs/active/specs/2026-10-13-assistant-browser-design.md). The computer's own
+  // window only (capabilities.assistantBrowser). Pictures arrive only for a conversation this window asked to watch.
+  browser: {
+    state: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_STATE, { sessionId }),
+    info: () => ipcRenderer.invoke(IPC.BROWSER_INFO),
+    watch: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_WATCH, { sessionId }),
+    unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_UNWATCH, { sessionId }),
+    ackFrame: (sessionId: string) => ipcRenderer.send(IPC.BROWSER_FRAME_ACK, { sessionId }),
+    answer: (sessionId: string, promptId: string, answer: string) => ipcRenderer.invoke(IPC.BROWSER_ANSWER, { sessionId, promptId, answer }),
+    openWindowForHandoff: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
+    setShowWindow: (show: boolean) => ipcRenderer.invoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
+    updateSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
+    removeSite: (host: string) => ipcRenderer.invoke(IPC.BROWSER_REMOVE_SITE, { host }),
+    clearSignins: () => ipcRenderer.invoke(IPC.BROWSER_CLEAR_SIGNINS),
+    stop: () => ipcRenderer.invoke(IPC.BROWSER_STOP),
+    closeSession: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),
+    download: () => ipcRenderer.invoke(IPC.BROWSER_DOWNLOAD),
+    cancelDownload: () => ipcRenderer.invoke(IPC.BROWSER_CANCEL_DOWNLOAD),
+    checkMyChrome: () => ipcRenderer.invoke(IPC.BROWSER_CHECK_MY_CHROME),
+    onState: (cb: (state: any) => void) => {
+      const h = (_e: IpcRendererEvent, state: any) => cb(state);
+      ipcRenderer.on(IPC.BROWSER_STATE_CHANGED, h);
+      return () => ipcRenderer.removeListener(IPC.BROWSER_STATE_CHANGED, h);
+    },
+    onFrame: (cb: (frame: any) => void) => {
+      const h = (_e: IpcRendererEvent, frame: any) => cb(frame);
+      ipcRenderer.on(IPC.BROWSER_FRAME, h);
+      return () => ipcRenderer.removeListener(IPC.BROWSER_FRAME, h);
+    },
+    onInfoChanged: (cb: () => void) => {
+      const h = () => cb();
+      ipcRenderer.on(IPC.BROWSER_INFO_CHANGED, h);
+      return () => ipcRenderer.removeListener(IPC.BROWSER_INFO_CHANGED, h);
+    },
   },
   // GPU / performance preference — read and write the preferPowerSaving flag.
   // multiGpuDetected: false in the response means the UI section stays hidden.

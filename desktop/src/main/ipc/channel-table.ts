@@ -58,6 +58,7 @@ import { docCommentsChannels } from './doc-comments';
 import { appearanceChannels } from './appearance';
 import { gameChannels } from './game';
 import { uiChannels } from './ui';
+import { browserChannels } from './browser';
 import { appChannels } from './app';
 import { shellChannels } from './shell';
 import { windowChannels } from './window';
@@ -112,6 +113,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...appearanceChannels,
   ...gameChannels,
   ...uiChannels,
+  ...browserChannels,
   ...appChannels,
   ...shellChannels,
   ...windowChannels,

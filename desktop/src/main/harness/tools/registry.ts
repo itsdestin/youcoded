@@ -3,6 +3,7 @@
 // this wrapper owns execution + uniform truncation + actionable errors.
 import { truncateOutput, composeNotice, type TruncateOpts } from './truncate';
 import type { NativeTool, ToolContext, ToolResultPayload } from './types';
+import { wrapUntrusted } from './untrusted';
 
 export const DEFAULT_CAPS: TruncateOpts = { maxChars: 30_000 };
 
@@ -50,8 +51,11 @@ export function defineTool<A>(
       // pipeline cap, so the cap measures the content and the tag always
       // closes; the notice composeNotice appends is harness prose and sits
       // OUTSIDE the tag. Errors are the harness's own words, never wrapped.
+      // WHY wrapUntrusted (design review 1 #2, 2026-10-13): it neutralises a
+      // "</untrusted-content>" planted in the fetched text, which used to end
+      // the frame early and pass page text off as the app's own words.
       const framed = def.untrusted && !raw.isError
-        ? `<untrusted-content source="${def.untrusted}">\n${t.text}\n</untrusted-content>`
+        ? wrapUntrusted(def.untrusted, t.text)
         : t.text;
       // The tool's own bound and the pipeline cap are independent; composeNotice
       // folds both into one line and uses the TOOL's widening advice, never a

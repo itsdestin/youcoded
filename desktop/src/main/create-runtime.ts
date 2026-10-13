@@ -8,6 +8,7 @@
 // (main/platform.ts), and the profile folder / app version arrive as plain values.
 // tests/create-runtime.test.ts proves nothing reachable from this file imports Electron.
 import fs from 'fs';
+import { getBrowserClient } from './assistant-browser/browser-electron';
 import path from 'path';
 import os from 'os';
 import { generateText } from 'ai';
@@ -390,6 +391,9 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     // reads services.search (the chain-walking SearchService).
     {
       search: searchService,
+      // The Browser (2026-10-13): runs Browser tools in its own worker process.
+      // getBrowserClient() forks nothing until the first call.
+      browser: { callTool: (sessionId, tool, args, opts) => getBrowserClient().callTool(sessionId, tool, args, opts) },
       // The Read tool shrinks an over-limit picture before it promises it to the model.
       images: imagePreparer,
       // Task 14 fix pass: same shape as the context/slots (~2295) and

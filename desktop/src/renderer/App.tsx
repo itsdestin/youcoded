@@ -30,6 +30,8 @@ import { runLeaseTakeoverGate } from './state/resume-lease-gate';
 import { createDrawerFilterStore } from './state/drawer-filter-store';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
+import BrowserPanel from './components/browser/BrowserPanel';
+import { browserSupported, closeBrowserPane, openBrowserPane, useBrowserPaneOpen, useBrowserWantsPane } from './state/browser-store';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
@@ -921,6 +923,32 @@ function AppInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDrawerOpen]);
+  // The Browser panel (2026-10-13) is the right slot's third occupant, with the
+  // same rule: opening one pane closes the others. Its open flag is per
+  // conversation and lives in state/browser-store.ts (read as a boolean slice,
+  // so a busy browser's state pushes never redraw App).
+  const browserPaneOpen = useBrowserPaneOpen(sessionId) && browserSupported();
+  useEffect(() => {
+    if (!browserPaneOpen || !sessionId) return;
+    if (activeDrawerOpen) dispatchArtifact({ type: 'DRAWER_CLOSED', sessionId });
+    if (gameState.panelOpen) gameDispatch({ type: 'TOGGLE_PANEL' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserPaneOpen]);
+  useEffect(() => {
+    if ((activeDrawerOpen || gameState.panelOpen) && sessionId) closeBrowserPane(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDrawerOpen, gameState.panelOpen]);
+  // First time a conversation's hidden browser shows pages this run, open its
+  // panel — unless another right pane is in use (spec §1: never replace what
+  // the person had open; the header button's dot says it instead).
+  const browserWantsPane = useBrowserWantsPane(sessionId);
+  const browserAutoOpened = useRef(new Set<string>());
+  useEffect(() => {
+    if (!browserWantsPane || !sessionId || browserAutoOpened.current.has(sessionId)) return;
+    browserAutoOpened.current.add(sessionId);
+    if (!activeDrawerOpen && !gameState.panelOpen) openBrowserPane(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserWantsPane, sessionId]);
   // Gate on isLeader so only the first-launched window opens the lobby
   // socket — avoids duplicate presence for the same GitHub identity when
   // multiple peer windows are open. When detach isn't available (remote
@@ -3435,6 +3463,15 @@ function AppInner() {
       <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
   ) : null;
+  // The right slot's occupant other than Session Files: the Browser panel when
+  // open, else the games pane. One element, placed by ChatView (chat view) or
+  // TerminalRightSlot (terminal view), so it never mounts twice.
+  const sidePaneOpen = browserPaneOpen || gameState.panelOpen;
+  const activeSidePane = browserPaneOpen && sessionId ? (
+    <ErrorBoundary name="Browser">
+      <BrowserPanel sessionId={sessionId} />
+    </ErrorBoundary>
+  ) : activeGamePane;
 
   return (
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
@@ -3476,7 +3513,7 @@ function AppInner() {
         // never moves the document drawer. Referencing the vars here (instead of
         // a px literal) means mid-drag App re-renders rewrite the SAME string and
         // can't snap the width back while the user is dragging.
-        style={{ ['--right-pane-width' as any]: gameState.panelOpen ? 'var(--game-pane-width, 420px)' : 'var(--drawer-width, 480px)' }}
+        style={{ ['--right-pane-width' as any]: gameState.panelOpen && !browserPaneOpen ? 'var(--game-pane-width, 420px)' : 'var(--drawer-width, 480px)' }}
       >
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
@@ -3498,7 +3535,7 @@ function AppInner() {
                 clip-path: polygon() has only ONE backdrop-filter sampling the
                 wallpaper directly, so the whole chrome reads as one
                 continuous tone. */}
-            <div className={`chrome-glass${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-glass--drawer-open' : ''}`} />
+            <div className={`chrome-glass${(activeDrawerOpen || sidePaneOpen) ? ' chrome-glass--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
                 sessions={stripSessions}
@@ -3551,7 +3588,7 @@ function AppInner() {
                   {pendingTab && pendingTab.tabId === s.id ? (
                     <ErrorBoundary name="Chat"><PendingHandoffView tab={pendingTab} visible={s.id === sessionId}
                       drawerOpen={s.id === sessionId && activeDrawerOpen} expanded={artifactState.drawerExpanded}
-                      gamePane={s.id === sessionId ? activeGamePane : null}
+                      gamePane={s.id === sessionId ? activeSidePane : null}
                       onRetry={() => { void pendingRef.current?.retry(s.id); }}
                       onContinue={() => { void pendingRef.current?.continueWithSavedCopy(s.id,
                         (device) => askTakeover(device, 'force'),
@@ -3575,7 +3612,7 @@ function AppInner() {
                       // get null) so there's a single GamePanel instance.
                       // ChatView only actually mounts it in chat view; in
                       // terminal view TerminalRightSlot (below) places it.
-                      gamePane={s.id === sessionId ? activeGamePane : null}
+                      gamePane={s.id === sessionId ? activeSidePane : null}
                       onOpenProviderSettings={chatViewHandlers.openProviderSettings}
                       onSwitchProviders={chatViewHandlers.switchProviders}
                       onUpgradePlan={chatViewHandlers.upgradePlan}
@@ -3607,11 +3644,11 @@ function AppInner() {
                  exactly one instance mounts. Electron-only for now (Android's
                  terminal overlay sizing is native — separate follow-up). */}
               {getPlatform() === 'electron' && currentViewMode === 'terminal' && sessionId
-                && (activeDrawerOpen || gameState.panelOpen) && (
+                && (activeDrawerOpen || sidePaneOpen) && (
                 <TerminalRightSlot
                   sessionId={sessionId}
                   cwd={currentSession?.cwd}
-                  gamePane={gameState.panelOpen ? activeGamePane : null}
+                  gamePane={sidePaneOpen ? activeSidePane : null}
                   drawerOpen={activeDrawerOpen}
                   expanded={artifactState.drawerExpanded}
                 />

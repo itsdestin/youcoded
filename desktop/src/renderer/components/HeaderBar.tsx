@@ -1,4 +1,5 @@
 import { guardDirtyEditor } from './artifact-views/dirty-editor-guard';
+import BrowserHeaderButton from './browser/BrowserHeaderButton';
 import React, { useRef, useLayoutEffect, useEffect, useState } from 'react';
 import { GamepadIcon } from './Icons';
 import SessionStrip from './SessionStrip';
@@ -620,6 +621,9 @@ export default React.memo(function HeaderBar({
             projectRoot={sessions.find((s) => s.id === activeSessionId)?.cwd}
           />
         )}
+        {/* The Browser (2026-10-13): appears once this conversation has used the
+            assistant's browser; the `|||` menu carries it on narrow screens. */}
+        {!narrow && <BrowserHeaderButton sessionId={activeSessionId} />}
         <div className="bg-inset rounded-md p-0.5 hidden sm:block">
           {/* §4.1: the pane holds four games now, so the button names the pane,
               not the game. "Games" also matches the accessibility rule that a

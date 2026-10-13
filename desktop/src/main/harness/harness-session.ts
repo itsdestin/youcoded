@@ -35,6 +35,7 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
+import { browserTools } from './tools/browser';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
@@ -1554,6 +1555,22 @@ export class HarnessSession extends EventEmitter {
     if (!this.toolByName.has('ModelSearch')) this.toolByName.set('ModelSearch', ModelSearchTool);
   }
 
+  /** Add or remove the Browser tools (2026-10-13). Three gates, all required:
+   *  the host injected `services.browser` (desktop only), this is not a
+   *  specialist child (children share the parent's conversation tabs and have a
+   *  fixed tool list), and the profile isn't a small model's simplified
+   *  presentation (seven more schemas crowd out a weak model's attention).
+   *  Re-run per buildAiTools like syncSkillTool: a model swap can flip the
+   *  profile either way; the has()/delete() pairs keep both directions idempotent. */
+  private syncBrowserTools(): void {
+    const wanted = !!this.opts.toolServices?.browser && !this.opts.isSpecialistChild
+      && this.profile.maxToolPresentation !== 'simplified';
+    for (const t of browserTools()) {
+      if (!wanted) this.toolByName.delete(t.name);
+      else if (!this.toolByName.has(t.name)) this.toolByName.set(t.name, t);
+    }
+  }
+
   /** Add or remove MCP server tools to match the CURRENT profile's budget
    *  (Task 6, spec §6).
    *
@@ -1642,6 +1659,7 @@ export class HarnessSession extends EventEmitter {
     if (!this.profile.supportsTools) { this._droppedMcpServers = []; this.activeSizingTools = {}; return {}; }
     this.syncSkillTool();
     this.syncTaskTool();
+    this.syncBrowserTools();
     this.syncMcpTools();
     // Simplified presentation (spec §4.2): small local models get each tool's
     // compact shortDescription (falling back to the full description when a tool
