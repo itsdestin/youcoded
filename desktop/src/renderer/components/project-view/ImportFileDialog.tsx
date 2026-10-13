@@ -6,13 +6,9 @@
 // put) or Move (source is gone), and — for a batch that collides with names
 // already in the destination folder — resolves every collision in the batch
 // with ONE choice (Replace / Keep both / Skip) rather than being asked once
-// per file. Styling matches the project-deletion modal in ProjectView.tsx
-// (Scrim + OverlayPanel, shared Button, useEscClose) rather than inventing new
-// markup for a one-off dialog.
+// per file. Built on the shared popup (Dialog) like every other popup.
 import { useState } from 'react';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { Scrim, OverlayPanel } from '../overlays/Overlay';
-import { Button } from '../ui';
+import { Button, CARD_LEVEL_1, Dialog, SegmentedTabs } from '../ui';
 import { getPlatform } from '../../platform';
 
 export type ImportMode = 'move' | 'copy';
@@ -59,7 +55,6 @@ export function ImportFileDialog({
   // default of 'replace' would silently destroy a file on a batch the user
   // never individually reviewed.
   const [onCollision, setOnCollision] = useState<CollisionMode>('keep-both');
-  useEscClose(true, onCancel);
 
   // Move deletes the source; Android's picker already copied the selection
   // into ~/attachments/ before the renderer ever saw a path, so "the source"
@@ -74,27 +69,40 @@ export function ImportFileDialog({
 
   const confirm = (mode: ImportMode) => onConfirm({ mode, onCollision });
 
+  // WHY the shared popup (final review F16; decisions "Popup and side-panel titles", "Closing
+  // popups"): this was hand-built — an 18px title (the shared one is 16px), no ✕ and no tapered
+  // line. Now: the shared title and ✕ (Esc = Cancel, the Dialog's own), the question and the
+  // collision choice in one card, and the buttons stacked full width in the narrow popup's footer
+  // with the one filled button on top (guide "Buttons": two or more in a narrow popup stack).
+  // The Replace / Keep both / Skip choice is the shared tab strip (guide "Settings": 2–4 short
+  // choices) in its nested look, not three buttons where the picked one was filled.
+  const title = `Add ${multiple ? `${sources.length} files` : 'file'}`;
   return (
-    <>
-      <Scrim layer={2} onClick={onCancel} />
-      <OverlayPanel
-        layer={2}
-        role="dialog"
-        aria-modal={true}
-        aria-label="Add file"
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-6 max-w-md w-[calc(100%-2rem)]"
-      >
-        <h3 className="text-lg font-semibold mb-2 text-fg">
-          Add {multiple ? `${sources.length} files` : 'file'}
-        </h3>
-        <p className="mb-3 text-sm text-fg">
+    <Dialog
+      open
+      onClose={onCancel}
+      title={title}
+      size="prompt"
+      noScreen="Opens only after files are picked in the system file picker (Projects → + Add file)."
+      footer={(
+        <div className="flex flex-col gap-2">
+          <Button variant="primary" className="w-full" onClick={() => confirm('copy')}>Copy</Button>
+          {!isAndroid && (
+            <Button variant="secondary" className="w-full" onClick={() => confirm('move')}>Move</Button>
+          )}
+          <Button variant="secondary" className="w-full" onClick={onCancel}>Cancel</Button>
+        </div>
+      )}
+    >
+      <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
+        <p className="text-sm text-fg">
           Copy or move {multiple ? 'these files' : 'this file'} into{' '}
           <span className="font-medium font-mono">{destLabel}</span>?
         </p>
 
         {hasCollisions && (
-          <div className="mb-4">
-            <p className="text-sm text-fg-muted mb-1.5">
+          <div className="flex flex-col gap-2">
+            <p className="text-sm text-fg-2">
               {collisions.length} file{collisions.length === 1 ? '' : 's'} already
               exist{collisions.length === 1 ? 's' : ''} in this folder:
             </p>
@@ -105,7 +113,7 @@ export function ImportFileDialog({
                 anything not listed here (see import-file.ts). Capped list with
                 an overflow line so a 50-file batch can't push the buttons off
                 screen. */}
-            <ul className="mb-2 max-h-24 overflow-y-auto text-xs font-mono text-fg-2 flex flex-col gap-0.5">
+            <ul className="max-h-24 overflow-y-auto text-xs font-mono text-fg-2 flex flex-col gap-0.5">
               {collisions.slice(0, MAX_NAMED_COLLISIONS).map((name) => (
                 <li key={name} className="truncate">{name}</li>
               ))}
@@ -115,36 +123,16 @@ export function ImportFileDialog({
                 </li>
               )}
             </ul>
-            <div className="flex gap-2">
-              {(['replace', 'keep-both', 'skip'] as const).map((m) => (
-                <Button
-                  key={m}
-                  variant={onCollision === m ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setOnCollision(m)}
-                  aria-pressed={onCollision === m}
-                >
-                  {COLLISION_LABEL[m]}
-                </Button>
-              ))}
-            </div>
+            <SegmentedTabs
+              aria-label="Files that already exist"
+              variant="nested"
+              value={onCollision}
+              onChange={(id) => setOnCollision(id as CollisionMode)}
+              tabs={(['replace', 'keep-both', 'skip'] as const).map((m) => ({ id: m, label: COLLISION_LABEL[m] }))}
+            />
           </div>
         )}
-
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" size="lg" onClick={onCancel}>
-            Cancel
-          </Button>
-          {!isAndroid && (
-            <Button variant="secondary" size="lg" onClick={() => confirm('move')}>
-              Move
-            </Button>
-          )}
-          <Button variant="primary" size="lg" onClick={() => confirm('copy')}>
-            Copy
-          </Button>
-        </div>
-      </OverlayPanel>
-    </>
+      </div>
+    </Dialog>
   );
 }

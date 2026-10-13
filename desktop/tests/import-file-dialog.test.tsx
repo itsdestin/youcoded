@@ -87,7 +87,8 @@ describe('ImportFileDialog', () => {
     expect(screen.getByText(/and 4 more/)).toBeTruthy();
     expect(screen.queryByText('f11.md')).toBeNull();
     // The choice itself must still be reachable.
-    expect(screen.getByRole('button', { name: /Replace/i })).toBeTruthy();
+    // The choice is the shared tab strip (one tab per choice).
+    expect(screen.getByRole('tab', { name: /Replace/i })).toBeTruthy();
   });
 
   it('asks about collisions once for a batch, with apply-to-all', async () => {
@@ -101,7 +102,8 @@ describe('ImportFileDialog', () => {
       />,
     );
     expect(screen.getByText(/2 files already exist/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Keep both/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Replace/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Keep both/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Copy$/ }));
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'copy', onCollision: 'keep-both' }),
