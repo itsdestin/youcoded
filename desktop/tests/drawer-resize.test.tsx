@@ -68,4 +68,25 @@ describe('useDrawerResize', () => {
     act(() => { rerender(<Drawer open onClose={onClose} />); });
     expect(drawer.style.height).toBe('70vh');
   });
+
+  // Final review F43: a touch the system takes away mid-drag (pointercancel) used to run the drop.
+  it('a cancelled drag neither closes the drawer nor toggles full height', () => {
+    const { drawer, handle, onClose } = setup();
+    fireEvent.pointerDown(handle, { clientY: 400, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientY: 1050, pointerId: 1 }); // 50px tall: below the 160px minimum
+    fireEvent.pointerCancel(handle, { clientY: 1050, pointerId: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(drawer.style.height).toBe('160px'); // never left below its minimum
+    fireEvent.pointerDown(handle, { clientY: 300, pointerId: 1 });
+    fireEvent.pointerCancel(handle, { clientY: 300, pointerId: 1 }); // a press, cancelled: not a click
+    expect(drawer.style.height).toBe('160px');
+  });
+
+  it('closing forgets the height at once, not only on the next open', () => {
+    const { drawer, handle, rerender, onClose } = setup();
+    fireEvent.pointerDown(handle, { clientY: 300, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientY: 300, pointerId: 1 });
+    act(() => { rerender(<Drawer open={false} onClose={onClose} />); });
+    expect(drawer.style.height).toBe('70vh');
+  });
 });

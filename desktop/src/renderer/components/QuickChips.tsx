@@ -305,6 +305,9 @@ function useChipDrag(chips: ChipConfig[], setChips: (c: ChipConfig[]) => Promise
     if (!o || !wasDragging) return;
     const { chipEl, shelf } = hit(e.clientX, e.clientY);
     if (!shelf) return;
+    // WHY (final review F42): released on the chip's own spot, the drop fell through to "the end
+    // of the shelf" and the chip jumped there — saved at once. Dropping a chip on itself is no move.
+    if (chipEl && parseInt(chipEl.dataset.chipIdx!, 10) === o.idx) return;
     const moving = { ...chips[o.idx], hidden: shelf === 'aside' };
     const rest = chips.filter((_, i) => i !== o.idx);
     let at = rest.length;

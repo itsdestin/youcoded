@@ -220,4 +220,19 @@ describe('quick chips — set aside', () => {
     await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
     expect(setChips.mock.calls[0][0]).toEqual([CHIPS[1], { ...CHIPS[0], hidden: true }]);
   });
+
+  // Final review F42: a press, a move past 5px and a release on the chip's own spot jumped it to
+  // the end of its shelf, saved at once.
+  it('dropping a chip back on itself moves nothing and saves nothing', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    const r = row(0);
+    (document as any).elementFromPoint = () => r;
+    fireEvent.pointerDown(r, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(r, { clientX: 0, clientY: 10 });
+    fireEvent.pointerUp(r, { clientX: 0, clientY: 10 });
+    await act(async () => {}); // let any save the drop started run
+    expect(setChips).not.toHaveBeenCalled();
+  });
 });

@@ -21,8 +21,9 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
   const drag = useRef<{ startY: number; startH: number; moved: boolean } | null>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // Reset on every open: the drawer never remembers where it was left.
-  useEffect(() => { if (open) setHeightPx(null); }, [open]);
+  // Reset on every open AND close: the drawer never remembers where it was left. WHY on close too
+  // (final review F43): reset only on open, the next open drew one frame at the old height first.
+  useEffect(() => { setHeightPx(null); }, [open]);
 
   const maxPx = () => window.innerHeight - TOP_GAP_PX;
   const defaultPx = () => Math.round(window.innerHeight * DEFAULT_SHARE);
@@ -57,6 +58,16 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
     const h = d.startH + (d.startY - e.clientY);
     if (h < MIN_PX) onClose();
   };
+  // WHY its own handler (final review F43): cancel used to run the DROP, so on Android a touch the
+  // system took away mid-drag (a scroll, a gesture) could close the drawer or toggle full height.
+  // A cancelled drag only stops following the finger, and never leaves the drawer below its minimum.
+  const onPointerCancel = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    drag.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    setDragging(false);
+    if (d?.moved) setHeightPx(h => (h !== null && h < MIN_PX ? MIN_PX : h));
+  };
   // Keyboard: Enter/Space = the click; arrows nudge by a tenth of the window.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMax(); return; }
@@ -72,7 +83,9 @@ export function useDrawerResize(open: boolean, onClose: () => void) {
     dragging,
     isMax,
     /** The drawer's height style: 70% of the window until the user moves it. */
-    height: heightPx === null ? `${DEFAULT_SHARE * 100}vh` : `${heightPx}px`,
-    handleProps: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onKeyDown },
+    // A dragged height is capped by the window as it is at this render (F43), so a window made
+    // smaller after a drag does not keep a drawer taller than the room under the top bar.
+    height: heightPx === null ? `${DEFAULT_SHARE * 100}vh` : `${Math.min(heightPx, maxPx())}px`,
+    handleProps: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onKeyDown },
   };
 }
