@@ -1955,7 +1955,7 @@ function RemoteButton(props: RemoteButtonProps) {
                               placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
                               value={newPassword}
                               onChange={(e) => onSetNewPassword(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
+                              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && onSetPassword() /* not while an IME word is being confirmed (F39) */}
                               aria-label="Remote access password"
                               disabled={hostOnly}
                             />

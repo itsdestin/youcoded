@@ -214,7 +214,7 @@ function useTagEditor({ registry, appliedIds, onToggleTag }: TagsProps) {
     <InputGroup size="sm">
       <InputGroup.Field aria-label="Search or create a tag" value={query} placeholder="Search or create a tag…"
         onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) { e.preventDefault(); void create(); } }} />
+        onKeyDown={(e) => { if (e.key === 'Enter' && canCreate && !e.nativeEvent.isComposing) { e.preventDefault(); void create(); } }} /* IME: F39 */ />
       {canCreate && <Button size="sm" onClick={() => void create()}>Create</Button>}
     </InputGroup>
   );

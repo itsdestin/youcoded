@@ -63,7 +63,7 @@ export function TagCloud({ registry, appliedIds, onToggle }: {
             aria-label="Search or create a tag"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) { e.preventDefault(); void create(); } }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canCreate && !e.nativeEvent.isComposing) { e.preventDefault(); void create(); } }} // IME: F39
             placeholder="Search or create a tag…"
           />
           {canCreate && <Button size="sm" onClick={() => void create()} aria-label={`Create tag ${query.trim()}`}>Create</Button>}
@@ -195,7 +195,7 @@ export function NewTagFields({ registry, onDone, onCancel }: { registry: TagRegi
       <div className="space-y-1.5">
         <div className="text-xs font-medium text-fg">Name</div>
         <TextInput size="sm" value={name} autoFocus onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void create(); } }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void create(); } }} // IME: F39
           placeholder="Name the tag" aria-label="New tag name" className="w-full" />
         {taken ? <FieldError>A tag called “{n}” already exists.</FieldError>
           : tried && !n ? <FieldError>Give the tag a name first.</FieldError> : null}

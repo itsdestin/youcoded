@@ -188,3 +188,19 @@ describe('CloseSessionPrompt', () => {
     expect(onConfirm.mock.calls[0][0].flags).toEqual({ complete: true });
   });
 });
+
+// Final review F39: the Enter that confirms a word in an input method (Japanese, Chinese…) must
+// not create the tag; the next plain Enter does.
+describe('creating a tag while an input method is composing', () => {
+  it('waits for the Enter that is not confirming a composed word', async () => {
+    mockWindowClaude({ tags: [], note: '', supported: true, flags: {} });
+    mount();
+    const field = await screen.findByPlaceholderText('Search or create a tag…');
+    fireEvent.change(field, { target: { value: 'にほん' } });
+    const create = (window as any).claude.tags.create as ReturnType<typeof vi.fn>;
+    fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
+    expect(create).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(create).toHaveBeenCalled());
+  });
+});

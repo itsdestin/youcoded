@@ -302,7 +302,8 @@ export default function FeedbackSection({ pluginId, installed, part = 'all' }: {
         <InputGroup.Field
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post(); } }}
+          // WHY isComposing (final review F39): Enter that confirms an IME word (Japanese, Chinese…) must not post.
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); post(); } }}
           placeholder={auth.signedIn ? 'Ask a question or say how it went…' : 'Sign in to comment'}
           aria-label="Write a comment"
         />
