@@ -251,11 +251,11 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const prompts: any[] = [];
     const model = new MockLanguageModelV4({ doStream: async (req: any) => {
       prompts.push(req.prompt);
-      return { stream: simulateReadableStream({ chunks: [
+      return { stream: simulateReadableStream({ chunks: asParts([
         { type: 'stream-start', warnings: [] },
         { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
         { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-      ] }) };
+      ]) }) };
     } });
     const events: any[] = [];
     let queued = true;
@@ -345,10 +345,10 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const notes = path.join(dir, 'b.txt'); fs.writeFileSync(notes, 'hello');
     const profile = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null });
     let seen: any;
-    const model = new MockLanguageModelV4({ doStream: async (o: any) => { seen = o.prompt; return { stream: simulateReadableStream({ chunks: [
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { seen = o.prompt; return { stream: simulateReadableStream({ chunks: asParts([
       { type: 'stream-start', warnings: [] },
       { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-    ] }) }; } });
+    ]) }) }; } });
     const events: any[] = [];
     const session = new HarnessSession({ sessionId: 's-down', cwd: dir, harness: ASSISTANT_PRESET, binding: { providerId: 'chatgpt', modelId: 'gpt-x' },
       skillCatalog: EMPTY_SKILL_CATALOG, profile } as any, async () => model as any);

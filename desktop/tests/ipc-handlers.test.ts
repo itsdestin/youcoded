@@ -228,7 +228,7 @@ describe('session:create resumed admission', () => {
       const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
       await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       acquire.mockClear();
-      const exit = manager.on.mock.calls.findLast((c: any) => c[0] === 'session-exit')[1];
+      const exit = [...manager.on.mock.calls].reverse().find((c: any) => c[0] === 'session-exit')![1];
       exit(info.id);
       const retry = open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       expect(release).not.toHaveBeenCalled();
@@ -1464,10 +1464,10 @@ describe('Welcome back tracking hooks', () => {
   it('the first user-message transcript event tracks a brand-new session, once', async () => {
     const { TranscriptWatcher } = await import('../src/main/transcript-watcher');
     const listeners: Record<string, Array<(...args: any[]) => void>> = {};
-    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string, cb: any) {
-      (listeners[event] ??= []).push(cb);
+    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string | symbol, cb: any) {
+      (listeners[event as string] ??= []).push(cb);
       return this;
-    });
+    } as any); // WHY cast: a `this`-returning stub cannot satisfy the EventEmitter overload
     try {
       const ipc = { handle: vi.fn(), on: vi.fn() };
       const hookRelay = { on: vi.fn(), start: vi.fn() };

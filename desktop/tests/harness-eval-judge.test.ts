@@ -35,7 +35,7 @@ const ANSWER = [
 ].join('\n');
 
 function toolUse(name: string, input: Record<string, unknown>): TranscriptEvent {
-  return { type: 'tool-use', sessionId: 's', uuid: `u${Math.random()}`, timestamp: 0, data: { toolName: name, toolInput: input } };
+  return { type: 'tool-use', sessionId: 's', uuid: `u${Math.random()}`, timestamp: 0, data: { toolUseId: `t${Math.random()}`, toolName: name, toolInput: input } };
 }
 
 function makeRun(over: Partial<CaseRun> = {}): CaseRun {

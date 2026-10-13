@@ -10,6 +10,7 @@ import { collectRunFacts, claimedTools, renderRunFacts, MIN_TOOL_CALLS } from '.
 import { scriptModel, type ScriptStep } from './helpers/harness-fakes';
 import { textChunks, toolCallChunk, finishChunk, stream } from './helpers/scripted-model';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import { looseData } from '../src/shared/transcript-event-types';
 // WHY: these tests feed the mock model RAW provider stream parts on purpose, with
 // deliberately minimal shapes (usage carries only `total`, finishReason may be
 // partial). The strict LanguageModelV4StreamPart type demands every usage field,
@@ -416,9 +417,9 @@ describe('runCase', () => {
     expect(run.toolCalls).toBe(1);
     const toolResult = run.events.find((e) => e.type === 'tool-result' && e.data.toolName === 'Read');
     expect(toolResult).toBeDefined();
-    expect(toolResult!.data.isError).toBeFalsy();
+    expect(looseData(toolResult!).isError).toBeFalsy();
     // Proves the tool actually ran against the real fixture tree, not a stub.
-    expect(toolResult!.data.toolResult).toContain('Fixture Project');
+    expect(looseData(toolResult!).toolResult).toContain('Fixture Project');
     expect(run.review).toBe('The README describes a Fixture Project.');
   });
 
@@ -459,8 +460,8 @@ describe('runCase', () => {
     expect(run.asks).toBe(1);
     const askResult = run.events.find((e) => e.type === 'tool-result' && e.data.toolName === 'AskUserQuestion');
     expect(askResult).toBeDefined();
-    expect(askResult!.data.toolResult).toContain('A: Red');
-    expect(askResult!.data.toolResult).not.toContain('A: Blue');
+    expect(looseData(askResult!).toolResult).toContain('A: Red');
+    expect(looseData(askResult!).toolResult).not.toContain('A: Blue');
   });
 
   it('denies a Write outside the fixture instead of rubber-stamping it (Critical fix)', async () => {
@@ -499,7 +500,7 @@ describe('runCase', () => {
       // the model can read, not a stall or a crash.
       const writeResult = run.events.find((e) => e.type === 'tool-result' && e.data.toolName === 'Write');
       expect(writeResult).toBeDefined();
-      expect(writeResult!.data.isError).toBe(true);
+      expect(looseData(writeResult!).isError).toBe(true);
 
       // (b) `asks` counts this: run-case's askUser increments `asks` for
       // EVERY ask that reaches it, answered or denied, because the field means
@@ -630,9 +631,9 @@ describe('runCase', () => {
 
       const searchResult = run.events.find((e) => e.type === 'tool-result' && e.data.toolName === 'WebSearch');
       expect(searchResult).toBeDefined();
-      expect(searchResult!.data.isError).toBeFalsy();
-      expect(searchResult!.data.toolResult).not.toContain('not wired');
-      expect(searchResult!.data.toolResult).toContain('via ddg');
+      expect(looseData(searchResult!).isError).toBeFalsy();
+      expect(looseData(searchResult!).toolResult).not.toContain('not wired');
+      expect(looseData(searchResult!).toolResult).toContain('via ddg');
       expect(fetchSpy).toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -781,7 +782,7 @@ describe('wrap-up turn', () => {
     // Assert non-empty FIRST — `.every` on an empty array is vacuously true, so
     // without this the test would also pass if the wrap-up turn never ran.
     expect(bashResults.length).toBeGreaterThan(0);
-    expect(bashResults.every((e) => e.data.isError)).toBe(true);
+    expect(bashResults.every((e) => looseData(e).isError)).toBe(true);
   }, HEAVY_RUN_TIMEOUT_MS);
 
   it('denies a genuine AskUserQuestion during wrap-up, so WRAP_UP_PROMPT\'s "every tool call will be denied" claim is true', async () => {

@@ -11,6 +11,7 @@ import { SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS } from '../src/ma
 import { OWNER, RAW_REPORT_CAP_CHARS } from '../src/main/harness/specialists/delegation-ledger';
 import { computeReportBudget } from '../src/main/harness/specialists/report-budget';
 import { APPROX_CHARS_PER_TOKEN } from '../src/main/harness/message-size';
+import { looseData } from '../src/shared/transcript-event-types';
 
 /** Remove a temp root a live NativeSessionHost was writing into.
  *
@@ -151,7 +152,7 @@ describe('specialist foreground run', () => {
     // record, which must stay a faithful record of the parent's own turns).
     await host.drain('root-1');
     const parentFile = store.readEvents('root-1', root);
-    expect(parentFile.filter((e) => e.data?.agentId && e.type !== 'subagent-usage')).toHaveLength(0);
+    expect(parentFile.filter((e) => looseData(e).agentId && e.type !== 'subagent-usage')).toHaveLength(0);
     // The ONE agentId-bearing event that DOES belong on the parent's disk: the
     // specialist's spend. It has to persist, or a resumed session would forget
     // every specialist it ever paid for (spec §2, consequence 3).

@@ -35,33 +35,35 @@ vi.mock('../src/main/presence-socket', async (orig) => ({
   probeHiddenPresence: () => h.probe(),
 }));
 
-import { registerSocialHandlers, destroySocialHandlers } from '../src/main/social-handlers';
+import { startSocial, destroySocialHandlers, getSocialOps } from '../src/main/social-handlers';
 
 describe('presence-connect while incognito', () => {
   beforeEach(() => {
     for (const f of Object.values(h.sock)) (f as ReturnType<typeof vi.fn>).mockClear?.();
     h.sent.length = 0;
-    registerSocialHandlers({ getToken: () => 'tok' } as never);
+    // WHY startSocial + getSocialOps (merge of master, 2026-10-13): social:presence-connect became a channel-table
+    // entry (main/ipc/social.ts) that calls this operation; nothing is registered with ipcMain any more.
+    startSocial({ getToken: () => 'tok' } as never);
   });
   afterEach(() => { destroySocialHandlers(); });
 
   it('connects hidden when the server supports it', async () => {
     h.probe.mockResolvedValueOnce(true);
-    await h.handlers.get('social:presence-connect')!({}, { hidden: true });
+    await getSocialOps()!.presenceConnect({ hidden: true });
     expect(h.sock.setHidden).toHaveBeenCalledWith(true);
     expect(h.sock.setDesired).toHaveBeenLastCalledWith(true);
   });
 
   it('an older server means NO connection at all, and the renderer is told why', async () => {
     h.probe.mockResolvedValueOnce(false);
-    await h.handlers.get('social:presence-connect')!({}, { hidden: true });
+    await getSocialOps()!.presenceConnect({ hidden: true });
     expect(h.sock.setDesired).not.toHaveBeenCalledWith(true);
     expect(h.sent).toContainEqual({ type: 'hidden-unsupported' });
   });
 
   it('not incognito connects visibly without asking', async () => {
     h.probe.mockClear();
-    await h.handlers.get('social:presence-connect')!({}, {});
+    await getSocialOps()!.presenceConnect({});
     expect(h.probe).not.toHaveBeenCalled();
     expect(h.sock.setHidden).toHaveBeenCalledWith(false);
     expect(h.sock.setDesired).toHaveBeenLastCalledWith(true);

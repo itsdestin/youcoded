@@ -24,6 +24,7 @@ import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegat
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
 import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
+import { looseData } from '../src/shared/transcript-event-types';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
  *  10ms interval each loop already uses (1,500 x 10ms = 15s, matching the
@@ -424,7 +425,7 @@ describe('NativeSessionHost', () => {
     const history = host.getHistory('s-1');
     expect(history).not.toBeNull();
     expect(history!.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
-    expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
+    expect(looseData(history![1]).text).toBe('Hi there');   // coalesced on disk
     // 2026-09-16 C2: the IPC handlers read through the async twins, which must
     // answer exactly what the sync forms do; isLive answers the tear-off's
     // boolean without reading anything.
@@ -5359,7 +5360,7 @@ describe('NativeSessionHost', () => {
 
       await store.append(root, {
         type: 'tool-result', sessionId: 'root-1', uuid: 'u-tool-result', timestamp: Date.now(),
-        data: { toolUseId: 'tc-1', toolResult: report },
+        data: { toolUseId: 'tc-1', toolResult: report, isError: false },
       });
 
       await h.destroy('root-1');
@@ -5372,8 +5373,8 @@ describe('NativeSessionHost', () => {
       const taskIdx = events.findIndex((e) => e.type === 'tool-use' && e.data.toolName === 'Task');
       expect(taskIdx).toBeGreaterThanOrEqual(0);
       // Immediately after — not just "somewhere after".
-      expect(events[taskIdx + 1].data.agentId).toBe(childId);
-      expect(events[taskIdx + 1].data.parentAgentToolUseId).toBe(events[taskIdx].data.toolUseId);
+      expect(looseData(events[taskIdx + 1]).agentId).toBe(childId);
+      expect(looseData(events[taskIdx + 1]).parentAgentToolUseId).toBe(looseData(events[taskIdx]).toolUseId);
       // Every stamped (agentId-bearing) event is display-safe — nothing else
       // rode along under the parent's id.
       //
@@ -5383,7 +5384,7 @@ describe('NativeSessionHost', () => {
       // to the parent's own file. It carries agentId only to name which child
       // the money belongs to. Its own coverage is in
       // tests/subagent-usage-event.test.ts.
-      const stamped = events.filter((e) => e.data.agentId && e.type !== 'subagent-usage');
+      const stamped = events.filter((e) => looseData(e).agentId && e.type !== 'subagent-usage');
       expect(stamped.length).toBeGreaterThan(0);
       expect(stamped.every((e) => SUBAGENT_DISPLAY_TYPES.has(e.type))).toBe(true);
       // …and that bookkeeping event really is on the parent's record exactly once.
@@ -5422,7 +5423,7 @@ describe('NativeSessionHost', () => {
 
       const events = h2.getHistory('root-1')!;
       const replayedText = events.find((e) => e.type === 'assistant-text' && e.data.agentId === childHeader.sessionId)!;
-      expect(replayedText.data.partId).toBe(originalText.data.partId);
+      expect(looseData(replayedText).partId).toBe(looseData(originalText).partId);
 
       await h2.destroyAll();
     });
@@ -5452,8 +5453,8 @@ describe('NativeSessionHost', () => {
       expect(merged[1].type).toBe('tool-use');
       expect(merged[2].type).toBe('assistant-text');
       expect(merged[2].sessionId).toBe('root-1');
-      expect(merged[2].data.agentId).toBe('child-1');
-      expect(merged[2].data.parentAgentToolUseId).toBe('tc-1');
+      expect(looseData(merged[2]).agentId).toBe('child-1');
+      expect(looseData(merged[2]).parentAgentToolUseId).toBe('tc-1');
       expect(merged[3].type).toBe('turn-complete');
     });
 
@@ -5488,7 +5489,7 @@ describe('NativeSessionHost', () => {
         { record: rec({ childId: 'child-2', parentToolCallId: 'tc-2' }), events: [ev('assistant-text', { data: { text: 'from child 2' } })] },
       ];
       const merged = mergeChildEvents('root-1', parentEvents, children);
-      expect(merged.map((e) => `${e.type}:${e.data.agentId ?? e.data.toolUseId}`)).toEqual([
+      expect(merged.map((e) => `${e.type}:${looseData(e).agentId ?? looseData(e).toolUseId}`)).toEqual([
         'tool-use:tc-1', 'assistant-text:child-1', 'tool-use:tc-2', 'assistant-text:child-2',
       ]);
     });
@@ -5514,10 +5515,10 @@ describe('NativeSessionHost', () => {
       ];
       const merged = mergeChildEvents('root-1', parentEvents, [{ record: rec(), events: childEvents }]);
       expect(merged.map((e) => e.type)).toEqual(['tool-use', 'assistant-thinking', 'assistant-text']);
-      expect(merged[1].data.text).toBe('thinking it through');
+      expect(looseData(merged[1]).text).toBe('thinking it through');
       expect(merged[1].sessionId).toBe('root-1');
-      expect(merged[1].data.agentId).toBe('child-1');
-      expect(merged[1].data.parentAgentToolUseId).toBe('tc-1');
+      expect(looseData(merged[1]).agentId).toBe('child-1');
+      expect(looseData(merged[1]).parentAgentToolUseId).toBe('tc-1');
     });
   });
 
