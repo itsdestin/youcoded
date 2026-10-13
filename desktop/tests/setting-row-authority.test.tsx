@@ -164,7 +164,7 @@ describe('setting row adoption', () => {
     // per-item surface, not a settings row.
     'SyncPanel.tsx': { count: 1, why: 'K6 sync-space status card toggle — a per-item status surface, not a settings row' },
     'ProvidersSection.tsx': { count: 1, why: 'K6 provider list row' },
-    'SyncSetupWizard.tsx': { count: 1, why: 'a wizard step, not a settings menu' },
+    // SyncSetupWizard.tsx left the list 2026-10-13 (small-fixes-3): its switch is the setting row now.
     'ResumeBrowser.tsx': { count: 1, why: 'L1 drawer — out of the dialog family entirely' },
     // The Resume browser's Skip permissions / new-window switches, moved into a
     // shared file (2026-09-16) so the Projects preview draws the same block.
