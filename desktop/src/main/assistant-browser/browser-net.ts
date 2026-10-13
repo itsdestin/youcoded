@@ -28,6 +28,9 @@ const defaultLookup: LookupFn = (host) => dnsLookup(host, { all: true });
 export function isNeverAddress(ip: string): boolean {
   const b = parseIpBytes(ip);
   if (!b) return false;
+  // ::1 is this computer (loopback), not "0.0.0.1": embeddedIpv4 reads the
+  // compatible form, which would wrongly make it never-openable.
+  if (b.length === 16 && b.slice(0, 15).every((v) => v === 0) && b[15] === 1) return false;
   const v4 = b.length === 4 ? b : embeddedIpv4(b);
   if (v4) {
     const [a, x, y, z] = v4;

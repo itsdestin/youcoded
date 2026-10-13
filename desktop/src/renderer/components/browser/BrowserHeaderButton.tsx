@@ -21,7 +21,9 @@ const BrowserHeaderButton = memo(function BrowserHeaderButton({ sessionId }: { s
           aria-label="Browser"
           aria-pressed={open}
           onClick={() => toggleBrowserPane(sessionId)}
-          className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center gap-1 ${open ? 'bg-accent text-on-accent' : ON_INSET_CONTROL}`}
+          // Same corner as the other header toggles, via the theme variable (no arbitrary class).
+          style={{ borderRadius: 'var(--radius-toggle)' }}
+          className={`px-2 py-1 transition-colors flex items-center gap-1 ${open ? 'bg-accent text-on-accent' : ON_INSET_CONTROL}`}
         >
           <GlobeIcon className="w-4 h-4" />
           {dot && !open && <span className="w-1.5 h-1.5 rounded-full bg-accent" aria-hidden />}

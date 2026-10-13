@@ -1,4 +1,4 @@
-// The Browser's saved choices: userData/assistant-browser/settings.json.
+// The Browser's saved choices: userData/assistant-browser/preferences.json.
 //
 // WHY per install (userData), not ~/.youcoded/config.json: design review 1 #24 —
 // config.json is shared by the dev instance and the installed app (and synced
@@ -71,7 +71,7 @@ export class BrowserSettings {
   private readonly file: string;
 
   constructor(rootDir: string) {
-    this.file = path.join(rootDir, 'settings.json');
+    this.file = path.join(rootDir, 'preferences.json');
   }
 
   async read(): Promise<BrowserPreferences> {

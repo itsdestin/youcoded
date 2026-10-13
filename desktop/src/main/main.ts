@@ -1,7 +1,5 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
-import { getBrowserClient, browserClientIfCreated } from './assistant-browser/browser-electron';
-import { wireBrowserPushes } from './ipc/browser';
-import { BrowserRelayServer, deployBrowserRelay, setBrowserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
+import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -1069,7 +1067,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   });
 
   // One-core R1: the runtime is built where registerIpcHandlers used to build it inline; both doors get this one.
-  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager });
+  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager, browser: browserToolService() });
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
@@ -1437,11 +1435,8 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:hook-relay:done');
 
-  // The Browser (2026-10-13): start the Claude Code relay in the background —
-  // nothing here waits on it, and a Claude Code session that starts first just
-  // goes without the Browser. Native sessions reach the Browser in-process.
-  wireBrowserPushes();
-  void startBrowserRelay().catch((e) => log('WARN', 'Main', 'Browser relay did not start — Claude Code sessions start without the Browser', { error: String(e) }));
+  // The Browser: pushes to windows + the Claude Code relay, in the background (browser-main.ts).
+  startBrowserSupport(sessionManager);
 
   // Legacy cleanup: youcoded-core was deprecated 2026-04. Users who
   // upgraded from a prior version still have the legacy clone at
@@ -1930,27 +1925,8 @@ void app.whenReady().then(async () => {
   perfMark('main:post-window:done');
 });
 
-// The Browser's Claude Code relay (assistant-browser/claude-code-browser-mcp.ts).
-let browserRelay: BrowserRelayServer | null = null;
-async function startBrowserRelay(): Promise<void> {
-  const relay = new BrowserRelayServer({
-    callTool: (sessionId, tool, args, opts) => getBrowserClient().callTool(sessionId, tool, args, opts),
-    isClaudeSession: (id) => sessionManager.getSession(id)?.provider === 'claude',
-    log: (level, msg, data) => log(level, 'Browser', msg, data),
-  });
-  const socketPath = await relay.start();
-  browserRelay = relay;
-  // Same interpreter the PTY worker and the other app MCP servers use (system
-  // Node), resolved without blocking.
-  let nodePath = 'node';
-  try { nodePath = await (require('which') as { (cmd: string): Promise<string> })('node'); } catch { /* bare 'node' */ }
-  setBrowserRelayAttachment(await deployBrowserRelay(app.getPath('userData'), nodePath, socketPath, relay.token));
-}
-
-// A conversation that ends closes its Browser tabs (both session kinds emit this).
-sessionManager.on('session-exit', (id: string) => {
-  browserClientIfCreated()?.commandIfAlive({ cmd: 'close-session', sessionId: id, forget: true });
-});
+// The Browser: a conversation that ends closes its tabs (assistant-browser/browser-main.ts).
+wireBrowserSessionCleanup(sessionManager);
 
 // Every teardown step the app owns, in one place, run at most once.
 //
@@ -2011,12 +1987,7 @@ async function runShutdown(): Promise<void> {
   ]).catch(() => {});
   // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.
   const officeQuit = quitOfficeSessions();
-  // The Browser: close the browser it launched (never the person's own Chrome)
-  // and stop the relay. BrowserClient.dispose() is bounded (3 s, then kill).
-  const browserStopped = Promise.all([
-    browserClientIfCreated()?.dispose(),
-    browserRelay?.stop(),
-  ]).catch(() => {});
+  const browserStopped = stopBrowserSupport(); // bounded: closes only the browser it launched
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).

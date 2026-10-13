@@ -49,6 +49,7 @@ import type { NativeChannelTypes } from './native-channel-types';
 import type { ModelsChannelTypes } from './models-channel-types';
 import type { FilesChannelTypes } from './files-channel-types';
 import type { AppChannelTypes } from './app-channel-types';
+import type { BrowserBridge, BrowserChannelTypes } from './browser-types';
 import type { OfficeChannelTypes } from './office-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
@@ -938,25 +939,6 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface BrowserChannelTypes {
-  'browser:state': { request: { sessionId: string }; response: import('./browser-types').BrowserSessionState | null };
-  'browser:info': { request: void; response: import('./browser-types').BrowserInfo };
-  'browser:watch': { request: { sessionId: string }; response: boolean };
-  'browser:unwatch': { request: { sessionId: string }; response: boolean };
-  'browser:frame-ack': { request: { sessionId: string }; response: void };
-  'browser:answer': { request: { sessionId: string; promptId: string; answer: import('./browser-types').PromptAnswer }; response: boolean };
-  'browser:open-window-for-handoff': { request: { sessionId: string }; response: boolean };
-  'browser:set-show-window': { request: { show: boolean }; response: import('./browser-types').BrowserInfo };
-  'browser:update-settings': { request: import('./browser-types').BrowserSettingsPatch; response: import('./browser-types').BrowserInfo };
-  'browser:remove-site': { request: { host: string }; response: import('./browser-types').BrowserInfo };
-  'browser:clear-signins': { request: void; response: import('./browser-types').BrowserInfo };
-  'browser:stop': { request: void; response: boolean };
-  'browser:close-session': { request: { sessionId: string }; response: boolean };
-  'browser:download': { request: void; response: import('./browser-types').BrowserInfo };
-  'browser:cancel-download': { request: void; response: boolean };
-  'browser:check-my-chrome': { request: void; response: import('./browser-types').MyChromeCheck };
-}
-
 export interface ChannelTypes extends BrowserChannelTypes, MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
@@ -1381,29 +1363,8 @@ interface ClaudeApi {
   };
   // GPU / performance preference — multiGpuDetected: false means the
   // Performance section in Settings hides itself (no hardware to toggle).
-  /** The Browser (2026-10-13). Present only where capabilities.assistantBrowser is true (the computer's own window);
-   *  remote-shim's methods reject. */
-  browser: {
-    state: (sessionId: string) => Promise<import('./browser-types').BrowserSessionState | null>;
-    info: () => Promise<import('./browser-types').BrowserInfo>;
-    watch: (sessionId: string) => Promise<boolean>;
-    unwatch: (sessionId: string) => Promise<boolean>;
-    ackFrame: (sessionId: string) => void;
-    answer: (sessionId: string, promptId: string, answer: import('./browser-types').PromptAnswer) => Promise<boolean>;
-    openWindowForHandoff: (sessionId: string) => Promise<boolean>;
-    setShowWindow: (show: boolean) => Promise<import('./browser-types').BrowserInfo>;
-    updateSettings: (patch: import('./browser-types').BrowserSettingsPatch) => Promise<import('./browser-types').BrowserInfo>;
-    removeSite: (host: string) => Promise<import('./browser-types').BrowserInfo>;
-    clearSignins: () => Promise<import('./browser-types').BrowserInfo>;
-    stop: () => Promise<boolean>;
-    closeSession: (sessionId: string) => Promise<boolean>;
-    download: () => Promise<import('./browser-types').BrowserInfo>;
-    cancelDownload: () => Promise<boolean>;
-    checkMyChrome: () => Promise<import('./browser-types').MyChromeCheck>;
-    onState: (cb: (state: import('./browser-types').BrowserSessionState) => void) => () => void;
-    onFrame: (cb: (frame: import('./browser-types').BrowserFrame) => void) => () => void;
-    onInfoChanged: (cb: () => void) => () => void;
-  };
+  /** The Browser (2026-10-13): shared/browser-types.ts. */
+  browser: BrowserBridge;
   performance: {
     get: () => Promise<import('./types').PerformanceConfigSnapshot>;
     set: (preferPowerSaving: boolean) => Promise<{ ok: true }>;

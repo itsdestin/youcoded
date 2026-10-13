@@ -7,7 +7,7 @@
 // ask card and App's right-slot all read ONE conversation's slice, and a busy
 // browser pushes state several times a second; a Context would redraw every
 // tab on each push.
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import type { BrowserSessionState } from '../../shared/browser-types';
 import { getCapabilities } from '../platform';
 
@@ -103,8 +103,27 @@ export function useBrowserWantsPane(sessionId: string | null | undefined): boole
   }, () => false);
 }
 
+const primed = new Set<string>();
+
+/** Ask once for a conversation's current state. WHY: the store only learns from
+ *  pushes, so a window that reloads or opens later (a torn-off chat, the app's
+ *  renderer restarting) would forget a browser that is still open until the
+ *  next change — the header button and panel vanished in the dev app
+ *  (2026-10-13). main answers from its cache without starting anything. */
+export function primeBrowserState(sessionId: string | null | undefined): void {
+  if (!sessionId || primed.has(sessionId) || states.has(sessionId) || !browserSupported()) return;
+  primed.add(sessionId);
+  ensureBrowserStore();
+  void bridge().state(sessionId).then((s: BrowserSessionState | null) => {
+    if (s && !states.has(sessionId)) setBrowserState(s);
+  }).catch(() => { primed.delete(sessionId); });
+}
+
 /** The header button shows when the conversation has used the browser or the browser needs the person. */
 export function useBrowserButton(sessionId: string | null | undefined): { show: boolean; open: boolean; dot: boolean } {
+  // The header and the ||| menu are mounted for the active conversation, so
+  // priming here catches the panel and the card up too.
+  useEffect(() => { primeBrowserState(sessionId); }, [sessionId]);
   const show = useSyncExternalStore(subscribe, () => {
     const s = getBrowserState(sessionId);
     return !!s && (s.used || !!s.prompt || s.tabs.length > 0);
@@ -116,5 +135,5 @@ export function useBrowserButton(sessionId: string | null | undefined): { show: 
 
 /** Test seam. */
 export function resetBrowserStoreForTests(): void {
-  states.clear(); paneOpen.clear(); attention.clear(); listeners.clear(); started = false;
+  states.clear(); paneOpen.clear(); attention.clear(); listeners.clear(); primed.clear(); started = false;
 }

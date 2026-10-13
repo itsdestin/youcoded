@@ -1009,6 +1009,14 @@ async function unwrap(p: Promise<any>): Promise<void> {
 }
 
 // WHY (2026-09-29 one-core R2): every call below sends ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
+// The Browser namespace's two helpers: an invoke, and a push channel as subscribe → unsubscribe.
+const browserInvoke = (ch: string, payload?: unknown) => ipcRenderer.invoke(ch, payload);
+const browserListen = (ch: string) => (cb: (v: any) => void) => {
+  const h = (_e: IpcRendererEvent, v: any) => cb(v);
+  ipcRenderer.on(ch, h);
+  return () => { ipcRenderer.removeListener(ch, h); };
+};
+
 contextBridge.exposeInMainWorld('claude', {
   // Dev-instance descriptor from `run-dev.sh --label` (YOUCODED_DEV_LABEL). The
   // StatusBar version pill shows it so concurrent dev instances are tellable
@@ -2026,40 +2034,28 @@ contextBridge.exposeInMainWorld('claude', {
     getScreenText: (sessionId: string, tailRows?: number): Promise<string> =>
       ipcRenderer.invoke('terminal:get-screen-text', { sessionId, tailRows }),
   },
-  // The Browser (2026-10-13; spec docs/active/specs/2026-10-13-assistant-browser-design.md). The computer's own
-  // window only (capabilities.assistantBrowser). Pictures arrive only for a conversation this window asked to watch.
+  // The Browser (2026-10-13): computer's own window only (capabilities.assistantBrowser); pictures arrive only for a
+  // conversation this window asked to watch. Helpers browserInvoke/browserListen sit above exposeInMainWorld.
   browser: {
-    state: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_STATE, { sessionId }),
-    info: () => ipcRenderer.invoke(IPC.BROWSER_INFO),
-    watch: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_WATCH, { sessionId }),
-    unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_UNWATCH, { sessionId }),
+    state: (sessionId: string) => browserInvoke(IPC.BROWSER_STATE, { sessionId }),
+    info: () => browserInvoke(IPC.BROWSER_INFO),
+    watch: (sessionId: string) => browserInvoke(IPC.BROWSER_WATCH, { sessionId }),
+    unwatch: (sessionId: string) => browserInvoke(IPC.BROWSER_UNWATCH, { sessionId }),
     ackFrame: (sessionId: string) => ipcRenderer.send(IPC.BROWSER_FRAME_ACK, { sessionId }),
-    answer: (sessionId: string, promptId: string, answer: string) => ipcRenderer.invoke(IPC.BROWSER_ANSWER, { sessionId, promptId, answer }),
-    openWindowForHandoff: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
-    setShowWindow: (show: boolean) => ipcRenderer.invoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
-    updateSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
-    removeSite: (host: string) => ipcRenderer.invoke(IPC.BROWSER_REMOVE_SITE, { host }),
-    clearSignins: () => ipcRenderer.invoke(IPC.BROWSER_CLEAR_SIGNINS),
-    stop: () => ipcRenderer.invoke(IPC.BROWSER_STOP),
-    closeSession: (sessionId: string) => ipcRenderer.invoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),
-    download: () => ipcRenderer.invoke(IPC.BROWSER_DOWNLOAD),
-    cancelDownload: () => ipcRenderer.invoke(IPC.BROWSER_CANCEL_DOWNLOAD),
-    checkMyChrome: () => ipcRenderer.invoke(IPC.BROWSER_CHECK_MY_CHROME),
-    onState: (cb: (state: any) => void) => {
-      const h = (_e: IpcRendererEvent, state: any) => cb(state);
-      ipcRenderer.on(IPC.BROWSER_STATE_CHANGED, h);
-      return () => ipcRenderer.removeListener(IPC.BROWSER_STATE_CHANGED, h);
-    },
-    onFrame: (cb: (frame: any) => void) => {
-      const h = (_e: IpcRendererEvent, frame: any) => cb(frame);
-      ipcRenderer.on(IPC.BROWSER_FRAME, h);
-      return () => ipcRenderer.removeListener(IPC.BROWSER_FRAME, h);
-    },
-    onInfoChanged: (cb: () => void) => {
-      const h = () => cb();
-      ipcRenderer.on(IPC.BROWSER_INFO_CHANGED, h);
-      return () => ipcRenderer.removeListener(IPC.BROWSER_INFO_CHANGED, h);
-    },
+    answer: (sessionId: string, promptId: string, answer: string) => browserInvoke(IPC.BROWSER_ANSWER, { sessionId, promptId, answer }),
+    openWindowForHandoff: (sessionId: string) => browserInvoke(IPC.BROWSER_OPEN_WINDOW_FOR_HANDOFF, { sessionId }),
+    setShowWindow: (show: boolean) => browserInvoke(IPC.BROWSER_SET_SHOW_WINDOW, { show }),
+    updateSettings: (patch: Record<string, unknown>) => browserInvoke(IPC.BROWSER_UPDATE_SETTINGS, patch),
+    removeSite: (host: string) => browserInvoke(IPC.BROWSER_REMOVE_SITE, { host }),
+    clearSignins: () => browserInvoke(IPC.BROWSER_CLEAR_SIGNINS),
+    stop: () => browserInvoke(IPC.BROWSER_STOP),
+    closeSession: (sessionId: string) => browserInvoke(IPC.BROWSER_CLOSE_SESSION, { sessionId }),
+    download: () => browserInvoke(IPC.BROWSER_DOWNLOAD),
+    cancelDownload: () => browserInvoke(IPC.BROWSER_CANCEL_DOWNLOAD),
+    checkMyChrome: () => browserInvoke(IPC.BROWSER_CHECK_MY_CHROME),
+    onState: browserListen(IPC.BROWSER_STATE_CHANGED),
+    onFrame: browserListen(IPC.BROWSER_FRAME),
+    onInfoChanged: browserListen(IPC.BROWSER_INFO_CHANGED),
   },
   // GPU / performance preference — read and write the preferPowerSaving flag.
   // multiGpuDetected: false in the response means the UI section stays hidden.

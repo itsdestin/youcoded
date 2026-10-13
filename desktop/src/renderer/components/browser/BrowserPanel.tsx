@@ -48,7 +48,12 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
     const onVis = () => (document.hidden ? stop() : start());
     const off = b.onFrame((f: { sessionId: string; data: string }) => {
       if (f.sessionId !== sessionId || !img.current) return;
-      img.current.src = `data:image/jpeg;base64,${f.data}`;
+      const src = `data:image/jpeg;base64,${f.data}`;
+      // WHY ack at once when unchanged: an identical picture (a still page) sets
+      // the same src, which fires no load event — waiting for one stalled the
+      // whole stream on the first repeat (seen in the dev app, 2026-10-13).
+      if (img.current.src === src) b.ackFrame(sessionId);
+      else img.current.src = src;
       setHasFrame(true); // a no-op after the first frame (same value)
     });
     start();
@@ -64,11 +69,12 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
       <img
         ref={img}
         onLoad={onLoad}
+        onError={onLoad}
         alt={title ? `What the assistant's browser shows: ${title}` : "What the assistant's browser shows"}
         className={`w-full h-auto max-h-full object-contain object-top ${hasFrame ? '' : 'hidden'}`}
         draggable={false}
       />
-      {!hasFrame && <LoadingState what="the picture" verb="Waiting for" variant="inline" className="py-6" />}
+      {!hasFrame && <div className="my-6"><LoadingState what="the picture" verb="Waiting for" variant="inline" /></div>}
       {/* Photo-only build: the panel counts as showing once a picture is drawn. */}
       {hasFrame && <ScreenMark name="chat/browser" />}
     </div>
@@ -93,8 +99,10 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const active = state?.tabs.find((t) => t.active) ?? null;
   const host = active ? hostOf(active.url) : '';
   const status = browserStatusWord(state);
-  const windowShown = state?.windowShown ?? info?.settings.showWindow ?? false;
-  const myChrome = state?.myChrome ?? info?.settings.useMyChrome ?? false;
+  // A running browser says what it IS; a stopped one is whatever the settings say it will start as.
+  const running = state?.run === 'running';
+  const windowShown = (running ? state?.windowShown : info?.settings.showWindow) ?? false;
+  const myChrome = (running ? state?.myChrome : info?.settings.useMyChrome) ?? false;
 
   const applyWindow = useCallback(async (show: boolean) => {
     setConfirmRestart(null);
@@ -142,7 +150,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="browser-panel relative h-full flex flex-col overflow-hidden bg-inset select-none">
+    <div className="relative h-full flex flex-col overflow-hidden bg-inset select-none">
       {!showingPicture && <ScreenMark name="chat/browser" />}
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
         <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0" />

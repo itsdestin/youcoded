@@ -31,7 +31,7 @@ import { createDrawerFilterStore } from './state/drawer-filter-store';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import BrowserPanel from './components/browser/BrowserPanel';
-import { browserSupported, closeBrowserPane, openBrowserPane, useBrowserPaneOpen, useBrowserWantsPane } from './state/browser-store';
+import { useBrowserRightPane } from './hooks/use-browser-right-pane';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
@@ -923,32 +923,9 @@ function AppInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDrawerOpen]);
-  // The Browser panel (2026-10-13) is the right slot's third occupant, with the
-  // same rule: opening one pane closes the others. Its open flag is per
-  // conversation and lives in state/browser-store.ts (read as a boolean slice,
-  // so a busy browser's state pushes never redraw App).
-  const browserPaneOpen = useBrowserPaneOpen(sessionId) && browserSupported();
-  useEffect(() => {
-    if (!browserPaneOpen || !sessionId) return;
-    if (activeDrawerOpen) dispatchArtifact({ type: 'DRAWER_CLOSED', sessionId });
-    if (gameState.panelOpen) gameDispatch({ type: 'TOGGLE_PANEL' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserPaneOpen]);
-  useEffect(() => {
-    if ((activeDrawerOpen || gameState.panelOpen) && sessionId) closeBrowserPane(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDrawerOpen, gameState.panelOpen]);
-  // First time a conversation's hidden browser shows pages this run, open its
-  // panel — unless another right pane is in use (spec §1: never replace what
-  // the person had open; the header button's dot says it instead).
-  const browserWantsPane = useBrowserWantsPane(sessionId);
-  const browserAutoOpened = useRef(new Set<string>());
-  useEffect(() => {
-    if (!browserWantsPane || !sessionId || browserAutoOpened.current.has(sessionId)) return;
-    browserAutoOpened.current.add(sessionId);
-    if (!activeDrawerOpen && !gameState.panelOpen) openBrowserPane(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserWantsPane, sessionId]);
+  // The Browser panel (2026-10-13): the right slot's third occupant, same exclusivity.
+  const browserPaneOpen = useBrowserRightPane(sessionId, activeDrawerOpen, gameState.panelOpen,
+    () => sessionId && dispatchArtifact({ type: 'DRAWER_CLOSED', sessionId }), () => gameDispatch({ type: 'TOGGLE_PANEL' }));
   // Gate on isLeader so only the first-launched window opens the lobby
   // socket — avoids duplicate presence for the same GitHub identity when
   // multiple peer windows are open. When detach isn't available (remote
@@ -3463,9 +3440,7 @@ function AppInner() {
       <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
   ) : null;
-  // The right slot's occupant other than Session Files: the Browser panel when
-  // open, else the games pane. One element, placed by ChatView (chat view) or
-  // TerminalRightSlot (terminal view), so it never mounts twice.
+  // Browser panel when open, else the games pane — one element, placed by ChatView or TerminalRightSlot.
   const sidePaneOpen = browserPaneOpen || gameState.panelOpen;
   const activeSidePane = browserPaneOpen && sessionId ? (
     <ErrorBoundary name="Browser">

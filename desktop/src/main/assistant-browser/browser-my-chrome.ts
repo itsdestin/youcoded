@@ -16,7 +16,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
-export function chromeUserDataDir(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+function chromeUserDataDir(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   if (env.YOUCODED_MY_CHROME_DIR) return env.YOUCODED_MY_CHROME_DIR; // test seam
   if (platform === 'win32') return path.join(env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'Google', 'Chrome', 'User Data');
   if (platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');

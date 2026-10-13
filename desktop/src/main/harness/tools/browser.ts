@@ -39,6 +39,20 @@ function makeTool(name: BrowserToolName): NativeTool {
   });
 }
 
+/** Add or remove the Browser tools on a session's tool map. `wanted` needs all
+ *  three gates (harness-session.ts buildAiTools): the host injected
+ *  `services.browser` (desktop only), the session isn't a specialist child
+ *  (children share the parent's tabs and have a fixed tool list), and the
+ *  profile isn't a small model's simplified presentation (seven more schemas
+ *  crowd out a weak model's attention). Run per buildAiTools like Skill: a model
+ *  swap can flip the profile either way; has()/delete() keep both directions idempotent. */
+export function syncBrowserTools(toolByName: Map<string, NativeTool>, wanted: boolean): void {
+  for (const t of browserTools()) {
+    if (!wanted) toolByName.delete(t.name);
+    else if (!toolByName.has(t.name)) toolByName.set(t.name, t);
+  }
+}
+
 let built: NativeTool[] | null = null;
 
 /** One instance per tool for the process (they hold no per-session state). */

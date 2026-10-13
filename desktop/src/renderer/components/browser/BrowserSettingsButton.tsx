@@ -69,7 +69,8 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="space-y-5">
           <section className="space-y-2">
             <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Which browser?</h3>
-            <RadioGroup options={WHICH} value={which} onChange={(v) => void run(() => bridge().updateSettings({ useMyChrome: v === 'my-chrome' }))} aria-label="Which browser" className="space-y-1">
+            <RadioGroup options={WHICH} value={which} onChange={(v) => void run(() => bridge().updateSettings({ useMyChrome: v === 'my-chrome' }))} aria-label="Which browser">
+              <div className="space-y-1">
               <SettingRow
                 variant="item"
                 title="The assistant's own browser (recommended)"
@@ -86,6 +87,7 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
                 onSelect={() => void run(() => bridge().updateSettings({ useMyChrome: true }))}
                 radioTabIndex={which === 'my-chrome' ? 0 : -1}
               />
+              </div>
             </RadioGroup>
             {s.useMyChrome && (
               <div className="rounded-lg bg-inset p-3 text-xs text-fg-2 space-y-2">

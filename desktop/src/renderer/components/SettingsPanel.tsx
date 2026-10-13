@@ -3134,9 +3134,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
         />
 
-        {/* The Browser (2026-10-13): an assistant ability, so it sits under
-            Assistant settings. Renders nothing off the computer's own window. */}
-        <BrowserSettingsButton />
+        <BrowserSettingsButton />{/* the assistant's web browser — computer's own window only */}
 
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 

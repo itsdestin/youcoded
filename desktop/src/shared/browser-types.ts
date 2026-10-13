@@ -3,7 +3,7 @@
 
 export type BrowserRunState = 'stopped' | 'starting' | 'running' | 'error';
 
-export type PromptKind = 'site' | 'final' | 'local' | 'handoff' | 'no-browser';
+type PromptKind = 'site' | 'final' | 'local' | 'handoff' | 'no-browser';
 export type PromptAnswer = 'allow_chat' | 'allow_always' | 'once' | 'no' | 'done' | 'cant' | 'download';
 
 /** A card the Browser shows the person, asking them to decide or act. */
@@ -18,7 +18,7 @@ export interface BrowserPrompt {
   allowAlways?: boolean;
 }
 
-export interface BrowserTabInfo { index: number; title: string; url: string; active: boolean }
+interface BrowserTabInfo { index: number; title: string; url: string; active: boolean }
 
 /** Everything a screen needs to draw one conversation's Browser panel and card. */
 export interface BrowserSessionState {
@@ -94,4 +94,47 @@ export function browserToolOf(toolName: string): typeof BROWSER_TOOL_LABEL_NAMES
   const m = /^(?:mcp__youcoded-browser-[0-9a-f]+__)?(Browser\w+)$/.exec(toolName);
   if (!m) return null;
   return (BROWSER_TOOL_LABEL_NAMES as readonly string[]).includes(m[1]) ? m[1] as typeof BROWSER_TOOL_LABEL_NAMES[number] : null;
+}
+
+/** Request/answer shapes of the browser:* channels (main/ipc/browser.ts). */
+export interface BrowserChannelTypes {
+  'browser:state': { request: { sessionId: string }; response: BrowserSessionState | null };
+  'browser:info': { request: void; response: BrowserInfo };
+  'browser:watch': { request: { sessionId: string }; response: boolean };
+  'browser:unwatch': { request: { sessionId: string }; response: boolean };
+  'browser:frame-ack': { request: { sessionId: string }; response: void };
+  'browser:answer': { request: { sessionId: string; promptId: string; answer: PromptAnswer }; response: boolean };
+  'browser:open-window-for-handoff': { request: { sessionId: string }; response: boolean };
+  'browser:set-show-window': { request: { show: boolean }; response: BrowserInfo };
+  'browser:update-settings': { request: BrowserSettingsPatch; response: BrowserInfo };
+  'browser:remove-site': { request: { host: string }; response: BrowserInfo };
+  'browser:clear-signins': { request: void; response: BrowserInfo };
+  'browser:stop': { request: void; response: boolean };
+  'browser:close-session': { request: { sessionId: string }; response: boolean };
+  'browser:download': { request: void; response: BrowserInfo };
+  'browser:cancel-download': { request: void; response: boolean };
+  'browser:check-my-chrome': { request: void; response: MyChromeCheck };
+}
+
+/** window.claude.browser — the computer's own window only (capabilities.assistantBrowser); remote-shim's methods reject. */
+export interface BrowserBridge {
+  state: (sessionId: string) => Promise<BrowserSessionState | null>;
+  info: () => Promise<BrowserInfo>;
+  watch: (sessionId: string) => Promise<boolean>;
+  unwatch: (sessionId: string) => Promise<boolean>;
+  ackFrame: (sessionId: string) => void;
+  answer: (sessionId: string, promptId: string, answer: PromptAnswer) => Promise<boolean>;
+  openWindowForHandoff: (sessionId: string) => Promise<boolean>;
+  setShowWindow: (show: boolean) => Promise<BrowserInfo>;
+  updateSettings: (patch: BrowserSettingsPatch) => Promise<BrowserInfo>;
+  removeSite: (host: string) => Promise<BrowserInfo>;
+  clearSignins: () => Promise<BrowserInfo>;
+  stop: () => Promise<boolean>;
+  closeSession: (sessionId: string) => Promise<boolean>;
+  download: () => Promise<BrowserInfo>;
+  cancelDownload: () => Promise<boolean>;
+  checkMyChrome: () => Promise<MyChromeCheck>;
+  onState: (cb: (state: BrowserSessionState) => void) => () => void;
+  onFrame: (cb: (frame: BrowserFrame) => void) => () => void;
+  onInfoChanged: (cb: () => void) => () => void;
 }

@@ -2,7 +2,6 @@
 // worker process (browser-host.ts). Plain structured-clone objects.
 import type { BrowserSessionState, FrameEvent, PromptAnswer } from './browser-service';
 
-export type { BrowserInfo, MyChromeCheck } from '../../shared/browser-types';
 
 export type BrowserCommand =
   | { cmd: 'state'; sessionId: string }

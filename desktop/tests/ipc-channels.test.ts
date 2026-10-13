@@ -275,6 +275,31 @@ describe('account:* channel parity', () => {
 // friends UI on one platform. The channel strings are asserted in preload.ts +
 // remote-shim.ts (single-quoted) and social-handlers.ts + SessionService.kt
 // (double-quoted). account:export is NOT here — it rides the account:* describe.
+// The Browser (2026-10-13): every browser:* request channel is one table entry
+// (main/ipc/browser.ts) marked desktopOnly — the browser runs on the computer and
+// its picture and controls are not sent to phones — and is present in preload and
+// remote-shim (which rejects through the host's refusal). No SessionService.kt
+// branches on purpose: Android has no Browser, and its final `else` answers
+// { unsupported:true }, which the shim rejects (android-honest-build.test.ts).
+describe('browser:* channel parity', () => {
+  const contract = readSource('src', 'shared', 'backend-contract.ts');
+  const REQUESTS = [...contract.matchAll(/^\s*(BROWSER_[A-Z_]+):\s*'(browser:[^']+)'/gm)]
+    .filter(([, k]) => !['BROWSER_STATE_CHANGED', 'BROWSER_FRAME', 'BROWSER_INFO_CHANGED'].includes(k));
+  it('names sixteen request channels (non-vacuity)', () => {
+    expect(REQUESTS.length).toBe(16);
+  });
+  it('each is a desktopOnly table entry, in preload and remote-shim', () => {
+    const table = readSource('src', 'main', 'ipc', 'browser.ts');
+    const preload = readSource('src', 'main', 'preload.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    for (const [, konst, channel] of REQUESTS) {
+      expect(table, `${channel}: no desktopOnly entry`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: '(handle|on)', desktopOnly: true`));
+      expect(preload, `${channel}: not in preload`).toContain(`IPC.${konst}`);
+      if (konst !== 'BROWSER_FRAME_ACK') expect(shim, `${channel}: not in remote-shim`).toContain(`'${channel}'`);
+    }
+  });
+});
+
 describe('social:* channel parity', () => {
   const NEW_TYPES = [
     'social:lookup-handle', 'social:send-request', 'social:list-requests',

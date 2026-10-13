@@ -9,7 +9,7 @@ import { log } from '../logger';
 let client: BrowserClient | null = null;
 
 /** userData/assistant-browser — profile, settings, shots, downloads, browsers. */
-export function browserRootDir(): string {
+function browserRootDir(): string {
   return path.join(app.getPath('userData'), 'assistant-browser');
 }
 

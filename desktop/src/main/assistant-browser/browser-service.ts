@@ -27,20 +27,20 @@ import type { Browser, BrowserContext, CDPSession, Page, chromium as ChromiumTyp
 import type { FoundBrowser } from '../../shared/browser-types';
 import { normalUserAgent, readBrowserVersion } from './browser-version';
 
-export const SESSION_IDLE_MS = 30 * 60_000;
-export const BROWSER_IDLE_MS = 5 * 60_000;
+const SESSION_IDLE_MS = 30 * 60_000;
+const BROWSER_IDLE_MS = 5 * 60_000;
 /** Bounded wait for in-flight calls before a restart proceeds anyway. */
 const RESTART_DRAIN_MS = 10_000;
 /** A hidden browser renders a common laptop-sized page so sites serve desktop layouts. */
-export const BACKGROUND_VIEWPORT = { width: 1280, height: 800 } as const;
+const BACKGROUND_VIEWPORT = { width: 1280, height: 800 } as const;
 /** Picture rate cap; each frame also waits for the screen's ack. */
 const MIN_FRAME_GAP_MS = 100;
 
 import type { BrowserFrame, BrowserPrompt, BrowserRunState, BrowserSessionState, PromptAnswer } from '../../shared/browser-types';
-export type { BrowserPrompt, BrowserSessionState, PromptAnswer, PromptKind, BrowserRunState, BrowserTabInfo } from '../../shared/browser-types';
+export type { BrowserPrompt, BrowserSessionState, PromptAnswer, BrowserRunState } from '../../shared/browser-types';
 export type FrameEvent = BrowserFrame;
 
-export interface LaunchConfig {
+interface LaunchConfig {
   showWindow: boolean;
   myChrome: boolean;
   browser: FoundBrowser | null;
