@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskCreateResult, parseTaskListResult, buildTasksById } from './task-state';
+import { parseTaskCreateResult, parseTaskListResult, buildTasksById, toolIdsBeforeLastClear } from './task-state';
 import type { ToolCallState } from '../../shared/types';
 
 function makeCall(overrides: Partial<ToolCallState> & { toolUseId: string; toolName: string }): ToolCallState {
@@ -270,5 +270,35 @@ describe('buildTasksById — tools that are not to-dos', () => {
     toolCalls.set('t1', makeCall({ toolUseId: 't1', toolName: 'TaskCreate', input: { subject: 'X' }, response: 'Task #1 created successfully: X' }));
     toolCalls.set('t2', makeCall({ toolUseId: 't2', toolName: 'TaskUpdate', input: { taskId: '1', status: 'deleted' } }));
     expect(buildTasksById(toolCalls).size).toBe(0);
+  });
+});
+
+// Final review F6: what counts as "before the clear".
+describe('toolIdsBeforeLastClear', () => {
+  const turn = (turnId: string) => ({ kind: 'assistant-turn', turnId });
+  const marker = (variant: string) => ({ kind: 'system-marker', marker: { variant } });
+  const session = (timeline: any[]) => ({
+    timeline,
+    assistantTurns: new Map([
+      ['a', { segments: [{ type: 'tool-group', groupId: 'g1' }, { type: 'text' }] }],
+      ['b', { segments: [{ type: 'tool-group', groupId: 'g2' }] }],
+      ['c', { segments: [{ type: 'tool-group', groupId: 'g3' }] }],
+    ]),
+    toolGroups: new Map([['g1', { toolIds: ['t1', 't2'] }], ['g2', { toolIds: ['t3'] }], ['g3', { toolIds: ['t4'] }]]),
+  });
+
+  it('is empty with no clear, and ignores a compact divider', () => {
+    expect([...toolIdsBeforeLastClear(session([turn('a'), marker('compact'), turn('b')]))]).toEqual([]);
+  });
+
+  it('takes every tool before the LAST clear, none after it', () => {
+    expect([...toolIdsBeforeLastClear(session([turn('a'), marker('clear'), turn('b'), marker('clear'), turn('c')]))].sort())
+      .toEqual(['t1', 't2', 't3']);
+  });
+
+  it('buildTasksById ignores the calls it is given as before the clear', () => {
+    const calls = new Map([['t1', { toolUseId: 't1', toolName: 'TodoWrite', status: 'complete', input: { todos: [{ content: 'Old', status: 'pending' }] } } as any]]);
+    expect(buildTasksById(calls).size).toBe(1);
+    expect(buildTasksById(calls, new Set(['t1'])).size).toBe(0);
   });
 });

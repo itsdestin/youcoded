@@ -146,7 +146,41 @@ function applyTodoWrite(tasks: Map<string, TaskState>, tool: ToolCallState, i: n
   }
 }
 
-export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
+/**
+ * Every tool call made before the conversation's LAST "Conversation cleared" divider.
+ *
+ * WHY (final review F6): /clear starts the model on an empty context — Claude Code opens a new
+ * session (its to-do list is per session) and the native runtime drops the history its stateless
+ * TodoWrite list lived in — but the chat keeps the earlier tool cards visible (faded), so Open
+ * tasks went on counting "3 pending" for a list nobody owned any more, until the model wrote a new
+ * one. Derived from the timeline (a clear divider is a timeline entry; a turn's tools are reached
+ * through its tool-group segments), so a resumed or paged-in conversation gets it for free.
+ * A compact divider does NOT count: compaction keeps the list.
+ */
+export function toolIdsBeforeLastClear(session: {
+  timeline: ReadonlyArray<{ kind: string; turnId?: string; marker?: { variant?: string } }>;
+  assistantTurns: ReadonlyMap<string, { segments: ReadonlyArray<{ type: string; groupId?: string }> }>;
+  toolGroups: ReadonlyMap<string, { toolIds: string[] }>;
+}): Set<string> {
+  const out = new Set<string>();
+  let last = -1;
+  for (let i = session.timeline.length - 1; i >= 0; i--) {
+    const e = session.timeline[i];
+    if (e.kind === 'system-marker' && e.marker?.variant === 'clear') { last = i; break; }
+  }
+  for (let i = 0; i < last; i++) {
+    const e = session.timeline[i];
+    if (e.kind !== 'assistant-turn' || !e.turnId) continue;
+    for (const seg of session.assistantTurns.get(e.turnId)?.segments ?? []) {
+      if (seg.type !== 'tool-group' || !seg.groupId) continue;
+      for (const id of session.toolGroups.get(seg.groupId)?.toolIds ?? []) out.add(id);
+    }
+  }
+  return out;
+}
+
+/** `beforeClear`: tool calls from before the last clear (toolIdsBeforeLastClear) — ignored. */
+export function buildTasksById(toolCalls: Map<string, ToolCallState>, beforeClear?: ReadonlySet<string>): Map<string, TaskState> {
   const tasks = new Map<string, TaskState>();
 
   // Scan in insertion order. `idx` gives us stable orderIndex values.
@@ -155,6 +189,7 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
     const i = idx++;
     const isTodoWrite = tool.toolName === 'TodoWrite';
     if (!isTodoWrite && !TASK_TOOLS.has(tool.toolName)) continue;
+    if (beforeClear?.has(tool.toolUseId)) continue; // belongs to the context /clear ended (F6 above)
     // WHY: a call the tool rejected changed nothing (a TodoWrite that failed validation never
     // replaced the list; a failed TaskUpdate never moved the status), so it must not here either.
     if (tool.status === 'failed') continue;
