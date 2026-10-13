@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isAndroid, isRemoteMode } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
-import { FieldError, FoldRow, SettingRow, Toggle } from './ui';
+import { FieldError, FoldRow, Pill, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -370,16 +370,14 @@ export function NativeExtras({ nb, preset, onPreset }: {
             open={nb.memDetailOpen}
             onToggle={(next) => nb.setMemDetailOpen(() => next)}
             title={(
-              // WHY `text-warning-fg` and not a fixed amber (contract R30, 2026-09-06):
-              // one hard-coded amber is crisp on a dark theme and invisible on a pale
-              // one — measured 9.5:1 on Halftone Dimension and 1.05:1 on Meadow Mist,
-              // where it sat on that theme's pale-green card at practically the same
-              // brightness. `--warning-fg` is the same amber nudged, per theme, until
-              // it is readable on that theme's own surfaces, so a theme nobody has
-              // written yet comes out right too. Dark themes are unchanged.
-              <span className={nb.memVerdict.verdict === 'too-large' ? 'text-destructive-fg' : 'text-warning-fg'}>
+              // (Before: `text-warning-fg`, a per-theme amber chosen over a fixed one for contrast,
+              // contract R30 2026-09-06. The pill's tint is the shared, measured status tint.)
+              // WHY a pill now (small-fixes-2#SF2-10, "fix-next"): the per-theme amber/red TEXT
+              // above was still status colour in words, which the guide rules out. Same words, in a
+              // status pill whose tint carries the amber/red — Local models' fit pills (SF2-9).
+              <Pill tone={nb.memVerdict.verdict === 'too-large' ? 'danger' : 'warning'}>
                 {nb.memVerdict.verdict === 'too-large' ? 'This model is too large for this computer' : 'This model may not fit in available memory'}
-              </span>
+              </Pill>
             )}
             description={nb.memDetailOpen ? nb.memVerdict.headline : undefined}
           >

@@ -105,7 +105,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#github-unsupported', 'dialog'), params: { syncWarn: 'github' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // The wizard's sign-in step when the sign-in fails: its own reason and Try again (small-fixes-2).
   { ...settings('settings/sync#add-auth-failed', 'dialog', 'error-state'), params: { syncSetup: 'auth-failed' }, escapeStepsBack: WIZARD_ESCAPE,
-    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Connect to Google'] },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google'] },
   // A Google Drive backup that timed out: the classifier's warning with its fix button (small-fixes-2).
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
@@ -115,9 +115,13 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making
   // the GitHub repository on Start backup — each a notice with Try again in its button's place.
   { ...settings('settings/sync#add-install-failed', 'dialog', 'error-state'), params: { syncSetup: 'install-failed' }, escapeStepsBack: WIZARD_ESCAPE,
-    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Install now'] },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Install now'] },
   { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' }, escapeStepsBack: WIZARD_ESCAPE,
-    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Connect to Google', 'Start backup'] },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google', 'Start backup'] },
+  // Every step of the add-a-backup wizard, rebuilt on small-fixes-3: sign-in, settings, done.
+  { ...settings('settings/sync#add-auth', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…'] },
+  { ...settings('settings/sync#add-configure', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google'] },
+  { ...settings('settings/sync#add-done', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google', 'Start backup'] },
   // The add-a-backup picker: Google Drive (and iCloud on Mac and Windows) — no GitHub on a computer.
   { ...settings('settings/sync#add-picker', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup'] },
   // "Remove backup?" on the default fixture's one backend (drive-1).

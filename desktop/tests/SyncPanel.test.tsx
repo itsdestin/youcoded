@@ -330,9 +330,11 @@ describe('Backup & sync — a partial status must not crash the app', () => {
       syncingBackendId: null,
     });
     await renderOpen();
-    // The "Includes …" category strip is the section that used to throw — it
-    // must be absent, not fatal.
-    expect(document.body.textContent).not.toContain('Includes');
+    // The legacy category strip is the section that used to throw — it must be absent, not
+    // fatal. (small-fixes-3: it now reads "Also includes …" under Additional backups; the GitHub
+    // card's own "Includes Conversations · Personal folder · Projects" is fixed text.)
+    expect(document.body.textContent).not.toContain('Also includes');
+    expect(document.body.textContent).toContain('Personal folder');
   });
 
   it('still renders the category strip when the field IS present', async () => {

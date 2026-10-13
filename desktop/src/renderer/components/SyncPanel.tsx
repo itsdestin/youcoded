@@ -17,7 +17,7 @@ import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
-import SyncSetupWizard, { githubBackupWorks, type FirstBackup } from './SyncSetupWizard';
+import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
@@ -239,7 +239,15 @@ const BACKEND_STYLE: Record<string, { icon: string; tint: string }> = {
   icloud: { icon: '\u2B21', tint: 'bg-sky-500/10 text-sky-400' },
 };
 
+// What cross-device sync copies (sync-spaces/managed-roots.ts: ~/YouCoded's Personal + Projects).
+// WHY a fixed list (small-fixes-3, Destin): the GitHub card read "Includes Memory · Conversations ·
+// Encyclopedia · Skills · System Config" — the LEGACY Drive/iCloud categories, most of which GitHub
+// sync never copies, contradicting the (i) explainer. Those now sit under Additional backups.
+const SYNC_INCLUDES = ['conversations', 'personal-folder', 'projects'] as const;
+
 const CATEGORY_LABELS: Record<string, string> = {
+  'personal-folder': 'Personal folder',
+  projects: 'Projects',
   memory: 'Memory',
   conversations: 'Conversations',
   encyclopedia: 'Encyclopedia',
@@ -251,6 +259,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 // Hover descriptions — shown via title attribute on each inline category label
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  'personal-folder': 'Any file you put in YouCoded’s Personal folder',
+  projects: 'Each project in YouCoded’s Projects folder',
   memory: 'Your Claude memory files and preferences',
   conversations: 'Chat history and conversation logs',
   encyclopedia: 'Your personal encyclopedia entries',
@@ -259,6 +269,21 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   plans: 'Implementation plans and design documents',
   specs: 'Technical specifications and reference docs',
 };
+
+/** "Includes Conversations · Personal folder · Projects": the card's grey hint line naming what it
+ *  copies, each word with a hover description. Nothing when the list is empty. */
+function includesLine(lead: string, cats: readonly string[]): React.ReactNode {
+  if (cats.length === 0) return null;
+  return (
+    <div className="text-3xs mt-0.5 leading-relaxed text-fg-muted">
+      <span className="font-medium">{lead}</span>
+      {cats.flatMap((cat, i) => {
+        const label = <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>{CATEGORY_LABELS[cat] || cat}</span>;
+        return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
+      })}
+    </div>
+  );
+}
 
 // --- Config display fields per backend type (read-only in edit form) ---
 const BACKEND_CONFIG_DISPLAY: Record<string, { key: string; label: string }[]> = {
@@ -492,6 +517,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // Derived once, so the Dialog header and the body below cannot disagree about
   // which view is showing.
   const isWizard = view === 'add-type' || view === 'add-config';
+  // The wizard step's title and back, shown in THIS popup's shared header (small-fixes-3).
+  const [wizardHeader, setWizardHeader] = useState<WizardHeaderInfo | null>(null);
+  const closeWizard = () => { setView('main'); setAddType(null); setWizardPreselect(undefined); };
   const isEdit = view === 'edit' && !!editingId;
   // Looked up ONCE and shared by the header and the form, so the title cannot
   // name a different backend from the one being edited.
@@ -999,21 +1027,23 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         panelRef={popupRef}
         title={
           showInfo ? 'About Backup & sync'
-            : isWizard ? undefined
+            : isWizard ? (wizardHeader?.title ?? 'Add a backup')
               : isEdit ? `Edit ${editingBackend?.label ?? 'backup'}`
                 : 'Backup & sync'
         }
         onBack={
           showInfo ? () => setShowInfo(false)
             : isEdit ? () => { setView('main'); setEditingId(null); }
+              // A wizard step's own back; the first step goes back to Backup & sync.
+              : isWizard ? (wizardHeader?.onBack ?? closeWizard)
               : undefined
         }
         headerActions={!showInfo && !isWizard && !isEdit ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
         aria-label="Backup & sync"
         size="panel"
         fill
-        // The wizard still owns its whole surface — it is the one view whose
-        // header text changes per STEP, and its step state lives inside it.
+        // The wizard still owns its body — each step has its own scroll area — but since
+        // small-fixes-3 its title and back are this popup's shared header.
         scrollBody={!isWizard}
       >
         {showInfo ? (
@@ -1023,6 +1053,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           />
         ) : (view === 'add-type' || view === 'add-config') ? (
           // Guided setup wizard handles type selection, prereq check, OAuth, and config
+          <WizardHeaderContext.Provider value={setWizardHeader}>
           <SyncSetupWizard
             initialType={addType ?? undefined}
             existingBackends={(status?.backends ?? []).map(b => ({ type: b.type, config: b.config }))}
@@ -1057,10 +1088,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               await refreshStatus();
               return first;
             }}
-            onClose={() => { setView('main'); setAddType(null); setWizardPreselect(undefined); }}
+            onClose={closeWizard}
             preselectedBackendId={wizardPreselect?.id}
             preselectedBackendType={wizardPreselect?.type}
           />
+          </WizardHeaderContext.Provider>
         ) : view === 'edit' && editingId ? (
           <EditBackendForm
             backend={editingBackend}
@@ -1178,19 +1210,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               // backs up, so it moves inside it, as a second grey hint line
               // under the GitHub/account sub-line, in every state (not only
               // "All synced") — text about a card lives inside that card.
-              const categoriesLine = (status?.syncedCategories?.length ?? 0) > 0 ? (
-                <div className="text-3xs mt-0.5 leading-relaxed text-fg-muted">
-                  <span className="font-medium">Includes </span>
-                  {(status!.syncedCategories ?? []).flatMap((cat, i) => {
-                    const label = (
-                      <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>
-                        {CATEGORY_LABELS[cat] || cat}
-                      </span>
-                    );
-                    return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
-                  })}
-                </div>
-              ) : null;
+              const categoriesLine = includesLine('Includes ', SYNC_INCLUDES);
 
               // Not-enabled + error + GitHub-authed collapses to the plain 'off'
               // header (only error + UNauthed gets 'waiting-github'), which used to
@@ -1475,11 +1495,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
                   {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
                       a boxed row here read as a card inside the card. */}
+                  {/* The daily copy's extra categories, moved here from the GitHub card (small-fixes-3):
+                      the same YouCoded folders plus these from ~/.claude (sync-service.ts pushDrive /
+                      pushiCloud). Conversations are already in the folders, so they are not repeated. */}
                   <SettingRow
                     variant="item"
                     header
                     title={<span className="flex items-center gap-2">Keep a second copy<Badge>Optional</Badge></span>}
-                    description={sub}
+                    description={<>{sub}{includesLine('Also includes ', (status?.syncedCategories ?? []).filter((c) => c !== 'conversations'))}</>}
                     control={
                       // Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
                       // on-state is the theme accent instead of hardcoded green-600.
