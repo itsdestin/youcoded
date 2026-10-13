@@ -159,6 +159,8 @@ function normalizeRepoUrl(url: string): string {
 export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType }: SyncSetupWizardProps) {
   // Always mounted when open (parent conditionally renders this component) — so open=true is correct here.
   useEscClose(true, onClose);
+  // The GitHub repo this wizard has already created, so Try again reuses it (see handleStartBackup).
+  const createdRepo = useRef<{ name: string; url: string } | null>(null);
   // If a specific backend needs reconnecting, jump straight to auth for that type.
   // iCloud has no auth step (no OAuth flow), so land at 'prereqs' for it instead.
   // Falls back to the initialType behavior (skip type-picker → prereqs) if set,
@@ -352,15 +354,25 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
       try {
         let finalRepoUrl = repoUrl;
 
-        // If GitHub + create mode, create the repo first
+        // If GitHub + create mode, create the repo first.
+        // WHY remembered per name (final review F34): when the repo was created but saving the backup
+        // then failed, Try again created the same repo again — GitHub refuses a name that exists, and
+        // the person saw a raw error for a repo that was already theirs. A repo this wizard already
+        // made under this name is reused; changing the name makes a new one.
         if (backendType === 'github' && repoMode === 'create') {
-          const result = await claude.sync.setup.createRepo(repoName);
-          if (!result.success) {
-            setError(result.error || 'Failed to create repository');
-            setSaving(false);
-            return;
+          const made = createdRepo.current?.name === repoName ? createdRepo.current.url : null;
+          if (made) {
+            finalRepoUrl = made;
+          } else {
+            const result = await claude.sync.setup.createRepo(repoName);
+            if (!result.success) {
+              setError(result.error || 'Failed to create repository');
+              setSaving(false);
+              return;
+            }
+            finalRepoUrl = result.repoUrl;
+            if (result.repoUrl) createdRepo.current = { name: repoName, url: result.repoUrl };
           }
-          finalRepoUrl = result.repoUrl;
         }
 
         // Assemble the backend config
