@@ -1,6 +1,6 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
- "total": 274,
+ "total": 275,
  "open": [
   "account:signed-in",
   "account:user",
@@ -248,6 +248,7 @@
   "syncspaces:lease-takeover",
   "syncspaces:list-devices",
   "syncspaces:remove-device",
+  "syncspaces:remove-project",
   "syncspaces:rename-device",
   "syncspaces:rename-project",
   "syncspaces:set-project-description",
