@@ -58,8 +58,8 @@ describe('page -> recorder announcements', () => {
     noteTerminalShown(4096, parsed);            // the terminal's layout effect runs BEFORE the App's
     announceSwitch(info({ viewMode: 'terminal' }));
     expect(heard[0].d).toMatchObject({ vm: 'terminal', dr: 4096 });
-    await new Promise((r) => setTimeout(r, 5));
-    expect(heard.find((h) => h.name === 'yc:switch-term')!.d.q).toBe(heard[0].d.q);
+    // WHY waitFor (test-waits guard): "drained" fires from xterm's parse callback, a timer a busy machine runs late.
+    await vi.waitFor(() => expect(heard.find((h) => h.name === 'yc:switch-term')?.d.q).toBe(heard[0].d.q));
   });
 
   it('a terminal show that is not a session switch (the chat/terminal toggle) leaves nothing parked for the next one', async () => {

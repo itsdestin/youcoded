@@ -339,6 +339,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     const frozenAt = r.state.sent;
     expect(frozenAt).toBeGreaterThan(100_000);
     expect(frozenAt).toBeLessThan(200_000 + 700_000);              // nowhere near the ~11 MB the program wants to print
+    // settle: a NEGATIVE check — output that resumed would show up in this second; none should.
     await new Promise((res) => setTimeout(res, 1000));
     expect(r.state.sent).toBe(frozenAt);                           // and it stays stopped
     // Releasing it lets the rest through, complete.

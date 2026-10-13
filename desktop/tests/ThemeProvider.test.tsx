@@ -218,6 +218,7 @@ it('a reconnect whose theme-file read FAILS keeps the theme and never writes the
   (window as any).claude.appearance.get.mockResolvedValue({ theme: slug });
   read.mockRejectedValue(new Error('link just came back'));
   await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+  // settle: a NEGATIVE check — a reset to the default would land within this window, and nothing should.
   await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
   expect(phone.result.current.theme).toBe(slug);          // not reset to the default
   expect(phone.result.current.activeTheme.slug).toBe(slug);

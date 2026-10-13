@@ -136,9 +136,9 @@ describe('Voice vocabulary preview', () => {
     const field = await open();
     add(field, 'Updated name');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await screen.findByRole('button', { name: 'Retry' });
+    await screen.findByRole('button', { name: 'Try again' });
     expect(screen.getByRole('status').textContent).toContain('Unsaved changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved'));
   });
 
@@ -148,10 +148,10 @@ describe('Voice vocabulary preview', () => {
     mount();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Speak your message' }));
       expect(screen.getByText('Loading vocabulary…')).toBeTruthy();
-    await screen.findByRole('button', { name: 'Retry' });
+    await screen.findByRole('button', { name: 'Try again' });
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByRole('textbox', { name: 'Add word or phrase' });
   });
 

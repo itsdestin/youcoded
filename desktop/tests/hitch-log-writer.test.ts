@@ -96,7 +96,7 @@ describe('RotatingJsonlWriter', () => {
     const p = w.flush();
     w.append({ a: 2 });
     await p;
-    await new Promise((r) => setTimeout(r, 60));
-    expect(readFileSync(join(dir, 'hitches.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2);
+    // WHY waitFor (test-waits guard): the second flush is timer-driven, and a busy machine runs it later than a fixed 60 ms.
+    await vi.waitFor(() => expect(readFileSync(join(dir, 'hitches.jsonl'), 'utf8').trim().split('\n')).toHaveLength(2));
   });
 });
