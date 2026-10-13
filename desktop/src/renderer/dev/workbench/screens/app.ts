@@ -27,4 +27,7 @@ export const APP: readonly ScreenEntry[] = [
   // OpenTasksPractice.tsx), since no practice conversation creates tasks. Both folded sections
   // start open (five or fewer in each), as in the app (submit-ticket-5#ST5-Q2).
   { name: 'dev/open-tasks', tags: ['dev'], mark: 'chat/open-tasks' },
+  // The same popup over a native session's TodoWrite list (Open tasks rework, 2026-10-13: the
+  // path that showed nothing before).
+  { name: 'dev/open-tasks#native', tags: ['dev'], mark: 'chat/open-tasks', params: { tasks: 'native' } },
 ];

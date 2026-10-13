@@ -29,14 +29,14 @@ describe('OpenTasksPopup', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('groups tasks by status with "In Progress", "Pending", "Completed" sections', () => {
+  it('lists the running task first, then the waiting ones, under "To do"; finished ones fold below', () => {
     render(
       <OpenTasksPopup
         open={true}
         tasks={[
           task({ id: '1', subject: 'Done thing', status: 'completed', orderIndex: 0 }),
-          task({ id: '2', subject: 'Running thing', status: 'in_progress', activeForm: 'Running', orderIndex: 1 }),
-          task({ id: '3', subject: 'Queued thing', status: 'pending', orderIndex: 2 }),
+          task({ id: '3', subject: 'Queued thing', status: 'pending', orderIndex: 1 }),
+          task({ id: '2', subject: 'Running thing', status: 'in_progress', activeForm: 'Running', orderIndex: 2 }),
         ]}
         onClose={noop}
         onMarkInactive={noop}
@@ -44,12 +44,9 @@ describe('OpenTasksPopup', () => {
       />
     );
     const body = screen.getByRole('dialog').textContent!;
-    const inProgressIdx = body.toLowerCase().indexOf('in progress');
-    const pendingIdx = body.toLowerCase().indexOf('pending');
-    const completedIdx = body.toLowerCase().indexOf('completed');
-    expect(inProgressIdx).toBeGreaterThanOrEqual(0);
-    expect(pendingIdx).toBeGreaterThan(inProgressIdx);
-    expect(completedIdx).toBeGreaterThan(pendingIdx);
+    const order = ['To do', 'Running', 'Queued thing', 'Other tasks', 'Completed', 'Done thing'].map((w) => body.indexOf(w));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it('uses activeForm as the row title when task is in_progress', () => {
@@ -76,7 +73,7 @@ describe('OpenTasksPopup', () => {
         onUnhide={noop}
       />
     );
-    const btn = screen.getByRole('button', { name: /mark task #5 inactive/i });
+    const btn = screen.getByRole('button', { name: 'Mark "Thing" inactive' });
     fireEvent.click(btn);
     expect(onMarkInactive).toHaveBeenCalledWith('5');
   });
@@ -171,5 +168,57 @@ describe('OpenTasksPopup folded sections', () => {
       expect(row.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
     }
     expect(document.querySelector('.border-t')).toBeNull();
+  });
+});
+
+// WHY (Open tasks rework, 2026-10-13; Destin small-fixes-1#SF-8 "align with the new ui guide",
+// built without review rounds): the popup is built only from the guide's existing pieces, and
+// these pin the ones a later edit could quietly undo.
+describe('OpenTasksPopup follows the guide', () => {
+  const tasks = [
+    task({ id: '7', subject: 'Fix it', activeForm: 'Fixing it', status: 'in_progress', orderIndex: 0, description: 'The longer note' }),
+    task({ id: '8', subject: 'Test it', status: 'pending', orderIndex: 1 }),
+    task({ id: '9', subject: 'Old idea', status: 'pending', orderIndex: 2, markedInactive: true }),
+  ];
+
+  it('puts every group in a labelled first-level card, so nothing sits bare on the popup', () => {
+    render(<OpenTasksPopup open tasks={tasks} onClose={noop} onMarkInactive={noop} onUnhide={noop} />);
+    for (const label of ['To do', 'Other tasks']) {
+      const section = screen.getByText(label).closest('section')!;
+      expect(section.querySelector(':scope > .surface-1')).toBeTruthy();
+    }
+  });
+
+  it('keeps the running task\'s green Working pill (small-fixes-1#SF-8), on that row only', () => {
+    render(<OpenTasksPopup open tasks={tasks} onClose={noop} onMarkInactive={noop} onUnhide={noop} />);
+    const pills = screen.getAllByText('Working');
+    expect(pills).toHaveLength(1);
+    expect(pills[0].closest('li')!.textContent).toContain('Fixing it');
+  });
+
+  it('shows no task numbers, dots or crossed-out words, and says each task in the normal text colour', () => {
+    render(<OpenTasksPopup open tasks={[...tasks, task({ id: '10', subject: 'Done', status: 'completed', orderIndex: 3 })]}
+      onClose={noop} onMarkInactive={noop} onUnhide={noop} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).not.toMatch(/#\d/);
+    expect(dialog.querySelector('.line-through, .font-mono, .rounded-full.w-2')).toBeNull();
+  });
+
+  it('makes Mark inactive and Unhide outlined buttons, never faded or bare text', () => {
+    render(<OpenTasksPopup open tasks={tasks} onClose={noop} onMarkInactive={noop} onUnhide={noop} />);
+    const outlined = screen.getByRole('button', { name: 'Mark "Fixing it" inactive' }).className;
+    for (const name of ['Mark "Test it" inactive', 'Unhide "Old idea"']) {
+      const cls = screen.getByRole('button', { name }).className;
+      expect(cls).toBe(outlined);
+      expect(cls).not.toContain('opacity-40');
+    }
+    expect(outlined).toContain('border');
+  });
+
+  it('says "No open tasks" inside the To do card when nothing is left', () => {
+    render(<OpenTasksPopup open tasks={[]} onClose={noop} onMarkInactive={noop} onUnhide={noop} />);
+    const line = screen.getByText('No open tasks.');
+    expect(line.closest('.surface-1')).toBeTruthy();
+    expect(screen.queryByText('Other tasks')).toBeNull();
   });
 });
