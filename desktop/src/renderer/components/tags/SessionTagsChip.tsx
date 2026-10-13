@@ -5,7 +5,7 @@
 // note icon, if applicable. tags should look like stacked tags of the relevant colors"):
 // the pin, the session's tags as stacked coloured tag icons, and the note's page icon —
 // or "Add tags" when the session has none.
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
@@ -16,6 +16,15 @@ import { PinIcon } from './PinIcon';
 import { NotePageGlyph } from './glyphs';
 import { Dialog, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
+import { memoWhileClosed } from '../memo-while-closed';
+
+// WHY its own memoWhileClosed component (merge of master, 2026-10-13): the chip lives in the
+// status bar, which re-renders on every session switch, and the always-mounted closed popup was
+// rebuilt with it (tests/busy-app-render-budget.test.tsx: "rebuilds nothing that is closed").
+// Closed, it ignores its props; the moment it opens it renders with the current ones.
+const SessionDetailsDialog = memoWhileClosed(function SessionDetailsDialog({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+  return <Dialog screen="chat/tags" open={open} onClose={onClose} title="Session details" size="panel">{children}</Dialog>;
+});
 
 export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string | null; sessionName?: string }) {
   const [open, setOpen] = useState(false);
@@ -61,7 +70,7 @@ export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string 
           button — every change saves as you make it (pick-menus-11#PM11-1). Mark complete
           is offered here too since close-session-2#CS2-5 ("also add the complete toggle
           here"); it is safe on an open session — see SessionListsCard. */}
-      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Session details" size="panel">
+      <SessionDetailsDialog open={open} onClose={() => setOpen(false)}>
         <SessionDetails
           name={sessionName || 'Untitled session'}
           onRename={sessionId ? () => setRenaming(true) : undefined}
@@ -73,7 +82,7 @@ export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string 
           pin={{ pinned, onPin: (next) => meta.setFlag('priority', next) }}
           complete={{ done: !!meta.flags.complete, onComplete: (next) => meta.setFlag('complete', next) }}
         />
-      </Dialog>
+      </SessionDetailsDialog>
       {renaming && sessionId && <SessionRenameDialog id={sessionId} name={sessionName || 'Untitled session'} onClose={() => setRenaming(false)} />}
     </>
   );
