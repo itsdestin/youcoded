@@ -132,6 +132,40 @@ const baseName = (p: string): string => p.replace(/\\/g, '/').split('/').pop() |
 // same "/home/d/proj/.claude was NOT imported" three times, naming a directory
 // nobody tried to import. The destination is still reported (it's the real,
 // verified detail), it just isn't the subject of the sentence.
+/** What Remove does after the confirm, in order — pulled out of the component so each failure can
+ *  be tested without drawing Project View (final review F8).
+ *  - A synced project is removed everywhere first; its failure keeps the confirm open with the
+ *    service's own words, and nothing else runs.
+ *  - Then the saved-folder entry goes. For a plain folder that IS the removal, so its failure keeps
+ *    the confirm open. For a synced one the project is already gone, so a failure here is not shown.
+ *  - The refreshed project list is best effort: `projects: null` means "drop the removed one from
+ *    what is shown" — the dialog must close either way.
+ *  WHY: after a successful remove, a rejected folders.remove() or list refresh left the dialog stuck
+ *  open with an empty error line, though the project was already gone. */
+export async function runProjectRemove<P>(steps: {
+  removeSynced: (() => Promise<{ ok: boolean; error?: string } | undefined>) | null;
+  removeFolder: () => Promise<unknown>;
+  deleteSidecar: (() => Promise<unknown>) | null;
+  listProjects: () => Promise<{ ok: boolean; projects?: P[] } | undefined>;
+}): Promise<{ error: string; projects?: undefined } | { error: null; projects: P[] | null }> {
+  if (steps.removeSynced) {
+    const res = await steps.removeSynced().catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) }));
+    if (!res?.ok) return { error: res?.error || "This project couldn't be removed." };
+  }
+  try {
+    await steps.removeFolder();
+  } catch {
+    if (!steps.removeSynced) return { error: "This project couldn't be removed." };
+  }
+  if (steps.deleteSidecar) await steps.deleteSidecar().catch(() => {});
+  try {
+    const res = await steps.listProjects();
+    return { error: null, projects: res?.ok && res.projects ? res.projects : null };
+  } catch {
+    return { error: null, projects: null };
+  }
+}
+
 export function describeImportFailure(r: { error: string; detail?: string }, source?: string): string {
   const who = source ? baseName(source) : 'That file';
   if (r.error === 'needs-confirm') {
@@ -632,31 +666,24 @@ export function ProjectView(props: ProjectViewProps) {
     // PQ-1). Files stay on every device; GitHub is untouched. A failure keeps the confirm
     // open with the service's own words — nothing else is changed then.
     const space = findSpaceFor(deletingProject.path, syncStatus);
-    if (space && !deletingProject.missing && space.id.startsWith('project:')) {
-      const res = await (window.claude as any).syncSpaces.removeProject?.(space.id.slice('project:'.length))
-        .catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) }));
-      if (!res?.ok) {
-        setRemoveError(res?.error ?? "This project couldn't be removed.");
-        return;
-      }
-    }
+    const synced = !!space && !deletingProject.missing && space.id.startsWith('project:');
+    const removing = deletingProject;
     // The project list IS the saved-folders store for plain folders, so "Remove" removes the
     // folder from that store (which also drops it from the new-session folder picker); for a
-    // synced one this drops any saved entry the import flow wrote.
-    // Optionally wipe the artifact-history sidecar + any index entry.
-    await (window.claude as any).folders.remove(deletingProject.path);
-    if (alsoDeleteSidecar) {
-      await (window.claude as any).artifacts.deleteProject(deletingProject.id, true).catch(() => {});
-    }
-    // Refresh project list after removal.
-    const res = await (window.claude as any).artifacts.listProjectsIndex({ withCounts: true });
-    if (res && res.ok) {
-      setProjects(res.projects);
-      // If we removed the active project, select the first remaining one.
-      setActiveProject((prev) =>
-        prev?.path === deletingProject.path ? (res.projects[0] ?? null) : prev
-      );
-    }
+    // synced one this drops any saved entry the import flow wrote. Optionally wipe the
+    // artifact-history sidecar + any index entry. Order and failures: runProjectRemove above.
+    const out = await runProjectRemove<CentralIndexProject>({
+      removeSynced: synced ? () => (window.claude as any).syncSpaces.removeProject?.(space!.id.slice('project:'.length)) : null,
+      removeFolder: () => (window.claude as any).folders.remove(removing.path),
+      deleteSidecar: alsoDeleteSidecar ? () => (window.claude as any).artifacts.deleteProject(removing.id, true) : null,
+      listProjects: () => (window.claude as any).artifacts.listProjectsIndex({ withCounts: true }),
+    });
+    if (out.error !== null) { setRemoveError(out.error); return; }
+    // Refresh the project list; if the refresh failed, at least the removed one leaves the screen.
+    const next = out.projects ?? projects.filter((p) => p.path !== removing.path);
+    setProjects(next);
+    // If we removed the active project, select the first remaining one.
+    setActiveProject((prev) => (prev?.path === removing.path ? (next[0] ?? null) : prev));
     setDeletingProject(null);
     setRemoveError(null);
   };

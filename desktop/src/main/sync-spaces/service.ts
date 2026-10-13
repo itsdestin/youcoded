@@ -11,7 +11,7 @@ import { GitTransport } from './git-transport';
 import { SpaceSyncEngine } from './engine';
 import { DailyBackup, BackupTarget } from './daily-backup';
 import { importProjectFolder } from './import-project';
-import { MAX_SYNC_FILE_BYTES } from './guards';
+import { MAX_SYNC_FILE_BYTES, validateSyncName } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
@@ -30,6 +30,8 @@ let recentEvents: SpaceSyncEvent[] = [];
 // projects-index) are on click paths; refreshed at startup, on every discovery pass (i.e.
 // after each Personal pull, which is how an offline device catches up), and on a local remove.
 let removedNames = new Set<string>();
+/** Names removed by THIS run (see refreshRemoved's WHY). */
+const locallyRemoved = new Set<string>();
 // Every over-limit file reported this launch, per space. Kept outside the
 // last-50 event buffer so the Sync panel can keep telling the user which
 // files are not syncing for as long as that is true (the engine reports each
@@ -591,7 +593,10 @@ export async function syncSpacesSetProjectDescription(name: string, description:
  *  changed, so a project removed on another device leaves the switcher and picker live. */
 async function refreshRemoved(): Promise<void> {
   if (!roots) return;
-  const next = await readRemovedProjects(roots.personalRoot);
+  // WHY the union with this run's own removes (final review F31): a read that began before a remove
+  // finished would otherwise overwrite the set without it, and the project showed again until the
+  // next pass. Markers are never taken back, so a name this device removed stays removed.
+  const next = new Set([...(await readRemovedProjects(roots.personalRoot)), ...locallyRemoved]);
   const changed = next.size !== removedNames.size || [...next].some((n) => !removedNames.has(n));
   removedNames = next;
   if (changed) broadcast({ type: 'projects-changed', spaceId: 'projects' });
@@ -603,16 +608,15 @@ export function isRemovedProject(name: string): boolean {
 }
 
 /** The project's GitHub page — the backup the app leaves in place when a project is removed.
- *  This device's own remote for it when known; else the account (read from the Personal
- *  backup's remote) plus the project's deterministic repository name. null when neither is
- *  known (sync never set up here). Only ever a link: the app never calls GitHub to delete. */
+ *  Only this device's own remote for it: null when this device never synced it.
+ *  WHY no guessed address any more (final review F32): the fallback built a link from the account
+ *  and the project's derived repository name, which 404s for a project whose backup was never
+ *  created — a button that opens a "not found" page. A missing link is the honest answer; the
+ *  device that synced it still shows one. Only ever a link: the app never calls GitHub to delete. */
 function githubPageFor(name: string): string | null {
   const own = manager?.remoteFor(`project:${name}`);
-  const toPage = (u: string) => u.replace(/\.git$/, '');
-  if (own && /^https:\/\/github\.com\//.test(own)) return toPage(own);
-  const personal = manager?.remoteFor('personal') ?? '';
-  const owner = /^https:\/\/github\.com\/([^/]+)\//.exec(personal)?.[1];
-  return owner ? `https://github.com/${owner}/${repoNameFor(name)}` : null;
+  if (own && /^https:\/\/github\.com\//.test(own)) return own.replace(/\.git$/, '');
+  return null;
 }
 
 /** Remove a synced project = stop syncing it on every device AND take it off every device's
@@ -622,12 +626,27 @@ function githubPageFor(name: string): string | null {
  *  GitHub backup is never touched — the confirm and Backup & Sync say so, with a link. */
 export async function syncSpacesRemoveProject(name: string) {
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
+  // WHY this order (final review F7): the stop used to be written first and the removed marker
+  // second, so a marker that failed — a disk error, or a name the marker writer rejects — left the
+  // stop already on its way to every device while this one kept the project attached and listed.
+  // A name the registry would refuse is turned away before anything is written; and once the stop
+  // is written, it is ALWAYS pushed and this device detached, whatever happens to the marker. The
+  // worst case is then exactly "Stop syncing" (a state the app already has), said plainly, and
+  // Remove again finishes the job. Nothing here deletes a file or touches GitHub.
+  if (validateSyncName(name) !== null) return { ok: false as const, error: "This project's name can't be used by sync, so it couldn't be removed. Nothing was changed." };
   await setProjectStopped(roots.personalRoot, name, repoNameFor(name));
-  await markProjectRemoved(roots.personalRoot, name);
-  removedNames = new Set([...removedNames, name]);
+  let marked = true;
+  try {
+    await markProjectRemoved(roots.personalRoot, name);
+    locallyRemoved.add(name);
+    removedNames = new Set([...removedNames, name]);
+  } catch {
+    marked = false;
+  }
   await pushPersonal();
   if (engine) await engine.removeSpace(`project:${name}`);
   broadcast({ type: 'projects-changed', spaceId: 'projects' });
+  if (!marked) return { ok: false as const, error: "Syncing stopped on all your devices, but the project couldn't be taken off your lists. Try again." };
   return { ok: true as const };
 }
 
