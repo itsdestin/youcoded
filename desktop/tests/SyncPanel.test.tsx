@@ -507,7 +507,7 @@ describe('GitHub backups on a computer', () => {
   it('an existing one says it is no longer supported and offers Remove, not "Backed up"', async () => {
     const GITHUB = { id: 'github-1', type: 'github', label: 'GitHub', syncEnabled: true, config: { PERSONAL_SYNC_REPO: 'https://github.com/me/x' }, connected: true, lastPushEpoch: 1, lastError: null };
     const api = stub({}, []);
-    api.getStatus = vi.fn(async () => ({
+    (api as any).getStatus = vi.fn(async () => ({
       backends: [DRIVE, GITHUB], lastSyncEpoch: null, backupMeta: null, warnings: [],
       syncInProgress: false, syncingBackendId: null, syncedCategories: [], lastSyncByDevice: {},
     }));

@@ -123,7 +123,8 @@ const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> =
   // batch that rewrote that flow was the right place to fix it. It now reports the
   // installer's own reason, or the general error when the installer gave none.
   'SyncPanel.tsx': { count: 1, why: "'Could not remove this device.'" },
-  'SyncSetupWizard.tsx': { count: 6, why: 'six sign-in / install / repo-create branches' },
+  // 6 -> 4 (small-fixes-2): the sign-in step's two "Sign-in failed" fallbacks now say only what is certain.
+  'SyncSetupWizard.tsx': { count: 4, why: 'four install / repo-create branches' },
 };
 
 describe('status adoption', () => {

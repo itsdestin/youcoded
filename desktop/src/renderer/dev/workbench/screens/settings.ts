@@ -117,7 +117,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#add-install-failed', 'dialog', 'error-state'), params: { syncSetup: 'install-failed' }, escapeStepsBack: WIZARD_ESCAPE,
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Install now'] },
   { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' }, escapeStepsBack: WIZARD_ESCAPE,
-    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '⌂ GitHub…', 'Start backup'] },
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Connect to Google', 'Start backup'] },
+  // The add-a-backup picker: Google Drive (and iCloud on Mac and Windows) — no GitHub on a computer.
+  { ...settings('settings/sync#add-picker', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup'] },
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),

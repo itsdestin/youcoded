@@ -2294,7 +2294,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     pushBackend: async () => ({ success: true, error: '' }),
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),
-    addBackend: async (instance: { type: string; label: string }) => ({ ...instance, id: `${instance.type}-new` }),
+    // `?syncSetup=save-failed`: the new backup can't be saved (small-fixes-1/2).
+    addBackend: async (instance: { type: string; label: string }) => {
+      if (syncSetupMode === 'save-failed') throw new Error("Couldn't save the new backup: the settings file is busy (workbench practice failure).");
+      return { ...instance, id: `${instance.type}-new` };
+    },
     // The add-a-backup wizard (small-fixes-1). WHY: on the catch-all's `[]` every prerequisite
     // read as missing and no step past the first could be reached. `?syncSetup=install-failed`
     // makes Drive's helper tool missing and its install fail; `?syncSetup=save-failed` makes
