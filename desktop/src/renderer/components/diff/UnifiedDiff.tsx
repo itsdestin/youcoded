@@ -194,12 +194,13 @@ export function UnifiedDiff({
                 ? 'bg-green-400/10 border-l-[3px] border-green-400'
                 : 'border-l-[3px] border-transparent';
           const glyph = row.kind === 'del' ? '−' : row.kind === 'add' ? '+' : ' ';
-          const glyphClass =
-            row.kind === 'del'
-              ? 'text-red-400 font-bold'
-              : row.kind === 'add'
-                ? 'text-green-400 font-bold'
-                : 'text-fg-muted';
+          // WHY the − / + in the text colour (known deviations fixed by existing rules,
+          // 2026-10-13): principle 2 and the status-colour sweep (small-fixes-3#SF3-10) keep
+          // status hues out of text — words in the normal colour, the colour in a tint or a
+          // bar. The row's red / green tint and left bar already say removed / added; the
+          // glyphs were red and green text on top of them. The same rows draw the Edit tool
+          // card's diff, so its marks change too (colour only).
+          const glyphClass = row.kind === 'ctx' ? 'text-fg-muted' : 'text-fg-2 font-bold';
           const textClass = row.kind === 'ctx' ? 'text-fg-dim' : 'text-fg';
           return (
             <React.Fragment key={idx}>

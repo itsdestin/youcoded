@@ -228,7 +228,15 @@ describe('GitReviewView', () => {
     await waitFor(() => screen.getByText('Uncommitted changes'));
     fireEvent.change(screen.getByPlaceholderText('Commit message'), { target: { value: 'x' } });
     fireEvent.click(screen.getByRole('button', { name: 'Commit 1 staged file' }));
-    await waitFor(() => expect(screen.getByText('nothing added to commit')).toBeInTheDocument());
+    // Plain sentence + Try again; git's own words one click away under Details
+    // (known deviations fixed by existing rules, 2026-10-13 — the failed install's shape).
+    await waitFor(() => expect(screen.getByText('The commit couldn’t be made.')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('nothing added to commit')).toBeInTheDocument();
+    // Try again runs the same commit, with the message still on screen.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(git.commit).toHaveBeenCalledTimes(2));
+    expect(git.commit).toHaveBeenLastCalledWith('/proj', 'x');
   });
 
   it('surfaces a commit-diff fetch error instead of collapsing to "No direct changes"', async () => {
@@ -236,14 +244,26 @@ describe('GitReviewView', () => {
     git.commitFileDiff.mockResolvedValueOnce({ ok: false, error: 'fatal: bad object', hunks: [], binary: false });
     await waitFor(() => screen.getByText('fix: first'));
     fireEvent.click(screen.getByText('fix: first'));
-    await waitFor(() => expect(screen.getByText('fatal: bad object')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('This commit’s changes couldn’t be loaded.')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('fatal: bad object')).toBeInTheDocument();
     expect(screen.queryByText('No direct changes to this file in this commit.')).not.toBeInTheDocument();
+    // Try again asks again without folding the card shut; the second answer draws.
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.getByText('No direct changes to this file in this commit.')).toBeInTheDocument());
+    expect(git.commitFileDiff).toHaveBeenCalledTimes(2);
   });
 
   it('renders externalError in the same slot as opError when there is no opError', async () => {
-    mountWith({}, { externalError: 'fatal: could not restore f.ts' });
+    const onRequestDiscard = vi.fn();
+    mountWith({}, { externalError: 'fatal: could not restore f.ts', onRequestDiscard });
     await waitFor(() => screen.getByText('Uncommitted changes'));
+    expect(screen.getByText('The changes couldn’t be reverted.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText('fatal: could not restore f.ts')).toBeInTheDocument();
+    // A failed revert's Try again opens the same confirm again (destructive: it still asks).
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(onRequestDiscard).toHaveBeenCalledWith(false);
   });
 
   it('calls onExternalErrorClear at the top of a new run() (stage/unstage)', async () => {
