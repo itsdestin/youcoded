@@ -130,7 +130,12 @@ async function elementInfo(target: { kind: 'page'; page: Page } | { kind: 'locat
     const tag = e.tagName.toLowerCase();
     const type = (e.getAttribute('type') || '').toLowerCase();
     const form = e.closest('form');
-    const label = (e.getAttribute('aria-label') || (e.innerText || '').trim() || (typeof e.value === 'string' ? e.value : '') || e.getAttribute('title') || e.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    // BOTH the accessible label and the visible text: a page can show "Buy now"
+    // under aria-label="Next", and the final-step check must see the words a
+    // person sees as well as the ones a screen reader hears (code review F11).
+    const aria = (e.getAttribute('aria-label') || '').trim();
+    const visible = ((e.innerText || '').trim() || (typeof e.value === 'string' ? e.value : '') || e.getAttribute('title') || e.getAttribute('placeholder') || '').trim();
+    const label = (aria && visible && aria !== visible ? `${aria} — ${visible}` : aria || visible).replace(/\s+/g, ' ').slice(0, 120);
     const a = e.closest('a');
     const isSubmit = (tag === 'button' && (type === '' || type === 'submit') && !!form) || (tag === 'input' && (type === 'submit' || type === 'image'));
     const formSearch = !!form && (form.getAttribute('role') === 'search' || !!form.querySelector('input[type="search"]') || /search/i.test(form.getAttribute('action') || ''));
@@ -219,7 +224,7 @@ async function offerDownload(env: RunnerEnv, ctx: RunCtx): Promise<RunResult> {
   if (wait <= 0) return err('No browser was found on this computer. Try again in a moment to offer the user a download.');
   const answer = await env.service.ask(ctx.sessionId, {
     kind: 'no-browser',
-    message: 'The assistant needs a browser for this. YouCoded can download one for it (about 150 MB, kept inside YouCoded).',
+    message: 'YouCoded can download a browser for the assistant (about 150 MB, kept inside YouCoded).',
   }, { timeoutMs: wait, signal: ctx.signal });
   if (answer === 'download') {
     env.installer.start();
@@ -255,9 +260,12 @@ async function settle(page: Page): Promise<void> {
 
 /** Answer → result wording shared by every ask, so declined and unanswered read differently (review 2 #3). */
 function askOutcome(answer: PromptAnswer | 'cancelled' | 'timeout', what: string): RunResult | null {
-  if (answer === 'timeout') return err(`The user didn't answer the request to ${what} (they may not be at the computer). It was NOT done. Don't retry it — ask them in chat.`);
-  if (answer === 'cancelled') return err(`The request to ${what} was withdrawn (the browser stopped or the tabs closed). It was NOT done.`);
-  if (answer === 'no') return err(`The user declined: they don't want you to ${what}. It was NOT done. Don't retry it.`);
+  // `what` can carry page text (a button's label), so these go in the untrusted
+  // frame too (code review F9).
+  const framed = (t: string) => err(wrapUntrusted('browser', t));
+  if (answer === 'timeout') return framed(`The user didn't answer the request to ${what}. It was NOT done. Don't retry it — ask them in chat. (The Browser's questions show only in the app on the computer, so they may be away from it or using a phone.)`);
+  if (answer === 'cancelled') return framed(`The request to ${what} was withdrawn (the browser stopped or the tabs closed). It was NOT done.`);
+  if (answer === 'no') return framed(`The user declined: they don't want you to ${what}. It was NOT done. Don't retry it.`);
   return null;
 }
 
@@ -272,7 +280,7 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
     try {
       const r = a.go === 'back' ? await page.goBack({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' }) : await page.goForward({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
       return pageReport(env, ctx, page, { lead: r ? undefined : `There was no page to go ${a.go} to.` });
-    } catch (e) { return err(mapActionError(e, undefined)); }
+    } catch (e) { return err(wrapUntrusted('browser', mapActionError(e, undefined))); }
   }
   let url: string;
   try { url = normaliseAddress(a.url!); } catch (e) { return err((e as Error).message); }
@@ -286,7 +294,7 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
       if (env.policy.isRefused(refKey)) return err(`The user already declined opening ${key} a moment ago. Don't retry — ask them in chat.`);
       const answer = await env.service.ask(sid, {
         kind: 'local', host: key,
-        message: `The assistant wants to open ${key}, an address on this computer or your home network.`,
+        message: `The assistant wants to open a page on this computer or your home network (${key}).`,
       }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
       const out = askOutcome(answer, `open ${key}`);
       if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
@@ -317,7 +325,7 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
   }
   let lead: string | undefined;
   try {
-    const resp = await page.goto(url, { timeout: Math.min(NAV_TIMEOUT_MS, remaining(ctx) - 15_000), waitUntil: 'domcontentloaded' });
+    const resp = await page.goto(url, { timeout: Math.max(1000, Math.min(NAV_TIMEOUT_MS, remaining(ctx) - 15_000)), waitUntil: 'domcontentloaded' });
     if (resp && resp.status() >= 400) lead = `The site answered with an error (HTTP ${resp.status()}).`;
   } catch (e) {
     const m = firstLine(e);
@@ -348,10 +356,10 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
   try {
     // A ref from an older outline resolves to nothing at once; say so instead
     // of waiting out the action timeout.
-    if (locator && (await locator.count()) === 0) return err(mapActionError(new Error('ref not found'), a.ref));
+    if (locator && (await locator.count()) === 0) return err(wrapUntrusted('browser', mapActionError(new Error('ref not found'), a.ref)));
     info = await elementInfo(locator ? { kind: 'locator', locator } : { kind: 'page', page }, 5000);
   } catch (e) {
-    return err(mapActionError(e, a.ref));
+    return err(wrapUntrusted('browser', mapActionError(e, a.ref)));
   }
   const host = hostOf(page.url()).toLowerCase();
   const frameHost = info?.frameUrl ? hostOf(info.frameUrl).toLowerCase() : host;
@@ -359,9 +367,11 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
   const label = info?.name ? `"${info.name.slice(0, 80)}"` : (a.element ? `"${a.element.slice(0, 80)}"` : 'an element');
   const verb = a.action === 'type' ? `type into ${label}` : a.action === 'select' ? `choose in ${label}` : a.action === 'press_key' ? `press ${a.key}` : `click ${label}`;
 
+  let askedFinal = false;
   if (a.action !== 'hover') {
     const enter = a.action === 'press_key' && /^(Enter|NumpadEnter)$/i.test(a.key ?? '');
     const final = (a.action !== 'press_key' || enter) && isFinalStep(a.action, info, !!a.submit);
+    askedFinal = final;
     const refKey = `${sid}|act|${host}|${a.action}|${info?.name ?? a.ref}`;
     if (env.policy.isRefused(refKey)) return err(`The user already declined or didn't answer this exact step a moment ago. Don't retry — ask them in chat.`);
     const prefs = await env.settings.read();
@@ -391,6 +401,17 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
   if (hostOf(page.url()).toLowerCase() !== host) {
     return err(`The page moved to ${hostOf(page.url())} while waiting, so nothing was done. Take a new outline.`);
   }
+  // …and the element itself: a step that became a final step while the person
+  // was answering (the page changed its words) is not done (code review F11).
+  if (a.action !== 'hover' && !askedFinal) {
+    try {
+      const again = await elementInfo(locator ? { kind: 'locator', locator } : { kind: 'page', page }, 3000);
+      const enterNow = a.action === 'press_key' && /^(Enter|NumpadEnter)$/i.test(a.key ?? '');
+      if ((a.action !== 'press_key' || enterNow) && isFinalStep(a.action, again, !!a.submit)) {
+        return err(wrapUntrusted('browser', `The element changed to "${again.name.slice(0, 80)}" while waiting — that now looks like a final step, so nothing was done. Take a new outline and try again.`));
+      }
+    } catch (e) { return err(wrapUntrusted('browser', mapActionError(e, a.ref))); }
+  }
   const t = Math.min(ACTION_TIMEOUT_MS, Math.max(1000, remaining(ctx) - 5000));
   try {
     switch (a.action) {
@@ -408,7 +429,7 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
         break;
     }
   } catch (e) {
-    return err(mapActionError(e, a.ref));
+    return err(wrapUntrusted('browser', mapActionError(e, a.ref)));
   }
   await settle(page);
   const now = await env.service.activePage(sid, false) ?? page;
@@ -479,7 +500,9 @@ async function tabs(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserTabs
 
 async function waitFor(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserWait'>): Promise<RunResult> {
   const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
-  const cap = Math.max(0, Math.min(30_000, remaining(ctx) - 15_000));
+  // WHY at least 1000: Playwright reads a timeout of 0 as "wait forever", which
+  // would break the one-call budget (code review F3).
+  const cap = Math.max(1000, Math.min(30_000, remaining(ctx) - 15_000));
   let lead = '';
   try {
     if (a.text) {
@@ -508,10 +531,8 @@ async function askUser(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserA
     : env.service.ask(sid, { kind: 'handoff', message: a.message.slice(0, 300) }, { timeoutMs: wait, signal: ctx.signal });
   env.service.markUsed(sid);
   const answer = await pending;
-  if (answer === 'done' || answer === 'cant') {
-    // A window shown just for this hand-off goes back to how the person set it.
-    if (env.service.hasWindowOverride()) await env.service.setWindowOverride(null).catch(() => undefined);
-  }
+  // (A window shown just for this hand-off is hidden again by the service
+  // whenever the hand-off ends — browser-service.ts endWindowOverride.)
   if (answer === 'done') {
     const page = await env.service.activePage(sid, false);
     if (!page) return { text: 'The user says they\'re done. No tab is open now.' };
@@ -524,29 +545,36 @@ async function askUser(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserA
 
 // ── navigation guard ─────────────────────────────────────────────────────────
 
-/** Stop a tab's MAIN-FRAME navigations (links, redirects, scripts) to an
- *  unapproved home-network address or a never-open address BEFORE the request
- *  is sent (design review 2 #5). CDP Fetch is enabled for Document requests
- *  only, so ordinary page resources (and the HTTP cache) are untouched.
- *  Requests a page's own scripts and images make are not covered (stated). */
+/** May a page or embedded page (iframe) load this address? Home-network
+ *  addresses need this conversation's approval (asked by BrowserNavigate);
+ *  metadata/link-local never. A tab no conversation owns yet gets no private
+ *  address at all. Requests a page's scripts and images make are not covered
+ *  (stated in the spec): only documents, which carry readable page text. */
+export async function navigationVerdict(env: RunnerEnv, sessionId: string | null, url: string): Promise<'allow' | 'block'> {
+  if (!/^https?:/i.test(url)) return 'allow'; // data:, about:, blob: — no network address
+  const cls = await classifyUrl(url, env.policy.lookup);
+  if (cls === 'public') return 'allow';
+  const key = hostPortKey(url);
+  if (cls === 'private' && sessionId && env.policy.localGranted(sessionId, key)) return 'allow';
+  if (sessionId) {
+    env.service.addNote(sessionId, cls === 'never'
+      ? `The browser stopped the page (or a part of it) from loading ${key}, a special network address that is never opened.`
+      : `The browser stopped the page (or a part of it) from loading ${key}, an address on this computer or the home network. To open it, use BrowserNavigate with that address — the user will be asked.`);
+  }
+  return 'block';
+}
+
+/** My Chrome only: the same check for one of the assistant's tabs, through CDP
+ *  Fetch on Document requests (main page AND iframes). A browser-wide route
+ *  would also intercept the person's own tabs. Awaited before the tab loads. */
 export async function installNavigationGuard(env: RunnerEnv, sessionId: string, page: Page): Promise<void> {
   try {
     const cdp = await page.context().newCDPSession(page);
-    const tree = await cdp.send('Page.getFrameTree') as { frameTree: { frame: { id: string } } };
-    const mainId = tree.frameTree.frame.id;
-    cdp.on('Fetch.requestPaused', (ev: { requestId: string; frameId: string; request: { url: string } }) => {
+    cdp.on('Fetch.requestPaused', (ev: { requestId: string; request: { url: string } }) => {
       void (async () => {
-        const cont = () => cdp.send('Fetch.continueRequest', { requestId: ev.requestId }).catch(() => undefined);
-        const url = ev.request.url;
-        if (ev.frameId !== mainId || !/^https?:/i.test(url)) return cont();
-        const cls = await classifyUrl(url, env.policy.lookup);
-        if (cls === 'public') return cont();
-        const key = hostPortKey(url);
-        if (cls === 'private' && env.policy.localGranted(sessionId, key)) return cont();
-        env.service.addNote(sessionId, cls === 'never'
-          ? `The browser stopped the page from going to ${key}, a special network address that is never opened.`
-          : `The browser stopped the page from going to ${key}, an address on this computer or the home network. To open it, use BrowserNavigate with that address — the user will be asked.`);
-        await cdp.send('Fetch.failRequest', { requestId: ev.requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
+        const verdict = await navigationVerdict(env, sessionId, ev.request.url).catch(() => 'block' as const);
+        if (verdict === 'allow') await cdp.send('Fetch.continueRequest', { requestId: ev.requestId }).catch(() => undefined);
+        else await cdp.send('Fetch.failRequest', { requestId: ev.requestId, errorReason: 'BlockedByClient' }).catch(() => undefined);
       })();
     });
     await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }] });

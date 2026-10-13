@@ -5,7 +5,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import BrowserPanel, { browserStatusWord } from '../src/renderer/components/browser/BrowserPanel';
 import BrowserHeaderButton from '../src/renderer/components/browser/BrowserHeaderButton';
 import { browserToolDisplay } from '../src/renderer/components/browser/browser-tool-display';
@@ -74,7 +74,7 @@ describe('Browser panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show window' }));
     expect(await screen.findByText(/Showing the window restarts the browser\. Pages reopen where they were, but anything typed and not yet sent is lost\. This also affects 2 other chats using the browser\./)).toBeInTheDocument();
     expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Restart and show' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Show window' }));
     await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(true));
   });
 

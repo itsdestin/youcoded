@@ -36,6 +36,8 @@ export function ensureBrowserStore(): void {
   if (started || !browserSupported()) return;
   started = true;
   bridge().onState((s: BrowserSessionState) => setBrowserState(s));
+  // An ended conversation's browser state is dropped (code review F15).
+  (globalThis as any).window?.claude?.on?.sessionDestroyed?.((id: string) => forgetBrowserSession(id));
 }
 
 export function setBrowserState(s: BrowserSessionState): void {
@@ -110,7 +112,7 @@ const primed = new Set<string>();
  *  renderer restarting) would forget a browser that is still open until the
  *  next change — the header button and panel vanished in the dev app
  *  (2026-10-13). main answers from its cache without starting anything. */
-export function primeBrowserState(sessionId: string | null | undefined): void {
+function primeBrowserState(sessionId: string | null | undefined): void {
   if (!sessionId || primed.has(sessionId) || states.has(sessionId) || !browserSupported()) return;
   primed.add(sessionId);
   ensureBrowserStore();

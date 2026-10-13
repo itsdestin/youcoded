@@ -17,6 +17,8 @@ import { Button, Callout, CloseButton, Dialog, EmptyState, ErrorState, LoadingSt
 import { GlobeIcon } from '../Icons';
 import { ScreenMark } from '../../shoot-mode';
 import { ContextMenu } from '../context-menu/ContextMenu';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
+import BrowserAskCard from './BrowserAskCard';
 
 function bridge() { return (window as any).claude.browser; }
 
@@ -87,6 +89,9 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const [confirmRestart, setConfirmRestart] = useState<null | boolean>(null);
   const [switching, setSwitching] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // On a narrow screen the panel covers the chat, so the browser's question is
+  // repeated here or it could never be seen (UX review 2, U1).
+  const narrow = useNarrowViewport();
 
   useEffect(() => {
     let live = true;
@@ -140,6 +145,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         <LivePicture sessionId={sessionId} title={active?.title ?? ''} />
         {state.tabs.length > 1 && (
           <ul className="text-2xs text-fg-muted px-1 space-y-0.5" aria-label="This conversation's tabs">
+            <li className="font-medium uppercase tracking-wide">Tabs {state.tabs.length}</li>
             {state.tabs.map((t) => (
               <li key={t.index} className={`truncate ${t.active ? 'text-fg-2 font-medium' : ''}`}>{t.title || hostOf(t.url)}</li>
             ))}
@@ -164,7 +170,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         <div className="min-w-0 flex-1 text-2xs text-fg-muted truncate select-text" title={active?.url}>
           {active ? <><span className="text-fg-2 font-medium">{host}</span>{active.url.slice(active.url.indexOf(host) + host.length)}</> : ' '}
         </div>
-        {!myChrome && (
+        {!myChrome && state?.run !== 'error' && (
           <Button variant="secondary" size="sm" onClick={onWindowButton} disabled={switching}>
             {windowShown ? 'Hide window' : 'Show window'}
           </Button>
@@ -183,18 +189,19 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           onClose={() => setMenuAt(null)}
           entries={[
             { type: 'item', id: 'copy-address', label: 'Copy address', icon: 'link', disabled: !active, run: () => { if (active) void navigator.clipboard?.writeText(active.url).catch(() => {}); } },
-            { type: 'item', id: 'stop-chat', label: 'Stop for this chat', icon: 'stop', disabled: !state?.tabs.length, run: () => { void bridge().closeSession(sessionId); } },
+            { type: 'item', id: 'stop-chat', label: 'Stop browsing in this chat', icon: 'stop', disabled: !state?.tabs.length, run: () => { void bridge().closeSession(sessionId); } },
           ]}
         />
       )}
       {info && !info.settings.explainerSeen && (
         <Callout className="mx-3 mb-2" title="The assistant's own browser">
-          <p>It's private: separate from your own browser, your other tabs and your sign-ins. Anything you sign into here is remembered for next time. Use Show window if you'd like to watch it in a real window.</p>
+          <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in next time. Press Show window to watch it in a real window.</p>
           <div className="flex justify-end mt-2">
             <Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>
           </div>
         </Callout>
       )}
+      {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}
       <Dialog
         open={confirmRestart !== null}
@@ -209,7 +216,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         </p>
         <div className="flex justify-end gap-2 mt-4">
           <Button variant="secondary" onClick={() => setConfirmRestart(null)}>Cancel</Button>
-          <Button variant="primary" onClick={() => void applyWindow(!!confirmRestart)}>{confirmRestart ? 'Restart and show' : 'Restart and hide'}</Button>
+          <Button variant="primary" onClick={() => void applyWindow(!!confirmRestart)}>{confirmRestart ? 'Show window' : 'Hide window'}</Button>
         </div>
       </Dialog>
     </div>

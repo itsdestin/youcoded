@@ -29,7 +29,7 @@ describe('Browser ask card', () => {
   it('site permission: for this chat by default, Always as a second choice, Not now', async () => {
     const b = show({ kind: 'site', id: 'p1', host: 'github.com', allowAlways: true, message: 'Let the assistant click and type on github.com?' });
     expect(screen.getByText('Let the assistant click and type on github.com?')).toBeInTheDocument();
-    expect(screen.getByText(/It will ask again before anything that sends, buys or deletes/)).toBeInTheDocument();
+    expect(screen.getByText(/It still asks before sending, buying or deleting/)).toBeInTheDocument();
     // Each answer disables the buttons until it is sent; wait for them to come back.
     for (const [name, answer] of [['Always allow github.com', 'allow_always'], ['Allow for this chat', 'allow_chat'], ['Not now', 'no']] as const) {
       await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
@@ -54,12 +54,12 @@ describe('Browser ask card', () => {
   it('needs you: I\'m done, Can\'t do this, open a window to sign in, show the browser', async () => {
     const b = show({ kind: 'handoff', id: 'p3', message: 'Please sign in to your library account.' });
     expect(screen.getByText('The assistant needs you in the browser')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open window to sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show window' }));
     expect(b.bridge.openWindowForHandoff).toHaveBeenCalledWith('s1');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Show the browser' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Show the browser' }));
     expect(isBrowserPaneOpen('s1')).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Can\'t do this' }));
+    fireEvent.click(screen.getByRole('button', { name: 'I can\'t do this' }));
     expect(b.bridge.answer).toHaveBeenCalledWith('s1', 'p3', 'cant');
     await waitFor(() => expect(screen.getByRole('button', { name: 'I\'m done' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'I\'m done' }));
@@ -68,7 +68,7 @@ describe('Browser ask card', () => {
 
   it('needs you, with the window already shown: no "Open window" button', () => {
     show({ kind: 'handoff', id: 'p3', message: 'Sign in please.' }, { windowShown: true });
-    expect(screen.queryByRole('button', { name: 'Open window to sign in' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show window' })).toBeNull();
   });
 
   it('no browser: Download, then progress with Cancel', () => {
@@ -83,7 +83,7 @@ describe('Browser ask card', () => {
 
   it('home-network address: explains why it asks', () => {
     show({ kind: 'local', id: 'p5', host: '192.168.1.1:80', message: 'The assistant wants to open 192.168.1.1:80, an address on this computer or your home network.' });
-    expect(screen.getByText(/can control devices or programs on your network/)).toBeInTheDocument();
+    expect(screen.getByText(/can control your router, your devices or programs/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Allow for this chat' })).toBeInTheDocument();
   });
 });

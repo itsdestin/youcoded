@@ -37,6 +37,16 @@ describe('Settings → Browser', () => {
     expect(await screen.findByText('Chrome is ready.')).toBeInTheDocument();
   });
 
+  it('asks first when switching would restart the browser for chats with pages open', async () => {
+    const b = installBrowserBridge(browserInfo({ sessionsWithTabs: 2 }));
+    render(<BrowserSettingsDialog onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('switch', { name: 'Show a browser window' }));
+    expect(screen.getByText(/This restarts the browser for 2 chats using it/)).toBeInTheDocument();
+    expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show window' }));
+    await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(true));
+  });
+
   it('lists the always-allowed sites, each removable', async () => {
     const b = installBrowserBridge(browserInfo({ settings: { ...browserInfo().settings, alwaysAllowedSites: ['github.com'] } }));
     render(<BrowserSettingsDialog onClose={() => {}} />);

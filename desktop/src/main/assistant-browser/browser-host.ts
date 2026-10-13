@@ -14,7 +14,7 @@ import { BrowserService, firstLine } from './browser-service';
 import { BrowserSettings } from './browser-settings';
 import { BrowserInstaller, playwrightCliPath } from './browser-installer';
 import { discoverBrowsers, defaultDiscoveryEnv, pickBrowser, type FoundBrowser } from './browser-discovery';
-import { BrowserPolicy, installNavigationGuard, runBrowserTool, type RunnerEnv } from './browser-tool-runners';
+import { BrowserPolicy, installNavigationGuard, navigationVerdict, runBrowserTool, type RunnerEnv } from './browser-tool-runners';
 import { findMyChrome } from './browser-my-chrome';
 import type { BrowserCommand, MainToWorker, WorkerToMain } from './browser-protocol';
 import type { BrowserInfo } from '../../shared/browser-types';
@@ -50,6 +50,9 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
     forceHeadless: hostOpts.forceHeadless,
     log,
     findMyChrome: () => findMyChrome(),
+    // The page-load check (home network / metadata), for every page and iframe.
+    requestGuard: (sid, url) => navigationVerdict(env, sid, url),
+    guardPage: (sid, page) => installNavigationGuard(env, sid, page),
     getLaunchConfig: async () => {
       const prefs = await settings.read();
       return { showWindow: prefs.showWindow, myChrome: prefs.useMyChrome, browser: pickBrowser(await discover(), prefs.preferredBrowser) };
@@ -73,8 +76,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
   const env: RunnerEnv = { service, settings, installer, policy: new BrowserPolicy() };
   service.on('state', (state) => send({ t: 'state', state }));
   service.on('frame', (frame) => send({ t: 'frame', frame }));
-  service.on('page-adopted', (sid: string, page) => { void installNavigationGuard(env, sid, page); });
-  void service.pruneShots(SHOT_MAX_AGE_MS);
+  void service.pruneOld(SHOT_MAX_AGE_MS);
 
   const calls = new Map<number, AbortController>();
 
@@ -126,9 +128,9 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
       case 'clear-signins': {
         // Signing out of everything = the browser's whole storage. Stop first:
         // Chrome holds the folder open.
-        await service.stop();
         const fs = await import('fs');
-        await fs.promises.rm(path.join(rootDir, 'profile'), { recursive: true, force: true, maxRetries: 5 });
+        // Nothing may start the browser while its folder is being removed.
+        await service.withStartsBlocked(() => fs.promises.rm(path.join(rootDir, 'profile'), { recursive: true, force: true, maxRetries: 5 }));
         send({ t: 'info-changed' });
         return info();
       }

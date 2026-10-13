@@ -24,17 +24,17 @@ export function browserCardCopy(p: BrowserPrompt): Copy {
       return {
         title: p.message,
         body: p.allowAlways === false
-          ? 'This is your own Chrome, where you\'re signed in. It will ask again before anything that sends, buys or deletes.'
-          : 'It will click buttons and type on this site in the assistant\'s own browser. It will ask again before anything that sends, buys or deletes.',
+          ? 'This is your own Chrome, where you\'re signed in. It still asks before sending, buying or deleting.'
+          : 'It still asks before sending, buying or deleting.',
       };
     case 'final':
       return { title: p.message, body: 'This looks like a step that buys, sends, posts, deletes or submits something. It only happens if you allow it.' };
     case 'local':
-      return { title: p.message, body: 'Pages like this can control devices or programs on your network, such as your router or something you\'re running.' };
+      return { title: p.message, body: 'These pages can control your router, your devices or programs you\'re running.' };
     case 'handoff':
       return { title: 'The assistant needs you in the browser', body: p.message };
     case 'no-browser':
-      return { title: 'The assistant needs a browser', body: p.message };
+      return { title: 'Browser needed', body: 'YouCoded can download one for the assistant (about 150 MB, kept inside YouCoded).' };
   }
 }
 
@@ -92,7 +92,7 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
     case 'final':
       actions = (
         <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't</Button>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
           <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('once')}>Allow this once</Button>
         </>
       );
@@ -100,7 +100,7 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
     case 'local':
       actions = (
         <>
-          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't</Button>
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('no')}>Don't allow</Button>
           <Button variant="primary" size="sm" disabled={sending} onClick={() => void answer('allow_chat')}>Allow for this chat</Button>
         </>
       );
@@ -108,9 +108,9 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
     case 'handoff':
       actions = (
         <>
-          <Button variant="ghost" size="sm" disabled={sending} onClick={() => void answer('cant')}>Can't do this</Button>
+          <Button variant="ghost" size="sm" disabled={sending} onClick={() => void answer('cant')}>I can't do this</Button>
           {!state?.windowShown && !state?.myChrome && (
-            <Button variant="secondary" size="sm" disabled={sending} onClick={() => void openWindow()}>Open window to sign in</Button>
+            <Button variant="secondary" size="sm" disabled={sending} onClick={() => void openWindow()}>Show window</Button>
           )}
           {!paneOpen && (
             <Button variant="secondary" size="sm" disabled={sending} onClick={() => openBrowserPane(sessionId)}>Show the browser</Button>

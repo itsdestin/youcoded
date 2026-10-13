@@ -85,9 +85,9 @@ describe('a native session using the Browser', () => {
       tools: [],
       mcpServers: [],
       profile: { ...CLOUD_DEFAULT, supportsVision: true },
-      toolServices: { browser: { callTool: (sid, tool, args, opts) => client.callTool(sid, tool, args, opts) } },
-      decide: async (tool, subject) => decidePermission(tool, subject, layers),
-      askUser: async (req) => { sessionAsks.push(req.toolName ?? String(req)); return { action: 'deny' } as any; },
+      toolServices: { browser: { callTool: (sid: string, tool: string, args: unknown, opts: { signal?: AbortSignal; vision: boolean }) => client.callTool(sid, tool, args, opts) } },
+      decide: async (tool: string, subject: string | undefined) => decidePermission(tool, subject, layers),
+      askUser: async (req: { toolName?: string }) => { sessionAsks.push(req.toolName ?? String(req)); return { action: 'deny' } as any; },
     } as any), async () => model as any);
     const events: TranscriptEvent[] = [];
     session.on('transcript-event', (e: TranscriptEvent) => events.push(e));

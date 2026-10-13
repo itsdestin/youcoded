@@ -58,6 +58,19 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
     setChecking(false);
   }, []);
 
+  // Showing/hiding the window or switching browsers restarts the browser for
+  // EVERY chat — ask first when pages are open, like the panel does (code
+  // review F13, UX review 2 U4).
+  const [pending, setPending] = useState<null | { kind: 'window' | 'mychrome'; value: boolean }>(null);
+  const apply = useCallback((p: { kind: 'window' | 'mychrome'; value: boolean }) => {
+    setPending(null);
+    void run(() => (p.kind === 'window' ? bridge().setShowWindow(p.value) : bridge().updateSettings({ useMyChrome: p.value })));
+  }, [run]);
+  const confirmThen = useCallback((p: { kind: 'window' | 'mychrome'; value: boolean }) => {
+    if (p.kind === 'mychrome' && p.value === !!info?.settings.useMyChrome) return;
+    if ((info?.sessionsWithTabs ?? 0) > 0) setPending(p); else apply(p);
+  }, [info, apply]);
+
   const s = info?.settings;
   const which = s?.useMyChrome ? 'my-chrome' : 'own';
 
@@ -69,22 +82,22 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="space-y-5">
           <section className="space-y-2">
             <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Which browser?</h3>
-            <RadioGroup options={WHICH} value={which} onChange={(v) => void run(() => bridge().updateSettings({ useMyChrome: v === 'my-chrome' }))} aria-label="Which browser">
+            <RadioGroup options={WHICH} value={which} onChange={(v) => confirmThen({ kind: 'mychrome', value: v === 'my-chrome' })} aria-label="Which browser">
               <div className="space-y-1">
               <SettingRow
                 variant="item"
                 title="The assistant's own browser (recommended)"
                 description="Private: separate from your own browser and sign-ins. Sign-ins you make in it are remembered on this computer and shared by all your chats."
                 selected={which === 'own'}
-                onSelect={() => void run(() => bridge().updateSettings({ useMyChrome: false }))}
+                onSelect={() => confirmThen({ kind: 'mychrome', value: false })}
                 radioTabIndex={which === 'own' ? 0 : -1}
               />
               <SettingRow
                 variant="item"
                 title="My Chrome (Experimental)"
-                description="The assistant opens its own tabs in your running Chrome, where you're signed in — so it can act as you on those sites. It asks before opening each new site."
+                description="Uses your open Chrome and your sign-ins, so the assistant can act as you. It asks before opening each new site."
                 selected={which === 'my-chrome'}
-                onSelect={() => void run(() => bridge().updateSettings({ useMyChrome: true }))}
+                onSelect={() => confirmThen({ kind: 'mychrome', value: true })}
                 radioTabIndex={which === 'my-chrome' ? 0 : -1}
               />
               </div>
@@ -107,17 +120,16 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
                 // item: the description is real guidance and must wrap, not cut (nav rows truncate).
                 variant="item"
                 title="Show a browser window"
-                description={s.showWindow
-                  ? 'On: a real browser window opens so you can watch and sign in.'
-                  : 'Off: the assistant works out of sight. You can follow along in the chat\'s Browser panel.'}
-                control={<Toggle checked={s.showWindow} disabled={busy} aria-label="Show a browser window" onChange={(v) => void run(() => bridge().setShowWindow(v))} />}
+                // One sentence for both states, so the row keeps its height when switched (UX review 2, U15).
+                description="On: a real window you can watch. Off: hidden — follow along in the chat's Browser panel."
+                control={<Toggle checked={s.showWindow} disabled={busy} aria-label="Show a browser window" onChange={(v) => confirmThen({ kind: 'window', value: v })} />}
               />
               {info.browsers.length >= 2 ? (
                 // A labelled field rather than a row control: a dropdown beside the title
                 // squeezed the title onto three lines at dialog width.
                 <div className="rounded-lg bg-inset p-3 space-y-1.5">
-                  <div className="text-sm text-fg font-medium">Browser program</div>
-                  <div className="text-2xs text-fg-muted">Which installed browser the assistant uses.</div>
+                  <div className="text-sm text-fg font-medium">Browser to use</div>
+                  <div className="text-2xs text-fg-muted">Which browser on this computer the assistant uses.</div>
                   <Select
                     size="sm"
                     value={s.preferredBrowser ?? info.chosen?.kind ?? info.browsers[0].kind}
@@ -172,6 +184,7 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
             <section className="space-y-2">
               <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Saved sign-ins</h3>
               <SettingRow
+                variant="item"
                 title="Clear saved sign-ins"
                 description="Signs the assistant's browser out of every site. Saved on this computer only."
                 control={<Button variant="danger-outline" size="sm" disabled={busy} onClick={() => setConfirmClear(true)}>Clear</Button>}
@@ -186,6 +199,24 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
           )}
         </div>
       )}
+      <Dialog
+        open={pending !== null}
+        onClose={() => setPending(null)}
+        title={pending?.kind === 'window' ? (pending.value ? 'Show the browser window?' : 'Hide the browser window?') : 'Switch browsers?'}
+        size="prompt"
+        layer={3}
+        noScreen="a two-button confirm inside Settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
+      >
+        <p className="text-sm text-fg-2">
+          {pending?.kind === 'window'
+            ? `This restarts the browser for ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'} using it. Pages reopen where they were, but anything typed and not yet sent is lost.`
+            : `This closes the pages the assistant has open in ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'}.`}
+        </p>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button>
+          <Button variant="primary" onClick={() => pending && apply(pending)}>{pending?.kind === 'window' ? (pending.value ? 'Show window' : 'Hide window') : 'Switch'}</Button>
+        </div>
+      </Dialog>
       <Dialog
         open={confirmClear}
         onClose={() => setConfirmClear(false)}

@@ -16,7 +16,7 @@
 //   app quit close it.
 // - Show/hide window is app-wide (one process cannot be both): restart() waits
 //   briefly for in-flight calls, reopens every tab by address, and bumps
-//   `generation` so the next result can say element refs went stale.
+//   adds a note to each conversation's next result that element refs went stale.
 // - Asks to the person (site permission, final step, sign-in hand-off, …) are
 //   PROMPTS owned here, drawn as a card by the screen, answered over IPC. One
 //   prompt per conversation at a time.
@@ -33,6 +33,8 @@ const BROWSER_IDLE_MS = 5 * 60_000;
 const RESTART_DRAIN_MS = 10_000;
 /** A hidden browser renders a common laptop-sized page so sites serve desktop layouts. */
 const BACKGROUND_VIEWPORT = { width: 1280, height: 800 } as const;
+/** Files kept per conversation's download folder. */
+const MAX_DOWNLOADS = 20;
 /** Picture rate cap; each frame also waits for the screen's ack. */
 const MIN_FRAME_GAP_MS = 100;
 
@@ -56,6 +58,14 @@ export interface BrowserServiceOptions {
   findMyChrome?: () => Promise<{ wsEndpoint: string } | { error: string }>;
   log?: (level: 'INFO' | 'WARN' | 'ERROR', msg: string, data?: Record<string, unknown>) => void;
   platform?: NodeJS.Platform;
+  /** Decides whether a page or embedded page may load an address (home network /
+   *  metadata, browser-tool-runners.ts navigationVerdict). `sessionId` is null for
+   *  a tab no conversation owns yet. */
+  requestGuard?: (sessionId: string | null, url: string) => Promise<'allow' | 'block'>;
+  /** My Chrome only: guard one of the assistant's tabs (CDP, per tab — a
+   *  browser-wide route there would also touch the person's own tabs). Awaited
+   *  before the tab loads anything. */
+  guardPage?: (sessionId: string, page: Page) => Promise<void>;
   /** Test seams. */
   sessionIdleMs?: number;
   browserIdleMs?: number;
@@ -66,6 +76,15 @@ export interface BrowserServiceOptions {
 export class BrowserUnavailableError extends Error {
   constructor(message: string, readonly code: 'no-browser' | 'start-failed' | 'my-chrome' | 'other' = 'other') { super(message); }
 }
+
+/** Which answers each kind of card offers (BrowserAskCard.tsx). */
+const ANSWERS_BY_KIND: Record<BrowserPrompt['kind'], readonly PromptAnswer[]> = {
+  site: ['allow_chat', 'allow_always', 'no'],
+  final: ['once', 'no'],
+  local: ['allow_chat', 'no'],
+  handoff: ['done', 'cant'],
+  'no-browser': ['download', 'no'],
+};
 
 interface SessionEntry {
   pages: Page[];
@@ -79,10 +98,7 @@ interface SessionEntry {
   /** Addresses to report/reopen after the browser closed under the conversation. */
   lastUrls: string[];
   queue: Promise<unknown>;
-  lastCall: number;
   idleTimer: NodeJS.Timeout | null;
-  /** The browser generation the conversation's last outline came from. */
-  seenGeneration: number;
 }
 
 let promptSeq = 0;
@@ -106,8 +122,6 @@ export class BrowserService extends EventEmitter {
   private readonly watchers = new Map<string, LiveView>();
   private readonly blankToClose = new Set<Page>();
   private shotSeq = 0;
-  /** Bumped by every (re)start: element refs from an older generation are stale. */
-  generation = 0;
   downloadPercent: number | null = null;
   /** While a hand-off asked for a window, the browser runs shown regardless of settings. */
   private windowOverride: boolean | null = null;
@@ -122,7 +136,7 @@ export class BrowserService extends EventEmitter {
   private entry(sessionId: string): SessionEntry {
     let e = this.sessions.get(sessionId);
     if (!e) {
-      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), lastCall: 0, idleTimer: null, seenGeneration: 0 };
+      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null };
       this.sessions.set(sessionId, e);
     }
     return e;
@@ -183,13 +197,11 @@ export class BrowserService extends EventEmitter {
       await prev.catch(() => undefined);
       e.busy++;
       e.used = true;
-      e.lastCall = Date.now();
       this.clearSessionIdle(e);
       if (e.busy === 1) this.emitState(sessionId);
       return await fn();
     } finally {
       e.busy--;
-      e.lastCall = Date.now();
       this.armSessionIdle(sessionId, e);
       release();
       this.emitState(sessionId);
@@ -236,6 +248,7 @@ export class BrowserService extends EventEmitter {
   /** The live context, starting the browser if needed. */
   async ensureContext(): Promise<BrowserContext> {
     if (this.context) return this.context;
+    if (this.startsBlocked) throw new BrowserUnavailableError('The browser is signing out of every site right now. Try again in a moment.');
     if (!this.starting) this.starting = this.start().finally(() => { this.starting = null; });
     return this.starting;
   }
@@ -247,8 +260,11 @@ export class BrowserService extends EventEmitter {
     try {
       const cfg = await this.opts.getLaunchConfig();
       const ctx = cfg.myChrome ? await this.startMyChrome() : await this.launchOwn(this.windowOverride ?? cfg.showWindow, cfg.browser);
+      // Own browser: every page and embedded-page load is checked at the context,
+      // from the very first request — a popup or iframe can't slip past
+      // (code review F1/F2). Not in My Chrome: the context there is the person's.
+      if (!cfg.myChrome && this.opts.requestGuard) await this.installRequestGuard(ctx, this.opts.requestGuard);
       this.context = ctx;
-      this.generation++;
       this.run = 'running';
       this.closingOnPurpose = false;
       ctx.on('page', (p) => this.adoptPopup(p));
@@ -258,6 +274,10 @@ export class BrowserService extends EventEmitter {
       this.emitAll();
       return ctx;
     } catch (err) {
+      // A half-made My Chrome connection must not linger (code review F4).
+      const half = this.connected;
+      this.connected = null;
+      if (half) await half.close().catch(() => undefined);
       this.run = 'error';
       const known = err instanceof BrowserUnavailableError;
       this.lastError = known ? err.message : startFailureMessage(err);
@@ -323,11 +343,25 @@ export class BrowserService extends EventEmitter {
     }
     this.connected = browser;
     const ctx = browser.contexts()[0];
+    // (start()'s catch closes `connected` on this throw.)
     if (!ctx) throw new BrowserUnavailableError('Chrome is connected but has no open window. Open a Chrome window and try again.', 'my-chrome');
     this.windowShown = true;
     this.myChrome = true;
     this.browserLabel = 'My Chrome';
     return ctx;
+  }
+
+  /** Check each Document request (a page or an embedded page) before it is sent. */
+  private async installRequestGuard(ctx: BrowserContext, guard: NonNullable<BrowserServiceOptions['requestGuard']>): Promise<void> {
+    await ctx.route('**/*', async (route) => {
+      const req = route.request();
+      if (req.resourceType() !== 'document') return route.continue().catch(() => undefined);
+      let sid: string | null = null;
+      try { sid = this.owner.get(req.frame().page()) ?? null; } catch { /* a worker's request has no frame */ }
+      const verdict = await guard(sid, req.url()).catch(() => 'block' as const);
+      if (verdict === 'allow') return route.continue().catch(() => undefined);
+      return route.abort('blockedbyclient').catch(() => undefined);
+    });
   }
 
   private onContextClosed(ctx: BrowserContext): void {
@@ -359,7 +393,12 @@ export class BrowserService extends EventEmitter {
   async stop(): Promise<void> {
     if (this.starting) await this.starting.catch(() => undefined);
     const ctx = this.context;
-    if (!ctx) return;
+    if (!ctx) {
+      // Retry after a failed start: clear the error so the next call starts
+      // afresh and the panel stops showing it (code review F6).
+      if (this.run === 'error') { this.run = 'stopped'; this.lastError = null; this.emitAll(); }
+      return;
+    }
     this.closingOnPurpose = true;
     for (const e of this.sessions.values()) {
       if (e.pages.length) e.lastUrls = e.pages.map((p) => p.url()).filter(isReopenable);
@@ -422,6 +461,23 @@ export class BrowserService extends EventEmitter {
 
   hasWindowOverride(): boolean { return this.windowOverride !== null; }
 
+  private endWindowOverride(): void {
+    if (this.windowOverride === null) return;
+    void this.setWindowOverride(null).catch((err) => this.log('WARN', 'Browser: could not hide the sign-in window', { error: firstLine(err) }));
+  }
+
+  /** While true, nothing may start the browser (clearing sign-ins deletes its folder). */
+  private startsBlocked = false;
+
+  /** Run `fn` with the browser stopped and unable to start (code review F14). */
+  async withStartsBlocked<T>(fn: () => Promise<T>): Promise<T> {
+    this.startsBlocked = true;
+    try {
+      await this.stop();
+      return await fn();
+    } finally { this.startsBlocked = false; }
+  }
+
   // ── tabs ─────────────────────────────────────────────────────────────────
 
   /** Open a new tab owned by `sessionId` and make it active. */
@@ -429,6 +485,7 @@ export class BrowserService extends EventEmitter {
     const ctx = await this.ensureContext();
     const page = await ctx.newPage();
     this.adopt(sessionId, page);
+    if (this.connected && this.opts.guardPage) await this.opts.guardPage(sessionId, page);
     for (const b of this.blankToClose) { this.blankToClose.delete(b); void b.close().catch(() => undefined); }
     return page;
   }
@@ -454,8 +511,6 @@ export class BrowserService extends EventEmitter {
     });
     page.on('download', (dl) => { void this.saveDownload(sessionId, dl); });
     page.on('crash', () => { e.notes.push('A tab crashed. Reopen the page to continue.'); });
-    // browser-host.ts installs the navigation guard (browser-tool-runners.ts) here.
-    this.emit('page-adopted', sessionId, page);
     this.emitState(sessionId);
     this.retargetWatcher(sessionId);
   }
@@ -468,6 +523,7 @@ export class BrowserService extends EventEmitter {
       const sid = opener ? this.owner.get(opener) : undefined;
       if (sid) {
         this.adopt(sid, page);
+        if (this.connected && this.opts.guardPage) void this.opts.guardPage(sid, page);
         this.entry(sid).notes.push(`A new tab opened (now the active tab): ${page.url() || 'loading…'}`);
       } else if (this.connected) {
         // My Chrome: the person's own new tabs are theirs; never adopt them.
@@ -560,6 +616,7 @@ export class BrowserService extends EventEmitter {
       const dir = path.join(this.opts.rootDir, 'downloads', safeId(sessionId));
       const target = await uniquePath(dir, name);
       await dl.saveAs(target);
+      await this.capDownloads(dir);
       const program = /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|app|dmg|pkg|sh|run|appimage|deb|rpm)$/i.test(name);
       e.notes.push(`Downloaded a file to ${target}${program ? ' — this is a program; do not open or run it, and warn the person before handing it over' : ''}. Hand it to the person with the file-sharing tool if they want it.`);
     } catch (err) {
@@ -574,16 +631,30 @@ export class BrowserService extends EventEmitter {
     return path.join(dir, `${safeId(sessionId)}-${Date.now()}-${this.shotSeq}.jpg`);
   }
 
-  /** Delete screenshots older than `maxAgeMs` (they can show signed-in pages). */
-  async pruneShots(maxAgeMs: number): Promise<void> {
-    const dir = path.join(this.opts.rootDir, 'shots');
-    let names: string[];
-    try { names = await fs.promises.readdir(dir); } catch { return; }
+  /** Delete screenshots and downloads older than `maxAgeMs` (screenshots can
+   *  show signed-in pages; a page can download on its own — code review F12). */
+  async pruneOld(maxAgeMs: number): Promise<void> {
     const cutoff = Date.now() - maxAgeMs;
-    for (const n of names) {
-      const p = path.join(dir, n);
-      try { if ((await fs.promises.stat(p)).mtimeMs < cutoff) await fs.promises.rm(p, { force: true }); } catch { /* raced */ }
-    }
+    const sweep = async (dir: string): Promise<void> => {
+      let names: fs.Dirent[];
+      try { names = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const d of names) {
+        const p = path.join(dir, d.name);
+        if (d.isDirectory()) { await sweep(p); continue; }
+        try { if ((await fs.promises.stat(p)).mtimeMs < cutoff) await fs.promises.rm(p, { force: true }); } catch { /* raced */ }
+      }
+    };
+    await sweep(path.join(this.opts.rootDir, 'shots'));
+    await sweep(path.join(this.opts.rootDir, 'downloads'));
+  }
+
+  /** At most MAX_DOWNLOADS files per conversation; the oldest go first. */
+  private async capDownloads(dir: string): Promise<void> {
+    try {
+      const files = await Promise.all((await fs.promises.readdir(dir)).map(async (n) => ({ p: path.join(dir, n), t: (await fs.promises.stat(path.join(dir, n))).mtimeMs })));
+      files.sort((a, b) => a.t - b.t);
+      for (const f of files.slice(0, Math.max(0, files.length - MAX_DOWNLOADS))) await fs.promises.rm(f.p, { force: true });
+    } catch { /* best effort */ }
   }
 
   // ── prompts: the person decides ──────────────────────────────────────────
@@ -626,6 +697,10 @@ export class BrowserService extends EventEmitter {
           e.prompt = null;
           this.emitState(sessionId);
         }
+        // A sign-in window shown just for this hand-off goes back to how the
+        // person set it whenever the hand-off ends — done, can't, or withdrawn
+        // (code review F5). Not on 'timeout': the card is still up.
+        if (prompt.kind === 'handoff' && a !== 'timeout') this.endWindowOverride();
         resolve(a);
       };
       const resolver = (a: PromptAnswer | 'cancelled' | 'timeout') => finish(a, true);
@@ -643,10 +718,16 @@ export class BrowserService extends EventEmitter {
   answerPrompt(sessionId: string, id: string, answer: PromptAnswer): boolean {
     const e = this.sessions.get(sessionId);
     if (!e?.prompt || e.prompt.id !== id) return false;
+    // Only the answers a card offers count for it — a stray 'done' must never
+    // read as permission on a final-step card (code review F8).
+    if (!ANSWERS_BY_KIND[e.prompt.kind].includes(answer)) return false;
     if (e.promptResolve) {
       e.promptResolve(answer);
     } else {
-      if (e.prompt.kind === 'handoff') e.notes.push(answer === 'done' ? 'The person said they are done.' : 'The person said they can\'t do this step.');
+      if (e.prompt.kind === 'handoff') {
+        e.notes.push(answer === 'done' ? 'The person said they are done.' : 'The person said they can\'t do this step.');
+        this.endWindowOverride();
+      }
       e.prompt = null;
       this.emitState(sessionId);
     }
@@ -804,7 +885,7 @@ export async function clearStaleProfileLock(profileDir: string, platform: NodeJS
 function startFailureMessage(err: unknown): string {
   const m = firstLine(err);
   if (/ProcessSingleton|profile.*in use|SingletonLock/i.test(m)) {
-    return 'The browser couldn\'t start because its saved data is in use by another copy of YouCoded. Close the other copy and try again.';
+    return 'The browser couldn\'t start because another YouCoded window is already using it. Close the other YouCoded and try again.';
   }
   return `The browser couldn't start: ${m}`;
 }
