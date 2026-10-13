@@ -137,8 +137,8 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
   return (
     // D1: header, close and scroll body come from the Dialog.
     // Headed sections: Themes · Layout (with the Additional customizations fold) ·
-    // Effects & chat. space-y-5 kept as it was; only the fold's contents changed.
-    <div className="space-y-5">
+    // Effects & chat. WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4).
+    <div className="space-y-4">
       <section className="space-y-2">
         {/* WHY SectionLabel, not the SECTION_LABEL class string (labels batch,
             guide: no spaced capitals — decisions H-3/L-1…L-4); the constant

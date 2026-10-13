@@ -1775,8 +1775,7 @@ function RemoteButton(props: RemoteButtonProps) {
           The main view used to paint its own — an h2, a CloseButton, and a
           `.scroll-fade flex-1` wrapper — which is the exact set of things D1
           exists to own, and the exact set two of SettingsPopup's seven callers
-          got wrong. `space-y-6` rather than Dialog's default `space-y-5`, so
-          the section rhythm here is unchanged. */}
+          got wrong. The body keeps the Dialog's own 16px group gap. */}
       <Dialog screen="settings/remote"
         open={open}
         onClose={() => setOpen(false)}

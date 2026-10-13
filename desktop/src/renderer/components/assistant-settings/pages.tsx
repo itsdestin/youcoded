@@ -258,11 +258,10 @@ function GeneralPage(ctx: PageContext) {
   );
 
   return (
-    // WHY space-y-4/space-y-1.5: design guide "Settings" → Spacing (16px
-    // between groups, 6px between rows), decisions.md SA-4 — was space-y-5/
-    // space-y-2 (20px/8px).
+    // WHY space-y-4/space-y-2: 16px between groups, 8px between rows (decisions
+    // "Popup spacing", SP-5, which superseded SA-4's 6px).
     <div className="space-y-4">
-      <section className="space-y-1.5">
+      <section className="space-y-2">
         {/* Q-3a: the same picker the chat uses, so any connected model can be
             the default. Title and hint are Destin's words from round 1 (P-3
             note). */}

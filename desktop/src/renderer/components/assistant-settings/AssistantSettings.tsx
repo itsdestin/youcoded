@@ -356,9 +356,10 @@ function ExplainerBody({ intro, sections }: { intro: string; sections: NonNullab
   const ref = useScrollFade<HTMLDivElement>();
   return (
     <div ref={ref} className="scroll-fade flex-1">
-      {/* space-y-5: the explainer renders bare sections and relies on the
-          dialog body's track for its rhythm; this track stands in for it. */}
-      <div className="px-4 py-4 space-y-5">
+      {/* space-y-4: the explainer renders bare sections and relies on the
+          dialog body's track for its rhythm (16px, the guide's group gap); this
+          track stands in for it. */}
+      <div className="px-4 py-4 space-y-4">
         <SettingsExplainer intro={intro} sections={sections} />
       </div>
     </div>

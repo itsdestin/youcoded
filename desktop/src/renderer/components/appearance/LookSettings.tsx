@@ -216,7 +216,8 @@ const GLASS_SLIDERS: { field: GlassField; label: string; min: number; max: numbe
  *  full width below — the design guide's rule for a set of choices (SA-1 "mixed"). */
 function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="space-y-1.5">
+    // WHY space-y-2: 8px between neighbouring rows (decisions "Popup spacing", SP-5; was 6px).
+    <div className="space-y-2">
       <div>
         <div className="text-xs font-medium text-fg">{title}</div>
         {hint && <p className="text-3xs text-fg-muted">{hint}</p>}
@@ -269,7 +270,8 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
     : reducedEffects ? 'Blur is off while Reduce visual effects is on' : undefined;
 
   return (
-    <div className="space-y-1.5">
+    // WHY space-y-2: 8px between neighbouring rows (decisions "Popup spacing", SP-5; was 6px).
+    <div className="space-y-2">
       <StackedRow title="Glass" hint={hint}>
         <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
       </StackedRow>

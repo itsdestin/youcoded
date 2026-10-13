@@ -394,7 +394,8 @@ export default function PermissionsSection() {
     // labels below say what each part is, and everything the intro used to
     // explain now lives behind the (i) — see SettingsExplainer's module header:
     // this app puts prose in the explainer and controls in the body.
-    <section className="space-y-5">
+    // WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4; guide "Spacing") — was 20px.
+    <section className="space-y-4">
       {/* ── 1. One explanation, both bands ────────────────────────────────── */}
       {/* The modes and the always-asks list share ONE bg-inset/50 card, divided
           by rules into bands. This is the whole point of the merge: Full auto's

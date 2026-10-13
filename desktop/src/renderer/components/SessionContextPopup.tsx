@@ -144,7 +144,9 @@ function DetailCard({ header, children }: { header: React.ReactNode; children: R
   return (
     <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
       {header}
-      <div className="border-t border-edge-dim">{children}</div>
+      {/* WHY no border-t (final review F17; decisions "Card levels": no full-width line inside
+          a card) — the header's own padding separates it from the body. */}
+      <div>{children}</div>
     </div>
   );
 }
@@ -185,7 +187,8 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
           </p>
         )}
       </div>
-      <div className="border-t border-edge-dim">
+      {/* WHY no border-t (final review F17): no full-width line inside a card. */}
+      <div>
         {view === 'cut'
           // fill: this wrapper is already the scroll surface (max-h-64
           // overflow-y-auto) — without fill, UnifiedDiff stacked its own
@@ -380,7 +383,8 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
       subtitle="Its instructions, skills and tools for this chat."
       screen="chat/session-context"
     >
-      <div className="space-y-5">
+      {/* WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4; guide "Spacing") — was 20px. */}
+      <div className="space-y-4">
         {/* The tab strip scrolls sideways rather than squeezing, so no label is
             ever cut in half on a phone (review-5 S-3). */}
         <div className="-mx-1 px-1 overflow-x-auto">

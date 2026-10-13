@@ -783,14 +783,16 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
         {WIDGET_CATEGORIES.filter((cat) => cat.widgets.some((w) => !w.locked)).map((cat) => (
           <section key={cat.name}>
             <SectionLabel className="mb-2">{cat.name}</SectionLabel>
-            <div className={`${CARD_LEVEL_1} px-3 divide-y divide-edge-dim`}>
+            {/* WHY spaced rows, no divide-y (final review F17; decisions "Card levels": never a
+                full-width line inside a card) — 8px between rows (decisions "Popup spacing"). */}
+            <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
               {cat.widgets.map((w) => {
                 const reason = widgetUnavailableReason(w.id, relevance);
                 const on = !!w.locked || visible.has(w.id);
                 const hint = reason ?? firstSentence(w.description);
                 const canToggle = !w.locked && !reason;
                 return (
-                  <div key={w.id} className="py-1" data-widget-row={w.id}>
+                  <div key={w.id} data-widget-row={w.id}>
                     {/* The shared settings row (switch vertically centred beside title and
                         hint). A row that doesn't apply here is dimmed with its reason as the
                         hint and NO switch — not a control in this session; its saved choice

@@ -59,7 +59,7 @@ export default function SessionNaming() {
     void drainWrites();
   };
   // WHY: naming is a General option, so it uses the same level-1 card as FieldRow.
-  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`} aria-label="Session naming">
+  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`} aria-label="Session naming">
     <div className="flex items-center gap-1"><h3 className="text-xs font-medium text-fg">Session naming</h3>
       <AnchorTip label="About session naming" title="Session naming"><div className="space-y-2 text-xs">
         <p>Basic is the default: it uses the opening request without AI calls and keeps that name.</p>
@@ -92,7 +92,7 @@ function ModelSelection({ value, update }: { value: NamingPreferences; update: (
   // both, the card said "Conversation model (default)" and then, underneath,
   // "Choose a model…" — a prompt to make a choice that had already been made.
   // The control now reads as the setting it is.
-  return <div className="space-y-1.5">
+  return <div className="space-y-2">
     <p className="text-xs font-medium text-fg">Naming model</p>
     <ModelPicker value={value.model} includeClaude={false} runsOn="host" /* the computer names the conversations */
       emptyLabel="Same as Conversation (default)"

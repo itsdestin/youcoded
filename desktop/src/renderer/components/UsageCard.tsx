@@ -270,7 +270,9 @@ export default function UsageCard({ snapshot: s }: Props) {
             card is where a native session goes to see them, because the status
             bar no longer shows them there. */}
         {showSubscription && (
-          <div className="space-y-2 pt-3 border-t border-edge-dim">
+          // WHY spacing, not a border-t (final review F17; decisions "Card levels": no
+          // full-width line inside a card) — 16px between groups (the context block's mb-3 + 4px).
+          <div className="space-y-2 mt-1">
             {/* One recipe for the two windows (plan-windows.tsx) — the Model
                 Providers rows draw the same bars for each plan. */}
             <PlanWindows usage={{
@@ -299,7 +301,8 @@ export default function UsageCard({ snapshot: s }: Props) {
 
         {/* Lines changed — only if non-zero, to avoid clutter on conversational sessions */}
         {showLines && (
-          <div className="mt-3 pt-3 border-t border-edge-dim text-xs text-fg-muted">
+          // WHY spacing, not a border-t (final review F17): no full-width line inside a card.
+          <div className="mt-4 text-xs text-fg-muted">
             {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
             <span className="tabular-nums">+{s.linesAdded ?? 0}</span>
             {' / '}

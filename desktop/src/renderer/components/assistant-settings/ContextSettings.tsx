@@ -15,7 +15,7 @@ const PROVIDERS = [{ id: 'openrouter', label: 'OpenRouter' }, { id: 'chatgpt', l
 export default function ContextSettings({ value, onChange }: ContextSettingsProps) {
   // WHY: this preview is controlled and provider-specific; choosing a larger window
   // must not silently opt the other provider into higher cost or plan usage.
-  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-1.5`} aria-label="Context">
+  return <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`} aria-label="Context">
     <div className="flex items-center gap-1">
       <h3 className="text-xs font-medium text-fg">Context</h3>
       <AnchorTip label="About context" title="Context" className="coarse-hit">

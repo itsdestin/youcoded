@@ -166,7 +166,8 @@ export default function SpecialistsSection({ cwd }: {
   // downstream has to guess which half of the screen is broken.
   if (roster.status === 'unavailable' || tiersUnavailable) {
     return (
-      <section className="space-y-5">
+      // WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4; guide "Spacing") — was 20px.
+      <section className="space-y-4">
         <EmptyState message="Specialists run on the desktop app. Open settings there to add or edit them." />
       </section>
     );
