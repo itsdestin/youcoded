@@ -15,7 +15,7 @@
 // roundness (Q-theme). The editors are Euro-Office (office-base#Q-base-final),
 // on their own sealed origin; only files and small messages cross.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } from '../ui';
+import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState, SectionLabel } from '../ui';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
@@ -303,8 +303,10 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   );
 }
 
+// WHY the shared small label, not spaced capitals (decisions "Heading ladder", H-3/L-1…L-4:
+// small labels are 12px medium grey in normal case).
 function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-1">{children}</div>;
+  return <SectionLabel className="px-1">{children}</SectionLabel>;
 }
 
 const NEW_HINT: Record<OfficeKind, string> = {

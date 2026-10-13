@@ -487,6 +487,9 @@ interface WidgetDef {
   defaultVisible: boolean;
   locked?: boolean;     // core control — always on, non-toggleable in the config menu
   description: string;  // Its first sentence is the row's hint in the config popup
+  /** A hint written for the row when the first sentence would drop a caveat the user needs
+   *  (final review F45: "informational only on Pro/Max", "resets on a rolling window"). */
+  hint?: string;
 }
 
 interface WidgetCategory {
@@ -539,12 +542,14 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: '5h usage',
         defaultVisible: true,
         description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
+        hint: 'How much of your 5-hour limit you\'ve used; it resets on a rolling window.',
       },
       {
         id: 'usage-7d',
         label: '7d usage',
         defaultVisible: true,
         description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
+        hint: 'How much of your 7-day limit you\'ve used; it resets on a rolling window.',
       },
     ],
   },
@@ -562,6 +567,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Session cost',
         defaultVisible: false,
         description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
+        hint: 'Estimated cost in US dollars — only an estimate on Pro and Max plans, which aren\'t billed per token.',
       },
       {
         id: 'session-time',
@@ -789,7 +795,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
               {cat.widgets.map((w) => {
                 const reason = widgetUnavailableReason(w.id, relevance);
                 const on = !!w.locked || visible.has(w.id);
-                const hint = reason ?? firstSentence(w.description);
+                const hint = reason ?? w.hint ?? firstSentence(w.description);
                 const canToggle = !w.locked && !reason;
                 return (
                   <div key={w.id} data-widget-row={w.id}>

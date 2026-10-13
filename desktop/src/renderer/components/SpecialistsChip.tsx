@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Callout, Dialog, Pill, SectionLabel, Tooltip } from './ui';
+import { Callout, CARD_LEVEL_1, Dialog, Pill, SectionLabel, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
@@ -122,7 +122,8 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
 
 /** Status pill — the one word that answers "what state is this helper in". */
 function StatusPill({ h }: { h: HelperView }) {
-  const base = 'inline-flex items-center gap-1 text-3xs font-medium px-1.5 py-0.5 rounded-full border';
+  // WHY every state is the shared Pill (final review F52; guide "Status and notices"): three of
+  // the five were hand-made rounded-full spans beside two Pills.
   // Words in the text colour; amber stays in the tint and outline (small-fixes-3#SF3-10, as Working below).
   if (h.group === 'needs-you') return <Pill tone="warning" className="gap-1"><QuestionIcon className="w-3 h-3" />Needs you</Pill>;
   // Green, not blue (Destin, 2026-09-05 deck note). The session pills in the
@@ -136,14 +137,14 @@ function StatusPill({ h }: { h: HelperView }) {
   // 1.81:1 on creme and 1.50:1 on meadow-mist (floor is 4.5:1). Green text
   // passes only on the three dark themes. Do not "fix" this back to
   // text-green-400 — re-measure first.
-  if (h.run.status === 'running') return <span className={`${base} border-green-400/40 text-fg bg-green-400/15`}><BrailleSpinner size="xs" />{h.run.stale ? 'May be stuck' : 'Working'}</span>;
-  if (h.run.status === 'interrupted') return <span className={`${base} border-edge text-fg-muted`}><StoppedIcon className="w-3 h-3" />Stopped</span>;
+  if (h.run.status === 'running') return <Pill tone="ok" className="gap-1"><BrailleSpinner size="xs" />{h.run.stale ? 'May be stuck' : 'Working'}</Pill>;
+  if (h.run.status === 'interrupted') return <Pill tone="neutral" className="gap-1"><StoppedIcon className="w-3 h-3" />Stopped</Pill>;
   // Fix: `danger` was never a real token (no --color-danger anywhere in globals.css,
   // confirmed by building the stylesheet and finding zero `danger` output) — this
   // pill rendered with NO color at all. `destructive` is the app's real semantic
   // token for this state (see globals.css comment above --color-destructive-fg).
   if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <Pill tone="danger" className="gap-1"><FailIcon className="w-3 h-3" />Failed</Pill>;
-  return <span className={`${base} border-edge text-fg-muted`}><CheckIcon className="w-3 h-3" />Finished</span>;
+  return <Pill tone="neutral" className="gap-1"><CheckIcon className="w-3 h-3" />Finished</Pill>;
 }
 
 function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: string; onJump: () => void }) {
@@ -183,7 +184,9 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
       // WHY no amber outline (specialist-ask, 2026-10-01; Destin, LB-6: the ask "looks
       // janky"): the card keeps the normal edge in every state. "Needs you" is said by
       // the status pill and by the notice box below, not by repainting the whole card.
-      className={`rounded-lg border border-edge bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
+      // WHY CARD_LEVEL_1 (final review F52; guide "Card levels"): the shared first-level card,
+      // not a hand-typed border/fill.
+      className={`${CARD_LEVEL_1} overflow-hidden ${done ? 'opacity-80' : ''}`}
       data-testid={`helper-card-${run.childId}`}
     >
       {/* ── WHO / WHAT / HOW FAR ─────────────────────────────────────────── */}

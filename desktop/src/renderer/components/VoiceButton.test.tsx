@@ -123,12 +123,12 @@ describe('VoiceButton card — unpacking (R23)', () => {
 });
 
 describe('VoiceButton card — the microphone will not open (R11, R12, R20, R21)', () => {
-  it('no microphone: says exactly that, with one Check again', () => {
+  it('no microphone: says exactly that, with one Try again', () => {
     const h = renderCard({ readiness: { state: 'unavailable', reason: NO_DEVICE } });
     tapMic();
 
     expect(screen.getByText(NO_DEVICE)).toBeInTheDocument();
-    const buttons = screen.getAllByRole('button', { name: 'Check again' });
+    const buttons = screen.getAllByRole('button', { name: 'Try again' });
     expect(buttons).toHaveLength(1);
     fireEvent.click(buttons[0]);
     expect(h.onRecheck).toHaveBeenCalledTimes(1);
@@ -138,7 +138,7 @@ describe('VoiceButton card — the microphone will not open (R11, R12, R20, R21)
   // something also errored, showing that card took away the Check again — the one
   // affordance that lets the user come back after plugging a microphone in. The more
   // useful of the two truths wins. Found reviewing T9, 2026-09-05.
-  it('an unavailable microphone keeps its Check again even when an error is also set', () => {
+  it('an unavailable microphone keeps its Try again even when an error is also set', () => {
     const h = renderCard({
       readiness: { state: 'unavailable', reason: NO_DEVICE },
       error: 'something else went wrong',
@@ -147,18 +147,18 @@ describe('VoiceButton card — the microphone will not open (R11, R12, R20, R21)
 
     expect(screen.getByText(NO_DEVICE)).toBeInTheDocument();
     expect(screen.queryByText('Voice stopped')).toBeNull();
-    const buttons = screen.getAllByRole('button', { name: 'Check again' });
+    const buttons = screen.getAllByRole('button', { name: 'Try again' });
     expect(buttons).toHaveLength(1);
     fireEvent.click(buttons[0]);
     expect(h.onRecheck).toHaveBeenCalledTimes(1);
   });
 
-  it('refused by the computer: the approved sentence, verbatim, with one Check again', () => {
+  it('refused by the computer: the approved sentence, verbatim, with one Try again', () => {
     renderCard({ readiness: { state: 'unavailable', reason: REFUSED } });
     tapMic();
 
     expect(screen.getByText(REFUSED)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Check again' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
   });
 });
 
@@ -170,6 +170,10 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     const h = renderCard({ readiness: NEEDS, error: REASON });
     // The card opens itself on an error — the reason is not left unread.
     expect(screen.getByText('Speak your messages')).toBeInTheDocument();
+    // The computer's own words are folded under Details, never the sentence.
+    expect(screen.getByText("The voice download didn't finish.")).toBeInTheDocument();
+    expect(screen.queryByText(REASON)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(screen.getByText(REASON)).toBeInTheDocument();
 
     const retry = screen.getByRole('button', { name: 'Try again' });
@@ -196,6 +200,9 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     // computer yet — this is the other side of that test.
     renderCard({ readiness: { state: 'ready', engine: 'Parakeet' }, error: 'The speech engine stopped: exit code 1' });
     expect(screen.getByText('Voice stopped')).toBeInTheDocument();
+    // A plain sentence; the host's words (an exit code) only under Details.
+    expect(screen.getByText('Voice input stopped before it finished.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(screen.getByText('The speech engine stopped: exit code 1')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
   });

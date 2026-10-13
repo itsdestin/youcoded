@@ -59,8 +59,9 @@ export function CommentsPaneFrame({ path, children, frameRef, projectRoot }: Pro
         {/* Show resolved as the Resume browser's "Show Complete" switch — same
             label recipe and the shared Toggle; text-2xs for G-5's 11px floor. */}
         <div className="flex items-center justify-between gap-2 px-3 py-2 shrink-0">
-          <label className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Show Resolved</label>
-          <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show Resolved" />
+          {/* WHY sentence case, no spaced capitals (decisions "Sentence case everywhere", H-3). */}
+          <label className="text-2xs font-medium text-fg-muted">Show resolved</label>
+          <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show resolved" />
         </div>
         {/* The list is its own scroller: cards are not tied to positions in
             the document, so scrolling the document must not carry them away. */}

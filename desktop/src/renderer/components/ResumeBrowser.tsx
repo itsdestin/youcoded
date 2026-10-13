@@ -1849,7 +1849,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                   {loadSlow && (
                     <div className="flex flex-col items-center gap-2 -mt-4 pb-6">
                       <span className="text-xs text-fg-muted">Still loading — this is taking longer than usual.</span>
-                      <Button variant="secondary" size="sm" onClick={loadSessions}>Try again</Button>
+                      {/* WHY filled (final review F51): the only action here — Try again is the main one. */}
+                      <Button variant="primary" size="sm" onClick={loadSessions}>Try again</Button>
                     </div>
                   )}
                 </div>

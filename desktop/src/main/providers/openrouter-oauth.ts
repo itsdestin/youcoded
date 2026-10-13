@@ -194,7 +194,10 @@ export class OpenRouterSignIn {
     if (outcome === 'signed-in') {
       reply(res, 200, 'You can close this tab and go back to YouCoded.', 'done', "You're signed in to OpenRouter");
     } else {
-      reply(res, 200, `${typeof outcome === 'object' ? outcome.error : 'The sign-in did not finish.'} You can close this tab.`);
+      // WHY a fixed sentence (final review F59; guide "Status and notices": machine words never
+      // in the sentence): the outcome can carry a server's or the key check's own words. YouCoded
+      // shows the reason where Try again is; this page only says where to look.
+      reply(res, 200, "The sign-in didn't finish. Go back to YouCoded to see why and try again. You can close this tab.");
     }
     this.finish(round, outcome);
   }

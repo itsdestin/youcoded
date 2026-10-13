@@ -37,7 +37,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
 import type { VoicePhase } from '../hooks/useVoiceInput';
-import { ErrorState, Tooltip } from './ui';
+import { ErrorState, FoldRow, Tooltip } from './ui';
 import { getCapabilities } from '../platform';
 import { useScreenOpen } from '../shoot-mode';
 import VocabularyPanel from './voice/VoiceVocabulary';
@@ -101,6 +101,19 @@ function Spinner() {
       <circle cx="12" cy="12" r="9" className="opacity-25" />
       <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
     </svg>
+  );
+}
+
+const firstLine = (t: string) => t.split('\n')[0];
+const restLines = (t: string) => t.split('\n').slice(1).join('\n').trim();
+
+/** The computer's own words, folded (the voice vocabulary popup's and Contribute's shape). */
+function ErrorDetails({ text, className = '' }: { text: string; className?: string }) {
+  if (!text.trim()) return null;
+  return (
+    <FoldRow title="Details" className={className}>
+      <p className="text-2xs text-fg-2 font-mono break-words whitespace-pre-line">{text}</p>
+    </FoldRow>
   );
 }
 
@@ -242,12 +255,16 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
           // box in the buttons' place, with Not now and Retry inside it at the right
           // (guide "Status and notices": a failed action replaces the buttons it came
           // from). It was a grey line above the same two loose buttons.
-          <ErrorState
-            className="mt-3"
-            message={<span className="whitespace-pre-line">{error}</span>}
-            moreActions={[{ label: 'Not now', onClick: () => { onClearError(); setOpen(false); } }]}
-            onRetry={onDownload}
-          />
+          // WHY a fixed sentence with the computer's words under Details (final review, item 9;
+          // guide "Status and notices": machine words only under a Details fold).
+          <div className="mt-3 space-y-2">
+            <ErrorState
+              message="The voice download didn't finish."
+              moreActions={[{ label: 'Not now', onClick: () => { onClearError(); setOpen(false); } }]}
+              onRetry={onDownload}
+            />
+            <ErrorDetails text={error} />
+          </div>
         ) : (
           // WHY secondary, not ghost (decisions "Secondary buttons", ui-element-review-final#F-2):
           // the less-important action beside a main one is outlined, never bare text — the same
@@ -268,11 +285,17 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">Voice isn&rsquo;t available</p>
-        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? readiness.reason : 'Still checking whether this computer can listen.'}</p>
+        {/* WHY the reason's first line only, the rest under Details: an unknown failure appends
+            the browser's own words on a second line (useVoiceInput captureFailureReadiness) —
+            machine words never in the sentence (guide "Status and notices"). */}
+        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : 'Still checking whether this computer can listen.'}</p>
+        {readiness?.state === 'unavailable' && <ErrorDetails text={restLines(readiness.reason)} className="mt-2" />}
         <div className="flex justify-end gap-2 mt-3">
           {/* WHY secondary (decisions "Secondary buttons"; guide Buttons — nothing bare-text reads
-              as a button): a lone action here was ghost, i.e. bare words. Outlined, like Not now. */}
-          <Button variant="secondary" size="sm" onClick={onRecheck}>Check again</Button>
+              as a button): a lone action here was ghost, i.e. bare words. Outlined, like Not now.
+              WHY "Try again" (final review F41; guide "Every retry button reads exactly 'Try
+              again'"): it asks the computer again — a retry; it read "Check again". */}
+          <Button variant="secondary" size="sm" onClick={onRecheck}>Try again</Button>
         </div>
       </>
     );
@@ -280,7 +303,10 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">Voice stopped</p>
-        <p className="text-2xs text-fg-2 leading-snug">{error}</p>
+        {/* WHY a fixed sentence with the host's words under Details (final review, item 9): the
+            message can carry an exit code and the engine's last line of output. */}
+        <p className="text-2xs text-fg-2 leading-snug">Voice input stopped before it finished.</p>
+        <ErrorDetails text={error} className="mt-2" />
         <div className="flex justify-end gap-2 mt-3">
           {/* WHY secondary: same rule as Check again above — never a bare-text button.
               WHY "Dismiss", not "OK" (final review F52; guide "A button names what it does",

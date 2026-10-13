@@ -11,7 +11,7 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
-import { Button, Callout, SectionLabel } from '../ui';
+import { Button, Callout, FieldError, SectionLabel } from '../ui';
 import { CenterLoading } from './BinaryContent';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
@@ -866,7 +866,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // (a permissions error is not a deleted file).
     return (
       <div className="p-4">
-        <ErrorState message={readState.message} onRetry={onRetryRead ?? (() => {})} />
+        {/* WHY no Try again without a handler (final review F38): it was wired to a no-op, a
+            button that did nothing. With no way to retry here, the failure is the shared
+            one-line error box (FieldError) with nothing to press. */}
+        {onRetryRead
+          ? <ErrorState message={readState.message} onRetry={onRetryRead} />
+          : <FieldError as="div">{readState.message}</FieldError>}
       </div>
     );
   }
