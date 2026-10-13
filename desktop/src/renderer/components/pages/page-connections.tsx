@@ -17,7 +17,7 @@ import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } f
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, ErrorState, SectionLabel, TextInput } from '../ui';
+import { Button, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
@@ -291,7 +291,10 @@ function DeviceAddressField({ c, value, onChange }: { c: PageConnectionStatus & 
         aria-invalid={!ok}
         className="select-text"
       />
-      {!ok && <div className="text-xs text-fg-2" role="alert" data-device-address-problem>{deviceAddressProblem(value)}</div>}
+      {/* WHY FieldError (final review; guide "Status and notices": a short error line under a
+          field is the notice box in miniature): this was plain grey text, unlike every other
+          field's error line. FieldError keeps the words grey and puts the red in the box. */}
+      {!ok && <FieldError as="div" size="2xs">{deviceAddressProblem(value)}</FieldError>}
       <div className="text-xs text-fg-muted leading-relaxed" data-device-not-encrypted>{DEVICE_NOT_ENCRYPTED}</div>
     </div>
   );
