@@ -567,7 +567,7 @@ export default React.memo(function HeaderBar({
         {!narrow && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && (
-          <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0">
+          <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
             REMOTE
           </span>
         )}

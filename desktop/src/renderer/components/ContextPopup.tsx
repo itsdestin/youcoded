@@ -14,12 +14,8 @@ function hintFor(pct: number): string {
   return 'Very low — compact now or your assistant may start forgetting earlier context.';
 }
 
-// Match the color function in StatusBar.tsx exactly so the popup number tracks the chip.
-function contextColor(pct: number): string {
-  if (pct < 20) return 'text-[#DD4444]';
-  if (pct < 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
-}
+// (The red/amber/green number colour went with small-fixes-3#SF3-10: status colour never colours
+// words or numbers. The hint line under the number already says what the level means.)
 
 // Explainer content — plain language for non-developer users.
 // Uses curly apostrophes and em-dashes intentionally; do not replace with straight quotes or hyphens.
@@ -129,7 +125,7 @@ export default function ContextPopup({
             {/* Current state */}
             <div className="px-4 py-4 space-y-3">
               <div className="text-center">
-                <div className={`text-3xl font-bold ${contextColor(pct)}`}>
+                <div className="text-3xl font-bold text-fg">
                   {contextPercent != null ? `${contextPercent}%` : '--'}
                 </div>
                 {contextTokens != null && (

@@ -211,9 +211,10 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 // there's no hardcoded blue token — translucent blue on pink goes muddy.
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'add' | 'remove' | 'warn' | 'info' }) {
   const toneClass =
-    tone === 'add' ? 'bg-green-400/15 text-green-400 border-green-400/40'
-    : tone === 'remove' ? 'bg-red-400/15 text-red-400 border-red-400/40'
-    : tone === 'warn' ? 'bg-amber-700/15 text-amber-700 border-amber-700/40'
+    // Tint and outline carry the tone; the words are the text colour (small-fixes-3#SF3-10).
+    tone === 'add' ? 'bg-green-400/15 text-fg-2 border-green-400/40'
+    : tone === 'remove' ? 'bg-red-400/15 text-fg-2 border-red-400/40'
+    : tone === 'warn' ? 'bg-amber-500/15 text-fg-2 border-amber-500/40'
     : tone === 'info' ? 'bg-inset text-fg-2 border-edge'
     : 'bg-inset text-fg-muted border-edge';
   return (
@@ -247,8 +248,9 @@ function CopyButton({ text }: { text: string }) {
 function ErrorBlock({ error }: { error: string }) {
   return (
     <div>
-      <div className="text-3xs uppercase tracking-wider text-red-500 mb-1">Error</div>
-      <pre className="text-xs text-red-400 bg-panel rounded-sm p-2 overflow-auto max-h-48 whitespace-pre-wrap">
+      {/* Words in the text colour; the red is the box's tint and outline (small-fixes-3#SF3-10). */}
+      <div className="text-3xs uppercase tracking-wider text-fg-2 mb-1">Error</div>
+      <pre className="text-xs text-fg-2 bg-destructive/10 border border-destructive/30 rounded-sm p-2 overflow-auto max-h-48 whitespace-pre-wrap">
         {error}
       </pre>
     </div>

@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
-import { fieldClasses, Tooltip, ErrorState } from './ui';
+import { fieldClasses, Pill, Tooltip, ErrorState } from './ui';
 import { FIELD_TRIGGER_STATES } from './ui/field';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
@@ -329,11 +329,10 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                       </div>
                     )}
 
-                    {/* Stale warning */}
+                    {/* Stale warning. The amber "Folder missing" pill's job, said as a tinted pill
+                        (decisions "Project switcher: rows" — amber); not red words (small-fixes-3#SF3-10). */}
                     {!f.exists && (
-                      <span className="text-4xs text-red-400/80 shrink-0" title="Directory not found">
-                        missing
-                      </span>
+                      <span title="Directory not found" className="shrink-0"><Pill tone="warning">Missing</Pill></span>
                     )}
 
                     {/* Selected check */}

@@ -257,7 +257,8 @@ export default function UsageCard({ snapshot: s }: Props) {
           <div className="mb-3">
             <div className="flex justify-between text-xs mb-1">
               <span className="text-fg-muted">Context remaining</span>
-              <span className="tabular-nums" style={{ color: contextColor }}>
+              {/* The bar under it carries the colour; the number is the text colour (small-fixes-3#SF3-10). */}
+              <span className="tabular-nums text-fg-2">
                 {Math.round(s.contextPercent)}%
               </span>
             </div>
@@ -299,9 +300,10 @@ export default function UsageCard({ snapshot: s }: Props) {
         {/* Lines changed — only if non-zero, to avoid clutter on conversational sessions */}
         {showLines && (
           <div className="mt-3 pt-3 border-t border-edge-dim text-xs text-fg-muted">
-            <span className="text-green-400 tabular-nums">+{s.linesAdded ?? 0}</span>
+            {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+            <span className="tabular-nums">+{s.linesAdded ?? 0}</span>
             {' / '}
-            <span className="text-red-500 tabular-nums">−{s.linesRemoved ?? 0}</span>
+            <span className="tabular-nums">−{s.linesRemoved ?? 0}</span>
             {' lines changed'}
           </div>
         )}

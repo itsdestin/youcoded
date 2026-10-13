@@ -199,14 +199,15 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
 function badgeForState(state: SyncDisplayState): React.ReactNode {
   if (state.kind === 'failing') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-red-400/15 text-red-400 text-4xs font-medium shrink-0">
+      // The count's words in the text colour, the state in the tint and outline (small-fixes-3#SF3-10).
+      <span className="px-1.5 py-0.5 rounded-full border border-red-400/40 bg-red-400/15 text-fg-2 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
   }
   if (state.kind === 'attention') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-amber-700/15 text-amber-700 text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/15 text-fg-2 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
@@ -1734,13 +1735,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         {logLines.map((line, i) => {
                           try {
                             const entry = JSON.parse(line);
-                            const levelColor = entry.level === 'ERROR' ? 'text-red-400'
-                              : entry.level === 'WARN' ? 'text-amber-700'
-                              : 'text-fg-dim';
+                            // The level in the text colour with a status dot (small-fixes-3#SF3-10):
+                            // "[ERROR]" / "[WARN]" were red / amber words.
+                            const levelDot = entry.level === 'ERROR' ? 'bg-red-400'
+                              : entry.level === 'WARN' ? 'bg-amber-500'
+                              : null;
                             return (
                               <div key={i} className="py-0.5">
                                 <span className="text-fg-muted">{entry.ts?.slice(11) || ''} </span>
-                                <span className={levelColor}>[{entry.level}]</span>{' '}
+                                <span className="text-fg-2">{levelDot ? <RowStatus dotClassName={levelDot}>[{entry.level}]</RowStatus> : `[${entry.level}]`}</span>{' '}
                                 <span className="text-fg-dim">{entry.msg}</span>
                               </div>
                             );

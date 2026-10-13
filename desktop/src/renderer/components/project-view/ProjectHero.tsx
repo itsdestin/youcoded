@@ -256,13 +256,14 @@ export function ProjectHero({
     : sync.dot.color === 'green'
       ? {
           short: sync.lastSynced ? `Synced ${sync.lastSynced}` : 'Synced',
-          tone: 'text-[#44A05C]',
+          // The dot beside the words carries green/red; the words are the text colour (small-fixes-3#SF3-10).
+          tone: 'text-fg-2',
           detail: 'Syncs across your devices.',
           action: sync.spaceId ? { label: 'Sync now', onClick: () => onSyncNow(sync.spaceId!) } : null,
         }
     : sync.dot.color === 'red'
       ? {
-          short: 'Sync problem', tone: 'text-[#DD4444]',
+          short: 'Sync problem', tone: 'text-fg-2',
           // The REAL error, never a guess — surfaced verbatim when the engine
           // gave one (error-message-standards.md).
           detail: sync.errorMessage

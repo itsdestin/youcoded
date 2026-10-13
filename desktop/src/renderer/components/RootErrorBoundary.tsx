@@ -27,7 +27,9 @@ export class RootErrorBoundary extends React.Component<
           background: '#1a1a2e', color: '#ccc', padding: 24, textAlign: 'center',
         }}>
           <div style={{ fontSize: 36, marginBottom: 12 }}>:(</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#e55' }}>
+          {/* Plain light words, not red (small-fixes-3#SF3-10): no status colour on words, even on
+              the screen that draws before any theme loads. */}
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#eee' }}>
             YouCoded failed to start
           </div>
           <div style={{

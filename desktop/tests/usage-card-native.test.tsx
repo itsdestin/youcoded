@@ -247,6 +247,8 @@ describe('UsageCard for a session that has measured nothing', () => {
 // labelled "used", two clicks from a green pill saying 90% remaining. One
 // number, two opposite readings. These pin the wording AND the direction of the
 // colour, because either alone can go backwards on its own.
+// small-fixes-3#SF3-10: the NUMBERS are the text colour now (status colour never colours words);
+// the bars under them keep the status colour, so each scale is pinned on the bar's fill.
 describe('UsageCard context row — remaining, not used', () => {
   const ctx = (pct: number): UsageSnapshot => ({ ...nativeSnapshot, contextPercent: pct });
   // The coloured fill inside the bar (ProgressBar renders track > fill).
@@ -267,7 +269,7 @@ describe('UsageCard context row — remaining, not used', () => {
 
   it('colours a mostly-free context window green, not red', () => {
     render(<UsageCard snapshot={ctx(90)} />);
-    expect(screen.getByText('90%')).toHaveStyle({ color: '#10b981' });
+    expect(screen.getByText('90%')).not.toHaveStyle({ color: '#10b981' });
     expect(fillOf(screen.getByRole('progressbar', { name: 'Context remaining' }))).toHaveStyle({
       backgroundColor: '#10b981',
     });
@@ -275,7 +277,7 @@ describe('UsageCard context row — remaining, not used', () => {
 
   it('colours a nearly-full context window red', () => {
     render(<UsageCard snapshot={ctx(12)} />);
-    expect(screen.getByText('12%')).toHaveStyle({ color: '#ef4444' });
+    expect(screen.getByText('12%')).not.toHaveStyle({ color: '#ef4444' });
     expect(fillOf(screen.getByRole('progressbar', { name: 'Context remaining' }))).toHaveStyle({
       backgroundColor: '#ef4444',
     });
@@ -283,15 +285,18 @@ describe('UsageCard context row — remaining, not used', () => {
 
   it('warns in amber once most of the window is gone', () => {
     render(<UsageCard snapshot={ctx(35)} />);
-    expect(screen.getByText('35%')).toHaveStyle({ color: '#f59e0b' });
+    expect(screen.getByText('35%')).not.toHaveStyle({ color: '#f59e0b' });
+    expect(fillOf(screen.getByRole('progressbar', { name: 'Context remaining' }))).toHaveStyle({
+      backgroundColor: '#f59e0b',
+    });
   });
 
   // The 5-hour and 7-day bars are UTILISATION — high really is bad there — so
   // the inverted context scale must not have been applied to them.
   it('leaves the subscription bars on the utilisation scale', () => {
     render(<UsageCard snapshot={{ ...nativeSnapshot, fiveHourUtilization: 90, sevenDayUtilization: 12 }} />);
-    expect(screen.getByText('90%')).toHaveStyle({ color: '#ef4444' });
-    expect(screen.getByText('12%')).toHaveStyle({ color: '#10b981' });
+    expect(fillOf(screen.getByRole('progressbar', { name: '5-hour limit' }))).toHaveStyle({ backgroundColor: '#ef4444' });
+    expect(fillOf(screen.getByRole('progressbar', { name: '7-day limit' }))).toHaveStyle({ backgroundColor: '#10b981' });
   });
 
   // Task 29 item 1: the two scales above are OPPOSITE on purpose, and until now
@@ -304,7 +309,7 @@ describe('UsageCard context row — remaining, not used', () => {
     // 20 is the FIRST value that is no longer critical: red is `< 20`, so 20
     // itself must warn in amber.
     render(<UsageCard snapshot={ctx(20)} />);
-    expect(screen.getByText('20%')).toHaveStyle({ color: '#f59e0b' });
+    expect(screen.getByText('20%')).not.toHaveStyle({ color: '#f59e0b' });
     expect(fillOf(screen.getByRole('progressbar', { name: 'Context remaining' }))).toHaveStyle({
       backgroundColor: '#f59e0b',
     });
@@ -313,7 +318,7 @@ describe('UsageCard context row — remaining, not used', () => {
   it('at exactly 50% remaining the context row is green, not amber', () => {
     // Amber is `< 50`, so half a window still free is healthy, not a warning.
     render(<UsageCard snapshot={ctx(50)} />);
-    expect(screen.getByText('50%')).toHaveStyle({ color: '#10b981' });
+    expect(screen.getByText('50%')).not.toHaveStyle({ color: '#10b981' });
     expect(fillOf(screen.getByRole('progressbar', { name: 'Context remaining' }))).toHaveStyle({
       backgroundColor: '#10b981',
     });
@@ -323,7 +328,7 @@ describe('UsageCard context row — remaining, not used', () => {
     // The mirror image of the row above: on the utilisation scale red starts AT
     // 80 (`>= 80`), because there high is the bad direction.
     render(<UsageCard snapshot={{ ...nativeSnapshot, fiveHourUtilization: 80, sevenDayUtilization: null }} />);
-    expect(screen.getByText('80%')).toHaveStyle({ color: '#ef4444' });
+    expect(screen.getByText('80%')).not.toHaveStyle({ color: '#ef4444' });
     expect(fillOf(screen.getByRole('progressbar', { name: '5-hour limit' }))).toHaveStyle({
       backgroundColor: '#ef4444',
     });
@@ -333,7 +338,7 @@ describe('UsageCard context row — remaining, not used', () => {
     // Amber starts AT 50 (`>= 50`) — the opposite edge from the context row,
     // where 50 is the first GREEN value.
     render(<UsageCard snapshot={{ ...nativeSnapshot, fiveHourUtilization: 50, sevenDayUtilization: null }} />);
-    expect(screen.getByText('50%')).toHaveStyle({ color: '#f59e0b' });
+    expect(screen.getByText('50%')).not.toHaveStyle({ color: '#f59e0b' });
     expect(fillOf(screen.getByRole('progressbar', { name: '5-hour limit' }))).toHaveStyle({
       backgroundColor: '#f59e0b',
     });

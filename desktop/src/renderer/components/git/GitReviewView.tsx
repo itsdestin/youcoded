@@ -226,8 +226,9 @@ export function GitReviewView({
             }
             headerRight={
               <>
-                <span className="text-3xs font-mono text-green-400">+{uncommitted.counts.added}</span>
-                <span className="text-3xs font-mono text-red-400">−{uncommitted.counts.removed}</span>
+                {/* Normal words (small-fixes-3#SF3-10). */}
+                <span className="text-3xs font-mono text-fg-2">+{uncommitted.counts.added}</span>
+                <span className="text-3xs font-mono text-fg-2">−{uncommitted.counts.removed}</span>
               </>
             }
           >
@@ -310,8 +311,8 @@ export function GitReviewView({
                       count at all rather than a misleading +0/−0. */}
                   {entry.counts && (
                     <>
-                      <span className="text-3xs font-mono text-green-400">+{entry.counts.added}</span>
-                      <span className="text-3xs font-mono text-red-400">−{entry.counts.removed}</span>
+                      <span className="text-3xs font-mono text-fg-2">+{entry.counts.added}</span>
+                      <span className="text-3xs font-mono text-fg-2">−{entry.counts.removed}</span>
                     </>
                   )}
                   <span className="text-2xs text-fg-muted whitespace-nowrap">{formatRelativeTime(entry.authorDate)}</span>

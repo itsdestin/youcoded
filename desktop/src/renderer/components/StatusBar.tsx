@@ -16,7 +16,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -83,7 +83,9 @@ const MODEL_DISPLAY: Record<ModelAlias | 'unknown', { label: string; color: stri
   fable:       { label: CLAUDE_ALIAS_LABELS.fable,      color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
   // Error state, not a real model — red like the high-danger usage threshold
   // (utilizationColor/contextColor) so it reads as "wrong", never as a normal pill.
-  unknown:     { label: 'Model unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
+  // WHY the words in the text colour (small-fixes-3#SF3-10 sweep): the guide keeps status colour out
+  // of words; the red stays in the chip's outline.
+  unknown:     { label: 'Model unknown', color: 'var(--fg-2)', border: 'rgba(221,68,68,0.5)' },
 };
 
 /**
@@ -159,7 +161,8 @@ export const PERMISSION_DISPLAY: Record<PermissionMode | NativePermissionMode | 
   // Error state — App.tsx passes this when the real mode can't be confirmed
   // (unrecognized value, missing data on resume/reconnect) rather than guessing
   // 'normal'/'ask', which would misrepresent what's actually enforced.
-  unknown:       { label: 'PERMISSION UNKNOWN',  shortLabel: 'UNKNOWN', color: '#DD4444', bg: 'var(--panel)', border: 'rgba(221,68,68,0.3)' },
+  // Words in the text colour, red only in the outline (small-fixes-3#SF3-10 sweep).
+  unknown:       { label: 'PERMISSION UNKNOWN',  shortLabel: 'UNKNOWN', color: 'var(--fg-2)', bg: 'var(--panel)', border: 'rgba(221,68,68,0.5)' },
 };
 
 // --- Native (local-model) StatusBar chips (Task 12) ---
@@ -255,16 +258,20 @@ export function selectNativeStatusChips(
   };
 }
 
-function utilizationColor(pct: number): string {
-  if (pct >= 80) return 'text-[#DD4444]';
-  if (pct >= 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
+// WHY dots, not coloured numbers (small-fixes-3#SF3-10, Destin picked "sweep them next"): the guide
+// keeps the status hues out of words — "+12", "34%" were green/amber/red text. The number is now the
+// normal text colour and the state is the small coloured dot before it, the setting row's own status
+// dot (RowStatus, "● Last synced just now"). Same thresholds as before.
+function utilizationDot(pct: number): string {
+  if (pct >= 80) return 'bg-[#DD4444]';
+  if (pct >= 50) return 'bg-[#FF9800]';
+  return 'bg-[#4CAF50]';
 }
 
-function contextColor(pct: number): string {
-  if (pct < 20) return 'text-[#DD4444]';
-  if (pct < 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
+function contextDot(pct: number): string {
+  if (pct < 20) return 'bg-[#DD4444]';
+  if (pct < 50) return 'bg-[#FF9800]';
+  return 'bg-[#4CAF50]';
 }
 
 // formatTime12 / formatDayLong moved to shared/time-format.ts (2026-09-05) so
@@ -319,9 +326,7 @@ function UsageChip({ label, utilization, reset, onClick, title }: {
       className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
     >
       <span>{label}:</span>
-      <span className={utilizationColor(utilization)}>
-        {utilization}%
-      </span>
+      <span><RowStatus dotClassName={utilizationDot(utilization)}>{utilization}%</RowStatus></span>
       <span className="text-fg-muted hidden sm:inline">{reset}</span>
     </button>
     </Tooltip>
@@ -464,9 +469,10 @@ interface Props {
   nativeTotals?: SessionTotals | null;
 }
 
+// Tint and outline carry the state; the words are the text colour (small-fixes-3#SF3-10).
 const warnStyles = {
-  danger: 'bg-red-400/15 text-red-400 border-red-400/25',
-  warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
+  danger: 'bg-red-400/15 text-fg-2 border-red-400/40',
+  warn: 'bg-amber-500/15 text-fg-2 border-amber-500/40',
 };
 
 // --- Widget visibility system ---
@@ -1132,7 +1138,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
           >
             <span>Context:</span>
-            <span className={contextColor(contextPercent)}>{pill.value}</span>
+            <span><RowStatus dotClassName={contextDot(contextPercent)}>{pill.value}</RowStatus></span>
             {pill.suffix && <span>{pill.suffix}</span>}
           </button>
         );
@@ -1178,7 +1184,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
               >
                 <span>Context:</span>
-                <span className={contextColor(nativeChips.contextPct)}>{pill.value}</span>
+                <span><RowStatus dotClassName={contextDot(nativeChips.contextPct)}>{pill.value}</RowStatus></span>
                 {pill.suffix && <span>{pill.suffix}</span>}
               </button>
               </Tooltip>
@@ -1373,7 +1379,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-fg-muted">Cached:</span>
-            <span className="text-green-400">{formatTokens(cr)}</span>
+            {/* Normal words (small-fixes-3#SF3-10): green told nothing a number doesn't. */}
+            <span>{formatTokens(cr)}</span>
           </span>
           </Tooltip>
         );
@@ -1421,9 +1428,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             <span className="text-fg-muted">Reuse:</span>
             {display.kind === 'first-turn' && <span className="text-fg-muted">New</span>}
             {display.kind === 'percent' && (
-              <span className={display.pct >= 80 ? 'text-green-400' : display.pct >= 50 ? 'text-amber-700' : 'text-red-400'}>
-                {display.pct}%
-              </span>
+              <span><RowStatus dotClassName={display.pct >= 80 ? 'bg-green-400' : display.pct >= 50 ? 'bg-amber-500' : 'bg-red-400'}>{display.pct}%</RowStatus></span>
             )}
           </span>
           </Tooltip>
@@ -1485,8 +1490,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
-            <span className="text-green-400">+{added ?? 0}</span>
-            <span className="text-red-400">-{removed ?? 0}</span>
+            {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+            <span>+{added ?? 0}</span>
+            <span>-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
           </span>
           </Tooltip>
@@ -1498,10 +1504,12 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         <Tooltip text={`Git: ${gitBranch}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border"
-          style={{ color: '#0D9488', borderColor: 'rgba(13,148,136,0.35)' }}
+          // The teal stays in the outline and the branch mark; the name is the text colour
+          // (small-fixes-3#SF3-10: no fixed hue on words).
+          style={{ borderColor: 'rgba(13,148,136,0.35)' }}
         >
           {/* Branch icon (octicon git-branch) */}
-          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" style={{ color: '#0D9488' }}>
             <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>
           </svg>
           <span>{gitBranch}</span>
@@ -1559,12 +1567,12 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         <button
           onClick={() => setAnnouncementOpen(true)}
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px] cursor-pointer hover:bg-inset transition-colors"
+          // Orange outline (and ★) mark it; the words are the text colour (small-fixes-3#SF3-10).
           style={{
-            color: '#EA580C',
-            borderColor: 'rgba(234,88,12,0.35)',
+            borderColor: 'rgba(234,88,12,0.45)',
           }}
         >
-          <span aria-hidden>★</span>
+          <span aria-hidden style={{ color: '#EA580C' }}>★</span>
           <span className="truncate">{statusData.announcement.message}</span>
         </button>
         </Tooltip>
@@ -1595,8 +1603,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           }`}
         >
           {updateStatus.update_available ? (
-            <span className="text-amber-700 font-medium">
-              v{updateStatus.latest} — Update Available
+            // Normal words on the amber tint (small-fixes-3#SF3-10); sentence case (decisions "Sentence case").
+            <span className="text-fg font-medium">
+              v{updateStatus.latest} — Update available
             </span>
           ) : (
             <span>v{updateStatus.current}</span>

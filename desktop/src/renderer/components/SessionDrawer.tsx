@@ -36,7 +36,7 @@ import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform, isRemoteMode } from '../platform';
 import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, Dialog, EmptyState, ErrorState, FieldError, SearchFilterPill, SectionLabel, Tooltip } from './ui';
+import { Button, CloseButton, Dialog, EmptyState, ErrorState, FieldError, Pill, SearchFilterPill, SectionLabel, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -1430,16 +1430,16 @@ export function GitFooterEntry({
   return (
     <>
       {conflicted && (
+        // A pill, not amber words (small-fixes-3#SF3-10) — decisions "Status words": the Conflict pill.
         <Tooltip text="This file has merge conflicts">
-        <span className="font-medium text-amber-700">
-          Conflict
-        </span>
+        <span className="shrink-0"><Pill tone="warning">Conflict</Pill></span>
         </Tooltip>
       )}
       {counts && (
         <>
-          <span className="font-mono text-green-400">+{counts.added}</span>
-          <span className="font-mono text-red-400">−{counts.removed}</span>
+          {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+          <span className="font-mono">+{counts.added}</span>
+          <span className="font-mono">−{counts.removed}</span>
         </>
       )}
       <Tooltip text="Review this file's changes">

@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Callout, Dialog, SectionLabel, Tooltip } from './ui';
+import { Callout, Dialog, Pill, SectionLabel, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
@@ -57,7 +57,8 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
         style={needsYou > 0
           // Amber = the same "waiting on you" tone the permission chip family uses.
-          ? { backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24', borderColor: 'rgba(251,191,36,0.4)' }
+          // Words in the text colour, amber in the tint and outline (small-fixes-3#SF3-10).
+          ? { backgroundColor: 'rgba(251,191,36,0.15)', color: 'var(--fg-2)', borderColor: 'rgba(251,191,36,0.5)' }
           : { backgroundColor: 'var(--inset)', color: 'var(--fg-muted)', borderColor: 'var(--edge-dim)' }}
         aria-label={tooltip}
         data-testid="specialists-chip"
@@ -122,7 +123,8 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
 /** Status pill — the one word that answers "what state is this helper in". */
 function StatusPill({ h }: { h: HelperView }) {
   const base = 'inline-flex items-center gap-1 text-3xs font-medium px-1.5 py-0.5 rounded-full border';
-  if (h.group === 'needs-you') return <span className={`${base} border-amber-700/40 text-amber-700 bg-amber-700/10`}><QuestionIcon className="w-3 h-3" />Needs you</span>;
+  // Words in the text colour; amber stays in the tint and outline (small-fixes-3#SF3-10, as Working below).
+  if (h.group === 'needs-you') return <Pill tone="warning" className="gap-1"><QuestionIcon className="w-3 h-3" />Needs you</Pill>;
   // Green, not blue (Destin, 2026-09-05 deck note). The session pills in the
   // header are this app's status vocabulary — StatusDot.tsx STATUS_LABEL reads
   // green: 'Working', blue: 'Response ready' — so a blue "Working" pill here
@@ -140,7 +142,7 @@ function StatusPill({ h }: { h: HelperView }) {
   // confirmed by building the stylesheet and finding zero `danger` output) — this
   // pill rendered with NO color at all. `destructive` is the app's real semantic
   // token for this state (see globals.css comment above --color-destructive-fg).
-  if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <span className={`${base} border-destructive/40 text-destructive-fg bg-destructive/10`}><FailIcon className="w-3 h-3" />Failed</span>;
+  if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <Pill tone="danger" className="gap-1"><FailIcon className="w-3 h-3" />Failed</Pill>;
   return <span className={`${base} border-edge text-fg-muted`}><CheckIcon className="w-3 h-3" />Finished</span>;
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, SectionLabel } from '../ui';
+import { Button, FieldError, SectionLabel } from '../ui';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { persistLastBinding } from '../RuntimeBinding';
 import { runLeaseTakeoverGate } from '../../state/resume-lease-gate';
@@ -278,7 +278,9 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         </div>
       )}
 
-      {warning && <p className="text-3xs text-warning-fg" style={{ margin: 0 }}>{warning}</p>}
+      {/* The notice box in miniature, not amber words (small-fixes-3#SF3-10; guide "a short error
+          line is the notice box in miniature"). */}
+      {warning && <FieldError as="p">{warning}</FieldError>}
       {error && <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>{error}</p>}
     </div>
   );

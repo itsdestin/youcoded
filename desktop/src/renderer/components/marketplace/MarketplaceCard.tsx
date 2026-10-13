@@ -69,9 +69,11 @@ interface Props {
 // consolidation. Status colors are intentionally hardcoded (not theme tokens)
 // since green/amber/red carry semantic meaning independent of the active theme.
 export const STATUS_TONE_CLASS: Record<'ok' | 'warn' | 'err' | 'neutral' | 'locked', string> = {
-  ok: 'bg-green-500/15 text-green-400 border border-green-500/30',
-  warn: 'bg-amber-500/15 text-amber-400 border border-amber-500/30',
-  err: 'bg-red-500/15 text-red-400 border border-red-500/30',
+  // Tint and outline carry the state, the words stay the text colour (small-fixes-3#SF3-10; the
+  // shared Pill's rule).
+  ok: 'bg-green-500/15 text-fg-2 border border-green-500/30',
+  warn: 'bg-amber-500/15 text-fg-2 border border-amber-500/30',
+  err: 'bg-red-500/15 text-fg-2 border border-red-500/30',
   neutral: 'bg-inset text-fg-2 border border-edge',
   // Platform-blocked — reads as "not for this platform" without the alarm of
   // err/warn. Change 24: was `bg-slate-500/10 border-slate-500/30`, a stock

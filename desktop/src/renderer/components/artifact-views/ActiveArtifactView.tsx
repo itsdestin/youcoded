@@ -11,6 +11,7 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
+import { Button, Callout } from '../ui';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
@@ -871,37 +872,31 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         // followed the OS color scheme, NOT the active YouCoded theme (the app
         // themes via data-theme, not a .dark class), so the banner could render
         // light-mode colors under a dark theme.
-        <div
-          className="p-3 text-sm flex flex-wrap gap-x-3 gap-y-1 items-center border-b shrink-0"
-          style={{ color: '#9a6a00', background: '#FFF6E5', borderColor: '#E8C170' }}
-        >
-          <span className="flex-1 min-w-0 font-medium">This file changed on disk while you were editing.</span>
-          <button className="underline hover:no-underline whitespace-nowrap" onClick={resolveKeepMine}>
-            Keep mine
-          </button>
-          <button className="underline hover:no-underline whitespace-nowrap" onClick={resolveUseDisk}>
-            Use disk version
-          </button>
-          <button
-            className="underline hover:no-underline whitespace-nowrap"
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? 'Hide diff' : 'View diff'}
-          </button>
+        // WHY the shared notice box (small-fixes-3#SF3-10): this was dark-amber words on a fixed
+        // cream strip with underlined-text buttons — status colour in words, and underlined text is
+        // not a button (guide "Buttons"). Now the warning notice box with its buttons inside at
+        // the right, the way Unsaved changes before quit offers Discard / Save: the outlined
+        // choices first, keeping your version (the save) filled last.
+        <div className="px-3 py-2 shrink-0">
+          <Callout tone="warning" actions={<>
+            <Button size="sm" variant="secondary" onClick={() => setShowDiff((v) => !v)}>{showDiff ? 'Hide diff' : 'View diff'}</Button>
+            <Button size="sm" variant="secondary" onClick={resolveUseDisk}>Use disk version</Button>
+            <Button size="sm" onClick={resolveKeepMine}>Keep mine</Button>
+          </>}>
+            This file changed on disk while you were editing.
+          </Callout>
         </div>
       )}
       {/* Save-failure banner — the real error, inline, dismissible. Replaces
           the old console-only failure path where a failed save looked identical
           to a successful one (§2.4). Theme-independent like the conflict banner. */}
       {saveError && (
-        <div
-          className="p-3 text-sm flex flex-wrap gap-x-3 gap-y-1 items-center border-b shrink-0"
-          style={{ color: '#8a1f1f', background: '#FDECEC', borderColor: '#E5A0A0' }}
-        >
-          <span className="flex-1 min-w-0">{saveError}</span>
-          <button className="underline hover:no-underline whitespace-nowrap" onClick={() => setSaveError(null)}>
-            Dismiss
-          </button>
+        // The danger notice box with its Dismiss inside (small-fixes-3#SF3-10): it was dark-red words
+        // on a fixed pink strip. The real error stays its words.
+        <div className="px-3 py-2 shrink-0">
+          <Callout tone="danger" actions={<Button size="sm" variant="secondary" onClick={() => setSaveError(null)}>Dismiss</Button>}>
+            {saveError}
+          </Callout>
         </div>
       )}
       {/* Real unified diff (jsdiff via the shared UnifiedDiff — same renderer as

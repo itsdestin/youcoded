@@ -186,11 +186,8 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   // SyncPanel.tsx: 4 -> 2 (fix batch 2) -> 0 (2026-09-28, nothing-bare-3#N3-2): the
   // backend rows are the plain nested box in every state now; the status light
   // carries red/green. No exemption left.
-  'SpecialistsChip.tsx': {
-    count: 2,
-    why: "StatusPill's Needs-you and Failed variants — rounded-full inline state badges, peers of the "
-      + 'same switch\'s untinted Stopped/Finished pills, not standalone passive text (Callout is rounded-lg/p-3)',
-  },
+  // SpecialistsChip.tsx: 2 -> 0 (2026-10-13, small-fixes-3#SF3-10): Needs you and Failed are the
+  // shared Pill now (words in the text colour, the tint carries the state). No exemption left.
 };
 
 /**
