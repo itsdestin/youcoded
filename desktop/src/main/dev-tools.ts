@@ -845,15 +845,26 @@ const workspaceRoot = () => path.join(os.homedir(), 'YouCoded', 'Development');
 const workspaceCandidate = (root: string, n: number) => path.join(root, n === 0 ? WORKSPACE_BASE : `${WORKSPACE_BASE}-${n + 1}`);
 
 /**
- * A copy this setup FINISHED: the workspace's own git folder and setup script, and the
- * app's repository that setup.sh clones. A half-made copy (a crash mid-clone) has no
- * app repository, and a folder the user made by hand has no git folder, so neither is
- * ever picked up as ours — R9: a folder that is already there is never written into.
+ * A copy this setup FINISHED: the workspace's own git folder and setup script, and EVERY
+ * repository setup.sh clones — read from the copy's own inventory (scripts/workspace-repos.json,
+ * the list setup.sh itself walks), each with its git folder. A half-made copy (a crash mid-clone,
+ * or the app killed while setup.sh was still cloning) is missing one, and a folder the user made
+ * by hand has no git folder or inventory, so neither is ever picked up as ours — R9: a folder
+ * that is already there is never written into.
+ * WHY the whole inventory (final review F36): the check used to need only the app's repository,
+ * which setup.sh clones FIRST, so a copy killed partway through setup.sh was reused and a session
+ * then worked inside a workspace with repositories missing. Not a new "finished" marker file:
+ * copies made by earlier builds have none, and treating them as unfinished would download the
+ * code (about 1 GB) again.
  */
 async function isFinishedWorkspace(dir: string): Promise<boolean> {
   try {
-    await Promise.all(['.git', 'setup.sh', path.join('youcoded', 'desktop', 'package.json')]
-      .map(p => fs.promises.access(path.join(dir, p))));
+    await Promise.all(['.git', 'setup.sh'].map(p => fs.promises.access(path.join(dir, p))));
+    const inventory = JSON.parse(await fs.promises.readFile(path.join(dir, 'scripts', 'workspace-repos.json'), 'utf8')) as Record<string, unknown>;
+    const repos = Object.keys(inventory).filter(name => name !== 'workspace');
+    if (repos.length === 0 || !repos.includes('youcoded')) return false;
+    await Promise.all(repos.map(name => fs.promises.access(path.join(dir, name, '.git'))));
+    await fs.promises.access(path.join(dir, 'youcoded', 'desktop', 'package.json'));
     return true;
   } catch { return false; }
 }

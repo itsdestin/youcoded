@@ -150,15 +150,31 @@ describe('reusing the copy already on this computer', () => {
   // WHY (submit-ticket-3#ST3-Q1): the "ready" answer lived only in memory, so after every
   // restart the next setup downloaded YouCoded's code again into a NEW folder (-2, -3 …),
   // about 1 GB each. A finished copy on disk is now found and reused.
-  const finished = (name: string) => {
+  const INVENTORY = { workspace: {}, youcoded: {}, 'wecoded-themes': {}, 'wecoded-marketplace': {} };
+  const finished = (name: string, skip: string[] = []) => {
     const dir = path.join(home, 'YouCoded', 'Development', name);
     fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'setup.sh'), '#!/bin/bash\n');
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'scripts', 'workspace-repos.json'), JSON.stringify(INVENTORY));
+    for (const repo of Object.keys(INVENTORY).filter((r) => r !== 'workspace' && !skip.includes(r))) {
+      fs.mkdirSync(path.join(dir, repo, '.git'), { recursive: true });
+    }
     fs.mkdirSync(path.join(dir, 'youcoded', 'desktop'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'youcoded', 'desktop', 'package.json'), '{}');
     fs.writeFileSync(path.join(dir, 'my-work.txt'), 'keep');
     return dir;
   };
+
+  // Final review F36: setup.sh clones the app's repository first, so a copy killed partway
+  // through setup.sh passed the old check and a session worked inside a workspace with
+  // repositories missing.
+  it('skips a copy whose setup stopped before every repository was cloned', async () => {
+    const partial = finished('youcoded-workspace', ['wecoded-marketplace']);
+    const good = finished('youcoded-workspace-2');
+    expect(await setupManagedWorkspace(() => {})).toEqual({ ok: true, path: good });
+    expect(fs.existsSync(path.join(partial, 'my-work.txt'))).toBe(true); // left exactly as it was
+  });
 
   it('uses the finished copy instead of downloading again', async () => {
     const dir = finished('youcoded-workspace');
