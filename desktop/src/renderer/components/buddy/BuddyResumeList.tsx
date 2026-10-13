@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, FieldError, SectionLabel } from '../ui';
+import { Button, ErrorState, FieldError, SectionLabel } from '../ui';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { persistLastBinding } from '../RuntimeBinding';
 import { runLeaseTakeoverGate } from '../../state/resume-lease-gate';
@@ -74,6 +74,10 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   // Closing the list is a decline, not a suspended handoff that can resume later.
   useEffect(() => () => { takeoverResolveRef.current?.(false); }, []);
 
+  // WHY a load attempt counter: the failed-load notice offers Try again (below), which
+  // re-runs the load effect; bumping this is the whole retry.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   const [defaultAlias, setDefaultAlias] = useState('sonnet');
   const [defaultDangerous, setDefaultDangerous] = useState(false);
 
@@ -97,7 +101,7 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
       } catch { /* best-effort — the alias below falls back to sonnet */ }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadAttempt]);
 
   // Newest first, completed ones hidden. `complete` is the flag the main browser
   // hides behind its "Show complete" switch; with no room for that switch here,
@@ -180,9 +184,12 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         {copy.consequence && (
           <p className="text-3xs text-fg-muted" style={{ margin: 0, lineHeight: 1.45 }}>{copy.consequence}</p>
         )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
-          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+        {/* WHY stacked, filled on top (decisions "Button arrangement by width" + "Stacked
+            order"; the buddy follows the popup rules): a 320px window is a narrow popup.
+            Same shape as BuddyWelcome's stacked pair and the new-session form above. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Button variant="primary" size="sm" className="w-full" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+          <Button variant="secondary" size="sm" className="w-full" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
         </div>
       </div>
     );
@@ -204,7 +211,14 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
       {rows === null ? (
         <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>Loading…</p>
       ) : loadFailed ? (
-        <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>Couldn&rsquo;t load your conversations.</p>
+        // WHY ErrorState with Try again (guide: an error with nothing to press is the notice box
+        // with Try again): was a grey line, a dead end. Copies FolderSwitcher's "Couldn't load
+        // your projects." — the same inline box, in the same buddy window's new-session form.
+        <ErrorState
+          variant="inline"
+          message="Couldn't load your conversations."
+          onRetry={() => { setRows(null); setLoadFailed(false); setLoadAttempt((n) => n + 1); }}
+        />
       ) : visible.length === 0 ? (
         <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>No conversations to pick up yet.</p>
       ) : (
@@ -226,7 +240,8 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
                   }}
                   style={{
                     display: 'flex', width: '100%', alignItems: 'baseline', gap: 6,
-                    padding: '6px 8px', border: 'none', borderRadius: 8,
+                    // WHY the theme token, not a hand-set 8px (guide principle 2).
+                    padding: '6px 8px', border: 'none', borderRadius: 'var(--radius-md)',
                     background: expanded ? 'var(--inset)' : 'transparent',
                     cursor: blocked ? 'default' : 'pointer',
                     opacity: blocked ? 0.55 : 1,
@@ -281,7 +296,9 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
       {/* The notice box in miniature, not amber words (small-fixes-3#SF3-10; guide "a short error
           line is the notice box in miniature"). */}
       {warning && <FieldError as="p">{warning}</FieldError>}
-      {error && <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>{error}</p>}
+      {/* WHY FieldError, not a grey line (decisions "Fix batch: error lines"): a short error line
+          is the small tinted box. The row's Resume button above is the way to try again. */}
+      {error && <FieldError as="p">{error}</FieldError>}
     </div>
   );
 }

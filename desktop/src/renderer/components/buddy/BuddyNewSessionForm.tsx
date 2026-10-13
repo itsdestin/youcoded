@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import FolderSwitcher from '../FolderSwitcher';
-import { Button, Toggle } from '../ui';
+import { Button, FieldError, Toggle } from '../ui';
 import { SkipPermissionsCaption } from '../SkipPermissionsCaption';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import {
@@ -204,25 +204,29 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
           {dangerous && <SkipPermissionsCaption />}
         </>
       )}
-      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <Button variant="secondary" size={size} onClick={onCancel} disabled={creating}>
-          Cancel
-        </Button>
+      {/* WHY stacked, filled on top (decisions "Applied from earlier rules": the buddy's
+          new-session form stacks its buttons; "Button arrangement by width" + "Stacked order":
+          two actions in a narrow popup stack full width, the filled one on top). The buddy
+          chat is a 320px window. Copies BuddyWelcome's own stacked New session / Resume pair. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
         <Button
           onClick={submit}
           disabled={creating || nb.nativeCreateBlocked}
           variant={dangerous && showSkipPermissions ? 'danger' : 'primary'}
           size={size}
-          className="flex-1"
+          className="w-full"
         >
           {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (dangerous)' : 'Create session'}
         </Button>
+        <Button variant="secondary" size={size} className="w-full" onClick={onCancel} disabled={creating}>
+          Cancel
+        </Button>
       </div>
-      {error && (
-        <p className="text-3xs text-fg-muted" style={{ margin: 0, textAlign: 'center' }}>
-          {error}
-        </p>
-      )}
+      {/* WHY FieldError, not a grey line (decisions "Fix batch: error lines, buttons, notices":
+          a short error line is the small tinted box, the danger notice in miniature). The way to
+          try again is the Create session button just above, so it carries no button of its own.
+          Same piece BuddyResumeList already uses for its warning. */}
+      {error && <FieldError as="p">{error}</FieldError>}
     </div>
   );
 }
