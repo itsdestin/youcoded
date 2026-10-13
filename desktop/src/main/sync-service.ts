@@ -1064,6 +1064,11 @@ export class SyncService extends EventEmitter {
         const pushedIds: string[] = [];
 
         for (const instance of instances) {
+          // WHY skip it outright (small-fixes-2): a github-type backup copies nothing on a computer
+          // (below), yet it was counted as pushed and its "last backed up" marker touched, so
+          // Backup & sync read "Backed up 5m ago" for a backup that never ran. Its settings stay;
+          // the panel says it is no longer supported and offers Remove.
+          if (instance.type === 'github') continue;
           try {
             let backendErrors = 0;
             switch (instance.type) {

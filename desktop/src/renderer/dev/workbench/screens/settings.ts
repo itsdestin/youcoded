@@ -101,6 +101,11 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
+  // A GitHub backup set up before computers stopped supporting it: shown honestly (small-fixes-2).
+  { ...settings('settings/sync#github-unsupported', 'dialog'), params: { syncWarn: 'github' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
+  // The wizard's sign-in step when the sign-in fails: its own reason and Try again (small-fixes-2).
+  { ...settings('settings/sync#add-auth-failed', 'dialog', 'error-state'), params: { syncSetup: 'auth-failed' }, escapeStepsBack: WIZARD_ESCAPE,
+    open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Connect to Google'] },
   // A Google Drive backup that timed out: the classifier's warning with its fix button (small-fixes-2).
   { ...settings('settings/sync#backup-timeout', 'dialog', 'error-state'), params: { syncWarn: 'timeout' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).

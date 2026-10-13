@@ -11,7 +11,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, ErrorState, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
-import { isAndroid as checkIsAndroid } from '../platform';
+import { isAndroid as checkIsAndroid, isRemoteMode } from '../platform';
+
+/** Whether a GitHub backup copies anything on the backend this screen talks to. Only the phone
+ *  app's own backup service still pushes one; a computer's (or a phone paired to a computer)
+ *  removed it. Shared with Backup & sync's rows. */
+export function githubBackupWorks(): boolean {
+  return checkIsAndroid() && !isRemoteMode();
+}
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { plainMessage } from '../utils/ipc-error';
@@ -201,7 +208,13 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   if (step === 'type') {
     const types: { type: BackendType; desc: string }[] = [
       { type: 'drive', desc: 'Stores your data in a Google Drive folder. Works on any device.' },
-      { type: 'github', desc: 'Stores your data in a private GitHub repository. Includes full version history.' },
+      // GitHub only where it still backs anything up: the phone app's own backup service
+      // (SyncService.kt pushGithub). WHY (small-fixes-2, Destin "yes, proceed"): on a computer the
+      // GitHub backup was removed (sync-service.ts, sync-legacy-demolition), so the option made a
+      // backup that copied nothing. A computer's GitHub copy is cross-device sync, above.
+      ...(githubBackupWorks()
+        ? [{ type: 'github' as BackendType, desc: 'Stores your data in a private GitHub repository. Includes full version history.' }]
+        : []),
       // iCloud only where an iCloud Drive client exists: macOS, and
       // iCloud-for-Windows on Windows. Linux has no iCloud client at all and
       // Android has no iCloud Drive support — offering it there gave users a
@@ -977,6 +990,9 @@ function PrereqRow({ label, status }: { label: string; status: 'checking' | 'rea
 
 // --- Auth Step ---
 
+// Said only when the sign-in gave no reason of its own: nothing about why (never a guess).
+const SIGN_IN_NO_REASON = "The sign-in didn't finish.";
+
 function AuthStep({
   backendType,
   isAdditionalDrive = false,
@@ -1010,18 +1026,18 @@ function AuthStep({
         if (result.success) {
           onSuccess({ remoteName: result.remoteName });
         } else {
-          setError(result.error || 'Sign-in failed');
+          setError(result.error || SIGN_IN_NO_REASON);
         }
       } else if (backendType === 'github') {
         const result = await claude.sync.setup.authGithub();
         if (result.success) {
           onSuccess({ username: result.username });
         } else {
-          setError(result.error || 'Sign-in failed');
+          setError(result.error || SIGN_IN_NO_REASON);
         }
       }
     } catch (e: any) {
-      setError(e.message || 'Something went wrong');
+      setError(plainMessage(e, SIGN_IN_NO_REASON));
     }
     setWaiting(false);
   };
@@ -1063,9 +1079,10 @@ function AuthStep({
             </div>
             {/* Last of the hardcoded bg-blue-600 buttons (spec change 55) — the sign-in
                 CTA now uses the theme accent like every other primary action. */}
-            <Button size="lg" onClick={handleAuth}>
+            {/* Hidden while its failure shows: that notice carries Try again (small-fixes-2). */}
+            {!error && <Button size="lg" onClick={handleAuth}>
               {buttonLabel}
-            </Button>
+            </Button>}
           </>
         ) : (
           <>
@@ -1079,17 +1096,13 @@ function AuthStep({
           </>
         )}
 
-        {/* Error + retry */}
-        {error && (
-          <div className="mt-4 space-y-2 text-center">
-            <div className="text-2xs text-fg-dim">
-              Looks like the sign-in didn't complete. No worries — try again when you're ready.
-            </div>
-            {/* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */}
-            <Button variant="secondary" onClick={handleAuth}>
-              Try again
-            </Button>
-          </div>
+        {/* WHY the real reason in the shared error box (small-fixes-2, Destin "yes, proceed";
+            error-message-standards): this showed "Looks like the sign-in didn't complete. No
+            worries — try again when you're ready." for EVERY failure and threw the sign-in's own
+            words away. Now the reason the sign-in gave, or — when it gave none — only what is
+            certainly true, with Try again inside, in the main button's place. */}
+        {error && !waiting && (
+          <ErrorState mode="recoverable" className="w-full max-w-xs text-left" message={error} onRetry={() => void handleAuth()} />
         )}
       </div>
     </div>

@@ -2246,6 +2246,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           config: { DRIVE_ROOT: 'YouCoded/Backup', rcloneRemote: 'gdrive' },
           lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 300, lastError: null,
         },
+        // `?syncWarn=github` (small-fixes-2): a GitHub backup set up before computers stopped
+        // supporting it — its settings still saved, nothing copied since.
+        ...(syncWarnMode === 'github' ? [{
+          id: 'github-1', type: 'github' as const, label: 'GitHub', syncEnabled: true, connected: true,
+          config: { PERSONAL_SYNC_REPO: 'https://github.com/you/claude-sync' },
+          lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 600, lastError: null,
+        }] : []),
       ],
       lastSyncEpoch: Math.floor(SYNC_NOW / 1000) - 120,
       backupMeta: {
@@ -2299,7 +2306,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       installRclone: async () => (syncSetupMode === 'install-failed'
         ? { success: false, error: 'The download of the helper tool stopped part way (workbench practice failure).' }
         : { success: true }),
-      authGdrive: async () => ({ success: true, remoteName: 'gdrive2' }),
+      // `?syncSetup=auth-failed`: the sign-in answers with a reason of its own.
+      authGdrive: async () => (syncSetupMode === 'auth-failed'
+        ? { success: false, error: 'Google sign-in was closed before it finished (workbench practice failure).' }
+        : { success: true, remoteName: 'gdrive2' }),
       createRepo: async (name: string) => (syncSetupMode === 'save-failed'
         ? { success: false, error: `GitHub refused to make the repository ${name}: name already exists on this account (workbench practice failure).` }
         : { success: true, repoUrl: `https://github.com/you/${name}` }),

@@ -13,7 +13,8 @@
 // SAME `bg-inset/50` as their own parent card, a box wearing its box's look.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel, FoldRow } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel, FoldRow, Pill } from './ui';
+import type { PillTone } from './ui/Pill';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
   InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
@@ -43,8 +44,23 @@ function gbNum(bytes: number): string {
 // Fit → a status color. These are theme-independent status colors (the app's
 // standing rule keeps green/amber/red hardcoded); the label text is plain words
 // straight from the estimator.
-function fitColor(fit: FitEstimate['fit']): string {
-  return fit === 'fits' ? 'text-green-600' : fit === 'tight' ? 'text-amber-500' : 'text-red-500';
+// WHY a pill, not coloured words (small-fixes-2, Destin "yes, proceed"): "Runs fast — fits on
+// your GPU" was green TEXT (amber / red for the others), and the guide keeps status colours out of
+// text — "a status label is a small tinted pill in its status colour" (guide "Status and
+// notices"; the Local engine's Running / Stopped pill on this same screen). Same words, same
+// colours, now in the pill's tint with the words in the normal text colour.
+function fitTone(fit: FitEstimate['fit']): PillTone {
+  return fit === 'fits' ? 'ok' : fit === 'tight' ? 'warning' : 'danger';
+}
+
+/** A model's size and how well it fits, on one centred line: the size, then the fit pill. */
+function SizeAndFit({ q, testId }: { q: QuantWithFit; testId?: string }) {
+  return (
+    <p className="text-3xs mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1" data-testid={testId} data-centres-agree="size and fit">
+      <span><SizeLine q={q} /></span>
+      <Pill tone={fitTone(q.fit.fit)}>{q.fit.label}</Pill>
+    </p>
+  );
 }
 
 /** The size under a downloadable model (deck S-2, Q-3 pick c; round 2 P-5): ONE
@@ -507,11 +523,7 @@ export function RepoCard({
               <p className="text-3xs text-fg-muted mt-0.5">Checking size…</p>
             )}
             {chosen && (
-              <p className="text-3xs mt-0.5" data-testid="repo-size-line">
-                <SizeLine q={chosen} />
-                {' · '}
-                <span className={fitColor(chosen.fit.fit)}>{chosen.fit.label}</span>
-              </p>
+              <SizeAndFit q={chosen} testId="repo-size-line" />
             )}
             {/* Grey, not amber (fix batch 2): the guide keeps status colours out
                 of text; the Retry box opens when the row is expanded. */}
@@ -1305,11 +1317,7 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
         <div className="min-w-0 flex-1">
           <p className="text-2xs text-fg font-medium">{q.quant}</p>
           <p className="text-3xs text-fg-muted">{q.description}</p>
-          <p className="text-3xs mt-0.5">
-            <SizeLine q={q} />
-            {' · '}
-            <span className={fitColor(q.fit.fit)}>{q.fit.label}</span>
-          </p>
+          <SizeAndFit q={q} />
         </div>
         {/* Hidden while its failure shows: that notice carries Try again (small-fixes-1). */}
         {!dl && !dlError && (

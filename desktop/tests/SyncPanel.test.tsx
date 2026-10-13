@@ -497,3 +497,33 @@ describe('Settings row — Backup & sync warnings freshness', () => {
     expect(container.textContent).toContain('Sync failing');
   });
 });
+
+// small-fixes-2 (Destin "yes, proceed"): on a computer a GitHub backup copies nothing — its
+// backend was removed — so one set up earlier is shown as no longer supported, with Remove, and
+// its settings are left alone; the add-a-backup picker no longer offers it.
+describe('GitHub backups on a computer', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('an existing one says it is no longer supported and offers Remove, not "Backed up"', async () => {
+    const GITHUB = { id: 'github-1', type: 'github', label: 'GitHub', syncEnabled: true, config: { PERSONAL_SYNC_REPO: 'https://github.com/me/x' }, connected: true, lastPushEpoch: 1, lastError: null };
+    const api = stub({}, []);
+    api.getStatus = vi.fn(async () => ({
+      backends: [DRIVE, GITHUB], lastSyncEpoch: null, backupMeta: null, warnings: [],
+      syncInProgress: false, syncingBackendId: null, syncedCategories: [], lastSyncByDevice: {},
+    }));
+    render(<SyncSection autoOpen />);
+    expect(await screen.findByText('No longer supported')).toBeInTheDocument();
+    expect(screen.getByText(/GitHub backups are no longer supported on computers/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    // The existing Remove confirm — nothing is removed until it is confirmed there.
+    expect(await screen.findByText(/This disconnects this backup destination/)).toBeInTheDocument();
+  });
+
+  it('the add-a-backup picker does not offer GitHub', async () => {
+    stub({}, []);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: /Add a backup/ }));
+    expect(await screen.findByRole('button', { name: /Google Drive/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /GitHub Stores your data/ })).toBeNull();
+  });
+});

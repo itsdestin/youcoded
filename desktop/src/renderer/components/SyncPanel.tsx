@@ -17,7 +17,7 @@ import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
-import SyncSetupWizard, { type FirstBackup } from './SyncSetupWizard';
+import SyncSetupWizard, { githubBackupWorks, type FirstBackup } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
@@ -1508,12 +1508,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           : (b.syncEnabled && b.connected) ? 'bg-green-400 ring-2 ring-green-400/25'
                           : 'bg-fg-muted/40';
                         const failure = uploadFailure[b.id];
+                        // A GitHub backup set up before it was removed on computers (small-fixes-2):
+                        // kept and shown honestly — its settings and the files on GitHub are never
+                        // touched — with Remove inside a notice ("Problem on a list item").
+                        const unsupported = b.type === 'github' && !githubBackupWorks();
                         return (
                           <React.Fragment key={b.id}>
                           {/* WHY always the plain nested box (nothing-bare-3#N3-2, Destin: "styled more
                               like typical second level cards"): the status light already carries
                               green/red; a tinted box per state made it a one-off look. */}
-                          <div className={`flex items-center gap-3 px-3 py-2.5 ${CARD_LEVEL_2}`}>
+                          {/* The row's box holds its own notice (guide "A notice about one thing sits
+                              inside that thing" — Local models' interrupted download), so it is a column. */}
+                          <div className={CARD_LEVEL_2}>
+                          <div className="flex items-center gap-3 px-3 py-2.5">
                             {/* Type icon */}
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0 ${BACKEND_STYLE[b.type]?.tint ?? ''}`}>
                               {BACKEND_STYLE[b.type]?.icon ?? '?'}
@@ -1522,7 +1529,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             <div className="flex-1 min-w-0">
                               <div className="text-xs text-fg font-medium truncate">{b.label}</div>
                               <div className="text-3xs text-fg-muted truncate">
-                                {b.lastError ? b.lastError :
+                                {unsupported ? 'No longer supported' :
+                                 b.lastError ? b.lastError :
                                  b.lastPushEpoch ? `Backed up ${timeAgo(b.lastPushEpoch)}` :
                                  !b.syncEnabled ? 'Auto-backup paused' :
                                  'Never backed up'}
@@ -1541,9 +1549,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               )}
                             </div>
                             {/* Status light (state at a glance) — controls moved into the cog menu. */}
-                            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${lightClass}`} />
-                            {/* Cog menu (replaces the old ⋯ kebab + per-row on/off toggle). */}
-                            <div className="relative shrink-0">
+                            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${unsupported ? 'bg-fg-muted/40' : lightClass}`} />
+                            {/* Cog menu (replaces the old ⋯ kebab + per-row on/off toggle). Not on an
+                                unsupported GitHub backup: Upload now and the rest would do nothing;
+                                its Remove sits in its notice below. */}
+                            {!unsupported && <div className="relative shrink-0">
                               <button
                                 onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
                                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
@@ -1568,7 +1578,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                   <MenuButton danger onClick={() => { setConfirmRemoveId(b.id); setMenuOpenId(null); }}>Remove</MenuButton>
                                 </div>
                               )}
+                            </div>}
+                          </div>
+                          {unsupported && (
+                            <div className="px-3 pb-2.5">
+                              <Callout tone="warning" compact actions={
+                                <Button size="sm" variant="secondary" onClick={() => setConfirmRemoveId(b.id)}>Remove</Button>
+                              }>
+                                GitHub backups are no longer supported on computers, so nothing is copied here. What's already on GitHub stays there.
+                              </Callout>
                             </div>
+                          )}
                           </div>
                           {failure && (
                             <ErrorState
