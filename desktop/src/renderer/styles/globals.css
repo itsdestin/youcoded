@@ -427,11 +427,13 @@
      11px" on the real screens (ui-element-review-pieces#T-1/#T-2, decisions.md
      "Smallest text"): nothing a user has to read is smaller than 11px. It keeps
      its own name rather than being folded into 2xs so the ~460 sites stay
-     greppable if the step ever needs to move again. 4xs (9px) was not part of
-     that question and is unchanged. */
+     greppable if the step ever needs to move again.
+     WHY 4xs is 11px too (2026-10-13, final review F14): the same rule — "nothing a user has
+     to read is smaller than 11px, the status bar included" (guide "Text and numbers") —
+     covers the ~20 tag, status-pill, timestamp and status-bar sites that were still 9px. */
   --text-2xs: 11px;
   --text-3xs: 11px;
-  --text-4xs: 9px;
+  --text-4xs: 11px;
 
   /* 13px — the one real step Tailwind's scale is missing, sitting between
      text-xs (12) and text-sm (14). Named rather than folded because all 22
@@ -1840,7 +1842,8 @@ pre.yc-code code {
 [data-statusbar-style="minimal"] .status-bar {
   background: transparent;
   border-top: none;
-  font-size: 9px;
+  /* WHY 11px, not 9px: the text floor covers the status bar (guide "Text and numbers"). */
+  font-size: 11px;
 }
 
 /* Floating chrome — elevate all chrome bars into detached, rounded cards.
