@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export interface ArtifactBytesState {
+interface ArtifactBytesState {
   bytes: Uint8Array | null;
   loading: boolean;
   error: string | null;
