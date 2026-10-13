@@ -1,4 +1,5 @@
 import { Terminal } from '@xterm/xterm';
+import { screenTextOf, VISIBLE_TAIL_MARGIN_ROWS } from '../../shared/terminal-screen-text';
 
 const terminals = new Map<string, Terminal>();
 
@@ -76,17 +77,20 @@ export function unregisterTerminal(sessionId: string) {
 }
 
 /**
- * Serialize the terminal buffer to text, joining wrapped lines.
+ * Serialize the terminal buffer to text, joining wrapped lines. The reading itself is shared/terminal-screen-text.ts (also used by the computer's
+ * own headless copy of the terminal, one-core R5-4b), so every reader sees a screen the same way.
  *
- * @param tailRows When set, only the last `tailRows` buffer rows are
- *   serialized (walked back to the nearest logical-line start so a wrapped
- *   line is never cut). The hot callers only need the tail — the prompt
- *   detector reads once per buffer flush (up to ~60/s while Claude streams)
- *   and the attention classifier asks for a 40-row tail once a second — so
- *   serializing the full scrollback (1000+ rows × translateToString) on
- *   every read was the single largest renderer CPU cost during streaming.
- *   Omit for the full buffer.
+ * @param tailRows When set, only the last `tailRows` buffer rows are serialized (see screenTextOf). Omit for the full buffer.
  */
+/** Rig instrument (perf-lab `cut` leg): the terminal's sticky modes, so a test can prove they survive a cut backlog. */
+export function getTerminalModes(sessionId: string): { bracketedPaste: boolean; appCursorKeys: boolean; cursorHidden: boolean | null } | null {
+  const t = terminals.get(sessionId);
+  if (!t) return null;
+  // cursorHidden has no public API in xterm 6; read the core service, tolerating its absence.
+  const hidden = (t as unknown as { _core?: { coreService?: { isCursorHidden?: boolean } } })._core?.coreService?.isCursorHidden;
+  return { bracketedPaste: t.modes.bracketedPasteMode, appCursorKeys: t.modes.applicationCursorKeysMode, cursorHidden: typeof hidden === 'boolean' ? hidden : null };
+}
+
 export function getScreenText(sessionId: string, tailRows?: number): string | null {
   const terminal = terminals.get(sessionId);
   if (!terminal) return null;
@@ -98,43 +102,8 @@ export function getScreenText(sessionId: string, tailRows?: number): string | nu
   } catch {
     return null;
   }
-
-  let start = 0;
-  if (tailRows !== undefined && buf.length > tailRows) {
-    start = buf.length - tailRows;
-    // Never start mid-wrapped-line: walk back to the logical line start so
-    // the join below sees the whole first line, not a fragment.
-    while (start > 0) {
-      const line = buf.getLine(start);
-      if (!line || !line.isWrapped) break;
-      start--;
-    }
-  }
-
-  const lines: string[] = [];
-  let current = '';
-
-  for (let i = start; i < buf.length; i++) {
-    const line = buf.getLine(i);
-    if (!line) continue;
-
-    const text = line.translateToString(true);
-    if (line.isWrapped) {
-      // Continuation of previous line — append without newline
-      current += text;
-    } else {
-      if (current) lines.push(current);
-      current = text;
-    }
-  }
-  if (current) lines.push(current);
-
-  return lines.join('\n');
+  return screenTextOf(buf, tailRows);
 }
-
-// Extra rows past the visible screen so a wrapped line straddling the
-// boundary still joins completely, with headroom for tall Ink menus.
-const VISIBLE_TAIL_MARGIN_ROWS = 40;
 
 /**
  * The visible screen (plus a wrap-join margin) — the cheap read for hot

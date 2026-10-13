@@ -2,10 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
-import { isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
-import { applyLookOverrides, parseLookOverrides, type LookOverrides } from '../themes/look-overrides';
+import { applyLookOverrides, parseLookOverrides, PAGES_SOLID_ATTR, type LookOverrides } from '../themes/look-overrides';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
 
@@ -52,6 +52,8 @@ function withWallpaper(json: unknown, value: string, terminal: string, buddy: [s
     source: 'youcoded-core',
   };
 }
+import { themeIconSet, type ThemeIconSet } from '../../shared/theme-icons';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(lightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
@@ -70,6 +72,8 @@ const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', mono
 const STORAGE_KEY = 'youcoded-theme';
 const CYCLE_KEY = 'youcoded-theme-cycle';
 const REDUCED_EFFECTS_KEY = 'youcoded-reduced-effects';
+// "Show theme background behind pages" — stored as '0' only when OFF; absent = ON (the default).
+const PAGES_SEE_THROUGH_KEY = 'youcoded-pages-see-through';
 const SHOW_TIMESTAMPS_KEY = 'youcoded-show-timestamps';
 const SHOW_TURN_METADATA_KEY = 'youcoded-show-turn-metadata';
 // Artifact viewer: filter Session Drawer / Project View to "Documents and
@@ -120,6 +124,10 @@ interface ThemeContextValue {
   font: string;
   reducedEffects: boolean;
   setReducedEffects: (v: boolean) => void;
+  /** Settings → Appearance → "Show theme background behind pages". One global switch (default ON): pages and Office let the
+   *  theme's wallpaper show through their frosted pane. Only has a visible effect on wallpaper themes in a floating style. */
+  pagesSeeThrough: boolean;
+  setPagesSeeThrough: (v: boolean) => void;
   /** Bumped one render after the theme (or Reduced Effects) has been written
    *  to the DOM. Key on THIS to read the theme back out of the DOM. */
   themeApplied: number;
@@ -173,6 +181,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   cycleList: DEFAULT_CYCLE, setCycleList: () => {},
   font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
+  pagesSeeThrough: true, setPagesSeeThrough: () => {},
   themeApplied: 0,
   showTimestamps: true, setShowTimestamps: () => {},
   showTurnMetadata: false, setShowTurnMetadata: () => {},
@@ -269,6 +278,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
+  const [pagesSeeThrough, setPagesSeeThroughState] = useState(() => getStored(PAGES_SEE_THROUGH_KEY, '1') !== '0');
   // See the interface: a counter for consumers that read the theme back out of the DOM.
   const [themeApplied, setThemeApplied] = useState(0);
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
@@ -405,6 +415,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   useEffect(() => () => { selectionGeneration.current++; }, []);
+  // True while a reconnect refresh is in flight (and a moment after): nothing it does may be written back as the user's choice.
+  const reconnectRefreshing = useRef(false);
 
   // The theme as the user sees it: its own choices, with any global override on top.
   // WHY every source (user themes too): the override is the user's, not the theme's —
@@ -426,7 +438,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (!allThemesInternal.find(t => t.slug === activeSlug)) {
       setActiveSlug(DEFAULT_THEME);
       try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
-      persistAppearance({ theme: DEFAULT_THEME });
+      // A refresh after a reconnect is never a choice: it must not overwrite the saved theme for every screen (sync-fix3 review).
+      if (!reconnectRefreshing.current) persistAppearance({ theme: DEFAULT_THEME });
     }
   }, [allThemesInternal, activeSlug, userThemesLoaded]);
 
@@ -434,12 +447,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // can refresh the list; the active-theme fallback effect (above) uses the
   // refreshed list to reset to the default if the user just uninstalled the
   // theme they had applied.
-  const reloadUserThemes = useCallback(async () => {
+  // WHY (2026-10-01, one-core R5-2): the theme list is read asynchronously; when the provider is
+  // gone before the read finishes, setting state afterwards ran against a torn-down window and
+  // surfaced as an unhandled error in a full-suite run (app-welcome-back-gating.test.tsx).
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const reloadUserThemes = useCallback(async (opts?: { keepOnFailure?: boolean }) => {
     try {
       const claude = (window as any).claude;
-      if (!claude?.theme?.list) { setUserThemesLoaded(true); return; }
+      if (!claude?.theme?.list) { if (alive.current) setUserThemesLoaded(true); return; }
       const slugs: string[] = await claude.theme.list();
       const loaded: LoadedTheme[] = [];
+      const failed: string[] = [];
       for (const slug of slugs) {
         try {
           const raw = await claude.theme.readFile(slug);
@@ -448,22 +467,30 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           loaded.push(resolveAllAssetPaths({ ...theme, source }));
         } catch (e) {
           console.warn(`[ThemeProvider] Failed to load user theme "${slug}":`, e);
+          failed.push(slug);
         }
       }
-      setUserThemes(loaded);
+      if (!alive.current) return;
+      // WHY (sync-fix3 review): a reconnect is exactly when a file read is likely to fail, and replacing the list without the active theme
+      // would send it to the "uninstalled" fallback. On a refresh, a theme whose read failed keeps its old definition, and a builder preview stays.
+      if (opts?.keepOnFailure) {
+        setUserThemes((prev) => [...loaded, ...prev.filter((t) => failed.includes(t.slug) || t.slug === '_preview')]);
+      } else setUserThemes(loaded);
       setUserThemesLoaded(true);
     } catch {
-      setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
+      if (alive.current) setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
     }
   }, []);
 
   // Initial load on mount
   useEffect(() => { reloadUserThemes(); }, [reloadUserThemes]);
 
-  // Load appearance preferences from disk (source of truth) on mount
-  useEffect(() => {
-    const generation = selectionGeneration.current;
-    const loadAppearance = async () => {
+  // Load appearance preferences from disk (source of truth) on mount, and again after a remote reconnect.
+  // WHY a callback that reads the generation when it RUNS (sync-fix3): the same body now serves the mount and a reconnect, and a choice the
+  // user makes while the read is in flight must still win over what the read brings back.
+  const loadAppearance = useCallback(async (startedAt?: number) => {
+    const generation = startedAt ?? selectionGeneration.current;
+    {
       try {
         const claude = (window as any).claude;
         if (!claude?.appearance?.get) return;
@@ -480,6 +507,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         if (typeof prefs.reducedEffects === 'boolean') {
           setReducedEffectsState(prefs.reducedEffects);
           try { localStorage.setItem(REDUCED_EFFECTS_KEY, prefs.reducedEffects ? '1' : ''); } catch {}
+        }
+        if (typeof prefs.pagesSeeThrough === 'boolean') {
+          setPagesSeeThroughState(prefs.pagesSeeThrough);
+          try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, prefs.pagesSeeThrough ? '1' : '0'); } catch {}
         }
         if (typeof prefs.showTimestamps === 'boolean') {
           setShowTimestampsState(prefs.showTimestamps);
@@ -506,9 +537,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(look)); } catch {}
         }
       } catch {}
-    };
-    loadAppearance();
+    }
   }, [applyIncomingTheme]);
+  useEffect(() => { void loadAppearance(); }, [loadAppearance]);
+
+  // WHY (sync-fix3): `appearance:sync` and `theme:reload` are one-shot pushes, so a phone that was asleep when another screen changed the theme (or
+  // when a theme was installed on the computer) kept the old look until a full page reload. After a reconnect: re-read the installed themes
+  // first (a newly installed one must exist before the chosen slug is looked up), then the saved appearance.
+  useOnRemoteReconnect(() => {
+    // The generation is taken BEFORE the theme reload, so a theme picked while it runs wins over the saved one read afterwards.
+    const startedAt = selectionGeneration.current;
+    reconnectRefreshing.current = true;
+    void reloadUserThemes({ keepOnFailure: true }).then(() => loadAppearance(startedAt)).finally(() => { setTimeout(() => { reconnectRefreshing.current = false; }, 100); });
+  });
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
@@ -528,6 +569,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (typeof prefs.reducedEffects === 'boolean') {
         setReducedEffectsState(prefs.reducedEffects);
         try { localStorage.setItem(REDUCED_EFFECTS_KEY, prefs.reducedEffects ? '1' : ''); } catch {}
+      }
+      if (typeof prefs.pagesSeeThrough === 'boolean') {
+        setPagesSeeThroughState(prefs.pagesSeeThrough);
+        try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, prefs.pagesSeeThrough ? '1' : '0'); } catch {}
       }
       if (typeof prefs.showTimestamps === 'boolean') {
         setShowTimestampsState(prefs.showTimestamps);
@@ -650,7 +695,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // theme/color tokens" (2026-09-10). Tokens and shape still apply, so a phone paired to
     // this computer looks like this computer.
     applyThemeToDom(
-      isRemoteMode() ? { ...activeTheme, background: undefined } : activeTheme,
+      !getCapabilities().themePictures ? { ...activeTheme, background: undefined } : activeTheme,
       reducedEffects,
     );
     applyHighlightTheme(activeTheme.dark);
@@ -658,16 +703,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
-    // A theme that declares its own appIcon gets it; every other theme sends null,
-    // which main resets to the bundled assets/icon.png.
+    // A theme that declares its own appIcon sends its whole icon bundle (app icon, Windows .ico,
+    // Mac glass version, tray icons — shared/theme-icons.ts); every other theme sends null, which
+    // main resets to the app's own icons.
     // WHY no theme tint (2026-09-10): the tint redrew the retired "YC" terminal
     // square, so once the mascot icon shipped the taskbar would swap from the new
     // icon back to the old one the moment the app opened. Theme-matched icons drawn
     // from the mascot are a parked item in the workspace's themes roadmap.
-    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
+    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (set: ThemeIconSet | null) => Promise<void> } } };
     const setIconFn = anyWin.claude?.window?.setIcon;
     if (setIconFn) {
-      setIconFn(activeTheme.appIcon ?? null).catch(() => {});
+      setIconFn(themeIconSet(activeTheme)).catch(() => {});
     }
 
     // Sync font state: use theme's declared font, or fall back to default.
@@ -710,6 +756,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setReducedEffectsState(v);
     try { localStorage.setItem(REDUCED_EFFECTS_KEY, v ? '1' : ''); } catch {}
     persistAppearance({ reducedEffects: v });
+  }, []);
+
+  // WHY an <html> attribute (present = OFF): pages, the page pane and Office all already watch <html>'s attributes, so the
+  // switch reaches every open page live with no new prop, IPC or per-page storage (page-theme.ts → paneIsGlass).
+  useEffect(() => {
+    document.documentElement.toggleAttribute(PAGES_SOLID_ATTR, !pagesSeeThrough);
+  }, [pagesSeeThrough]);
+
+  const setPagesSeeThrough = useCallback((v: boolean) => {
+    setPagesSeeThroughState(v);
+    try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, v ? '1' : '0'); } catch {}
+    persistAppearance({ pagesSeeThrough: v });
   }, []);
 
   const setShowTimestamps = useCallback((v: boolean) => {
@@ -819,7 +877,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(() => ({
     theme: activeSlug, setTheme, cycleTheme,
     cycleList, setCycleList, font,
-    reducedEffects, setReducedEffects, themeApplied,
+    reducedEffects, setReducedEffects, pagesSeeThrough, setPagesSeeThrough, themeApplied,
     showTimestamps, setShowTimestamps,
     showTurnMetadata, setShowTurnMetadata,
     showDeletedArtifacts, setShowDeletedArtifacts,
@@ -829,7 +887,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     allThemes, activeTheme, bgStyle, patternStyle,
     lookOverrides, setLookOverrides, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
-       reducedEffects, setReducedEffects, themeApplied, showTimestamps, setShowTimestamps,
+       reducedEffects, setReducedEffects, pagesSeeThrough, setPagesSeeThrough, themeApplied, showTimestamps, setShowTimestamps,
        showTurnMetadata, setShowTurnMetadata,
        showDeletedArtifacts, setShowDeletedArtifacts,
        contextDisplay, setContextDisplay,

@@ -79,10 +79,12 @@ export function usePresence(isLeader: boolean = true) {
     // shown to them. Main refuses to connect at all if the server can't do that
     // (presence-socket.ts HIDDEN MODE), so the fallback is "see no one", never "be seen".
     const shouldConnect = signedIn && isLeader;
+    // WHY the .catch (R4-1): presence belongs to the computer's own windows (the table refuses it for a phone), so on a phone the
+    // call is answered "unsupported" and rejected. Nothing is wrong, so it must not surface as an unhandled error in the console.
     if (shouldConnect) {
-      void window.claude.social.presenceConnect({ hidden: incognito });
+      void window.claude.social.presenceConnect({ hidden: incognito }).catch(() => {});
     } else {
-      void window.claude.social.presenceDisconnect();
+      void window.claude.social.presenceDisconnect().catch(() => {});
     }
   }, [signedIn, incognito, incognitoLoaded, isLeader]);
 
@@ -263,7 +265,9 @@ export function usePresence(isLeader: boolean = true) {
     // (disconnect + connect) so a stuck connection rebuilds cleanly. Used by the
     // ErrorScreen Retry button.
     dispatch({ type: 'PARTY_ERROR_CLEARED' });
-    void window.claude.social.presenceDisconnect().then(() => window.claude.social.presenceConnect());
+    // WHY hidden here too: a plain presenceConnect() means "visible" to main, so Retry while
+    // incognito used to show this device to friends. Reconnect keeps the device's incognito state.
+    void window.claude.social.presenceDisconnect().then(() => window.claude.social.presenceConnect({ hidden: incognitoRef.current }));
   }, [dispatch]);
 
   return { updateStatus, challengePlayer, respondToChallenge, incognito, toggleIncognito, reconnect };

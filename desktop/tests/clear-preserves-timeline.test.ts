@@ -27,8 +27,8 @@ function withHistory(): ChatState {
   st = chatReducer(st, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: S, uuid: 'u2', text: 'second question', timestamp: 3 } as any);
   return st;
 }
-const clear = (st: ChatState) =>
-  chatReducer(st, { type: 'CLEAR_TIMELINE', sessionId: S, markerId: 'm1', timestamp: 100 } as any);
+const clear = (st: ChatState, markerId = 'm1') =>
+  chatReducer(st, { type: 'CLEAR_TIMELINE', sessionId: S, markerId, timestamp: 100 } as any);
 
 describe('CLEAR_TIMELINE keeps the conversation readable', () => {
   it('does not discard the entries that came before it', () => {
@@ -60,8 +60,15 @@ describe('CLEAR_TIMELINE keeps the conversation readable', () => {
   });
 
   it('two clears leave two markers and still lose nothing', () => {
-    const tl = clear(clear(withHistory())).get(S)!.timeline;
+    const tl = clear(clear(withHistory()), 'm2').get(S)!.timeline;
     expect(tl.filter((e) => e.kind === 'system-marker').length).toBe(2);
     expect(tl.filter((e) => e.kind === 'user').length).toBe(2);
+  });
+});
+
+describe('the same clear delivered twice', () => {
+  it('draws one divider (the computer\'s numbered event can be replayed)', () => {
+    const tl = clear(clear(withHistory())).get(S)!.timeline;
+    expect(tl.filter((e) => e.kind === 'system-marker').length).toBe(1);
   });
 });

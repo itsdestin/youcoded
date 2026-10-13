@@ -1,5 +1,5 @@
 import type { ArtifactViewProps } from './types';
-import { getPlatform } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { Button } from '../ui';
 import { READ_BINARY_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
 
@@ -26,7 +26,8 @@ export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryT
   // shell.openPath is desktop-only — the remote shim stubs it as a no-op and
   // Android has no handler, so showing the button there would silently do
   // nothing. Gate on the platform like SessionDrawer's toolbar does.
-  const isElectron = getPlatform() === 'electron';
+  // R4-1: `openInOs` capability, not a platform-name guess.
+  const canOpenInOs = getCapabilities().openInOs;
   const openExternally = () => {
     // Open with the OS default app via shell.openPath (HTML→browser, etc.).
     (window.claude as any).shell?.openPath?.(absolutePath);
@@ -35,7 +36,7 @@ export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryT
     <div className="flex flex-col items-center justify-center h-full p-8 text-fg-muted">
       <p className="mb-4">{message}</p>
       <p className="mb-4 font-mono text-sm">{path}</p>
-      {isElectron && (
+      {canOpenInOs && (
         <Button
           // `primary` (the default) + lg reproduces the old accent fill and
           // px-4 py-2 sizing; the primitive owns radius, hover and focus ring.

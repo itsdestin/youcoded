@@ -16,7 +16,8 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import { stampSubagent } from '../../shared/types';
+import type { TranscriptEvent, EventOf, StampableEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
@@ -25,6 +26,7 @@ import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-reb
 import { compactionSourceDigest } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
+import type { ModelAttachment } from './busy-message-boundary';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
 import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-password-service';
@@ -36,7 +38,7 @@ import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
 import { prepareProjectInstructions, type ProjectInstructionFile } from './injection/project-instructions';
-import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
+import { resolveProfile, effectiveContextForModel, IMAGE_LIMITS_DEFAULT, type CapabilityProfile, type ProfileProviderType, type ImageLimits } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
 import { createSkillCatalog, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
@@ -101,7 +103,7 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 // input the user has no way to know is piling up unseen.
 /** One unit of work for the turn drain: the message text plus any composer
  *  attachments that must ride with it. */
-type SendUnit = { text: string; attachments: string[] };
+type SendUnit = { text: string; attachments: string[]; modelAttachments?: ModelAttachment[] };
 
 const SEND_QUEUE_LIMIT = 10;
 /** Resume could not read the saved conversation. No cause named: a lock, EMFILE and a bad disk look alike. */
@@ -146,7 +148,7 @@ export const SUBAGENT_DISPLAY_TYPES = new Set<TranscriptEvent['type']>(['tool-us
  * stallWarning countdown, or a toolPreparing notice all fail this — none
  * carries data.text — and stay child-only.
  */
-function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
+function isSubagentDisplayEvent(e: TranscriptEvent): e is StampableEvent {
   return SUBAGENT_DISPLAY_TYPES.has(e.type)
     || (e.type === 'assistant-thinking' && typeof e.data.text === 'string' && e.data.text.length > 0);
 }
@@ -206,11 +208,7 @@ export function mergeChildEvents(
     if (idx === -1) continue; // defensive skip — see the function's own WHY above
     const stamped = events
       .filter(isSubagentDisplayEvent)
-      .map((e) => ({
-        ...e,
-        sessionId: parentId,
-        data: { ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId },
-      } satisfies TranscriptEvent));
+      .map((e) => ({ ...stampSubagent(e, record.parentToolCallId, record.childId), sessionId: parentId }));
     merged.splice(idx + 1, 0, ...stamped);
   }
   return merged;
@@ -330,8 +328,10 @@ interface LiveEntry {
   // shift() (see runTurns), so a removed entry can never be shifted out and sent.
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
-  // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[]; ready?: boolean }[];
+  // while a turn was in flight would silently lose its pictures. The same holds
+  // for `modelAttachments` (the prepared copies the model reads, parallel to
+  // `attachments`): dropping it here would resend the over-limit original.
+  queue: { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; ready?: boolean; /** when it was queued (ms), for the strip */ at?: number }[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -2178,6 +2178,36 @@ export class NativeSessionHost extends EventEmitter {
   // is the read-side answer to "what personality is this session running as".
   private presetIdFor = new Map<string, string>();   // resolved (post-legacy-mapping) preset id
 
+  /** Ids (not text) of messages waiting behind the running turn, oldest first, including ones typed while the session
+   *  was starting. WHY (R5-1): the session record reads the queue from its one owner instead of keeping a copy. */
+  queuedMessageIds(sessionId: string): string[] {
+    return [
+      ...(this.startingSends.get(sessionId) ?? []).map((q) => q.id),
+      ...(this.live.get(sessionId)?.queue ?? []).map((q) => q.id),
+    ];
+  }
+
+  /** The waiting messages themselves, oldest first: what the docked strip draws on EVERY screen (one-core R5-4a). `content` is the text
+   *  exactly as it was sent, which is also what the strip showed when only the sending screen drew it. */
+  queuedMessagesFor(sessionId: string): { queueId: string; content: string; timestamp: number }[] {
+    const item = (q: { id: string; text: string; at?: number }) => ({ queueId: q.id, content: q.text, timestamp: q.at ?? 0 });
+    return [
+      ...(this.startingSends.get(sessionId) ?? []).map(item),
+      ...(this.live.get(sessionId)?.queue ?? []).map(item),
+    ];
+  }
+
+  /** The last queue announced per session, as its ids. WHY (R5-4a): the queue changes in about ten places (a send, a cancel, a drain, a
+   *  hand-over, a teardown); each calls announceQueue and only a CHANGE is published, so a drain that finds nothing new stays silent. */
+  private lastQueueAnnounced = new Map<string, string>();
+  private announceQueue(sessionId: string): void {
+    const items = this.queuedMessagesFor(sessionId);
+    const key = items.map((q) => q.queueId).join(',');
+    if ((this.lastQueueAnnounced.get(sessionId) ?? '') === key) return;
+    if (key) this.lastQueueAnnounced.set(sessionId, key); else this.lastQueueAnnounced.delete(sessionId);
+    this.emit('queue-changed', { sessionId, queue: items });
+  }
+
   /** This session's current permission mode (default 'ask' when not seeded). */
   getPermissionMode(sessionId: string): NativePermissionMode { return this.modeFor.get(sessionId) ?? 'ask'; }
   /** This session's resolved preset id (null if not live). */
@@ -3044,7 +3074,7 @@ export class NativeSessionHost extends EventEmitter {
    * the instant the session exists, so the message the user typed is never
    * thrown away — which is the real harm; better wording alone still loses it.
    */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[] }[]>();
+  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[]>();
 
   /** Mark an id as being built. Called at the TOP of create() and resume(), so
    *  the window a pre-live send can fall into is covered from its first tick. */
@@ -3055,7 +3085,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Stop holding sends for an id, returning whatever was held. Called by wire()
    *  on success, and by create()/resume() when they give up — a message held for
    *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[] }[] {
+  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[] {
     const held = this.startingSends.get(sessionId) ?? [];
     this.startingSends.delete(sessionId);
     return held;
@@ -3083,7 +3113,7 @@ export class NativeSessionHost extends EventEmitter {
   /** The portable checkpoint is the compact-summary line itself. Return the RAW
    * append result to the harness; only the chain's copy swallows rejections. */
   private commitCompaction(sessionId: string, session: HarnessSession,
-    proposal: Parameters<NonNullable<HarnessSessionOpts['commitCompaction']>>[0]): Promise<TranscriptEvent> {
+    proposal: Parameters<NonNullable<HarnessSessionOpts['commitCompaction']>>[0]): Promise<EventOf<'compact-summary'>> {
     const entry = this.live.get(sessionId);
     if (!entry || entry.session !== session || entry.committing) return Promise.reject(new Error('stale-compaction'));
     const generation = entry.compactionGeneration;
@@ -3114,11 +3144,13 @@ export class NativeSessionHost extends EventEmitter {
       }
       const record = { v: 1 as const, generation: generation + 1,
         sourceRevision: proposal.sourceRevision, resumeFrom, coveredThrough };
-      const event: TranscriptEvent = {
+      // WHY no cast now (M5): `data` is typed as compact-summary's payload, so a
+      // mistyped compactionRecord field is a compile error instead of a silent cast.
+      const event: EventOf<'compact-summary'> = {
         ...proposal.event,
         data: { ...proposal.event.data, compactionRecord: {
           ...record, sourceDigest: compactionSourceDigest(sourceEvents, String(proposal.event.data.summary ?? ''), record),
-        } } as TranscriptEvent['data'],
+        } },
       };
       // Advance only for a candidate that actually reaches the append point.
       // A later candidate under this live entry gets a distinct generation.
@@ -3223,8 +3255,11 @@ export class NativeSessionHost extends EventEmitter {
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
     this.store.hydrateReferences(sessionId, persisted);
-    const rebuilt = rebuildHistoryWithOrigins(persisted, readImageFromDisk);
-    const portable = restorePortableHistory(persisted, readImageFromDisk,
+    // WHY the closure: the pixel gate is the SESSION's provider limits, and the
+    // reader is the one place every resume path agrees on what is too big.
+    const readImage = (p: string) => readImageFromDisk(p, session.profileSnapshot.imageLimits);
+    const rebuilt = rebuildHistoryWithOrigins(persisted, readImage);
+    const portable = restorePortableHistory(persisted, readImage,
       reason => this.logContinuation(sessionId, `portable-${reason}`, 'restore'));
     if (portable) this.restoredCompactionGeneration.set(session, portable.generation);
     if (store) {
@@ -3235,6 +3270,9 @@ export class NativeSessionHost extends EventEmitter {
         const restored = await store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
           binding: identity, assemblyDigest: session.assemblyDigest(),
+          // WHY: the checkpoint re-reads ORIGINAL picture files; an over-limit one
+          // must fail the restore (image-oversized) so the gated rebuild above wins.
+          imageLimits: session.profileSnapshot.imageLimits,
         });
         if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.
@@ -3332,7 +3370,8 @@ export class NativeSessionHost extends EventEmitter {
     if (held.length > 0) {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
-      this.send(sessionId, first.text, first.attachments);
+      this.send(sessionId, first.text, first.attachments, first.modelAttachments);
+      this.announceQueue(sessionId); // the first one is no longer waiting
     }
   }
 
@@ -3822,11 +3861,7 @@ export class NativeSessionHost extends EventEmitter {
       // The original is never mutated — the persisted event above and this copy
       // are two different objects on purpose.
       if (!isSubagentDisplayEvent(event)) return;
-      this.emit('transcript-event', {
-        ...event,
-        sessionId: parentId,
-        data: { ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId },
-      } satisfies TranscriptEvent);
+      this.emit('transcript-event', { ...stampSubagent(event, parentToolCallId, childId), sessionId: parentId });
     });
   }
 
@@ -4065,7 +4100,10 @@ export class NativeSessionHost extends EventEmitter {
    *  re-entrancy (a second send while a turn is in flight) — the host never
    *  calls it re-entrantly (inFlight gates that), so the only remaining throw
    *  surface is a provider-factory rejection, which runTurns catches. */
-  send(sessionId: string, text: string, attachments: string[] = []): NativeSendResult {
+  send(sessionId: string, text: string, attachments: string[] = [], modelAttachments?: ModelAttachment[]): NativeSendResult {
+    // WHY modelAttachments rides every path below (held, queued, dispatched):
+    // it is what the model reads — a prepared copy of an over-limit picture —
+    // and any path that dropped it would resend the original the provider refuses.
     const entry = this.live.get(sessionId);
     if (!entry) {
       // Not live YET is not the same as not live any more. A session still being
@@ -4077,7 +4115,8 @@ export class NativeSessionHost extends EventEmitter {
       if (held) {
         if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
         const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments });
+        held.push({ id: queueId, text, attachments, ...(modelAttachments ? { modelAttachments } : {}), at: Date.now() });
+        this.announceQueue(sessionId);
         return { status: 'queued', queueId };
       }
       return { status: 'failed', reason: 'not-live' };
@@ -4096,8 +4135,9 @@ export class NativeSessionHost extends EventEmitter {
       const queueId = randomUUID();
       // WHY: both the host drainer and a future in-turn claimant must leave this
       // head untouched until the IPC acknowledgement has had a macrotask to flush.
-      const queued = { id: queueId, text, attachments, ready: false };
+      const queued = { id: queueId, text, attachments, ...(modelAttachments ? { modelAttachments } : {}), ready: false, at: Date.now() };
       entry.queue.push(queued);
+      this.announceQueue(sessionId); // every screen shows it, not only the one that sent it (R5-4a)
       setImmediate(() => {
         queued.ready = true;
         // The turn may have settled while this head was unready. Readiness is
@@ -4120,9 +4160,15 @@ export class NativeSessionHost extends EventEmitter {
     // its send() so this promise never rejects — .then(resolve, resolve) is
     // belt-and-suspenders against a future throw path.
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments }).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments, modelAttachments }).then(resolve, resolve); });
     });
     return { status: 'sent' };
+  }
+
+  /** The live session's picture limits, for the send handler's preparation step.
+   *  A session still starting gets the conservative default. */
+  imageLimitsFor(sessionId: string): ImageLimits {
+    return this.live.get(sessionId)?.session.profileSnapshot.imageLimits ?? IMAGE_LIMITS_DEFAULT;
   }
 
   /** Cancel/edit a queued-but-not-yet-sent message (Task 11). Sync findIndex +
@@ -4144,13 +4190,14 @@ export class NativeSessionHost extends EventEmitter {
     const held = this.startingSends.get(sessionId);
     if (held) {
       const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.splice(i, 1); return true; }
+      if (i !== -1) { held.splice(i, 1); this.announceQueue(sessionId); return true; }
     }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
     const idx = entry.queue.findIndex((q) => q.id === queueId);
     if (idx === -1) return false;
     entry.queue.splice(idx, 1);
+    this.announceQueue(sessionId);
     return true;
   }
 
@@ -4162,7 +4209,7 @@ export class NativeSessionHost extends EventEmitter {
     const held = this.startingSends.get(sessionId); // still starting: reorder only
     if (held) {
       const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.unshift(...held.splice(i, 1)); return true; }
+      if (i !== -1) { held.unshift(...held.splice(i, 1)); this.announceQueue(sessionId); return true; }
     }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
@@ -4171,6 +4218,7 @@ export class NativeSessionHost extends EventEmitter {
     const [item] = entry.queue.splice(idx, 1);
     item.ready = true; // its IPC ack flushed long before a button could be pressed
     entry.queue.unshift(item);
+    this.announceQueue(sessionId); // "send now" moves it to the front
     this.interrupt(sessionId);
     return true;
   }
@@ -4178,14 +4226,15 @@ export class NativeSessionHost extends EventEmitter {
   /** WHY: only the live root driver may remove an acknowledged FIFO head.
    * No awaits between checking generation/readiness/quiesce and the shift. */
   private takeReadyBusyMessage(sessionId: string, session: HarnessSession):
-    { id: string; text: string; attachments: string[]; restore: () => void } | undefined {
+    { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore: () => void } | undefined {
     const entry = this.live.get(sessionId);
     if (!entry || entry.session !== session || entry.parentSessionId || !entry.inFlight ||
         entry.quiescing || entry.compacting || entry.queue[0]?.ready === false) return;
     const item = entry.queue.shift();
     if (!item) return;
+    this.announceQueue(sessionId);
     return { ...item, restore: () => {
-      if (this.live.get(sessionId) === entry && !entry.quiescing) entry.queue.unshift(item);
+      if (this.live.get(sessionId) === entry && !entry.quiescing) { entry.queue.unshift(item); this.announceQueue(sessionId); }
       else log('ERROR', 'NativeSessionHost', 'claimed message could not be restored after delivery failure', { sessionId, queueId: item.id });
     } };
   }
@@ -4230,7 +4279,7 @@ export class NativeSessionHost extends EventEmitter {
           }
           try {
             if (typeof next === 'function') await next();
-            else await entry.session.send(next.text, next.attachments);
+            else await entry.session.send(next.text, next.attachments, next.modelAttachments);
           } catch (err) {
             log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
           }
@@ -4244,6 +4293,7 @@ export class NativeSessionHost extends EventEmitter {
           // The atomic shift owns the queue ID; an unready FIFO head blocks
           // dispatch, and its scheduled readiness transition restarts the pass.
           next = entry.quiescing || entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
+          if (next !== undefined) this.announceQueue(sessionId); // it is being sent now, no longer waiting (R5-4a)
         }
         // Stop pressed during this pass: leave reports parked, but never park
         // submitted user messages. A notice pass can receive sends while awaiting.
@@ -4251,6 +4301,7 @@ export class NativeSessionHost extends EventEmitter {
         if (this.live.get(sessionId) !== entry || entry.quiescing) return;
         next = entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
         if (next === undefined) break;
+        this.announceQueue(sessionId);
       }
     } finally {
       entry.inFlight = false;
@@ -4610,16 +4661,29 @@ export class NativeSessionHost extends EventEmitter {
     // Being wound down for a takeover (quiesce): would append past the flush.
     // (Combined branch: checked before master's compaction guards, same as send.)
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
-    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) {
+      // A refusal still shows what the screen that typed it always showed (a spinner, then a "may have failed" note); say so on every screen.
+      this.emit('compaction', { sessionId, phase: 'start' });
+      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
+      return { ok: false, reason: 'turn-in-flight' };
+    }
     // WHY: claim the idle session synchronously, before compactNow awaits a
     // provider. A simultaneous send must receive a refusal, not a false 'sent'
     // acknowledgement for a turn the session's re-entrancy guard will drop.
     entry.compacting = true;
+    // One-core R5-4a: say a compaction began, so every screen draws the spinner (it used to be drawn only by the screen that typed /compact).
+    // The success case ends with the harness's own compact-summary line, which every screen turns into the "Compacted" note; only a
+    // compaction that ends WITHOUT one needs an explicit end.
+    this.emit('compaction', { sessionId, phase: 'start' });
     try {
       const result = await entry.session.compactNow(focus, targetContextLength);
       // Failed candidates do not rewrite history or publish a checkpoint.
       if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'compaction');
+      else this.emit('compaction', { sessionId, phase: 'end', outcome: result.reason === 'interrupted' ? 'cancelled' : 'failed' });
       return result;
+    } catch (err) {
+      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
+      throw err;
     } finally {
       entry.compacting = false;
       // WHY: a report queued while the summary held the idle slot has no
@@ -4809,6 +4873,7 @@ export class NativeSessionHost extends EventEmitter {
     // through endQuiesce().
     entry.quiescing = true;
     entry.queue.length = 0;                        // (1) no post-flush turn can start
+    this.announceQueue(sessionId);                 // (the strip empties on every screen)
     // (1b) Tear down specialist children before quiescing this session: a
     // running child keeps appending to ITS file and keeps the parent's Task call
     // pending, both of which contradict what quiesce promises the caller (no
@@ -4870,6 +4935,8 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
+    // One-core R5-4a: the model label changes on every screen the moment the host swaps (it used to change only on the screen that picked).
+    this.emit('model-changed', { sessionId, model: binding.modelId });
     this.republishWindow(sessionId, entry);
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
@@ -4951,6 +5018,12 @@ export class NativeSessionHost extends EventEmitter {
   currentUsageProgressFor(sessionId: string): TranscriptEvent | null {
     const entry = this.live.get(sessionId);
     return entry?.inFlight ? entry.session.currentUsageProgress : null;
+  }
+
+  /** The record of what this session was given, for a screen that opens after it was announced (the push fires once at
+   *  session start, so a window or phone that was not there needs it from here — R5-2, session-open.ts). */
+  sessionContextFor(sessionId: string): SessionContext | null {
+    return this.live.get(sessionId)?.sessionContext ?? null;
   }
 
   getHistory(sessionId: string): TranscriptEvent[] | null {
@@ -5160,6 +5233,7 @@ export class NativeSessionHost extends EventEmitter {
     // A session torn down while it was still starting has nowhere to deliver a
     // held message, so drop it here rather than leave it stranded in memory.
     this.endStarting(sessionId);
+    this.lastQueueAnnounced.delete(sessionId);
     // Specialist children go next, and unconditionally — before the not-live
     // early return, because a child must never outlive its parent even if the
     // parent's own entry is already gone (a double destroy, or a teardown

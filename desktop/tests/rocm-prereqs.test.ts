@@ -277,13 +277,13 @@ describe('enginePrereqs — the channel', () => {
   // state from BEFORE the install, for the rest of the app run.
   it('every surface\'s engine:prereqs handler passes refresh', () => {
     const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    const prereqLine = handlers.split('\n').find((l) => l.includes('IPC.ENGINE_PREREQS'));
-    expect(prereqLine).toBeDefined();
-    expect(prereqLine).toContain('{ refresh: true }');
-    const remoteLine = read('src', 'main', 'remote-server.ts').split('\n').find((l) => l.includes('enginePrereqs('));
-    expect(remoteLine).toBeDefined();
-    expect(remoteLine).toContain('{ refresh: true }');
+    // WHY (2026-09-30 one-core R3-6): engine:prereqs is ONE table entry (main/ipc/engine.ts) for the window and the
+    // phone, so there is one line to check, and no second copy that could forget `refresh`.
+    const entry = read('src', 'main', 'ipc', 'engine.ts').split('\n').find((l) => l.includes('IPC.ENGINE_PREREQS'));
+    expect(entry).toBeDefined();
+    expect(entry).toContain('{ refresh: true }');
+    expect(read('src', 'main', 'ipc-handlers.ts')).not.toContain('IPC.ENGINE_PREREQS');
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain('enginePrereqs(');
   });
 
   it('refresh bypasses the cache; without it the SAME answer object comes back', () => {

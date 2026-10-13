@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { hasFeatureName, remoteUnsupportedMessage } from '../src/renderer/remote-unsupported';
+import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
@@ -42,11 +43,14 @@ describe('a phone is never shown a channel id', () => {
     // The root cause, and a documented invariant: `.claude/rules/react-renderer.md` says a
     // remote browser takes attention from status:data's attentionMap and must not run its
     // own classifier. It was running, once a second, for the life of every connection.
-    expect(classifier).toContain("import { isRemoteMode } from '../platform';");
+    // R4-1: the gate is the screen's `terminalScreenRead` capability, which the host reports false to every remote screen.
+    expect(classifier).toContain("import { getCapabilities } from '../platform';");
     // assertPatternMatches proves the regex can match SOMETHING before it is trusted to
     // prove the source does — a pattern matching nothing passes a `not`, and reads green.
-    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && !isRemoteMode\(\);/;
-    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();", 'classifier remote gate');
+    // R5-4b: and not `sessionRecord`: wherever the computer keeps a record its main process owns the "may be stuck" reading.
+    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && getCapabilities\(\)\.terminalScreenRead && !getCapabilities\(\)\.sessionRecord;/;
+    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && getCapabilities().terminalScreenRead && !getCapabilities().sessionRecord;", 'classifier remote gate');
+    expect(REMOTE_SCREEN_CAPABILITIES.terminalScreenRead).toBe(false);
     expect(classifier).toMatch(shape);
   });
 });
@@ -133,16 +137,23 @@ describe('a phone paired to this computer looks like this computer', () => {
   it('the host will hand over a theme definition, read-only and path-guarded', () => {
     // The phone already learned WHICH theme (appearance:get was bridged); it could not
     // find out what the name meant, so a community theme fell back to a built-in.
-    expect(server).toContain("case 'theme:read-file': {");
-    expect(server).toContain("if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug))");
-    expect(server).toContain("if (!manifestPath.startsWith(THEMES_DIR + path.sep))");
-    // Reading only. Writing a theme stays desktop-only like every other host change.
+    // WHY appearance.ts (2026-10-01 one-core R3-8): theme:read-file and theme:write-file are channel-table entries now; the same two guards
+    // sit in the one handler both doors run, and the phone's soft answers are the entry's remoteOnError.
+    const entries = read('../src/main/ipc/appearance.ts');
+    expect(entries).toContain('name: IPC.THEME_READ_FILE');
+    expect(entries).toContain("const SAFE_SLUG_RE = /^[a-z0-9_]+(?:-[a-z0-9_]+)*$/;");
+    expect(entries).toContain('if (!manifestPath.startsWith(THEMES_DIR + path.sep))');
+    expect(entries).toContain("'Theme not found'");
+    // Reading only. Writing a theme stays the computer's like every other host change: the table refuses it for a phone.
+    expect(entries).toMatch(/name: IPC\.THEME_WRITE_FILE, kind: 'handle', remoteAllowed: false/);
     expect(server).not.toContain("case 'theme:write-file'");
   });
 
   it('takes the colours and leaves the wallpaper behind', () => {
     // A theme's background files live on the computer that owns them, so their paths mean
     // nothing in a phone browser. Dropping `background` also zeroes the glass knobs.
-    expect(themeCtx).toMatch(/isRemoteMode\(\) \? \{ \.\.\.activeTheme, background: undefined \}/);
+    // R4-1: asked as the `themePictures` capability, which the host reports false to every remote screen.
+    expect(themeCtx).toMatch(/!getCapabilities\(\)\.themePictures \? \{ \.\.\.activeTheme, background: undefined \}/);
+    expect(REMOTE_SCREEN_CAPABILITIES.themePictures).toBe(false);
   });
 });

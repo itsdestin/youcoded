@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { isPrivateIp, assertPublicHttpUrl, guardedFetch, readBodyCapped, NetGuardError } from '../src/main/harness/tools/net-guard';
+import { isPrivateIp, isNeverDialIp, assertPublicHttpUrl, assertHomeHttpUrl, guardedFetch, readBodyCapped, NetGuardError } from '../src/main/harness/tools/net-guard';
 
 describe('isPrivateIp', () => {
   it.each([
@@ -16,6 +16,53 @@ describe('isPrivateIp', () => {
     ['::ffff:a9fe:a9fe', true],          // 169.254.169.254 (cloud metadata)
     ['2606:2800:220:1:248:1893:25c8:1946', false],
   ])('%s → %s', (ip, expected) => expect(isPrivateIp(ip as string)).toBe(expected));
+});
+
+describe('isPrivateIp: other spellings of the same address are the same address', () => {
+  it.each([
+    '0:0:0:0:0:0:0:1', '0::1', '::0001', '0:0:0:0:0:0:0:0',
+    '::127.0.0.1', '::7f00:1',                       // v4-compatible loopback (never matched before)
+    '::a9fe:a9fe', '::169.254.169.254',
+    '0:0:0:0:0:ffff:127.0.0.1', '0:0:0:0:0:ffff:7f00:1', '::FFFF:7F00:1',
+    '64:ff9b::7f00:1',                               // NAT64 form of loopback
+    'FD00:0EC2::254', 'fe80::1%eth0', 'febf::1',
+  ])('%s is private', (ip) => expect(isPrivateIp(ip)).toBe(true));
+  it.each(['2001:db8::1', '::ffff:8.8.8.8', '::8.8.8.8', '2606:2800:220:1:248:1893:25c8:1946'])('%s is public', (ip) => expect(isPrivateIp(ip)).toBe(false));
+});
+
+describe('isNeverDialIp', () => {
+  it.each([
+    '127.0.0.1', '127.9.9.9', '0.0.0.0', '169.254.169.254', '169.254.0.1', '100.100.100.200', '224.0.0.251', '255.255.255.255',
+    '::', '::1', '0:0:0:0:0:0:0:1', '0::1', '::0001', '0:0:0:0:0:0:0:0',
+    '::127.0.0.1', '::7f00:1', '::169.254.169.254', '::a9fe:a9fe',
+    '::ffff:127.0.0.1', '0:0:0:0:0:ffff:127.0.0.1', '0:0:0:0:0:ffff:7f00:1', '::FFFF:7F00:1', '::ffff:169.254.169.254', '::ffff:a9fe:a9fe',
+    '::ffff:0:127.0.0.1', '64:ff9b::7f00:1',
+    'fe80::1', 'FE80::1%eth0', 'febf::1', 'fd00:ec2::254', 'fd00:0ec2::254', 'FD00:EC2:0:0:0:0:0:254', 'ff02::fb',
+  ])('%s is never dialled', (ip) => expect(isNeverDialIp(ip)).toBe(true));
+  it.each([
+    '192.168.4.9', '10.0.0.5', '172.16.0.2', '100.100.100.201', '8.8.8.8', '223.255.255.255',
+    '::ffff:192.168.4.9', '::ffff:c0a8:409', '0:0:0:0:0:ffff:c0a8:409', 'fd12:3456::9', 'fd00:ec3::254', 'fec0::1', '2001:db8::1',
+    'camera.local', '127.1', '',                       // names and non-literals are not this function's business
+  ])('%s is allowed', (ip) => expect(isNeverDialIp(ip)).toBe(false));
+});
+
+// The home-address guard (page device connections) compares an IPv4 literal
+// only AFTER `new URL` has rewritten it, so shorthand / hex / octal / decimal
+// spellings arrive dotted and IPv6 literals are refused outright. Pinned here
+// because a bypass was feared; none exists, and this keeps it that way.
+describe('assertHomeHttpUrl: other spellings of an outside address stay refused', () => {
+  const none = async () => { throw new Error('no dns'); };
+  it.each([
+    'http://127.1/', 'http://0x7f.1/', 'http://2130706433/', 'http://0177.0.0.1/', 'http://017700000001/',
+    'http://169.254.169.254/', 'http://0xa9fea9fe/', 'http://2852039166/',
+    'http://[::1]/', 'http://[0:0:0:0:0:0:0:1]/', 'http://[::ffff:127.0.0.1]/', 'http://[::ffff:c0a8:409]/', 'http://[fd00:ec2::254]/',
+    'http://8.8.8.8/', 'http://0x08080808/',
+  ])('refuses %s', async (u) => {
+    await expect(assertHomeHttpUrl(u, none)).rejects.toBeInstanceOf(NetGuardError);
+  });
+  it.each(['http://0xc0.0xa8.4.9/', 'http://3232236553/', 'http://0300.0250.4.9/'])('still accepts %s (192.168.4.9 spelled another way)', async (u) => {
+    await expect(assertHomeHttpUrl(u, none)).resolves.toBeInstanceOf(URL);
+  });
 });
 
 describe('assertPublicHttpUrl', () => {

@@ -140,6 +140,10 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
   }, [read, key, id]);
 
   useEffect(() => { void loadNewest(); }, [loadNewest]);
+  // WHY: a read that finishes after the pane is gone must count as superseded, like a swap does. Without this its .then
+  // still called onSettledRef -> the parent's reveal() -> setState on a torn-down tree (an unhandled rejection that made
+  // verify.sh fail under machine load: tests/app-welcome-back-gating.test.tsx, 2026-10-05).
+  useEffect(() => () => { genRef.current++; }, []);
 
   const cursor = session?.history.cursor ?? null;
   const hasMore = !!session?.history.hasMore;

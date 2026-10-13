@@ -64,7 +64,7 @@ function presetStatusBarWidgets(scenario: ScenarioId): void {
  *  or a connected remote shim. */
 /** The workbench renders the DESKTOP app, so it must say so.
  *
- *  platform-bootstrap.ts decides the platform from `window.claude` at
+ *  platform.ts decides the platform from `window.claude` at
  *  module-graph head and mirrors it onto `<html data-platform>` synchronously,
  *  "so it lands before any style evaluates". The workbench installs its mock in
  *  index.tsx's boot branch — after every import has evaluated — so that check

@@ -53,6 +53,40 @@ describe('chat message Find corpus', () => {
     expect(resolveBodyRanges(body, '/tmp/find-example.txt')).toHaveLength(0);
     expect(resolveBodyRanges(body, 'hello')[0].toString()).toBe('hello');
   });
+  // Review 2026-10-04 item 5: a long code fence still being written is drawn as a frozen head (in
+  // chunks) plus a live tail. Find must treat it as ONE block: the same text as the source index,
+  // a match in the head and one in the tail both found, and the same after the fence closes.
+  it('finds matches in the frozen head and the live tail of a streaming long fence, and after it closes', () => {
+    const rows = Array.from({ length: 90 }, (_, i) => `const headword${i === 3 ? 'ZEBRA' : i} = ${i}; // tailword${i === 88 ? 'ZEBRA' : i}`);
+    const open = `Here\n\n\`\`\`ts\n${rows.join('\n')}\n`;
+    const Body = ({ content, live }: { content: string; live: boolean }) =>
+      React.createElement('div', { 'data-testid': 'body' }, React.createElement(MarkdownContent, { content, sessionId: 'test', incremental: true, live }));
+    const view = render(React.createElement(Body, { content: 'Here', live: true }));
+    view.rerender(React.createElement(Body, { content: open, live: true }));
+    const check = (content: string) => {
+      const body = view.getByTestId('body');
+      const index = new ChatMessageFindIndex();
+      index.setRows([{ id: 'a', bodies: [content], markdown: true }]);
+      expect(messageBodyBlocks(body)).toEqual(index.blocksOf('a', 0));
+      for (const term of ['headwordZEBRA', 'tailwordZEBRA', 'ZEBRA', 'headword50']) {
+        const found = resolveBodyRanges(body, term);
+        expect(found.length, term).toBe(index.search(term).length);
+        expect(found.length, term).toBeGreaterThan(0);
+        expect(found[0].toString().toLowerCase()).toBe(term.toLowerCase());
+      }
+      expect(resolveBodyRanges(body, 'ZEBRA')).toHaveLength(2);
+    };
+    // The head really was split off: its first line sits in a different chunk than the last.
+    check(open);
+    const withMore = `${open}const headwordMORE = 1;\n`;
+    view.rerender(React.createElement(Body, { content: withMore, live: true }));
+    check(withMore);
+    const closed = `${withMore}\`\`\`\n\nDone`;
+    view.rerender(React.createElement(Body, { content: closed, live: true }));
+    check(closed);
+    view.rerender(React.createElement(Body, { content: closed, live: false }));
+    check(closed);
+  });
   it('plain user body projection excludes timestamp and hidden file destination', () => {
     const content = 'Open /tmp/deep/notes.txt now';
     const message = { id: 'u', content, role: 'user' as const, timestamp: 1000 };

@@ -5,6 +5,7 @@ import { defineTool } from './registry';
 import { canonicalize, resolveP, shellCwdMissHint, lunaPathRefused } from './guards';
 import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHMENT_BYTES } from '../image-support';
 import { readPdfAsToolResult } from '../pdf-text';
+import { IMAGE_LIMITS_DEFAULT } from '../capability-profile';
 import { fingerprintFile, fingerprintFileInPieces, fingerprintOf } from './file-fingerprint';
 
 const BINARY_SNIFF_BYTES = 8000;
@@ -183,7 +184,31 @@ export const ReadTool = defineTool({
       if (st.size > MAX_ATTACHMENT_BYTES) {
         return { text: `Read rejected: ${args.file_path} is a ${(st.size / (1024 * 1024)).toFixed(1)} MB image (limit ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB).`, isError: true };
       }
+      // WHY the registry keeps the ORIGINAL path even when a derivative is
+      // promised: Edit/Write's read-before-write guard is about the user's
+      // file, never the cached copy.
       ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), await fingerprintFile(abs));
+      // Shrink-once (image-prepare.ts): a picture over THIS session's provider
+      // limits is downscaled into a cached file BEFORE it is promised, so the
+      // driver, the transcript and every resume path see a size the provider
+      // accepts. The preparer reads only a bounded header (HEADER_READ_BYTES,
+      // async) to decide. The text keeps the user's path and says what changed
+      // — the model must know small text may be unreadable. Absent service →
+      // promise the path; resolveToolImages' gate still refuses with a note.
+      const prepared = ctx.services?.images ? await ctx.services.images.prepare(abs, ctx.imageLimits ?? IMAGE_LIMITS_DEFAULT) : null;
+      // WHY the preparer's reason verbatim: it names the real cause (size,
+      // decoder, IO code) — Read must not invent a different one.
+      if (prepared?.kind === 'refused') return { text: `Read rejected: ${args.file_path} ${prepared.reason}`, isError: true };
+      if (prepared?.kind === 'prepared') {
+        const pct = Math.max(1, Math.round((100 * prepared.preparedWidth) / prepared.width));
+        return {
+          text: `Read image ${args.file_path} (${prepared.width}×${prepared.height} px, shown downscaled to ${prepared.preparedWidth}×${prepared.preparedHeight}, ${pct}% of original; small text may be unreadable — Read individual screenshots or crops for detail).`,
+          images: [prepared.path],
+          // WHY a label: the model-facing name stays the ORIGINAL file's, not
+          // the cache's hashed derivative name.
+          imageLabels: [path.basename(abs)],
+        };
+      }
       return { text: `Read image ${args.file_path} (${Math.max(1, Math.round(st.size / 1024))} KB, ${imageMediaType}).`, images: [abs] };
     }
     if (undeliverableExt) {

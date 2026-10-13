@@ -18,7 +18,7 @@ renderer (app origin)                                  add-on page  office://<to
   EditorFrame  <iframe sandbox>  ──postMessage──▶        tauri-relay.js  (fake window.__TAURI__)
      │  window.claude.office.invoke(token, cmd, args)     yc-bridge.js / yc-early.js / yc-comments.js
      ▼  IPC
-main  office/: office-ipc.ts → office-commands.ts → x2t.ts (native converter, spawned)
+main  ipc/office.ts (the channel table's office:* entries) → office/: office-ipc.ts → office-commands.ts → x2t.ts (native converter, spawned)
       office-protocol.ts serves the editor and the document's media
 ```
 
@@ -90,7 +90,7 @@ A release tarball per platform holds `manifest.json`, `editors/`, `converter/` (
 
 ## Tests
 
-`youcoded/desktop/tests/office/` (one file per module: protocol, commands, sessions, ipc, recovery, versions, x2t, pictures, print, dialogs, comments, editor settings, frame guard, journal sync, theme fonts, fetch-office pin and signing config, plus `editor-frame*.test.tsx` and `office-no-lost-edits.test.tsx` for the renderer) with fixtures in `tests/office/fixtures/`; `tests/doc-comments-live.test.ts` for live comments; the `office:*` block of `tests/ipc-channels.test.ts` pins channel parity across `preload.ts`, `remote-shim.ts`, `office-ipc.ts` and `SessionService.kt`. Tests that run the real converter need `node scripts/fetch-office.mjs` first and skip without it. The add-on has its own suite (`node --test test/*.test.mjs` in that repo). **`tests/render-cost/`** is a separate vitest project (`vitest.config.ts`: `render-cost`) that runs *after* the parallel suite, one file at a time, with `--expose-gc`, because it pins CPU-time ratios (today `CommentsMargin` and `ReadingHighlights` — the comment views Office's live comments feed) that flake under contention; it still runs in `npm test`. Dev loop: `bash scripts/run-workbench.sh` + `node scripts/office-workbench-server.mjs` (fake backend), or `bash scripts/run-dev.sh` (real); screens `office/*` for `shoot`.
+`youcoded/desktop/tests/office/` (one file per module: protocol, commands, sessions, ipc, recovery, versions, x2t, pictures, print, dialogs, comments, editor settings, frame guard, journal sync, theme fonts, fetch-office pin and signing config, plus `editor-frame*.test.tsx` and `office-no-lost-edits.test.tsx` for the renderer) with fixtures in `tests/office/fixtures/`; `tests/doc-comments-live.test.ts` for live comments; `tests/channel-table-office.test.ts` pins the table entries (`main/ipc/office.ts`: computer-only, one object per request); the `office:*` block of `tests/ipc-channels.test.ts` pins channel parity across `preload.ts`, `remote-shim.ts`, `office-ipc.ts` and `SessionService.kt`. Tests that run the real converter need `node scripts/fetch-office.mjs` first and skip without it. The add-on has its own suite (`node --test test/*.test.mjs` in that repo). The comment views Office's live comments feed (`CommentsMargin`, `ReadingHighlights`) are pinned by counted work, not CPU time, in `tests/CommentsMargin.test.tsx` and `tests/ReadingHighlights.test.tsx`. Dev loop: `bash scripts/run-workbench.sh` + `node scripts/office-workbench-server.mjs` (fake backend), or `bash scripts/run-dev.sh` (real); screens `office/*` for `shoot`.
 
 ## Known limits
 

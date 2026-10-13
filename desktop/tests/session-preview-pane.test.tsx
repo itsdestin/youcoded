@@ -15,6 +15,7 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-libra
 import SessionPreviewPane from '../src/renderer/components/SessionPreviewPane';
 import { COPY, previewSessionKey } from '../src/shared/chatsearch-refs';
 import type { TranscriptEvent } from '../src/shared/types';
+import { ev } from './helpers/transcript-events';
 import { FOLD_IDLE_MS } from '../src/renderer/hooks/use-entry-folding';
 
 // jsdom has no IntersectionObserver, and scrolling up to the top is what loads
@@ -56,10 +57,10 @@ async function reachTop() {
 function turn(id: string, n: number): TranscriptEvent[] {
   const sessionId = previewSessionKey(id);
   return [
-    { type: 'user-message', sessionId, uuid: `u${n}`, timestamp: n, data: { text: `ask${n}` } },
-    { type: 'assistant-text', sessionId, uuid: `a${n}`, timestamp: n, data: { text: `reply${n}` } },
-    { type: 'turn-complete', sessionId, uuid: `c${n}`, timestamp: n, data: {} },
-  ] as TranscriptEvent[];
+    ev('user-message', { text: `ask${n}` }, { sessionId, uuid: `u${n}`, timestamp: n }),
+    ev('assistant-text', { text: `reply${n}` }, { sessionId, uuid: `a${n}`, timestamp: n }),
+    ev('turn-complete', {}, { sessionId, uuid: `c${n}`, timestamp: n }),
+  ];
 }
 const page = (id: string, ns: number[], before: number | null) => ({
   ok: true, events: ns.flatMap((n) => turn(id, n)),

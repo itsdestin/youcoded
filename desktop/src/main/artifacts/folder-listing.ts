@@ -35,6 +35,7 @@ import {
 } from '../../shared/artifacts/folder-page';
 import { discoveredFileRecord } from './project-file-discovery';
 import { authorizeArtifactRead } from './write-authorization';
+import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 
 /** The most entries one call returns (the default is FOLDER_PAGE_SIZE, shared). */
 const MAX_PAGE_SIZE = 1000;
@@ -156,6 +157,8 @@ export async function listFolderPage(
     /** Names only: skip file times and subfolder previews (a caller that only
      *  compares names — the "+ Add file" check — never pays for them). */
     namesOnly?: boolean;
+    /** WHY (2026-10-01 one-core R3-SEC): the phone's door only. A folder on the phone deny list (.git, .ssh…) is not listed. */
+    refusePrivate?: boolean;
   },
 ): Promise<FolderPage> {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof relDir !== 'string') {
@@ -197,6 +200,7 @@ export async function listFolderPage(
         if ('orphan' in auth) return { ok: false, error: 'not-found' };
         return { ok: false, error: auth.error === 'protected-path' ? 'protected-path' : 'outside-project' };
       }
+      if (opts?.refusePrivate && await isPhoneDeniedFile(absDir, auth.realPath)) return { ok: false, error: KEPT_ON_COMPUTER };
       const { files, folders } = await readEntries(auth.realPath);
       folders.sort(byName);
       if (sort === 'recent') {

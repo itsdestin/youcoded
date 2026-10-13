@@ -4,7 +4,7 @@
 //
 // WHY: the app refuses a chat send (and holds back its lost-message Enter)
 // whenever something other than Claude Code's message box has the keyboard —
-// read from the SHAPE of the screen (src/renderer/parser/cc-input-focus.ts),
+// read from the SHAPE of the screen (src/shared/cc-input-focus.ts),
 // so new pop-ups need no code change. What CAN break it is Claude Code
 // redrawing that shape: a restyled message box would make every screen look
 // like a pop-up (every send refused), a new mode that keeps a box but steals

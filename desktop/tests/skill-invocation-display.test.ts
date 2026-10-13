@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { HarnessSession } from '../src/main/harness/harness-session';
 import type { TranscriptEvent } from '../src/shared/types';
+import { malformedEv } from './helpers/transcript-events';
 import { rebuildHistory } from '../src/main/harness/history-rebuild';
 import { textChunks, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
 import { makeOpts } from './helpers/harness-fakes';
@@ -79,7 +80,8 @@ describe('user-invoked skill — resume', () => {
   });
 
   it('a skill-invoked event with no body contributes nothing rather than an empty turn', async () => {
-    const bare = { type: 'skill-invoked', sessionId: 's', uuid: 'u', timestamp: 1, data: { skillId: 'x' } } as TranscriptEvent;
+    // Deliberately missing displayName/body: pins the translator's fallbacks.
+    const bare = malformedEv('skill-invoked', { skillId: 'x' }, { sessionId: 's', uuid: 'u', timestamp: 1 });
     expect(rebuildHistory([bare])).toEqual([]);
   });
 });

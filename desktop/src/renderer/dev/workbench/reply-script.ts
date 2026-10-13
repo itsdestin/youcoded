@@ -15,6 +15,8 @@
 //   turn_complete      — ends the turn
 // No Date.now(): timestamps are a counter so a replay is byte-identical.
 
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../../../shared/types';
+
 export type ReplyLine =
   | { type: 'assistant_text'; text: string; delay?: number; model?: string }
   // A user bubble the SCRIPT puts on the timeline — for a turn nobody typed here
@@ -27,7 +29,7 @@ export type ReplyLine =
   | { type: 'turn_complete'; delay?: number; model?: string };
 
 export interface ReplySinks {
-  transcript: (event: unknown) => void;
+  transcript: (event: TranscriptEvent) => void;
   hook: (event: unknown) => void;
   /** characters per second for streamed text; tests pass a large number */
   cps?: number;
@@ -56,6 +58,13 @@ export function resolvePermission(requestId: string): boolean {
 let counter = 0;
 const uid = () => `wb-ev-${++counter}`;
 const stamp = () => 1_753_800_000_000 + counter * 1000;
+
+/** One scripted event, typed: `type` and `data` must belong together, exactly as
+ *  the real producers' emitEvent<T> demands (M5). The cast is the one place a
+ *  generic type/data pair is folded into the union — TypeScript cannot prove it. */
+function mint<T extends TranscriptEventType>(sessionId: string, type: T, data: DataOf<T>): EventOf<T> {
+  return { type, sessionId, uuid: uid(), timestamp: stamp(), data } as EventOf<T>;
+}
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** True for the control bytes App/useSubmitConfirmation send to a PTY session
@@ -78,8 +87,8 @@ export function splitTurns(lines: ReplyLine[]): ReplyLine[][] {
 
 export async function playReply(sessionId: string, text: string, script: ReplyLine[], sinks: ReplySinks): Promise<void> {
   if (isControl(text)) return;
-  const t = (type: string, data: Record<string, unknown>) =>
-    sinks.transcript({ type, sessionId, uuid: uid(), timestamp: stamp(), data });
+  const t = <T extends TranscriptEventType>(type: T, data: DataOf<T>) =>
+    sinks.transcript(mint(sessionId, type, data));
   const speed = sinks.speed && sinks.speed > 0 ? sinks.speed : 1;
   const perChar = 1000 / ((sinks.cps ?? 40) * speed);
   if (sinks.echoUser) t('user-message', { text: text.replace(/\r$/, '') });
@@ -119,7 +128,9 @@ export async function playReply(sessionId: string, text: string, script: ReplyLi
         break;
       }
       case 'turn_complete':
-        t('turn-complete', { stopReason: 'end_turn', model: line.model ?? null });
+        // WHY not `?? null` (M5): the typed payload says `model?: string`. An absent model reads
+        // as null downstream (the translator coalesces `model ?? null`), so the screen is unchanged.
+        t('turn-complete', { stopReason: 'end_turn', model: line.model });
         break;
       default:
         // A typo in a fixture must be loud, not a silently skipped beat.
@@ -135,10 +146,10 @@ export async function playReply(sessionId: string, text: string, script: ReplyLi
  *  the promo's phone beat takes over "econ midterm brief" and must show the
  *  brief, and before this the page came back empty. `userText`, when given,
  *  is the user bubble the fixture never carries (see the header). */
-export function scriptToEvents(sessionId: string, lines: ReplyLine[], userText?: string): unknown[] {
-  const out: unknown[] = [];
-  const t = (type: string, data: Record<string, unknown>) =>
-    out.push({ type, sessionId, uuid: uid(), timestamp: stamp(), data });
+export function scriptToEvents(sessionId: string, lines: ReplyLine[], userText?: string): TranscriptEvent[] {
+  const out: TranscriptEvent[] = [];
+  const t = <T extends TranscriptEventType>(type: T, data: DataOf<T>) =>
+    out.push(mint(sessionId, type, data));
   if (userText) t('user-message', { text: userText });
   for (const line of lines) {
     switch (line.type) {
@@ -148,7 +159,9 @@ export function scriptToEvents(sessionId: string, lines: ReplyLine[], userText?:
       case 'tool_result': t('tool-result', { toolUseId: line.tool_use_id, toolResult: line.content, isError: !!line.is_error }); break;
       // In history the ask was answered long ago: only the call it became remains.
       case 'permission_request': t('tool-use', { toolUseId: line.id, toolName: line.name, toolInput: line.input }); break;
-      case 'turn_complete': t('turn-complete', { stopReason: 'end_turn', model: line.model ?? null }); break;
+      case 'turn_complete': // WHY not `?? null` (M5): the typed payload says `model?: string`. An absent model reads
+        // as null downstream (the translator coalesces `model ?? null`), so the screen is unchanged.
+        t('turn-complete', { stopReason: 'end_turn', model: line.model }); break;
     }
   }
   return out;

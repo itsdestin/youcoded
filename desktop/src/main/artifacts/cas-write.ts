@@ -197,7 +197,10 @@ async function atomicWrite(target: string, content: string): Promise<void> {
  */
 export async function mutateFileUnderLock(
   target: string,
-  mutate: (onDisk: string | null) => string | null
+  mutate: (onDisk: string | null) => string | null,
+  // WHY: bounded/fatal-decoding readers must run INSIDE the write lock too;
+  // validating outside it leaves a race with a replaced or growing document.
+  readCurrent?: (target: string) => Promise<string | null>,
 ): Promise<boolean> {
   await fs.mkdir(dirname(target), { recursive: true });
   const lock = target + '.lock';
@@ -205,7 +208,7 @@ export async function mutateFileUnderLock(
   try {
     let onDisk: string | null = null;
     try {
-      onDisk = await fs.readFile(target, 'utf8');
+      onDisk = readCurrent ? await readCurrent(target) : await fs.readFile(target, 'utf8');
     } catch (e: any) {
       if (e.code !== 'ENOENT') throw e;
     }

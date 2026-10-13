@@ -1,7 +1,7 @@
 import React from 'react';
 import { useThemeMascot } from '../hooks/useThemeMascot';
 import { useTheme } from '../state/theme-context';
-import { isAndroid, isRemoteMode } from '../platform';
+import { getCapabilities, isAndroid, isRemoteMode } from '../platform';
 import { MascotRig, type RigMotion } from './mascot/MascotRig';
 import { MascotScene } from './mascot/MascotScene';
 import { defaultMascotPaint } from './mascot/default-mascot-paint';
@@ -309,7 +309,8 @@ export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6'
   // Rig rendering is Electron-desktop-only for now: it fetches theme-asset://
   // URLs, which don't exist in the Android WebView or the remote-browser shim.
   // Those platforms keep the flat path until rig asset delivery is ported.
-  const desktop = !isAndroid() && !isRemoteMode();
+  // R4-1: the host says whether rigs can draw here (`themeRigs`); only the computer's own window does.
+  const desktop = getCapabilities().themeRigs;
   const rigSrc = desktop ? activeTheme?.mascot?.rig ?? null : null;
   const companions = scene && desktop ? activeTheme?.companions ?? [] : [];
   // A picture this page cannot show gets the default mascot, never a broken-image box (Destin,

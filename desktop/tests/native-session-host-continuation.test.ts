@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
+import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os'; import * as crypto from 'crypto';
 import { createOpenAI } from '@ai-sdk/openai';
 import { wrapLanguageModel } from 'ai';
 import { NativeHome } from '../src/main/native-home';
@@ -12,6 +12,8 @@ import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
 import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
 import { completed, richToolStep, silentReasoningStep, sse, textStep } from './helpers/responses-fakes';
+import { pngHeader } from './helpers/image-fixtures';
+import { imageNote } from '../src/main/harness/image-support';
 
 /** The identity string the registry would build for a signed-in ChatGPT account
  *  (`provider\0model\0sha256(accountId)\0credentialEpoch`) — the host never
@@ -911,5 +913,50 @@ describe('NativeSessionHost durable continuation', () => {
     expect(carriesCiphertext(body)).toBe(false);
     expect(JSON.stringify(body.input)).toContain('half an answer');
     expect(JSON.stringify(body.input)).toContain('both files');
+  });
+
+  it('reopen after a collapse keeps the repair, through the private checkpoint too', async () => {
+    const first = makeHost({ home, userData, vision: true, fetchImpl: scriptedFetch([], [textStep('one', 'first answer')]) });
+    await first.host.create({ sessionId: 'collapsed-reopen', cwd, binding: BINDING });
+    await turn(first.host, 'collapsed-reopen', 'hello');
+    await first.host.destroyAll();
+    // Splice a pre-gate Read of an over-limit picture into the transcript (a session from before
+    // this fix): a persisted path and no imageLabels, exactly what an old transcript holds.
+    // Header-only fixture — the gate judges the IHDR, so 33 bytes stand in for 2904×17528.
+    const huge = path.join(home, 'contact.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+    const transcriptPath = first.sessionStore.transcriptPath('collapsed-reopen', cwd);
+    const stamp = (type: string, data: any) => JSON.stringify({ type, sessionId: 'collapsed-reopen', uuid: crypto.randomUUID(), timestamp: Date.now(), data });
+    fs.appendFileSync(transcriptPath, [
+      stamp('user-message', { text: 'look' }),
+      stamp('tool-use', { toolUseId: 'call_h', toolName: 'Read', toolInput: { file_path: huge } }),
+      stamp('tool-result', { toolUseId: 'call_h', toolName: 'Read', toolResult: 'Read image', images: [huge] }),
+      stamp('turn-complete', {}), '',
+    ].join('\n'));
+    const second = makeHost({ home, userData, vision: true, fetchImpl: scriptedFetch([], [textStep('two', 'second answer')]) });
+    const secondLog = vi.spyOn(second.host as any, 'logContinuation');
+    expect(await second.host.resume('collapsed-reopen', cwd)).toBe(true);
+    // WHICH path restored: the appended lines moved the transcript past the first
+    // host's checkpoint, so the private restore fails 'transcript-advanced' and the
+    // GATED REBUILD is what wrote the note.
+    expect(secondLog).toHaveBeenCalledWith('collapsed-reopen', 'transcript-advanced', 'restore');
+    const note = imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 });
+    const resumed = (second.host as any).live.get('collapsed-reopen').session;
+    expect(JSON.stringify(resumed.acceptedHistory().messages)).toContain(note);
+    // WHY not a base64 check: in-memory picture bytes serialise as a Buffer JSON array,
+    // so a base64 string could never appear — the file part itself is what must be gone.
+    expect(JSON.stringify(resumed.acceptedHistory().messages)).not.toContain('"type":"file"');
+    await turn(second.host, 'collapsed-reopen', 'and now');       // publishes a checkpoint describing the collapsed result
+    await second.host.destroyAll();
+    const third = makeHost({ home, userData, vision: true, fetchImpl: scriptedFetch([], []) });
+    const thirdLog = vi.spyOn(third.host as any, 'logContinuation');
+    expect(await third.host.resume('collapsed-reopen', cwd)).toBe(true);
+    // This time the PRIVATE CHECKPOINT (published after the second host's turn,
+    // describing the collapsed result as `pruned.oversized`) is what restored:
+    // no restore-phase fallback was logged.
+    expect(thirdLog.mock.calls.filter((c: any[]) => c[2] === 'restore')).toEqual([]);
+    const again = (third.host as any).live.get('collapsed-reopen').session;
+    expect(JSON.stringify(again.acceptedHistory().messages)).toContain(note);
+    expect(JSON.stringify(again.acceptedHistory().messages)).not.toContain('"type":"file"');
+    await third.host.destroyAll();
   });
 });

@@ -128,6 +128,26 @@ describe('NativeSessionHost.switchModel', () => {
   });
 });
 
+// sync-fix3 (audit item 8): "Summarize and switch" is a summary the COMPUTER runs, so the host says it began and every screen draws the card (not only
+// the one whose picker was used). It does so because switchModel goes through compact(), which emits 'compaction'. This pins that link: if switchModel ever
+// summarised by another route, the other screens (and a late joiner, via the record) would silently lose the card.
+it('Summarize and switch says a compaction began, on the same push every screen draws its spinner from', async () => {
+  const emitted: any[] = [];
+  const entry: any = { session: { fitForWindow: () => 'needs-summary', compactNow: vi.fn(async () => ({ ok: true })) }, inFlight: false, compacting: false, queue: [] };
+  const host: any = {
+    live: new Map([['s', entry]]),
+    resolveContextAndProfile: vi.fn(async () => ({ contextLength: 32_768 })),
+    setBinding: vi.fn(async () => true),
+    publishAcceptedHistory: vi.fn(),
+    emit: (name: string, payload: any) => emitted.push([name, payload]),
+    pendingDeliveryParents: new Set(), pendingHostNotices: new Map(),
+  };
+  host.compact = NativeSessionHost.prototype.compact.bind(host);
+  const result = await NativeSessionHost.prototype.switchModel.call(host, 's', { providerId: 'p', modelId: 'small' }, true);
+  expect(result).toEqual({ status: 'switched', summarized: true });
+  expect(emitted).toContainEqual(['compaction', { sessionId: 's', phase: 'start' }]);
+});
+
 // Merge with the skill repeat guard (master, 2026-09-23): a summary retires the
 // skill's body, so the guard must forget it — or the model is told a skill it
 // no longer has is "already loaded".

@@ -658,6 +658,8 @@ describe('GitTransport auth-failure surfacing', () => {
       return { code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '', tokenUsed: true };
     });
     (t as any).reapStaleLocks = () => {};
+    // Fetches run through their own quiet-aware runner; script them like git.
+    (t as any).fetchOrigin = (sp: SyncSpace) => (t as any).git(sp, ['fetch', 'origin', 'main']);
     return t;
   }
 
@@ -743,6 +745,8 @@ describe('GitTransport benign-allowlist intent', () => {
       return { code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '', tokenUsed: false };
     });
     (t as any).reapStaleLocks = () => {};
+    // Fetches run through their own quiet-aware runner; script them like git.
+    (t as any).fetchOrigin = (sp: SyncSpace) => (t as any).git(sp, ['fetch', 'origin', 'main']);
     return t;
   }
 
@@ -1086,5 +1090,60 @@ describe('GitTransport conflict resolution never guesses on a failed read', () =
       await h.transport.pull(a);
       expect(fs.readFileSync(path.join(a.root, 'notes.md'), 'utf8')).toBe('from a');
     } finally { vi.restoreAllMocks(); await h.cleanup(); }
+  });
+});
+
+describe('GitTransport downloads', () => {
+  // A remote whose upload-pack says nothing for 30s: stands in for a download
+  // that has stalled. A short idle limit must stop it long before that.
+  const STALL = ['config', 'remote.origin.uploadpack', 'sleep 30;'];
+  const gitIn = (s: SyncSpace, args: string[]) =>
+    execFileSync('git', args, { env: { ...process.env, GIT_DIR: path.join(s.root, '.youcoded', 'sync.git') } });
+
+  it('a fetch that goes quiet is stopped by the idle limit and reads as offline', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    gitIn(a, STALL);
+    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300 });
+    const r = await (t as any).fetchOrigin(a);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/fetch stopped: no data/);
+    await expect(t.pull(a)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
+    await h.cleanup();
+  });
+
+  it('pull removes partial downloads a dead fetch left behind, but not a fresh one', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    const pack = path.join(a.root, '.youcoded', 'sync.git', 'objects', 'pack');
+    fs.mkdirSync(pack, { recursive: true });
+    const old = path.join(pack, 'tmp_pack_dead');
+    const fresh = path.join(pack, 'tmp_pack_live');
+    fs.writeFileSync(old, 'x');
+    fs.writeFileSync(fresh, 'x');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(old, twoHoursAgo, twoHoursAgo);
+    await h.transport.pull(a);
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    await h.cleanup();
+  });
+
+  it('a push refused because the download behind it never finished stays quiet, then lands once it can', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    const b = await h.makeDeviceSpace();
+    fs.writeFileSync(path.join(a.root, 'a.md'), 'from a');
+    await h.transport.push(a, 'seed');
+    await h.transport.pull(b);
+    fs.writeFileSync(path.join(b.root, 'b.md'), 'from b');
+    await h.transport.push(b, 'b moves on');                 // remote is now ahead of a
+    fs.writeFileSync(path.join(a.root, 'a2.md'), 'more from a');
+    gitIn(a, STALL);
+    const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300 });
+    await expect(t.push(a, 'while stalled')).resolves.toMatchObject({ pushed: false, contacted: false });
+    gitIn(a, ['config', '--unset', 'remote.origin.uploadpack']);
+    await expect(t.push(a, 'recovered')).resolves.toMatchObject({ pushed: true });
+    await h.cleanup();
   });
 });

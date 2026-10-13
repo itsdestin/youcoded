@@ -15,6 +15,7 @@ import * as http from 'http';
 import * as net from 'net';
 import { safeStorage } from 'electron';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { mutateFileUnderLock } from '../src/main/artifacts/cas-write';
 import {
   ChatGptAuth,
@@ -268,7 +269,7 @@ beforeEach(async () => {
   h = {
     dir,
     file: path.join(dir, CHATGPT_ACCOUNT_FILE),
-    secrets: new SecretsStore(dir),
+    secrets: new SecretsStore(dir, getSecretStorage()),
     clock,
     fetch: fetchFake,
     opened: [],

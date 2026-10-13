@@ -7,6 +7,8 @@
 // editor's own CSS variables. Same pattern as Pages' theme message, with its own
 // watcher (watchOfficeTheme) so a theme switch reaches an open document without a reload.
 
+import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+
 const TOKENS = [
   'canvas', 'panel', 'inset', 'well', 'accent', 'on-accent',
   'fg', 'fg-2', 'fg-dim', 'fg-muted', 'fg-faint', 'edge', 'edge-dim', 'link',
@@ -57,7 +59,9 @@ export function readOfficeTheme(root: HTMLElement = document.documentElement): O
     tokens,
     dark: lum !== null ? lum < 0.3 : /dark/.test(scheme),
     fontLinks: [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"][href^="https://fonts.googleapis.com/"]')].map((l) => l.href),
-    wallpaper: root.hasAttribute('data-wallpaper'),
+    // WHY also the global switch: with "Show theme background behind pages" off the pane behind the editor is solid, and the
+    // editor must paint its own bands again — the add-on keys its see-through bands on this one flag, so no add-on change.
+    wallpaper: root.hasAttribute('data-wallpaper') && !root.hasAttribute(PAGES_SOLID_ATTR),
     panelsOpacity: Number.parseFloat(cs.getPropertyValue('--panels-opacity')) || 1,
     // Reduced effects zeroes this at the source (theme-engine), so the editor follows.
     panelsBlur: Number.parseFloat(cs.getPropertyValue('--panels-blur')) || 0,

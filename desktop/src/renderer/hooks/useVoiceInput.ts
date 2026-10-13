@@ -231,6 +231,7 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
         break;
       case 'final':
         if (idle && !watchdogFiredRef.current) break;
+        if (startingRef.current) abortStartRef.current = true;
         // The late case: we had already given up and shown an error. The words
         // arrived anyway, so clear the error and deliver them.
         if (watchdogFiredRef.current) { watchdogFiredRef.current = false; setError(null); }
@@ -241,6 +242,9 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
         cbRef.current.onFinal(e.text);
         break;
       case 'error':
+        // WHY: tokenizer/load errors can arrive while capture is still opening.
+        // A late microphone must close, never resurrect an already-ended turn.
+        if (startingRef.current) abortStartRef.current = true;
         clearWatchdog();
         closeCapture();
         watchdogFiredRef.current = false;

@@ -5,6 +5,10 @@ import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { HookEvent } from '../src/shared/types';
 
+// One waiting message appended to what the host's queue snapshot already said (the host announces the WHOLE queue; one-core R5-4a).
+const queueRow = (st: any, sessionId: string, queueId: string, content: string, timestamp: number) =>
+  dispatch(st, { type: 'QUEUE_SYNCED', sessionId, queue: [...(st.get(sessionId)?.queuedMessages ?? []), { queueId, content, timestamp }] } as any);
+
 const SESSION = 'test-session';
 
 function initState(): ChatState {
@@ -1025,17 +1029,17 @@ describe('native runtime reducer paths', () => {
   });
 
   // ---- Task 12: queued messages leave the timeline — docked strip list ----
-  describe('QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED', () => {
-    it('QUEUED_MESSAGE_ADDED appends to queuedMessages, not the timeline', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'queued msg', timestamp: 1 });
+  describe('QUEUE_SYNCED / QUEUED_MESSAGE_REMOVED', () => {
+    it('a queue snapshot sets to queuedMessages, not the timeline', () => {
+      state = queueRow(state, SESSION, 'q-1', 'queued msg', 1);
       expect(state.get(SESSION)!.timeline).toHaveLength(0);
       expect(state.get(SESSION)!.queuedMessages).toEqual([{ queueId: 'q-1', content: 'queued msg', timestamp: 1 }]);
     });
 
     it('QUEUED_MESSAGE_REMOVED removes only the matching entry, leaving others untouched', () => {
       state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'keep me (sent)', timestamp: 1 });
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'cancel me', timestamp: 2 });
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-2', content: 'keep me (queued)', timestamp: 3 });
+      state = queueRow(state, SESSION, 'q-1', 'cancel me', 2);
+      state = queueRow(state, SESSION, 'q-2', 'keep me (queued)', 3);
       expect(state.get(SESSION)!.timeline).toHaveLength(1); // only the sent-path bubble
       expect(state.get(SESSION)!.queuedMessages).toHaveLength(2);
 
@@ -1046,7 +1050,7 @@ describe('native runtime reducer paths', () => {
     });
 
     it('is a no-op when the drain already won the race (TRANSCRIPT_USER_MESSAGE confirmed first)', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'racer', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'racer', 1);
       // Confirm arrives first — the drain-side removal (TRANSCRIPT_USER_MESSAGE) already cleared the list entry.
       state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u-1', text: 'racer', timestamp: 2 });
       const before = state.get(SESSION)!;
@@ -1061,14 +1065,14 @@ describe('native runtime reducer paths', () => {
     });
 
     it('is a no-op for an unknown session id', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'irrelevant', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'irrelevant', 1);
       const before = state;
       state = dispatch(state, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: 'ghost-session', queueId: 'q-1' });
       expect(state).toBe(before);
     });
 
     it('TRANSCRIPT_USER_MESSAGE appends the drained queued message at the END (true position), not in place of a bubble that was never written', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'confirm me', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'confirm me', 1);
       expect(state.get(SESSION)!.timeline).toHaveLength(0);
       state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u-1', text: 'confirm me', timestamp: 2 });
       const timeline = state.get(SESSION)!.timeline;
@@ -1207,7 +1211,7 @@ describe('SESSION_MOVED reducer action', () => {
       timestamp: 1000,
     });
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'u2',
       toolUseId: 'tool-1',
@@ -1511,7 +1515,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
 
   it('a kept placeholder stays kept when the real tool-use replaces it, and can still be settled', () => {
     let s = expire(withAsk(), 'hook-closed');
-    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
     expect([...s.get(SESSION)!.toolCalls.keys()].filter((k) => k.startsWith('perm-'))).toEqual([]);
     expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
     s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'toolu_1' });
@@ -1521,7 +1525,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
   it('a re-emitted tool-use does not reset a kept card to running (the send gates must keep holding)', async () => {
     const { hasPendingInteraction } = await import('../src/renderer/state/pty-input-gate');
     let s = expire(withAsk(), 'hook-closed');
-    const use = { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
+    const use = { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
     s = dispatch(dispatch(s, use), use);
     expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
     expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
@@ -1529,7 +1533,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
 
   it("the tool's own result settles a kept card and clears the flag (answered in the terminal)", () => {
     let s = expire(withAsk(), 'hook-closed');
-    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
     const ok = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_1', result: 'ok', isError: false } as ChatAction);
     expect(card(ok, 'toolu_1')).toMatchObject({ status: 'complete' });
     expect(card(ok, 'toolu_1').expired).toBeUndefined();
@@ -1651,5 +1655,51 @@ describe('chat reducer copy-on-write', () => {
     s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction);
     expect(s.get(COW)!.toolCalls.get('t1')!.status).toBe('awaiting-approval');
     expect(chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction)).toBe(s);
+  });
+});
+
+describe('a sent message the computer may not have received', () => {
+  const sent = (sendId?: string): ChatState => dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hello', timestamp: 1, ...(sendId ? { sendId } : {}) } as ChatAction);
+  const bubble = (s: ChatState) => s.get(SESSION)!.timeline.find((e) => e.kind === 'user') as any;
+
+  it('carries its id on the bubble, takes a note, changes it and clears it, touching only that bubble', () => {
+    let s = dispatch(sent('id1'), { type: 'USER_PROMPT', sessionId: SESSION, content: 'other', timestamp: 2, sendId: 'id2' } as ChatAction);
+    expect(bubble(s).sendId).toBe('id1');
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' });
+    expect(bubble(s).sendNote).toBe('unsure');
+    expect((s.get(SESSION)!.timeline[1] as any).sendNote).toBeUndefined();
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' });
+    expect(bubble(s).sendNote).toBe('not-sent');
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: null });
+    expect(bubble(s).sendNote).toBeUndefined();
+  });
+
+  it('the same note again, a note for an unknown id and a note for a bubble already confirmed are the very same state back', () => {
+    const s = dispatch(sent('id1'), { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' });
+    expect(dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' })).toBe(s);
+    expect(dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'nobody', note: 'not-sent' })).toBe(s);
+    const confirmed = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, text: 'hello', timestamp: 3, uuid: 'e1' } as ChatAction);
+    expect(dispatch(confirmed, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' })).toBe(confirmed);
+  });
+
+  it('discarding removes just that unconfirmed bubble', () => {
+    let s = dispatch(sent('id1'), { type: 'USER_PROMPT', sessionId: SESSION, content: 'keep', timestamp: 2, sendId: 'id2' } as ChatAction);
+    s = dispatch(s, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' });
+    expect(s.get(SESSION)!.timeline.map((e: any) => e.message?.content)).toEqual(['keep']);
+    expect(dispatch(s, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' })).toBe(s);
+  });
+
+  it('a message that never arrived stops the spinner it started when nothing else is running, but never a running turn\'s', () => {
+    const idle = sent('id1');
+    expect(idle.get(SESSION)!.isThinking).toBe(true);                         // the optimistic send put it up
+    expect(dispatch(idle, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' }).get(SESSION)!.isThinking).toBe(true);   // not known: left alone
+    expect(dispatch(idle, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(false);
+    expect(dispatch(idle, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' }).get(SESSION)!.isThinking).toBe(false);
+    // A turn was already running when this was sent mid-stream: it keeps its spinner.
+    let busy = dispatch(initState(), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, text: 'first', timestamp: 1, uuid: 'u0' } as ChatAction);
+    busy = dispatch(busy, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, text: 'working', timestamp: 2, uuid: 'a0', turnId: 't1' } as ChatAction);
+    busy = dispatch(busy, { type: 'USER_PROMPT', sessionId: SESSION, content: 'more', timestamp: 3, sendId: 'id9' } as ChatAction);
+    expect(busy.get(SESSION)!.currentTurnId).toBeTruthy();
+    expect(dispatch(busy, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id9', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(true);
   });
 });

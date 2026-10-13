@@ -88,7 +88,7 @@ describe('Attention state reducer actions', () => {
       timestamp: 1000,
     });
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'u2',
       toolUseId: 'tool-1',
@@ -176,7 +176,7 @@ describe('Attention state reducer actions', () => {
       timestamp: 1000,
     });
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'u2',
       toolUseId: 'tool-1',
@@ -252,7 +252,7 @@ describe('stalled turn', () => {
       // is precisely the gap being closed.
       vi.setSystemTime(1_030_000);
       state = dispatch(state, {
-        type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1',
+        type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1',
         toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'ls' },
       });
       expect(state.get(SESSION)!.attentionState).toBe('ok');
@@ -321,7 +321,7 @@ describe('stalled turn', () => {
     // the abandoned text below cannot MERGE into step one's bubble, but does
     // nothing to protect a naive id-based filter from deleting step one too.
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION,
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION,
       uuid: 'u2', toolUseId: 'tool-1', toolName: 'Bash', toolInput: { command: 'ls' },
     });
     // Step 2 reuses the SAME fallback partId 'text-0' (provider omitted an
@@ -352,7 +352,7 @@ describe('stalled turn', () => {
     });
     // New step boundary.
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION,
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION,
       uuid: 'u2', toolUseId: 'tool-1', toolName: 'Bash', toolInput: { command: 'ls' },
     });
     // The abandoned attempt: a reasoning segment followed by a text segment,

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { safeStorage } from 'electron';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import {
   PageConnectionsStore, ConnectionsUnreadableError, CONNECTIONS_FILE, UNKNOWN_VERSION_MESSAGE,
   approvalKey, savedKeyId, splitSavedKeyId, hashHtml,
@@ -24,7 +25,7 @@ const fileOnDisk = () => JSON.parse(readFileSync(path.join(dir, CONNECTIONS_FILE
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), 'page-connections-'));
-  secrets = new SecretsStore(dir);
+  secrets = new SecretsStore(dir, getSecretStorage());
   store = new PageConnectionsStore(dir, secrets);
 });
 afterEach(() => {

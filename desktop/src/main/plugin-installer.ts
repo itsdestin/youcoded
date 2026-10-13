@@ -89,14 +89,10 @@ export interface InstallMeta {
   sourceSubdir?: string;
 }
 
-export type InstallResult =
-  // `commit` is the exact upstream sha the install landed on, present only when
-  // the catalog listed one (see pinToCommit). The package record stores it so the
-  // Update check can tell "the repo moved" from "the author bumped the version".
-  | { status: 'installed'; type?: 'plugin' | 'prompt'; commit?: string }
-  | { status: 'already_installed'; via: string; type?: 'plugin' | 'prompt' }
-  | { status: 'failed'; error: string; type?: 'plugin' | 'prompt' }
-  | { status: 'installing'; type?: 'plugin' | 'prompt' };
+// WHY (2026-09-30 one-core R3-3): the shape lives in shared/skills-types.ts so the skills:install
+// channel row can name it; re-exported here so every existing import keeps working.
+import type { InstallResult } from '../shared/skills-types';
+export type { InstallResult };
 
 interface MarketplaceEntry {
   id: string;

@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop, type InjectedMeta } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -253,7 +253,10 @@ export type TimelineEntry =
   // `uuid` (remote access batch 2): the transcript line this entry was confirmed or
   // created from. A hydrate uses it to tell an echo the phone has not applied yet from
   // older history the two copies simply loaded to different depths.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string }
+  // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
+  // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
+  // bubble, so a note can never outlive the doubt it describes.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -282,7 +285,6 @@ export interface SessionChatState {
   usageProgressAt: number;
   /** Progress heartbeat identity is separate from durable transcript seenUuids. */
   usageProgressUuid: string | null;
-  streamingText: string;
   /** ID of the current tool group (tools are appended here until next message) */
   currentGroupId: string | null;
   /** ID of the current assistant turn (text + tool groups accumulate here) */
@@ -370,7 +372,7 @@ export interface SessionChatState {
    * Holds the pre-compaction contextTokens count so COMPACTION_COMPLETE can compute
    * how much was freed.
    */
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   /**
    * Native sessions only. Tokens occupying the model's window after the last
    * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
@@ -443,6 +445,15 @@ export interface SessionChatState {
    * have shown, so the drain-side removal can content-match it.
    */
   queuedMessages: Array<{ queueId: string; content: string; timestamp: number }>;
+  /**
+   * The model the computer last said this session switched to, until a reply proves it (one-core R5-4a). WHY: the chip's model was worked
+   * out from the newest assistant turn, so every screen but the one that picked a model showed the old one until the next reply.
+   * The host now announces `/model` and picker changes (`session:live`, kind `model`); this holds the announcement and
+   * `useActiveSessionModel` prefers it. `turnId` is the turn in flight when it arrived (null when idle): that turn's remaining text
+   * still carries the OLD model and must not undo the announcement; the first reply of a LATER turn replaces it with the model that
+   * really answered. Not serialized: it describes the live session only.
+   */
+  modelAnnounced: { model: string; turnId: string | null } | null;
 
   /** Session-so-far totals for the status bar and /usage (spec §2). Accumulated
    *  as events arrive rather than walked on demand — see session-totals.ts for
@@ -480,7 +491,6 @@ export function createSessionChatState(): SessionChatState {
     inProgressUsage: null,
     usageProgressAt: 0,
     usageProgressUuid: null,
-    streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
     lastActivityAt: 0,
@@ -501,6 +511,7 @@ export function createSessionChatState(): SessionChatState {
     modelEverResident: false,
     seenUuids: new Set(),
     queuedMessages: [],
+    modelAnnounced: null,
     history: { cursor: null, hasMore: false, loading: false },
     totals: emptyTotals(),
     sessionContext: null,
@@ -513,7 +524,12 @@ export type ChatAction =
   // Replaces the entire ChatState Map with a deserialized snapshot. Fired once
   // per remote-access connect so browser clients get the full chat history
   // immediately rather than rebuilding it from replayed transcript events.
-  | { type: 'HYDRATE_CHAT_STATE'; sessions: SerializedChatState }
+  /** Dev workbench only (workbench/seed-chat.ts): timelines built by replaying fixtures, handed in whole. */
+  | { type: 'CHAT_STATE_SEEDED'; sessions: SerializedChatState }
+  /** A session is about to be filled from a fresh page (main/session-open.ts): start it over, keeping rows this screen queued. */
+  | { type: 'SESSION_FILL_RESET'; sessionId: string }
+  /** The computer's record says a turn is in flight and the page-filled copy does not show it. Only turns the indicator on. */
+  | { type: 'SESSION_WORKING_SYNCED'; sessionId: string; working: boolean }
   | { type: 'SESSION_INIT'; sessionId: string }
   | { type: 'SESSION_REMOVE'; sessionId: string }
   | {
@@ -524,21 +540,42 @@ export type ChatAction =
       // Exact attached-file paths (see ChatMessage.attachments) — lets the
       // bubble render pills for paths with spaces that regex detection misses.
       attachments?: string[];
+      /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
+      sendId?: string;
     }
   | {
-      // Task 12: a native send came back 'queued' (host FIFO'd it behind an
-      // in-flight turn). Adds to SessionChatState.queuedMessages — NEVER
-      // touches the timeline or turn state (that's exactly the Task 3/11 bug
-      // this replaces: an enqueue-time timeline bubble could land above
-      // content the still-streaming prior turn hadn't emitted yet). content
-      // is the same display string USER_PROMPT would have used for the
-      // bubble, so TRANSCRIPT_USER_MESSAGE's drain-side removal can
-      // content-match it.
-      type: 'QUEUED_MESSAGE_ADDED';
+      // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
+      type: 'SEND_NOTE';
       sessionId: string;
-      queueId: string;
-      content: string;
-      timestamp: number;
+      sendId: string;
+      note: 'unsure' | 'not-sent' | null;
+      /** With note null: the person pressed Dismiss — hide the note, keep the bubble, and never re-add an "unsure" one. */
+      dismissed?: true;
+    }
+  | {
+      // "Send again": the unconfirmed bubble goes, and the same words go out as a new send with its own bubble (one-core R5-4b).
+      type: 'SEND_DISCARD';
+      sessionId: string;
+      sendId: string;
+    }
+  | {
+      // One-core R5-4a: the host's queue of waiting messages as it is NOW (a snapshot, `session:live` kind `queue`). Replaces the list, so a
+      // screen that missed a change, a screen that did not send the message and a screen that reconnected all end up showing the same rows.
+      type: 'QUEUE_SYNCED';
+      sessionId: string;
+      queue: Array<{ queueId: string; content: string; timestamp: number }>;
+    }
+  | {
+      // The host took back a "Model switched to X" divider because Claude Code refused the switch (one-core R5-4a review).
+      type: 'MODEL_SWITCH_RETRACT';
+      sessionId: string;
+      markerId: string;
+    }
+  | {
+      // One-core R5-4a: the host announced a model change (`session:live` kind `model`); see SessionChatState.modelAnnounced.
+      type: 'MODEL_ANNOUNCED';
+      sessionId: string;
+      model: string;
     }
   | {
       // Task 12 (replaces QUEUED_PROMPT_CANCELED): removes a queuedMessages
@@ -641,6 +678,8 @@ export type ChatAction =
       type: 'ATTENTION_STATE_CHANGED';
       sessionId: string;
       state: AttentionState;
+      /** Apply only while the session's attention is this (one-core R5-4b: the computer clears ITS "stuck" without wiping a different state). */
+      onlyFrom?: AttentionState;
     }
   | {
       // Heartbeat fired when the transcript watcher sees an assistant
@@ -771,6 +810,15 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // One-core R6-2 (instant buttons on a phone), see state/permission-answer.ts. `pending`: the answer is drawn before the computer confirms;
+      // `waiting`: its reply was lost; `settled`: confirmed, drop the mark; `undone`: put the card back (`unconfirmed`: say the answer could not be confirmed).
+      type: 'PERMISSION_ANSWER';
+      sessionId: string;
+      requestId: string;
+      step: 'pending' | 'waiting' | 'settled' | 'undone';
+      unconfirmed?: boolean;
+    }
+  | {
       // admin-password design §2.5/§2.6: sets ToolCallState.passwordAsk (or
       // the matching nested Task-card segment for a specialist's own sudo) on
       // the Bash card named by `toolUseId` — matched directly, unlike
@@ -857,12 +905,13 @@ export type ChatAction =
       toolUseId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
-      // The transcript event's own stamp (epoch ms). Optional because the
-      // top-level card never needed it; a CHILD tool row (parentAgentToolUseId
-      // set) carries it onto its segment so a specialist's mid-run note can be
-      // placed among the tool calls by time (chat-reducer.ts
-      // reconcileNoteSegments) instead of at the bottom of the trail.
-      timestamp?: number;
+      // The transcript event's own stamp (epoch ms). REQUIRED so that a producer
+      // that forgets it fails the build: the buddy once dropped it and every
+      // specialist note fell to the tail of its trail there. The top-level card
+      // ignores it; a CHILD tool row (parentAgentToolUseId set) carries it onto its
+      // segment so a specialist's mid-run note can be placed among the tool calls by
+      // time (chat-reducer.ts reconcileNoteSegments).
+      timestamp: number;
       parentAgentToolUseId?: string;
       agentId?: string;
     }
@@ -991,7 +1040,9 @@ export type ChatAction =
   | {
       type: 'CLEAR_TIMELINE';
       sessionId: string;
-      markerId: string;       // Stable id so the divider survives re-renders
+      /** Stable id so the divider survives re-renders. ABSENT = reset the turn only and draw NO divider: a live native `context-clear` event
+       *  (the record's own `session:live` clear draws the line, once, for both runtimes; sync-fix6). */
+      markerId?: string;
       timestamp: number;
     }
   // Typed `/model <alias>` in chat: replaces the raw "/model opus" bubble with
@@ -1016,6 +1067,8 @@ export type ChatAction =
       // so App's 3-minute "may have failed" watchdog must not guess instead —
       // a slow local summary legitimately runs longer and its marker was lost.
       awaitsResult?: boolean;
+      // The computer raised this spinner and ends it itself (main/session-live.ts watchdog): no screen watchdog guesses (one-core R5-4a).
+      hostOwned?: boolean;
     }
   // A native summary the user stopped (or a switch popup that gave up): drop the
   // spinner with NO marker — nothing was compacted, and nothing "may have failed".
@@ -1092,7 +1145,6 @@ export interface SerializedSessionChatState {
   toolGroups: Array<[string, ToolGroupState]>;
   assistantTurns: Array<[string, AssistantTurn]>;
   isThinking: boolean;
-  streamingText: string;
   currentGroupId: string | null;
   currentTurnId: string | null;
   lastActivityAt: number;
@@ -1110,7 +1162,7 @@ export interface SerializedSessionChatState {
   // makes the elapsed number approximate on remote; that is accepted.
   stalledSince?: number | null;
   lastBufferActivityAt: number;
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized because it is a fact about the SESSION's window, not about one
   // client's view: a phone that reconnects after the desktop compacted must see
@@ -1144,16 +1196,6 @@ export interface SerializedSessionChatState {
 
 export interface SerializedChatState {
   sessions: Array<[string, SerializedSessionChatState]>;
-  // Set when the host could not produce a real snapshot (renderer export timed
-  // out, or serialization threw) and fell back to an empty payload. Lets the
-  // client tell "the host has no sessions" apart from "the host failed" —
-  // without it, both look like a valid empty snapshot. Optional so a payload
-  // from a pre-field host still deserializes.
-  degraded?: true;
-  // Remote access batch 2 (§2, R2): the session the desktop is showing (its
-  // last-focused main window's selection), so a phone with no place of its own
-  // opens it. Optional so a payload from a pre-field host still deserializes.
-  focus?: { sessionId: string | null };
 }
 
 export function serializeChatState(state: ChatState): SerializedChatState {
@@ -1167,7 +1209,6 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         toolGroups: Array.from(s.toolGroups.entries()),
         assistantTurns: Array.from(s.assistantTurns.entries()),
         isThinking: s.isThinking,
-        streamingText: s.streamingText,
         currentGroupId: s.currentGroupId,
         currentTurnId: s.currentTurnId,
         lastActivityAt: s.lastActivityAt,
@@ -1212,7 +1253,6 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       inProgressUsage: null,
       usageProgressAt: 0,
       usageProgressUuid: null,
-      streamingText: ser.streamingText,
       currentGroupId: ser.currentGroupId,
       currentTurnId: ser.currentTurnId,
       lastActivityAt: ser.lastActivityAt,
@@ -1247,6 +1287,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       seenUuids: new Set(ser.seenUuids ?? []),
       // Older hosts predate queuedMessages — default to an empty list.
       queuedMessages: ser.queuedMessages ?? [],
+      modelAnnounced: null, // live-session only (R5-4a), never in a snapshot
       // Older hosts predate paged history — default to "nothing older known",
       // which is what a hydrated snapshot already represents.
       history: ser.history
@@ -1265,4 +1306,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
 }
 
 /** Structured header for a host-injected specialist report — mirrors TranscriptEvent.data.injectedMeta. */
-export type InjectedMeta = NonNullable<NonNullable<import('../../shared/types').TranscriptEvent['data']>['injectedMeta']>;
+// WHY a re-export: InjectedMeta used to be derived from TranscriptEvent['data'] (a
+// self-reference that cannot survive `data` becoming a union, M5). The real type
+// lives in shared/types.ts; renderer files keep importing it from here.
+export type { InjectedMeta };

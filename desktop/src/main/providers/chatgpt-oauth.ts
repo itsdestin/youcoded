@@ -25,7 +25,7 @@
 
 import { createHash } from 'crypto';
 import type { CatalogModel } from '../../shared/provider-types';
-import { chatGptLimitMessage, type ChatGptUsage } from '../../shared/chatgpt-types';
+import { CHATGPT_APP_LIMIT_MESSAGE, chatGptLimitMessage, type ChatGptRouteName, type ChatGptUsage } from '../../shared/chatgpt-types';
 
 // ---------------------------------------------------------------------------
 // Constants — verified against pi's source (badlogic/pi-mono) 2026-09-04/05 and
@@ -54,9 +54,106 @@ export function chatGptModelsUrl(clientVersion: string): string {
   return `${CHATGPT_BACKEND}/codex/models?client_version=${encodeURIComponent(clientVersion)}`;
 }
 
+// ---------------------------------------------------------------------------
+// The OFFICIAL route — OpenAI's "Sign in with ChatGPT" for open-source, locally
+// run apps (launched 2026-09-29). Measured against a real account on
+// 2026-10-05: youcoded-dev docs/archive/investigations/2026-10-05-chatgpt-official-siwc-phase0.md.
+//
+// WHY two routes: the one above borrows the Codex CLI's client id and a private
+// endpoint, which OpenAI may close at any time. Destin chose (2026-10-05) to ship
+// this one BUILT IN BUT OFF — the Codex route keeps free plans and the usage bars
+// working while it lives — so the day it breaks, one switch moves everyone here.
+// Written from OpenAI's public docs; nothing is copied from their @siwc/local SDK
+// (its licence is noncommercial).
+// ---------------------------------------------------------------------------
+
+export type ChatGptRoute = ChatGptRouteName;
+
+export const CHATGPT_OFFICIAL_AUTHORIZE_URL = 'https://auth.openai.com/api/accounts/authorize';
+export const CHATGPT_OFFICIAL_TOKEN_URL = 'https://auth.openai.com/api/accounts/oauth/token';
+export const CHATGPT_OFFICIAL_REVOKE_URL = 'https://auth.openai.com/api/accounts/oauth/revoke';
+/** Both the token `resource` and the base of every plan request. */
+export const CHATGPT_OFFICIAL_BASE_URL = 'https://api.openai.com/v1';
+/** Same manifest row shape as `/codex/models` (measured), so `parseModelsManifest` reads it. */
+export const CHATGPT_OFFICIAL_MODELS_URL = `${CHATGPT_OFFICIAL_BASE_URL}/models`;
+/** `chatgpt.tokens.use.direct` is the plan-usage grant; the user can refuse it separately. */
+const CHATGPT_OFFICIAL_SCOPE = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
+export const CHATGPT_PLAN_USAGE_SCOPE = 'chatgpt.tokens.use.direct';
+/** A first sign-in registers the app on the fly: this placeholder id plus the app's name. */
+const CHATGPT_DYNAMIC_CLIENT_ID = 'dynamic_agent_client';
+/** The name OpenAI's consent screen and ChatGPT Settings → Usage show. Never vary it. */
+const CHATGPT_OFFICIAL_APP_NAME = 'YouCoded';
+
+/** The URL the browser opens on the official route. `clientId` is the id an
+ *  earlier sign-in was issued; without one the round registers anew. */
+export function buildOfficialAuthorizeUrl(opts: {
+  state: string; challenge: string; nonce: string; redirectUri: string; hostId: string; clientId?: string;
+}): string {
+  const url = new URL(CHATGPT_OFFICIAL_AUTHORIZE_URL);
+  const params: Record<string, string> = {
+    response_type: 'code',
+    client_id: opts.clientId ?? CHATGPT_DYNAMIC_CLIENT_ID,
+    redirect_uri: opts.redirectUri,
+    scope: CHATGPT_OFFICIAL_SCOPE,
+    resource: CHATGPT_OFFICIAL_BASE_URL,
+    state: opts.state,
+    nonce: opts.nonce,
+    code_challenge: opts.challenge,
+    code_challenge_method: 'S256',
+    ext_agent_host_id: opts.hostId,
+  };
+  if (!opts.clientId) params.agent_name_hint = CHATGPT_OFFICIAL_APP_NAME;
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return url.toString();
+}
+
+export function officialExchangeBody(opts: { code: string; verifier: string; clientId: string; redirectUri: string }): string {
+  return new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: opts.clientId,
+    code: opts.code,
+    code_verifier: opts.verifier,
+    redirect_uri: opts.redirectUri,
+    resource: CHATGPT_OFFICIAL_BASE_URL,
+  }).toString();
+}
+
+/** The refresh token ROTATES on this route (measured): the caller must store the new one. */
+export function officialRefreshBody(opts: { refreshToken: string; clientId: string }): string {
+  return new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: opts.clientId,
+    refresh_token: opts.refreshToken,
+    resource: CHATGPT_OFFICIAL_BASE_URL,
+  }).toString();
+}
+
+export function officialRevokeBody(opts: { refreshToken: string; clientId: string }): string {
+  return new URLSearchParams({ token: opts.refreshToken, token_type_hint: 'refresh_token', client_id: opts.clientId }).toString();
+}
+
+/** The account on the official route comes from the id token alone: the access
+ *  token's claims are opaque here (measured — no account id, no plan). `sub`
+ *  is the stable identity. Null when the id token is missing, is not for this
+ *  client, or answers a different sign-in round (nonce). */
+export function officialAccountFromIdToken(idToken: string | undefined, expected: { clientId: string; nonce?: string }): ChatGptAccountClaims | null {
+  const id = decodeJwtClaims(idToken);
+  const sub = asString(id?.sub);
+  if (!id || !sub) return null;
+  const aud = id.aud;
+  const audOk = Array.isArray(aud) ? aud.includes(expected.clientId) : aud === expected.clientId;
+  if (!audOk) return null;
+  if (expected.nonce !== undefined && id.nonce !== expected.nonce) return null;
+  return { accountId: sub, plan: '', email: asString(id.email) ?? '' };
+}
+
 /** What the registry throws when a ChatGPT model is picked while signed out. */
 export const CHATGPT_SIGN_IN_REQUIRED_MESSAGE =
   'Sign in with ChatGPT in Assistant settings → Cloud providers to use this model.';
+/** A saved sign-in made on the other route (questions deck Q-2: everyone is
+ *  asked once, rather than kept on the old way). */
+export const CHATGPT_SIGN_IN_AGAIN_MESSAGE =
+  'ChatGPT sign-in has changed — sign in again in Assistant settings → Cloud providers to keep using it.';
 /** What a turn ends with when a refresh can no longer fix a 401. */
 export const CHATGPT_SIGN_IN_EXPIRED_MESSAGE =
   'Your ChatGPT sign-in has expired — sign in again in Assistant settings → Cloud providers.';
@@ -437,6 +534,7 @@ export interface ClassifyErrorInput {
 }
 
 const LIMIT_CODE = /usage_limit_reached|usage_not_included/i;
+const OFFICIAL_LIMIT_CODE = 'subscription_sharing_usage_limit_exceeded';
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 /** How close a snapshot window's reset must be to the reply's to count as the
  *  same window. Two polls a few seconds apart report the same reset. */
@@ -533,6 +631,12 @@ export function classifyErrorBody(input: ClassifyErrorInput): ClassifiedError {
   const { json, text } = parseBody(input.body);
   const err = asRecord(json?.error);
 
+  // The official route's cap (per app, or the whole plan — OpenAI's docs say not
+  // to guess which, nor a reset time). It carries no window, so it gets its own
+  // sentence and the card offers ChatGPT's usage page instead of a reset time.
+  if (asString(err?.code) === OFFICIAL_LIMIT_CODE || asString(json?.code) === OFFICIAL_LIMIT_CODE) {
+    return { kind: 'limit', message: CHATGPT_APP_LIMIT_MESSAGE, windowLabel: '', resetsAt: '' };
+  }
   if (status === 429) {
     const code = asString(err?.code) ?? asString(err?.type) ?? asString(json?.code) ?? '';
     if (!LIMIT_CODE.test(code)) return { kind: 'other' };

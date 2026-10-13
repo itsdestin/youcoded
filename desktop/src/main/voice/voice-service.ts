@@ -50,7 +50,8 @@ import {
 // instead of a microphone that silently does nothing.
 //
 // In words, the conversation is: the worker is forked with the app's data
-// folder as its only argument and finds the engine itself. We say `start`, then
+// folder and bundled tokenizer path and finds the engine itself. For nonempty
+// vocabulary the host sends one configuration snapshot before `start`, then
 // `audio` ten times a second, then `stop` (one last pass, then exactly one
 // `final`) or `cancel` (nothing at all). It says `ready` when the engine is
 // loaded, `pass-begin` with the LENGTH OF AUDIO it is about to re-hear — the
@@ -92,7 +93,7 @@ export interface VoiceServiceDeps {
   /** Call `cb` if that window goes away; returns an unsubscribe. */
   onWindowGone(webContentsId: number, cb: () => void): () => void;
   /** Start the speech engine's own program. */
-  spawnWorker(): VoiceWorkerHandle;
+  spawnWorker(vocabulary?: readonly string[]): VoiceWorkerHandle;
   assets: VoiceAssetsApi;
   /** Overridable only so a test can pretend to be on macOS/Windows-on-ARM. */
   platform?: NodeJS.Platform | string;
@@ -152,11 +153,18 @@ interface Session {
   speechHeard: boolean;
   lastLoudAt: number;
   unwatchWindow: () => void;
+  queuedAudio: ArrayBuffer[];
+  ended: Promise<void>;
+  resolveEnded: () => void;
+  terminalError?: Error;
 }
 
 export class VoiceService {
   private session: Session | null = null;
   private worker: VoiceWorkerHandle | null = null;
+  private workerVocabulary: readonly string[] = [];
+  private workerExit: Promise<void> | null = null;
+  private retiringWorker: Promise<void> | null = null;
   /** The worker has said `ready`: its engine is loaded. Until then a stop waits
    *  on the LOAD (60 s clock), not on the 20 s "return your words" clock. */
   private workerReady = false;
@@ -225,7 +233,10 @@ export class VoiceService {
 
   /** Open the mic for one window. Refuses, with a real reason, when the engine
    *  is not installed or when another window is already listening. */
-  async start(webContentsId: number): Promise<void> {
+  async start(webContentsId: number, vocabulary: readonly string[] = []): Promise<void> {
+    // WHY: the requesting window may close while IPC reads its saved vocabulary.
+    // A dead window must not reserve the mic or load an engine with no consumer.
+    if (!this.deps.isWindowAlive(webContentsId)) throw new Error('The YouCoded window that requested voice typing has closed.');
     if (this.session) {
       // WHY refuse rather than steal: two windows sharing one microphone would
       // put half of your sentence in the wrong text box.
@@ -249,20 +260,52 @@ export class VoiceService {
     }
 
     this.clearIdleUnload();
-    this.ensureWorker();
-
+    // WHY: reserve ownership and copy preferences synchronously before waiting
+    // for any old process to exit. Another window cannot steal the pending start.
+    const snapshot = Object.freeze([...vocabulary]);
+    let resolveEnded = () => {};
+    const ended = new Promise<void>((resolve) => { resolveEnded = resolve; });
     const now = Date.now();
-    this.session = {
+    const session: Session = {
       webContentsId,
       terminated: false,
       finishing: false,
       speechHeard: false,
       lastLoudAt: now,
+      queuedAudio: [], ended, resolveEnded,
       // A window that closes mid-sentence must not leave a microphone open and
       // a 1.14 GB recogniser resident.
       unwatchWindow: this.deps.onWindowGone(webContentsId, () => this.onWindowGone(webContentsId)),
     };
-    this.worker?.send({ type: 'start' });
+    this.session = session;
+    if (this.worker && (snapshot.length !== this.workerVocabulary.length
+      || snapshot.some((phrase, index) => phrase !== this.workerVocabulary[index]))) {
+      this.unloadWorker();
+    }
+    if (this.retiringWorker) {
+      // WHY: kill requests are asynchronous. Wait for exit, not merely kill(),
+      // before allocating another 1.14 GB recognizer. Cancellation/deadline also
+      // releases this start, so a missing exit cannot leave its IPC unresolved.
+      this.armLoadDeadline(true);
+      await Promise.race([this.retiringWorker, session.ended]);
+      // WHY: a timeout must reject the start IPC, or the renderer opens capture
+      // after the backend session ended. Deliberate cancellation stays silent.
+      if (session.terminalError) throw session.terminalError;
+      if (this.session !== session || session.terminated) return;
+    }
+    try {
+      this.ensureWorker(snapshot);
+      this.worker?.send({ type: 'start' });
+      for (const chunk of session.queuedAudio) this.worker?.send({ type: 'audio', chunk });
+      session.queuedAudio = [];
+      if (session.finishing) this.worker?.send({ type: 'stop' });
+    } catch (error) {
+      // WHY: fork/send can fail before start is acknowledged. Release the newly
+      // reserved session and return the actual failure, not a stuck mic owner.
+      this.endSession();
+      this.unloadWorker();
+      throw error;
+    }
   }
 
   /** Close the mic and deliver exactly one `final`. */
@@ -270,6 +313,7 @@ export class VoiceService {
     const s = this.session;
     if (!s || s.terminated || s.finishing) return;
     s.finishing = true;
+    if (!this.worker && this.retiringWorker) return; // start flushes the queued stop after exit
     if (!this.worker) {
       // No engine at all: the contract still owes the composer one `final`, or
       // the box would listen forever. Empty text is the honest answer.
@@ -306,7 +350,8 @@ export class VoiceService {
     // room noise into your sentence.
     if (s.webContentsId !== webContentsId) return;
 
-    this.worker?.send({ type: 'audio', chunk });
+    if (this.worker) this.worker.send({ type: 'audio', chunk });
+    else s.queuedAudio.push(chunk);
 
     const now = Date.now();
     if (rms >= SPEECH_RMS_FLOOR) {
@@ -330,7 +375,7 @@ export class VoiceService {
 
   // ── The worker ────────────────────────────────────────────────────────────
 
-  private ensureWorker(): void {
+  private ensureWorker(vocabulary: readonly string[]): void {
     if (this.worker) {
       // Fix (2026-09-30 review): a cancel during the load clears the load clock
       // (endSession), and nothing used to re-arm it. A second tap while that same
@@ -340,8 +385,12 @@ export class VoiceService {
       if (!this.workerReady && !this.loadTimer) this.armLoadDeadline();
       return;
     }
-    const w = this.deps.spawnWorker();
+    const w = vocabulary.length ? this.deps.spawnWorker(vocabulary) : this.deps.spawnWorker();
     this.worker = w;
+    this.workerVocabulary = vocabulary;
+    let resolveExit = () => {};
+    const exit = new Promise<void>((resolve) => { resolveExit = resolve; });
+    this.workerExit = exit;
     this.workerReady = false;
     this.lastStderr = null;
     // Every callback checks that the worker which spoke is still OUR worker.
@@ -354,7 +403,11 @@ export class VoiceService {
     // a dead worker could otherwise put its last words in a live one's error.
     // Found reviewing T5, 2026-09-05.
     w.onMessage((m) => { if (this.worker === w) this.onWorkerMessage(m); });
-    w.onExit((code) => { if (this.worker === w) this.onWorkerExit(code); });
+    w.onExit((code) => {
+      resolveExit();
+      if (this.retiringWorker === exit) this.retiringWorker = null;
+      if (this.worker === w) this.onWorkerExit(code);
+    });
     w.onStderr((line) => {
       if (this.worker !== w) return;
       const trimmed = line.trim();
@@ -366,9 +419,15 @@ export class VoiceService {
     this.armLoadDeadline();
   }
 
-  private armLoadDeadline(): void {
+  private armLoadDeadline(waitingForExit = false): void {
     this.clearTimer('load');
     this.loadTimer = setTimeout(() => {
+      if (waitingForExit) {
+        // WHY: the new engine has not started loading yet. Report the missing
+        // exit acknowledgment, not a load failure or a successful close we lack.
+        this.emitTerminal({ type: 'error', message: 'Voice stopped: the previous speech engine did not report closing within 60 seconds.' });
+        return;
+      }
       this.killWedged('the speech engine did not finish loading within 60 seconds');
     }, LOAD_DEADLINE_MS);
   }
@@ -476,6 +535,7 @@ export class VoiceService {
 
   private unloadWorker(): void {
     const w = this.worker;
+    if (w) this.retiringWorker = this.workerExit;
     this.worker = null;
     this.endPass();
     this.clearTimer('load');
@@ -495,6 +555,7 @@ export class VoiceService {
     const s = this.session;
     if (!s || s.terminated) return;
     s.terminated = true;
+    if (event.type === 'error') s.terminalError = new Error(event.message);
     this.push(s.webContentsId, event);
     this.endSession();
   }
@@ -504,6 +565,7 @@ export class VoiceService {
     if (!s) return;
     try { s.unwatchWindow(); } catch { /* window already gone */ }
     this.session = null;
+    s.resolveEnded();
     this.endPass();
     this.clearTimer('load');
     this.clearTimer('stop');

@@ -87,7 +87,7 @@ function readStoredFileView(): FileViewMode {
 }
 import { Button, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
-import { isRemoteMode } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface ProjectViewProps {
@@ -987,7 +987,8 @@ export function ProjectView(props: ProjectViewProps) {
                       uploads are a later, separately approved batch, and a
                       button that does nothing on a phone read as broken
                       (tester U4, 2026-09-10). */}
-                  {!isRemoteMode() && (
+                  {/* R4-1: `projectWrites` capability, was !isRemoteMode(). */}
+                  {getCapabilities().projectWrites && (
                     <Button
                       variant="secondary"
                       className="shrink-0"

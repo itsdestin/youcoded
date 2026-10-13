@@ -14,11 +14,13 @@
 //     what a service already received.
 import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
+import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
 import { Button, ErrorState, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
+import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
 import { publishPages } from './use-pages';
 
 function bridge(): PagesBridge | undefined {
@@ -66,8 +68,46 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
         : { what: 'Look up and change things on GitHub using your GitHub sign-in.', limit: 'That includes your repositories.' };
     case 'open':
       return { what: 'Reach any website.', limit: 'Anything shown in this page, or typed into it, could be sent anywhere.' };
+    // Home-device deck (2026-10-01): one device, never the internet
+    // (S-only-home), and the key is the person's own (S-key-and-control).
+    case 'device': {
+      const using = c.needsKey ? ` using your ${c.service} key` : '';
+      // No usable address yet (the box holds something refused): name the
+      // device, not an address.
+      const at = c.address ? ` at ${c.address}` : '';
+      const only = 'Only this one device in your home; nothing on the internet.';
+      return c.access === 'lookup'
+        ? { what: `Look things up on your ${c.service}${at}${using}.`, limit: `Cannot change anything there. ${only}` }
+        : { what: `Look up and change things on your ${c.service}${at}${using}.`, limit: c.needsKey ? `It can do whatever that key allows. ${only}` : only };
+    }
+    // Finance dashboard (2026-10-05). Practice mode says so plainly, so nobody
+    // thinks their real bank is reachable from a sandbox page.
+    case 'plaid':
+      return c.environment === 'sandbox'
+        ? { what: "See Plaid's made-up practice banks, using your Plaid keys.", limit: 'Nothing real is reached.' }
+        : { what: 'See balances, credit limits and due dates from banks you connect through Plaid, using your Plaid keys.', limit: 'Cannot move money. Each bank is added only when you sign in to it in your browser, and you can remove it any time.' };
   }
 }
+
+/** Extra plain lines for a device whose manifest asks for more than ordinary look-ups: a live connection
+ *  (a login greeting or a "logged in" reply means the page keeps a socket open) and camera video. Only the
+ *  fields that are present produce a line, so a device that asks for neither shows nothing new.
+ *  WHY: both ride the approval fingerprint, so the person was approving them without being told. */
+const LIVE_CONNECTION_LINE = 'Keeps a live connection open for instant updates.';
+const CAMERA_VIDEO_LINE = 'Can play camera video through the app.';
+function deviceExtraLines(c: PageConnection): string[] {
+  if (c.kind !== 'device') return [];
+  const lines: string[] = [];
+  if (c.socketHello || c.socketReady) lines.push(LIVE_CONNECTION_LINE);
+  if (c.videoProfile) lines.push(CAMERA_VIDEO_LINE);
+  return lines;
+}
+
+/** Home-device deck, S-plain-connection: most home devices only speak the
+ *  unencrypted form of web traffic, so the card says what that means rather
+ *  than hiding it. Tailscale encrypts on its own, which is why the line says
+ *  "your home wifi" and not "anyone". */
+const DEVICE_NOT_ENCRYPTED = 'The connection to a home device is usually not encrypted. Someone already on your home wifi could see what passes between them, including the key. Over Tailscale it is encrypted.';
 
 /** Two-label endings that are registries rather than somebody's website, so
  *  the real site is the THIRD label from the right. A short hand-kept list, not
@@ -101,7 +141,10 @@ export function splitAddress(address: string): { prefix: string; site: string } 
 /** The address as it is read: the real website solid, everything in front of
  *  it dim. Same everywhere an address appears, so one screen never teaches a
  *  way of reading that another screen breaks. */
-function Address({ address }: { address: string }) {
+function Address({ address, device }: { address: string; device?: boolean }) {
+  // A home device has no "real website" hiding inside it — 100.99.234.114:8123
+  // split at its dots would emphasise "234.114:8123" — so it is shown whole.
+  if (device) return <span data-page-address={address} className="text-fg font-medium">{address}</span>;
   const { prefix, site } = splitAddress(address);
   return (
     <span data-page-address={site}>
@@ -112,16 +155,16 @@ function Address({ address }: { address: string }) {
 }
 
 function addressOf(c: PageConnection): string | undefined {
-  return c.kind === 'key' || c.kind === 'public' ? c.address : undefined;
+  return c.kind === 'key' || c.kind === 'public' || c.kind === 'device' ? c.address : undefined;
 }
 
 /** The connection's sentence, with its address rendered rather than written —
  *  the same words, only read correctly. */
-function withAddress(text: string, address: string | undefined): React.ReactNode {
+function withAddress(text: string, address: string | undefined, device?: boolean): React.ReactNode {
   if (!address) return text;
   const at = text.indexOf(address);
   if (at < 0) return text;
-  return <>{text.slice(0, at)}<Address address={address} />{text.slice(at + address.length)}</>;
+  return <>{text.slice(0, at)}<Address address={address} device={device} />{text.slice(at + address.length)}</>;
 }
 
 /** True while any line is waiting for a yes — the page stays closed until then. */
@@ -150,8 +193,9 @@ function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; child
   return (
     <div className="flex flex-col gap-1.5" data-page-connection={c.kind}>
       <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
-        {withAddress(words.what, addressOf(c))} <span className="text-fg-dim">{words.limit}</span>
+        {withAddress(words.what, addressOf(c), c.kind === 'device')} <span className="text-fg-dim">{words.limit}</span>
       </div>
+      {deviceExtraLines(c).map((line) => <div key={line} className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`} data-device-extra>{line}</div>)}
       {children}
     </div>
   );
@@ -160,12 +204,58 @@ function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; child
 /** How to find a key: the page's author may supply the steps (they travel with
  *  the page); otherwise a general pointer. Shown as the author's words, not the
  *  app's, because the app cannot vouch for them. */
-function KeyHelp({ c }: { c: PageConnectionStatus & { kind: 'key' } }) {
-  const steps = c.keyHelp?.steps ?? [];
+type KeyedLine = (PageConnectionStatus & { kind: 'key' | 'device' })
+  // A Plaid line is keyed like the rest, under the service and address its
+  // saved key lives at (pages-types plaidAddress), so the saved-key offer and
+  // the storage note read the same way for it.
+  | (PageConnectionStatus & { kind: 'plaid'; service: string; address: string });
+
+function plaidKeyed(c: PageConnectionStatus & { kind: 'plaid' }): KeyedLine {
+  return { ...c, service: PLAID_SERVICE, address: plaidAddress(c.environment) };
+}
+
+/** Plaid's own dashboard page where both keys are shown. */
+const PLAID_KEYS_PAGE = 'https://dashboard.plaid.com/developers/keys';
+const PLAID_KEY_STEPS = (env: string) => [
+  'Sign in at dashboard.plaid.com (making an account is free).',
+  'Open Developers, then Keys.',
+  `Copy your client ID and your ${env === 'sandbox' ? 'Sandbox' : 'Production'} secret into the two boxes below.`,
+];
+
+function KeyHelp({ c }: { c: KeyedLine }) {
+  const steps = c.keyHelp?.steps ?? (c.kind === 'plaid' ? PLAID_KEY_STEPS(c.environment) : []);
+  // Home-device deck, S-key-and-control: a device that names where its keys
+  // are made gets a button straight there, on the address the person allowed,
+  // so nobody has to find a settings screen inside Home Assistant by hand.
+  // Full width (screens review, S-key: "make the open home assistant button
+  // full width"), matching the stacked buttons below it.
+  const openOnDevice = c.kind === 'device' && c.keyPage ? (
+    <div>
+      <Button
+        variant="secondary"
+        className="w-full"
+        data-open-key-page
+        onClick={() => { void window.claude.shell.openExternal(`http://${c.address}${c.keyPage}`); }}
+      >
+        Open {c.service}
+      </Button>
+    </div>
+  ) : c.kind === 'plaid' ? (
+    <div>
+      <Button variant="secondary" className="w-full" data-open-key-page onClick={() => { void window.claude.shell.openExternal(PLAID_KEYS_PAGE); }}>
+        Open Plaid's dashboard
+      </Button>
+    </div>
+  ) : null;
   if (steps.length === 0) {
     return (
-      <div className="text-sm text-fg-2 leading-relaxed">
-        Sign in on {c.service}'s website and look for a section called API, Developer or Integrations. Copy the key shown there.
+      <div className="flex flex-col gap-2">
+        <div className="text-sm text-fg-2 leading-relaxed">
+          {c.kind === 'device'
+            ? <>Open {c.service} and look for a section called Security, API or Access tokens. Make a new key and copy it.</>
+            : <>Sign in on {c.service}'s website and look for a section called API, Developer or Integrations. Copy the key shown there.</>}
+        </div>
+        {openOnDevice}
       </div>
     );
   }
@@ -175,6 +265,34 @@ function KeyHelp({ c }: { c: PageConnectionStatus & { kind: 'key' } }) {
       <ol className="list-decimal pl-5 text-sm text-fg-2 leading-relaxed flex flex-col gap-0.5">
         {steps.map((t, i) => <li key={i}>{t}</li>)}
       </ol>
+      {openOnDevice}
+    </div>
+  );
+}
+
+/** The address box on a device line (home-device deck, Q-address): the page
+ *  suggests, the person may change it before allowing. Checked as they type
+ *  with the same rule main applies, so a refusal is explained here instead of
+ *  arriving later as a failed Allow. */
+function DeviceAddressField({ c, value, onChange }: { c: PageConnectionStatus & { kind: 'device' }; value: string; onChange: (v: string) => void }) {
+  const ok = cleanDeviceAddress(value) !== null;
+  return (
+    <div className="flex flex-col gap-1.5" data-device-address-field>
+      <label className="text-xs text-fg-dim" htmlFor={`device-address-${c.id}`}>
+        Where your {c.service} is. Change this if yours is at a different address.
+      </label>
+      <TextInput
+        id={`device-address-${c.id}`}
+        size="sm"
+        autoComplete="off"
+        spellCheck={false}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-invalid={!ok}
+        className="select-text"
+      />
+      {!ok && <div className="text-xs text-fg-2" role="alert" data-device-address-problem>{deviceAddressProblem(value)}</div>}
+      <div className="text-xs text-fg-muted leading-relaxed" data-device-not-encrypted>{DEVICE_NOT_ENCRYPTED}</div>
     </div>
   );
 }
@@ -194,8 +312,18 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   // A re-ask after an edit shows what was already allowed too, so the new line
   // is read in context; the first ask has nothing approved yet.
   const isChange = already.length > 0;
-  const [step, setStep] = useState<'what' | 'keys'>('what');
+  // `?pagesStep=keys` opens the key step directly in the workbench, so it is
+  // a screen of its own (shoot) rather than only reachable by clicking.
+  const [step, setStep] = useState<'what' | 'keys'>(() =>
+    isWorkbenchMode() && new URLSearchParams(location.search).get('pagesStep') === 'keys' ? 'keys' : 'what');
   const [keys, setKeys] = useState<Record<string, string>>({});
+  // Plaid takes two values; they are joined into the one saved key here.
+  const [plaidParts, setPlaidParts] = useState<Record<string, { clientId: string; secret: string }>>({});
+  const setPlaidPart = (id: string, part: 'clientId' | 'secret', v: string) => setPlaidParts((m) => {
+    const next = { ...(m[id] ?? { clientId: '', secret: '' }), [part]: v };
+    setKeys((k) => ({ ...k, [id]: next.clientId.trim() && next.secret.trim() ? JSON.stringify({ clientId: next.clientId.trim(), secret: next.secret.trim() }) : '' }));
+    return { ...m, [id]: next };
+  });
   const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   // Allowing can fail where nothing is wrong with the page: a computer with no
@@ -204,9 +332,32 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   // un-greyed and the screen stayed — which reads as "nothing happened".
   const [failure, setFailure] = useState<string | null>(null);
   const here = keysEnteredHere();
+  // Home-device deck, Q-address: each device line's address as the person has
+  // it right now, starting from the page's suggestion.
+  const [addresses, setAddresses] = useState<Record<string, string>>(() =>
+    Object.fromEntries(asking.filter((c) => c.kind === 'device').map((c) => [c.id, (c as { address: string }).address])));
 
-  const keyLines = asking.filter((c): c is PageConnectionStatus & { kind: 'key' } => c.kind === 'key');
-  const toType = keyLines.filter((c) => !c.savedKey || differentKey[c.id]);
+  // A device line with its address replaced by the one being typed, so the
+  // sentence, the key step and the Open button all name the device that will
+  // actually be allowed — never the suggestion the person already changed.
+  // An address that is not allowed becomes '' rather than the typed text, so
+  // the sentence never reads "…at evil.example.com… only this one device in
+  // your home" while the box is showing why that address is refused.
+  const asTyped = (c: PageConnectionStatus): PageConnectionStatus =>
+    c.kind === 'device' && addresses[c.id] !== undefined ? { ...c, address: cleanDeviceAddress(addresses[c.id]) ?? '' } : c;
+  const shown = asking.map(asTyped);
+  const addressesOk = shown.every((c) => c.kind !== 'device' || cleanDeviceAddress(addresses[c.id]) !== null);
+
+  const keyLines: KeyedLine[] = shown.flatMap((c): KeyedLine[] =>
+    c.kind === 'key' || (c.kind === 'device' && c.needsKey) ? [c as KeyedLine] : c.kind === 'plaid' ? [plaidKeyed(c)] : []);
+  // A saved key is kept per service AND address, so it is only offered while
+  // the device is still at the address it was saved for.
+  const suggested = (id: string) => {
+    const a = asking.find((x) => x.id === id);
+    return a?.kind === 'device' ? a.address : undefined;
+  };
+  const savedHere = (c: KeyedLine) => !!c.savedKey && (c.kind !== 'device' || c.address === suggested(c.id));
+  const toType = keyLines.filter((c) => !savedHere(c) || differentKey[c.id]);
   const missingKey = toType.some((c) => !(keys[c.id] ?? '').trim());
 
   const allow = async () => {
@@ -215,9 +366,11 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     setBusy(true);
     setFailure(null);
     const sent: Record<string, string> = {};
-    for (const c of keyLines) sent[c.id] = toType.includes(c) ? keys[c.id].trim() : 'saved';
+    for (const c of keyLines) sent[c.id] = toType.some((t) => t.id === c.id) ? keys[c.id].trim() : 'saved';
+    const sentAddresses: Record<string, string> = {};
+    for (const c of shown) if (c.kind === 'device') sentAddresses[c.id] = c.address;
     try {
-      const r = await b.approve(page.id, sent);
+      const r = await b.approve(page.id, sent, sentAddresses);
       // On a yes the host replaces this screen with the page itself, so the
       // button stays "Allowing…" rather than flicking back to Allow for the
       // frame or two in between — which would invite a second press.
@@ -261,6 +414,26 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
         <div key={c.id} className="flex flex-col gap-3" data-page-key-step={c.service}>
           {toType.length > 1 && <div className="text-sm font-medium text-fg">{c.service}</div>}
           <KeyHelp c={c} />
+          {c.kind === 'plaid' ? (<>
+            <TextInput
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Your Plaid client ID"
+              placeholder="Client ID"
+              value={plaidParts[c.id]?.clientId ?? ''}
+              onChange={(e) => setPlaidPart(c.id, 'clientId', e.target.value)}
+              className="select-text"
+            />
+            <TextInput
+              type="password"
+              autoComplete="off"
+              aria-label={`Your Plaid ${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
+              placeholder={`${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
+              value={plaidParts[c.id]?.secret ?? ''}
+              onChange={(e) => setPlaidPart(c.id, 'secret', e.target.value)}
+              className="select-text"
+            />
+          </>) : (
           <TextInput
             type="password"
             autoComplete="off"
@@ -270,6 +443,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             onChange={(e) => setKeys((m) => ({ ...m, [c.id]: e.target.value }))}
             className="select-text"
           />
+          )}
         </div>
       ))}
       {/* Review round 2, D-2: "page never sees it" read as nonsense to someone
@@ -279,7 +453,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           sync never touches. The key does leave the machine — to its own
           service — so that is said too, never "not accessible to anyone". */}
       <div className="text-xs text-fg-muted leading-relaxed" data-key-storage-note>
-        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? <Address address={toType[0].address} /> : 'the service it belongs to'}.
+        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? <Address address={toType[0].address} device={toType[0].kind === 'device'} /> : 'the service it belongs to'}.
       </div>
       {failureState}
       <div className="flex flex-col gap-2">
@@ -305,23 +479,29 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           eyebrow (labels batch, guide: no spaced capitals). */}
       {isChange && <div className="text-xs font-medium text-fg" data-new-label>New</div>}
       <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
-        {asking.map((c) => (
+        {shown.map((c) => (
           <ConnectionLine key={c.id} c={c}>
             {c.kind === 'open' && (
               <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-open-internet-means>
                 {OPEN_INTERNET_MEANS.map((t) => <li key={t}>{t}</li>)}
               </ul>
             )}
-            {c.kind === 'key' && c.savedKey && (
-              <div className="flex items-center gap-2 text-xs text-fg-muted" data-saved-key-offer>
-                <span>{differentKey[c.id] ? `You'll paste a different ${c.service} key next.` : `Uses your saved ${c.service} key.`}</span>
-                {here && (
-                  <Button variant="secondary" size="sm" onClick={() => setDifferentKey((m) => ({ ...m, [c.id]: !m[c.id] }))}>
-                    {differentKey[c.id] ? 'Use the saved key' : 'Use a different key'}
-                  </Button>
-                )}
-              </div>
+            {c.kind === 'device' && (
+              <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />
             )}
+            {(() => {
+              const k = keyLines.find((x) => x.id === c.id);
+              return k && savedHere(k) ? (
+                <div className="flex items-center gap-2 text-xs text-fg-muted" data-saved-key-offer>
+                  <span>{differentKey[c.id] ? `You'll paste a different ${k.service} key next.` : `Uses your saved ${k.service} key.`}</span>
+                  {here && (
+                    <Button variant="secondary" size="sm" onClick={() => setDifferentKey((m) => ({ ...m, [c.id]: !m[c.id] }))}>
+                      {differentKey[c.id] ? 'Use the saved key' : 'Use a different key'}
+                    </Button>
+                  )}
+                </div>
+              ) : null;
+            })()}
           </ConnectionLine>
         ))}
       </div>
@@ -350,9 +530,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           </span>
         </Button>
       ) : toType.length > 0 ? (
-        <Button variant="primary" onClick={() => setStep('keys')} className="w-full">Continue</Button>
+        <Button variant="primary" onClick={() => setStep('keys')} disabled={!addressesOk} className="w-full">Continue</Button>
       ) : (
-        <Button variant="primary" onClick={() => { void allow(); }} disabled={busy} className="w-full">
+        <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || !addressesOk} className="w-full">
           {busy ? 'Allowing…' : 'Allow and open'}
         </Button>
       )}

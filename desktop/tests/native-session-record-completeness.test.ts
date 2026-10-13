@@ -10,7 +10,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeHome } from '../src/main/native-home';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 describe('native session record completeness', () => {
   let dir: string;
@@ -31,8 +32,8 @@ describe('native session record completeness', () => {
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  const ev = (type: TranscriptEvent['type'], data: TranscriptEvent['data']): TranscriptEvent =>
-    ({ type, sessionId: 's1', uuid: `u-${type}-${JSON.stringify(data).length}`, timestamp: 1, data });
+  const ev = <T extends TranscriptEventType>(type: T, data: DataOf<T>): EventOf<T> =>
+    mkEv(type, data, { uuid: `u-${type}-${JSON.stringify(data).length}`, timestamp: 1 });
 
   it('round-trips turn-complete usage', async () => {
     // readEvents() treats line 1 of the session file as the header (line
@@ -76,6 +77,8 @@ describe('native session record completeness', () => {
     await store.append(cwd, ev('tool-result', {
       toolUseId: 't1',
       toolName: 'Edit',
+      toolResult: 'ok',
+      isError: false,
       structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' keep', '-gone', '+new'] }],
     }));
     const back = store.readEvents('s1', cwd);

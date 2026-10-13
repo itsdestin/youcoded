@@ -41,6 +41,15 @@ p { margin: 0; }
 ::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 9999px; border: 2px solid var(--canvas); }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* See-through (the host sets this attribute only when the app's page pane is
+   glass over the theme's wallpaper AND the person has the page's "Show theme
+   background" switch on): the page paints no backdrop of its own, so the pane's
+   glass — and the wallpaper under it — is what shows, exactly as in Office.
+   WHY the scrollbar border changes too: it was painted --canvas to look inset,
+   which would be a visible opaque rim on glass. */
+:root[data-yc-see-through] body { background: transparent; }
+:root[data-yc-see-through] ::-webkit-scrollbar-thumb { border-color: transparent; background-clip: padding-box; }
+
 .yc-page { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .yc-stack { display: flex; flex-direction: column; gap: 12px; }
 .yc-row { display: flex; align-items: center; gap: 8px; }

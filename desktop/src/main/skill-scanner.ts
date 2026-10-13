@@ -260,6 +260,9 @@ function readdirSafe(dir: string): fs.Dirent[] {
 /** Minimal SKILL.md frontmatter reader — just `name` and `description`. */
 function readSkillMeta(skillMdPath: string): { name?: string; description?: string } {
   try {
+    // WHY (2026-10-01 one-core R6-3): look at the file kind BEFORE reading. A SKILL.md that is a named pipe made this synchronous read
+    // wait forever for a writer and froze the whole main process. statSync follows links, so a link to a regular file still reads.
+    if (!fs.statSync(skillMdPath).isFile()) return {};
     const raw = fs.readFileSync(skillMdPath, 'utf8');
     const fm = /^---\s*\n([\s\S]*?)\n---/m.exec(raw);
     if (!fm) return {};

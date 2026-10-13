@@ -4,7 +4,7 @@ import { installMock } from '../src/renderer/dev/workbench/install-mock';
 describe('installMock', () => {
   beforeEach(() => { delete (globalThis as any).window; (globalThis as any).window = {}; });
 
-  // platform-bootstrap.ts writes <html data-platform> synchronously at
+  // platform.ts writes <html data-platform> synchronously at
   // module-graph head, keyed off `window.claude` — which the workbench installs
   // LATER, so the attribute never lands and every
   // `html[data-platform="electron"]` rule in globals.css silently does nothing.

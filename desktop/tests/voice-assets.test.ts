@@ -23,6 +23,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as zlib from 'zlib';
+import { parse as parseYaml } from 'yaml';
+import { voiceVocabularyAssetPath, verifyVoiceVocabularyAsset } from '../src/main/voice/voice-recognizer-vocabulary';
 import { execFileSync } from 'child_process';
 
 // The fixture pins, built fresh for each test. `vi.hoisted` because the mock
@@ -55,6 +57,28 @@ vi.mock('../src/main/voice/voice-pin', async (importOriginal) => {
 import { VoiceAssets } from '../src/main/voice/voice-assets';
 import type { VoiceAssetProgress, VoiceFetch } from '../src/main/voice/voice-assets';
 import { MODEL_DIR_NAME, SHERPA_VERSION } from '../src/main/voice/voice-pin';
+
+describe('bundled contextual tokenizer resource', () => {
+  it('packages the pinned original vocabulary and attribution at the path the host passes to the worker', async () => {
+    const desktop = path.resolve(__dirname, '..');
+    const builder = parseYaml(fs.readFileSync(path.join(desktop, 'electron-builder.yml'), 'utf8'));
+    const entry = builder.extraResources.find((r: { to: string }) => r.to === 'voice');
+    expect(entry).toEqual({ from: 'resources/voice', to: 'voice', filter: ['**/*'] });
+    const devAsset = voiceVocabularyAssetPath(desktop);
+    expect(devAsset).toBe(path.join(desktop, entry.from, 'parakeet-tdt-v3.vocab'));
+    expect(await verifyVoiceVocabularyAsset(devAsset)).toBe(devAsset);
+    const bytes = fs.readFileSync(devAsset);
+    expect(bytes.length).toBe(101024);
+    expect(crypto.createHash('sha256').update(bytes).digest('hex')).toBe('41130ff456706304a1adec782ccc9e003c4d417e8e324353d281be958cac4e17');
+    const packagedRoot = path.resolve(desktop, 'fake-package-resources');
+    expect(voiceVocabularyAssetPath(desktop, packagedRoot)).toBe(path.join(packagedRoot, entry.to, path.basename(devAsset)));
+    const attribution = fs.readFileSync(path.join(desktop, entry.from, 'ATTRIBUTION.md'), 'utf8');
+    expect(attribution).toContain('NVIDIA');
+    expect(attribution).toContain('CC BY 4.0');
+    expect(attribution).toContain('541d1f99c6b0c3cd0b11a95167540bb8edefd82b');
+    expect(attribution).toContain('No vocabulary generation');
+  });
+});
 
 /** A one-file .tgz whose entry is named EXACTLY `name`, traversal and all.
  *

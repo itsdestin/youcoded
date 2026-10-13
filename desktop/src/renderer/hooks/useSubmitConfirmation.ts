@@ -137,7 +137,7 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
     // system or the known-title detector reported. With an unreported Claude
     // Code pop-up up (auto-mode setup offer, compaction or billing notice),
     // this bare `\r` pressed its highlighted option — "Yes" started an
-    // auto-mode scan nobody asked for. Recheck until the message box is back.
+    // auto-mode scan nobody asked for. Recheck until the message box is back. (The verdict is the computer's reading of the terminal, published to every screen: pty-input-gate.ts.)
     if (!canRetrySubmit(session) || screenInputBlock(info.sessionId)) {
       // CC is observably busy (turn in flight, tool running, or a prompt is
       // awaiting the user). Don't retry yet; recheck shortly. By the time

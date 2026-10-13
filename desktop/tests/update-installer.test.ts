@@ -133,7 +133,9 @@ describe('createUpdateInstaller download engine', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-test-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
+    // WHY retries: a failed download's write stream can still be closing when this runs and
+    // drop one last file into the folder mid-delete (ENOTEMPTY under a loaded full run).
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it('downloads a file to update-cache, renaming .partial on completion', async () => {
@@ -255,7 +257,7 @@ describe('cleanupStaleDownloads', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cleanup-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it('creates the cacheDir if missing', () => {
@@ -293,7 +295,7 @@ describe('findCachedDownload', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cache-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it('returns null when no file matches the version', () => {
@@ -373,7 +375,7 @@ describe('findCachedDownload', () => {
 describe('launchInstaller', () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-launch-test-')); });
-  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 }); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
 
   function fakeChild(overrides: Partial<{ exitCode: number | null; exitDelay: number; errorOnSpawn: boolean }> = {}) {
     const emitter: any = new EventEmitter();

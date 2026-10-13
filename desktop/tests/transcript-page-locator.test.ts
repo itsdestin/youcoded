@@ -23,6 +23,7 @@ vi.mock('electron', () => {
 });
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { WindowRegistry } from '../src/main/window-registry';
 import { TranscriptWatcher } from '../src/main/transcript-watcher';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
@@ -61,14 +62,13 @@ const SLUG = '-home-destin-project';
 
 describe('history page interruption boundary', () => {
   it('reconciles native history only when the host confirms the session is idle', () => {
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: false })).toBe(true);
-    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: false })).toBe(false);
+    expect(shouldReconcileNativePage({ nativeIdle: true, olderPage: false })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, olderPage: false })).toBe(false);
   });
 
-  it('reconciles idle older pages, but never guesses that a busy or transferred page is stale', () => {
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: true })).toBe(true);
-    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: true })).toBe(false);
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: true, olderPage: true })).toBe(false);
+  it('reconciles idle older pages, but never guesses that a busy page is stale', () => {
+    expect(shouldReconcileNativePage({ nativeIdle: true, olderPage: true })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, olderPage: true })).toBe(false);
   });
 });
 
@@ -109,7 +109,7 @@ describe('transcript:page locator memory', () => {
       ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
     };
     const mockCommandProvider: any = { list: vi.fn(() => []), refresh: vi.fn() };
-    registerIpcHandlers(
+    registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any, sessionManagerOverride ?? mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider,
       undefined, undefined, remoteServer, windowRegistry,
     );
@@ -180,8 +180,8 @@ describe('transcript:page locator memory', () => {
     });
     expect(page.reconcileInterruptedToolIds).toEqual(['old-tool']);
     expect(page.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
-    registry.markInheritedByTransfer('desktop-1', 1);
-    const redocked = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
+    // A screen that opens (a re-dock, a phone) reads to the end of the file: `toEnd`, which session:open always sets.
+    const redocked = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null, toEnd: true });
     expect(redocked.reconcileInterruptedToolIds).toEqual(['old-tool']);
     expect(redocked.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
     // An older page wholly before the restart is historical even after the
@@ -191,7 +191,7 @@ describe('transcript:page locator memory', () => {
     expect(older.reconcileInterrupted).toBe(true);
   });
 
-  // The phone's session:create runs the desktop's own create path (setSessionCreate), so a
+  // The phone's session:create runs the desktop's own create path (the session:create table entry), so a
   // Claude Code resume started from a phone takes the same pre-spawn snapshot.
   it('a Claude Code resume started from a phone is bounded the same way', async () => {
     writeTranscript(2);
@@ -205,14 +205,14 @@ describe('transcript:page locator memory', () => {
       destroySession: vi.fn(), listSessions: vi.fn(() => []), getSession: vi.fn(),
       sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
     };
-    let createFromPhone: ((opts: any) => Promise<any>) | null = null;
     const remote = {
-      broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
+      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(),
       setLastTopic: vi.fn(), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
-      setSessionCreate: vi.fn((fn: any) => { createFromPhone = fn; }),
     };
     const handler = pageHandler(new WindowRegistry(), manager, remote);
-    await createFromPhone!({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
+    // The phone's session:create is the table entry a window reaches too (main/ipc/session.ts).
+    const { findChannel } = await import('../src/main/ipc/channel-table');
+    await findChannel('session:create')!.handler({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' }, { door: 'remote', runtime: null, broadcast: () => {} } as any);
     fs.appendFileSync(file, turnLines(2)); // a live turn appended after the resume began
     const page = await handler(evt, {
       sessionId: 'desktop-2', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG,
@@ -250,13 +250,8 @@ describe('transcript:page locator memory', () => {
       const first = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
       expect(first.reconcileInterruptedToolIds).toBeUndefined();
 
-      const registry = new WindowRegistry();
-      const inheritedHandler = pageHandler(registry);
-      registry.markInheritedByTransfer('desktop-1', 1);
-      const consume = vi.spyOn(registry, 'consumeInheritedByTransfer');
-      const inherited = await inheritedHandler(evt, { sessionId: 'desktop-1', beforeCursor: null });
-      expect(consume).toHaveBeenCalledWith('desktop-1', 1);
-      expect(inherited.reconcileInterruptedToolIds).toBeUndefined();
+      const opened = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null, toEnd: true });
+      expect(opened.reconcileInterruptedToolIds).toBeUndefined();
     } finally {
       spy.mockRestore();
     }
@@ -299,23 +294,6 @@ describe('transcript:page locator memory', () => {
     expect(older.unresolved).toBe(true);
   });
 
-  // A window that INHERITED a session by tear-off is marked so its first page
-  // reads to EOF (WindowRegistry.markInheritedByTransfer) — without that it
-  // renders a conversation frozen at the moment the session was resumed. The
-  // mark is a ONE-SHOT consumed by the first `beforeCursor: null` request, and
-  // first-page requests now retry for longer while main reports `unresolved`,
-  // so an attempt that served nothing must not be the one that spends it.
-  it('an unresolved answer does not spend the tear-off read-to-EOF mark', async () => {
-    const registry = new WindowRegistry();
-    registry.markInheritedByTransfer('desktop-1', 1);
-    const handler = pageHandler(registry);
-
-    const page = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
-    expect(page.unresolved).toBe(true);
-
-    expect(registry.consumeInheritedByTransfer('desktop-1', 1)).toBe(true);
-  });
-
   it('forgets a remembered locator when its session is destroyed', async () => {
     writeTranscript(40);
     const handler = pageHandler();
@@ -324,7 +302,7 @@ describe('transcript:page locator memory', () => {
     });
 
     const destroy = (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === 'session:destroy')[1];
-    await destroy(evt, 'desktop-1');
+    await destroy(evt, { sessionId: 'desktop-1' }); // one object on the wire (one-core R2)
 
     const older = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
     expect(older.unresolved).toBe(true);

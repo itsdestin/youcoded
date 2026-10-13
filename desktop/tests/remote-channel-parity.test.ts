@@ -22,9 +22,28 @@ describe('remote channels — every channel is answered', () => {
     return [...new Set([...shim.matchAll(/invoke\('(remote:[^']+)'/g)].map(m => m[1]))].sort();
   }
 
-  /** Every `remote:*` channel the WS host has a case for. */
+  // WHY (2026-10-01 one-core R3-8): the remote:* administration channels are channel-table entries (main/ipc/remote-admin.ts), so a
+  // channel the host "answers" is a `case` OR an entry the phone is not left to the unsupported default for: one it may call, or one
+  // that carries the refusal `refusal: hostAdminRefusal` (the answer a phone has always been given). The entries are read as text, one
+  // `defineChannel({ name: IPC.X ...` each, with each constant resolved to its channel string through the contract.
+  const contractSource = read('../src/shared/backend-contract.ts');
+  const adminSource = readStripped(fileURLToPath(new URL('../src/main/ipc/remote-admin.ts', import.meta.url)));
+  const adminEntries = adminSource.split('defineChannel({').slice(1).map((chunk) => {
+    const konst = /name: IPC\.([A-Z0-9_]+)/.exec(chunk)?.[1] ?? '';
+    const head = chunk.slice(0, 260);
+    return {
+      name: new RegExp(`\\b${konst}: '([^']+)'`).exec(contractSource)?.[1] ?? `?${konst}`,
+      answered: !/desktopOnly: true/.test(head) && (!/remoteAllowed: false/.test(head) || /refusal: hostAdminRefusal/.test(head)),
+      refused: /remoteAllowed: false/.test(head) && /refusal: hostAdminRefusal/.test(head),
+    };
+  });
+
+  /** Every `remote:*` channel the WS host answers: a `case`, or a table entry that is not left to the unsupported default. */
   function hostedRemoteChannels(): string[] {
-    return [...new Set([...server.matchAll(/case '(remote:[^']+)':/g)].map(m => m[1]))].sort();
+    return [...new Set([
+      ...[...server.matchAll(/case '(remote:[^']+)':/g)].map(m => m[1]),
+      ...adminEntries.filter(e => e.answered).map(e => e.name),
+    ])].sort();
   }
 
   /**
@@ -56,8 +75,9 @@ describe('remote channels — every channel is answered', () => {
       // rejection only for channels in REJECT_ON_NOT_OK; anywhere else it resolves as an
       // ordinary value and the caller reads a refusal as success — which is how Unpair
       // removed a row from the list for a device that kept full access.
-      const refused = [...server.matchAll(/case '(remote:[^']+)': \{\s*\n\s*this\.respond\([^\n]*ok: false/g)]
-        .map(m => m[1]).sort();
+      // WHY (2026-10-01 one-core R3-8): the refusals are table entries that carry `refusal: hostAdminRefusal`.
+      expect(adminEntries.filter(e => e.name.startsWith('?'))).toEqual([]);
+      const refused = adminEntries.filter(e => e.refused).map(e => e.name).sort();
       expect(refused.length).toBeGreaterThan(0);
       const rejectList = /export const REJECT_ON_NOT_OK[^[]*\[([\s\S]*?)\n\]\);/.exec(shim)?.[1] ?? '';
       const unguarded = refused.filter(c => !rejectList.includes(`'${c}'`));
@@ -96,31 +116,55 @@ describe('remote channels — every channel is answered', () => {
     'project:write-context-file',
   ];
 
+  // WHY (2026-09-30 one-core R3-7): the artifacts: and project: channels are channel-table entries
+  // (main/ipc/artifacts.ts, project.ts), so "answered by the host" is now "has a table entry the phone is not
+  // refused from". The scan reads those two files as text (one `defineChannel({ name: IPC.X ...` per entry; a
+  // `remoteAllowed: false` on the entry is the refusal) and resolves each constant to its channel string through
+  // the contract, so an entry that loses its name or its refusal changes this answer.
+  const contract = read('../src/shared/backend-contract.ts');
+  const valueOf = (konst: string) => new RegExp(`\\b${konst}: '([^']+)'`).exec(contract)?.[1];
+  function tableEntries(file: string): Array<{ name: string; phone: boolean }> {
+    const src = readStripped(fileURLToPath(new URL(`../src/main/ipc/${file}.ts`, import.meta.url)));
+    return src.split('defineChannel({').slice(1).map((chunk) => {
+      const konst = /name: IPC\.([A-Z0-9_]+)/.exec(chunk)?.[1] ?? '';
+      const head = chunk.slice(0, 200);
+      return { name: valueOf(konst) ?? `?${konst}`, phone: !/remoteAllowed: false|desktopOnly: true/.test(head) };
+    });
+  }
+  const hostedFileChannels = (prefix: string) => [
+    ...unique(serverCode, CASE(prefix)),
+    ...[...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => e.phone && e.name.startsWith(prefix)).map((e) => e.name),
+  ];
+  const refusedByTable = () => [...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => !e.phone).map((e) => e.name);
+
   describe('every file channel a phone reads through is answered by the host', () => {
     it('the patterns can see real channels on both sides, so an empty diff is not vacuous', () => {
       assertPatternMatches(INVOKE('artifacts:'), "invoke('artifacts:get', { projectRoot, artifactId })", 'a shim invoke of an artifacts: channel');
-      assertPatternMatches(CASE('project:'), "case 'project:list-context': {", 'a host case for a project: channel');
       expect(unique(shimCode, INVOKE('artifacts:'))).toContain('artifacts:get');
-      expect(unique(serverCode, CASE('artifacts:'))).toContain('artifacts:get');
+      expect(hostedFileChannels('artifacts:')).toContain('artifacts:get');
       expect(unique(shimCode, INVOKE('project:'))).toContain('project:list-context');
-      expect(unique(serverCode, CASE('project:'))).toContain('project:list-context');
+      expect(hostedFileChannels('project:')).toContain('project:list-context');
+      // Every entry's constant resolved to a real channel string (a typo would read as "?KONST").
+      expect([...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => e.name.startsWith('?'))).toEqual([]);
     });
 
     for (const prefix of ['artifacts:', 'project:']) {
       it(`leaves no ${prefix} read to the unsupported default`, () => {
         const invoked = unique(shimCode, INVOKE(prefix));
-        const hosted = unique(serverCode, CASE(prefix));
+        const hosted = hostedFileChannels(prefix);
         const missing = invoked.filter(c => !hosted.includes(c) && !FILE_WRITES_NOT_OVER_REMOTE.includes(c));
         expect(missing).toEqual([]);
       });
     }
 
-    it('the exemption list is honest: each entry is still invoked by the shim and still unhandled by the host', () => {
+    it('the exemption list is honest: each entry is still invoked by the shim and still refused to a phone', () => {
       const invoked = [...unique(shimCode, INVOKE('artifacts:')), ...unique(shimCode, INVOKE('project:'))];
-      const hosted = [...unique(serverCode, CASE('artifacts:')), ...unique(serverCode, CASE('project:'))];
+      const hosted = [...hostedFileChannels('artifacts:'), ...hostedFileChannels('project:')];
       expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => !invoked.includes(c))).toEqual([]);
-      // A write that gained a host case is bridged now; its row here would claim otherwise.
+      // A write that gained a phone-allowed entry is bridged now; its row here would claim otherwise.
       expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => hosted.includes(c))).toEqual([]);
+      // And the table really does refuse every one of them (the answer the phone has always been given).
+      expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => !refusedByTable().includes(c))).toEqual([]);
     });
   });
 
@@ -133,7 +177,8 @@ describe('remote channels — every channel is answered', () => {
   // built on a sibling branch: presence would be red here until the merge, and a
   // one-sided name after the merge is exactly the drift this file exists to catch.
   describe('the bare frames batch 2 adds are named on both ends or neither', () => {
-    for (const name of ['client:ready', 'pty:reset']) {
+    // pty:reset is no longer pushed by the host (one-core R5-2): a session:open answer carries `reset`, and the shim replays it locally.
+    for (const name of ['client:ready']) {
       it(`${name}`, () => {
         const inShim = shimCode.includes(`'${name}`);
         const inHost = serverCode.includes(`'${name}`);
@@ -153,20 +198,23 @@ describe('remote channels — device list channels', () => {
 
   describe('the device list exists on every platform', () => {
     it('each channel is registered in preload, the desktop handlers and the shim', () => {
-      // WHY a parity test and not a type: a bridge type (SharedBridge in shared/bridge-types.ts)
+      // WHY a parity test and not a type: a bridge type (SharedBridge in shared/backend-contract.ts)
       // compares SHAPES, so a channel missing from one side of the bridge type-checks and
       // then does nothing at runtime.
       for (const c of CHANNELS) {
         expect(preload).toContain(`'${c}'`);
         expect(shim).toContain(`'${c}'`);
       }
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_LIST');
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_RENAME');
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_UNPAIR');
+      // WHY remote-admin.ts (2026-10-01 one-core R3-8): the three are channel-table entries now, not ipc-handlers.ts handlers.
+      const adminEntries = read('../src/main/ipc/remote-admin.ts');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_LIST');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_RENAME');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_UNPAIR');
+      expect(handlers).not.toContain('ipcMain.handle(IPC.REMOTE_DEVICES');
     });
 
     it('Android answers all three rather than falling through to unsupported', () => {
-      // The bridge types in shared/types.ts cannot see Kotlin, so a missing case here is invisible until a
+      // The bridge types in shared/backend-contract.ts cannot see Kotlin, so a missing case here is invisible until a
       // phone hits it. Every channel must appear in the when-block.
       for (const c of CHANNELS) expect(kotlin).toContain(`"${c}"`);
     });
@@ -204,16 +252,16 @@ describe('remote channels — rehydrate channels', () => {
       const constant = /REMOTE_REHYDRATE:\s*'remote:rehydrate'/;
       assertPatternMatches(constant, "REMOTE_REHYDRATE: 'remote:rehydrate',", 'the IPC map entry');
       expect(src('main', 'preload.ts')).toMatch(constant);
-      expect(src('shared', 'types.ts')).toMatch(constant);
+      expect(src('shared', 'backend-contract.ts')).toMatch(constant);
     });
 
-    it('preload declares rehydrate, reportHydrate and the status push', () => {
+    it('preload declares rehydrate, reportFill and the status push', () => {
       const preload = src('main', 'preload.ts');
       const invoke = /rehydrate:\s*\(\)\s*=>\s*ipcRenderer\.invoke\(IPC\.REMOTE_REHYDRATE\)/;
       assertPatternMatches(invoke, 'rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE)', 'the preload invoke');
       expect(preload).toMatch(invoke);
-      const report = /reportHydrate:\s*\([^)]*\)\s*=>\s*\{\s*\}/;
-      assertPatternMatches(report, 'reportHydrate: (_report: { seq?: number; kept: string[] }) => {}', 'an empty arrow');
+      const report = /reportFill:\s*\([^)]*\)\s*=>\s*\{\s*\}/;
+      assertPatternMatches(report, 'reportFill: (_report: { round?: number; failed?: number }) => {}', 'an empty arrow');
       expect(preload).toMatch(report);
       const status = /remoteConversationStatus:\s*\([^)]*\)\s*=>\s*\(\)\s*=>\s*\{\s*\}/;
       assertPatternMatches(status, 'remoteConversationStatus: (_cb: unknown) => () => {}', 'a no-op subscriber');
@@ -226,12 +274,13 @@ describe('remote channels — rehydrate channels', () => {
       expect(src('main', 'ipc-handlers.ts')).toMatch(handler);
     });
 
-    it('the shim invokes remote:rehydrate and exposes reportHydrate and the status push', () => {
+    it('the shim starts a Refresh round and exposes reportFill and the status push', () => {
       const shim = src('renderer', 'remote-shim.ts');
-      const inv = /invoke\('remote:rehydrate',\s*\{\s*seq/;
-      assertPatternMatches(inv, "invoke('remote:rehydrate', { seq })", 'the shim invoke');
-      expect(shim).toMatch(inv);
-      expect(shim).toMatch(/reportHydrate:\s*\(/);
+      // WHY no invoke any more (one-core R5-2): Refresh is filled by App through session:open; the shim only starts the round.
+      const start = /dispatchEvent\(new CustomEvent\(REMOTE_REFRESH_EVENT/;
+      assertPatternMatches(start, 'window.dispatchEvent(new CustomEvent(REMOTE_REFRESH_EVENT, {', 'the shim Refresh');
+      expect(shim).toMatch(start);
+      expect(shim).toMatch(/reportFill:\s*\(/);
       expect(shim).toMatch(/remoteConversationStatus:\s*\(/);
     });
 

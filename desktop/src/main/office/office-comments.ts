@@ -15,7 +15,7 @@
 // Desktop only, like the quit prompt (main/unsaved-quit.ts): the phone and the remote client
 // have no Office editors, so they carry none of these channels.
 import { randomBytes } from 'node:crypto';
-import { ipcMain, webContents } from 'electron';
+import { webContents } from 'electron';
 import { log } from '../logger';
 import { getOfficeSessions } from './office-session-registry';
 import { EditorNotReady, setLiveCommentsRouter, type Ask, type LiveAnswer, type LiveCommentsRouter, type LiveOp } from '../doc-comments/live-comments';
@@ -187,11 +187,11 @@ export function createOfficeComments(deps: OfficeCommentsDeps): LiveCommentsRout
 }
 
 /** Desktop startup (main.ts), after registerOfficeIpc. */
-export function registerOfficeComments(): void {
+export function registerOfficeComments(ipc: Ipc): void {
   setLiveCommentsRouter(createOfficeComments({
     sessions: () => getOfficeSessions(),
     windowFor: (id) => webContents.fromId(id) ?? null,
-    ipc: ipcMain,
+    ipc,
     onChanged: (realPath) => nudgeDocumentComments(realPath),
   }));
 }

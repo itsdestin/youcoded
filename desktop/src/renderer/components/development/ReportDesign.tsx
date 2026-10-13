@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { memoWhileClosed } from '../memo-while-closed';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
 import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState, Pill, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput, Toggle } from '../ui';
@@ -45,7 +46,7 @@ const HANDOVER_PROMPT = (kind: string, description: string, errorDetails: string
  */
 export type ReportContext = { error?: string; surface?: string; diagnose?: boolean };
 
-export function ReportDesign({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
+function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
   // WHY a flag for the Contribute screen (submit-ticket-3#ST3-Q1 "contribute"): the ticket
   // hands "Let your assistant try to fix it" to Contribute, which explains and runs the
   // download. It opens on top of this popup, and Escape belongs to it while it shows.
@@ -53,7 +54,8 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   useEscClose(open && !contributing, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
-  const [kind, setKind] = useState('bug');
+  // WHY typed (2026-09-30 one-core R3-2): the dev:* request types now say the kind is bug or feature.
+  const [kind, setKind] = useState<'bug' | 'feature'>('bug');
   const [phase, setPhase] = useState<Phase>(context?.diagnose ? 'review' : 'draft');
   const [title, setTitle] = useState('');
   // WHY never pre-filled (Destin, submit-ticket-1#ST-13: "it shouldn't fill text in the
@@ -222,7 +224,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   const ticketCard = <section>
     <SectionLabel className="mb-2">Your ticket</SectionLabel>
     <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-      <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={setKind} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />
+      <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={(id) => setKind(id === 'feature' ? 'feature' : 'bug')} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />
       <div className="space-y-2">
         <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
         <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
@@ -400,3 +402,6 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       onStarted: () => { setContributing(false); setPhase('handed-over'); } }} />
   </>;
 }
+
+// Same reason as SettingsPanel: a closed report form is never rebuilt by a parent re-render.
+export const ReportDesign = memoWhileClosed(ReportDesignImpl);

@@ -518,30 +518,32 @@ export class LocalSkillProvider {
     }
   }
 
-  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
+  /**
+   * Which installed plugin `uninstall(id)` would remove, or null when it would only delete a
+   * prompt skill. WHY it is its own method (2026-09-30 one-core R3-4): the bundled-plugin
+   * guard used to compare the raw id, but a Library skill card sends a skill id such as
+   * `youcoded-chatsearch:chatsearch`, which uninstall() resolves to its parent plugin AFTER
+   * the guard ran — so a bundled plugin's skill id walked past it (both doors, older than
+   * the channel table). The guard now asks this, and uninstall() uses it too, so the two
+   * cannot disagree about what an id means.
+   */
+  async resolveUninstallTarget(id: string): Promise<string | null> {
     const installed = this.configStore.getInstalledPlugins();
-
-    // Direct plugin-id match (e.g. marketplace card calling uninstall with
-    // the plugin id).
-    if (installed[id]) {
-      await uninstallPlugin(id);
-      this.configStore.removePluginInstall(id);
-      this.installedCache = null;
-      this.onCacheInvalidated?.();
-      return { type: 'plugin' };
-    }
-
-    // Skill-granular ids like `superpowers:brainstorming` come from Library
-    // skill cards. Resolve them to the parent plugin id by
-    // looking up the skill in the installed cache (which carries pluginName)
-    // and then uninstall that plugin. This matches the user's expectation
-    // that "Uninstall" on a skill card removes the plugin shipping the skill.
+    // Direct plugin-id match (e.g. marketplace card calling uninstall with the plugin id).
+    if (installed[id]) return id;
+    // Skill-granular ids like `superpowers:brainstorming` come from Library skill cards.
+    // Resolve to the parent plugin id by looking the skill up in the installed cache (which
+    // carries pluginName); "Uninstall" on a skill card removes the plugin shipping the skill.
     const scanned = await this.getInstalled();
-    const skill = scanned.find(s => s.id === id);
-    const parentPluginId = skill?.pluginName;
-    if (parentPluginId && installed[parentPluginId]) {
-      await uninstallPlugin(parentPluginId);
-      this.configStore.removePluginInstall(parentPluginId);
+    const parentPluginId = scanned.find(s => s.id === id)?.pluginName;
+    return parentPluginId && installed[parentPluginId] ? parentPluginId : null;
+  }
+
+  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
+    const pluginId = await this.resolveUninstallTarget(id);
+    if (pluginId) {
+      await uninstallPlugin(pluginId);
+      this.configStore.removePluginInstall(pluginId);
       this.installedCache = null;
       this.onCacheInvalidated?.();
       return { type: 'plugin' };

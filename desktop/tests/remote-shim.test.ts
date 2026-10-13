@@ -538,10 +538,29 @@ describe('remote-shim — terminal backlog', () => {
     });
     afterEach(() => { vi.useRealTimers(); delete (globalThis as any).WebSocket; });
 
+    /** What App does for each conversation: ask the computer to fill it (the answer lets that session's live terminal frames through). */
+    async function openIt(sock: FakeWebSocket, sessionId: string, answer: Record<string, unknown> = {}) {
+      const pending = (window as any).claude.session.open({ sessionId, ...(answer.__req as object ?? {}) });
+      const req = sock.sentOf('session:open').at(-1);
+      sock.receive({ type: 'session:open:response', id: req.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, ...answer } });
+      await pending;
+      return req;
+    }
     const output = (sessionId: string, data: string, offset: number, epoch = 'e1') =>
       ws.receive({ type: 'pty:output', payload: { sessionId, data, epoch, offset } });
 
-    it('delivers pty:output and pty:reset that arrived before any listener, in order, on the first listener', () => {
+    it('drops a live terminal frame for a conversation it has not opened on this connection (an answer carries the bytes up to its cut)', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      output('s1', 'too early', 0);
+      expect(seen).toEqual([]);
+      await openIt(ws, 's1');
+      output('s1', 'now', 0);
+      expect(seen).toEqual(['now']);
+    });
+
+    it('delivers pty:output and pty:reset that arrived before any listener, in order, on the first listener', async () => {
+      await openIt(ws, 's1');
       output('s1', 'old ', 0);
       ws.receive({ type: 'pty:reset', payload: { sessionId: 's1', epoch: 'e2' } });
       output('s1', 'fresh', 0, 'e2');
@@ -556,7 +575,8 @@ describe('remote-shim — terminal backlog', () => {
       expect(seen).toEqual(['old ', '<RESET>', 'fresh', ' live']);
     });
 
-    it('keeps the backlog per session', () => {
+    it('keeps the backlog per session', async () => {
+      await openIt(ws, 's1'); await openIt(ws, 's2');
       output('s1', 'one', 0);
       output('s2', 'two', 0);
       const s2: string[] = [];
@@ -567,10 +587,8 @@ describe('remote-shim — terminal backlog', () => {
       expect(s1).toEqual(['one']);
     });
 
-    it('caps the backlog at 256 KB of units by trimming the OLDEST output, keeping its tail and everything after', () => {
-      // A restore's replay is one frame of up to 4M units. Dropping whole entries threw the
-      // entire replay away the moment one more frame arrived — while the saved offset still
-      // counted it as drawn, so no reconnect ever brought the history back (T2 review, 5).
+    it('caps the backlog at 256 KB of units by trimming the OLDEST output, keeping its tail and everything after', async () => {
+      await openIt(ws, 's1');
       const replay = 'old-line\n'.repeat(40 * 1024);              // 360 KB, line-shaped
       output('s1', replay, 0);
       output('s1', 'live', replay.length);
@@ -583,9 +601,9 @@ describe('remote-shim — terminal backlog', () => {
       expect(replay.endsWith(seen[0])).toBe(true);                   // the TAIL of the replay survived
     });
 
-    it('reports the epoch and the units it has drawn per session in client:ready, and 0 after a reset', async () => {
+    it('a reconnect\'s session:open says how far each terminal drew, per session, and 0 after a reset', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      (window as any).claude.on.chatHydrate(() => {});
+      await openIt(ws, 's1'); await openIt(ws, 's2');
       output('s1', 'abc', 0);
       output('s1', 'de', 3);
       output('s2', 'zzzz', 0, 'e9');
@@ -598,11 +616,142 @@ describe('remote-shim — terminal backlog', () => {
       ws2.open();
       ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
       await Promise.resolve();
-      const readyMsg = ws2.sentOf('client:ready')[0];
-      expect(readyMsg.payload.ptyOffsets).toEqual({ s1: { epoch: 'e1', units: 5 }, s2: { epoch: 'e10', units: 0 } });
+      const r1 = await openIt(ws2, 's1');
+      const r2 = await openIt(ws2, 's2');
+      expect(r1.payload.pty).toEqual({ epoch: 'e1', units: 5 });
+      expect(r2.payload.pty).toEqual({ epoch: 'e10', units: 0 });
     });
 
-    it('forgets a destroyed session\'s offsets and backlog', () => {
+    it('applies the terminal bytes an answer carries (a reset first when the host could not continue), then continues from them', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyResetForSession('s1', () => seen.push('<RESET>'));
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      await openIt(ws, 's1', { pty: { epoch: 'E', offset: 0, data: 'screen so far', reset: true } });
+      expect(seen).toEqual(['<RESET>', 'screen so far']);
+      output('s1', ' + live', 13, 'E');
+      expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
+    });
+
+    // THE TERMINAL BEFORE THE CHAT (one-core sync-fix2). Destin: "terminal view doesn't work until loading finishes". The terminal used to ride the same answer as the
+    // chat page and every live frame was dropped until that answer landed. Now a small `ptyOnly` ask is answered first.
+    it('draws the terminal from the early ptyOnly answer and lets live frames through BEFORE the chat open has answered; the open then does not redraw it', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyResetForSession('s1', () => seen.push('<RESET>'));
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      const opening = (window as any).claude.session.open({ sessionId: 's1' });
+      const asks = ws.sentOf('session:open');
+      const early = asks.find((m: any) => m.payload.ptyOnly === true);
+      const full = asks.find((m: any) => !m.payload.ptyOnly);
+      expect(early).toBeTruthy(); expect(full).toBeTruthy();
+      // The small answer arrives first: the screen draws, and the frames after it are accepted although the chat has not been filled.
+      ws.receive({ type: 'session:open:response', id: early.id, payload: { ok: true, ptyOnly: true, epoch: 'E', pty: { epoch: 'E', offset: 0, data: 'screen so far', reset: true } } });
+      await Promise.resolve(); await Promise.resolve();
+      expect(seen).toEqual(['<RESET>', 'screen so far']);
+      output('s1', ' + live', 13, 'E');
+      expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
+      // The chat open answers later with its own copy of the terminal (cut from where this page was when it asked): drawn only past what is already there, never as a reset.
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, pty: { epoch: 'E', offset: 0, data: 'screen so far + live', reset: true } } });
+      await opening;
+      expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
+    });
+    it('without the early answer (lost, late or an older host) the open still draws the terminal, as before', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      const opening = (window as any).claude.session.open({ sessionId: 's1' });
+      const full = ws.sentOf('session:open').find((m: any) => !m.payload.ptyOnly);
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
+      await opening;
+      expect(seen).toEqual(['from the open']);
+      // A late early answer after that changes nothing.
+      const early = ws.sentOf('session:open').find((m: any) => m.payload.ptyOnly === true);
+      ws.receive({ type: 'session:open:response', id: early.id, payload: { ok: true, ptyOnly: true, epoch: 'E', pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
+      await Promise.resolve();
+      expect(seen).toEqual(['from the open']);
+    });
+    it('a frame that overlaps what an answer already carried is drawn only past it (no doubled text)', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      await openIt(ws, 's1', { pty: { epoch: 'E', offset: 0, data: 'hello world', reset: false } });
+      output('s1', 'o world!!', 4, 'E');            // began at 4: only the "!!" is new
+      output('s1', 'hello', 0, 'E');                // wholly inside: nothing
+      expect(seen).toEqual(['hello world', '!!']);
+    });
+
+    it('asks whether a message arrived under the record epoch it was SENT under, not the one the page holds after a later refill', async () => {
+      await openIt(ws, 's1', { epoch: 'OLD', headSeq: 1 });
+      (window as any).claude.session.sendInput('s1', 'hi\r', undefined, 'send-1');
+      await openIt(ws, 's1', { epoch: 'NEW', headSeq: 1 });         // the computer restarted; the page was filled again under another epoch
+      const asked = (window as any).claude.session.sendOutcomes('s1', ['send-1', 'never-sent-here']);
+      await vi.waitFor(() => expect(ws.sentOf('session:send-outcomes').length).toBe(2));
+      const reqs = ws.sentOf('session:send-outcomes');
+      expect(reqs.map((r: any) => r.payload)).toEqual([
+        { sessionId: 's1', ids: ['send-1'], epoch: 'OLD' },
+        { sessionId: 's1', ids: ['never-sent-here'] },                // an id this page did not send has no epoch: the computer answers unknown
+      ]);
+      for (const r of reqs) ws.receive({ type: 'session:send-outcomes:response', id: r.id, payload: { epoch: 'NEW', outcomes: Object.fromEntries(r.payload.ids.map((i: string) => [i, 'unknown'])) } });
+      await expect(asked).resolves.toMatchObject({ outcomes: { 'send-1': 'unknown', 'never-sent-here': 'unknown' } });
+    });
+
+    it('unwatching a conversation tells the computer, drops any terminal frame still on the wire, and keeps its place for next time', async () => {
+      await openIt(ws, 's1', { epoch: 'E', headSeq: 7 });
+      output('s1', 'abc', 0);
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      expect(seen).toEqual(['abc']);
+      const done = (window as any).claude.session.unwatch('s1');
+      const req = ws.sentOf('session:unwatch').at(-1);
+      expect(req.payload).toEqual({ sessionId: 's1' });
+      ws.receive({ type: 'session:unwatch:response', id: req.id, payload: { ok: true } });
+      await expect(done).resolves.toEqual({ ok: true });
+      output('s1', 'late frame', 3);
+      expect(seen).toEqual(['abc']);                                   // dropped: not watched
+      // Opening it again says where it got to, so the computer sends only what it missed.
+      const again = await openIt(ws, 's1');
+      expect(again.payload.have).toEqual({ epoch: 'E', seq: 7 });
+      expect(again.payload.pty).toEqual({ epoch: 'e1', units: 3 });
+    });
+
+    it('Refresh forgets where it got to in the conversations it is NOT watching, so they take a fresh page when next opened', async () => {
+      await openIt(ws, 's1', { epoch: 'E', headSeq: 7 });
+      await openIt(ws, 's2', { epoch: 'E', headSeq: 9 });
+      const done = (window as any).claude.session.unwatch('s2');
+      ws.receive({ type: 'session:unwatch:response', id: ws.sentOf('session:unwatch').at(-1).id, payload: { ok: true } });
+      await done;
+      await (window as any).claude.remote.rehydrate();
+      const watched = await openIt(ws, 's1', { __req: { fresh: true } });
+      expect(watched.payload.have).toBeUndefined();                     // a Refresh asks for a fresh page
+      const unwatched = await openIt(ws, 's2');
+      expect(unwatched.payload.have).toBeUndefined();                   // and so does the one it was not watching
+    });
+
+    it('hands the computer\'s per-session summary to subscribers, and to one that subscribes after the push', async () => {
+      const first: any[] = [];
+      (window as any).claude.on.sessionSummary((p: any) => first.push(p));
+      ws.receive({ type: 'session:summary', payload: { summaries: { s1: { working: true, awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0 } } } });
+      expect(first).toHaveLength(1);
+      expect(first[0].summaries.s1.working).toBe(true);
+      const late: any[] = [];
+      (window as any).claude.on.sessionSummary((p: any) => late.push(p));
+      expect(late).toHaveLength(1);                                      // told the latest at once
+    });
+
+    it('routes the computer\'s session:live pushes (queue, model, dividers, cards) to subscribers, and the mode push to its own listener (one-core R5-4a)', () => {
+      const lives: any[] = [];
+      const modes: Array<[string, string]> = [];
+      const off = (window as any).claude.on.sessionLive((l: any) => lives.push(l));
+      (window as any).claude.on.sessionPermissionMode((sid: string, mode: string) => modes.push([sid, mode]));
+      ws.receive({ type: 'session:live', payload: { sessionId: 's1', kind: 'queue', queue: [{ queueId: 'q', content: 'x', timestamp: 1 }] } });
+      ws.receive({ type: 'session:permission-mode', payload: { sessionId: 's1', mode: 'plan' } });
+      ws.receive({ type: 'session:live', payload: null });                 // a malformed push is ignored, not thrown
+      expect(lives.map((l) => l.kind)).toEqual(['queue']);
+      expect(modes).toEqual([['s1', 'plan']]);
+      off();
+      ws.receive({ type: 'session:live', payload: { sessionId: 's1', kind: 'model', model: 'sonnet' } });
+      expect(lives).toHaveLength(1);                                       // unsubscribed
+    });
+
+    it('forgets a destroyed session\'s offsets and backlog', async () => {
+      await openIt(ws, 's1');
       output('s1', 'abc', 0);
       ws.receive({ type: 'session:destroyed', payload: { sessionId: 's1', exitCode: 0 } });
       const seen: string[] = [];
@@ -612,23 +761,23 @@ describe('remote-shim — terminal backlog', () => {
 
     it('an old host that sends no epoch leaves the offsets unreported rather than wrong', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await openIt(ws, 's1');
       ws.receive({ type: 'pty:output', payload: { sessionId: 's1', data: 'abc' } });
       const seen: string[] = [];
       (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
       expect(seen).toEqual(['abc']);
-      (window as any).claude.on.chatHydrate(() => {});
       ws.close();
       vi.advanceTimersByTime(1000);
       const ws2 = FakeWebSocket.instances[1];
       ws2.open();
       ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
       await Promise.resolve();
-      expect(ws2.sentOf('client:ready')[0].payload.ptyOffsets).toEqual({});
+      const req = await openIt(ws2, 's1');
+      expect(req.payload.pty).toEqual({});
     });
 
-    it('the line-break search is bounded: a replay with no nearby line break keeps its full tail', () => {
-      // An Ink redraw can run hundreds of KB without a newline; an unbounded search kept
-      // only what followed a far-off break — a handful of units of a 4M replay (T2 re-review, 10).
+    it('the line-break search is bounded: a replay with no nearby line break keeps its full tail', async () => {
+      await openIt(ws, 's1');
       const replay = 'x'.repeat(300 * 1024) + '\n' + 'y'.repeat(10);
       output('s1', replay, 0);
       const seen: string[] = [];
@@ -638,9 +787,8 @@ describe('remote-shim — terminal backlog', () => {
       expect(total).toBeLessThanOrEqual(256 * 1024);
     });
 
-    it('a live frame from a NEW buffer (another epoch) resets the terminal before drawing', () => {
-      // A host restart or a recreated session: no restore pass saw it, so the first frame of
-      // the new stream is the only signal. Appending it to the old screen was the bug (T2 review, 12).
+    it('a live frame from a NEW buffer (another epoch) resets the terminal before drawing', async () => {
+      await openIt(ws, 's1');
       const seen: string[] = [];
       (window as any).claude.on.ptyResetForSession('s1', () => seen.push('<RESET>'));
       (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
@@ -651,15 +799,16 @@ describe('remote-shim — terminal backlog', () => {
     });
 
     it('pairing to a different host forgets every terminal position', async () => {
+      await openIt(ws, 's1');
       output('s1', 'abc', 0);
-      (window as any).claude.on.chatHydrate(() => {});
       (globalThis as any).location.host = 'other-desktop:9900';
       const p2 = shim.connect('pw', false);
       const ws2 = FakeWebSocket.instances[1];
       ws2.open();
       ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
       await p2;
-      expect(ws2.sentOf('client:ready')[0].payload.ptyOffsets).toEqual({});
+      const req = await openIt(ws2, 's1');
+      expect(req.payload.pty).toEqual({});
     });
   });
 });
@@ -691,7 +840,6 @@ describe('remote-shim — conversation status', () => {
   describe('remote:conversation-status', () => {
     let shim: typeof import('../src/renderer/remote-shim');
     let phases: string[];
-    let hydrates: any[];
 
     beforeEach(async () => {
       vi.resetModules();
@@ -706,22 +854,23 @@ describe('remote-shim — conversation status', () => {
         setItem(k: string, v: string) { this._s[k] = v; },
         removeItem(k: string) { delete this._s[k]; },
       };
+      // The page's event bus (a bare node global has none): the shim tells App about a reconnect and a Refresh through it.
+      const bus = new EventTarget();
+      (globalThis as any).addEventListener = bus.addEventListener.bind(bus);
+      (globalThis as any).removeEventListener = bus.removeEventListener.bind(bus);
+      (globalThis as any).dispatchEvent = bus.dispatchEvent.bind(bus);
       shim = await import('../src/renderer/remote-shim');
       shim.installShim();
       phases = [];
-      hydrates = [];
     });
     afterEach(() => { vi.useRealTimers(); delete (globalThis as any).WebSocket; });
 
     const claude = () => (window as any).claude;
 
-    /** What App does: subscribe late (after auth:ok), apply the hydrate, report what was kept. */
-    function mountApp(kept: () => string[] = () => []) {
+    /** What App does: subscribe late (after auth:ok), then report how each round of fills went. */
+    function mountApp() {
       const off = claude().on.remoteConversationStatus((s: { phase: string }) => phases.push(s.phase));
-      claude().on.chatHydrate((payload: any) => {
-        hydrates.push(payload);
-        claude().remote.reportHydrate({ seq: payload.seq, kept: kept() });
-      });
+      claude().on.sessionCreated(() => {});
       return off;
     }
 
@@ -743,7 +892,7 @@ describe('remote-shim — conversation status', () => {
     it('reconnecting → restoring → complete across a drop', async () => {
       const ws1 = await firstConnect();
       mountApp();
-      ws1.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+      claude().remote.reportFill({ failed: 0 });
       expect(phases).toEqual(['restoring', 'complete']);
 
       ws1.close();
@@ -754,123 +903,111 @@ describe('remote-shim — conversation status', () => {
       ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
       await Promise.resolve();
       expect(phases[phases.length - 1]).toBe('restoring');
-      ws2.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 2 } });
+      claude().remote.reportFill({ failed: 0 });
       expect(phases).toEqual(['restoring', 'complete', 'reconnecting', 'restoring', 'complete']);
     });
 
-    it('a degraded hydrate is incomplete', async () => {
-      const ws = await firstConnect();
+    it('a reconnect tells the page so it can fill every conversation again from where it left off', async () => {
+      const ws1 = await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1, degraded: true } });
+      const heard: number[] = [];
+      window.addEventListener('youcoded:remote-reconnected', () => heard.push(1));
+      ws1.close();
+      vi.advanceTimersByTime(1000);
+      const ws2 = FakeWebSocket.instances[1];
+      ws2.open();
+      ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+      await Promise.resolve();
+      expect(heard).toHaveLength(1);
+    });
+
+    it('a round where any conversation could not be filled is incomplete', async () => {
+      await firstConnect();
+      mountApp();
+      claude().remote.reportFill({ failed: 1 });
       expect(phases[phases.length - 1]).toBe('incomplete');
     });
 
-    it('a hydrate that left any session kept from before is incomplete', async () => {
-      const ws = await firstConnect();
-      mountApp(() => ['s2']);
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
-      expect(phases[phases.length - 1]).toBe('incomplete');
-    });
-
-    it('no hydrate within 10 s of client:ready is incomplete', async () => {
-      const ws = await firstConnect();
+    it('no report within 10 s of connecting is incomplete', async () => {
+      await firstConnect();
       mountApp();
-      expect(ws.sentOf('client:ready')).toHaveLength(1);
       vi.advanceTimersByTime(9_999);
       expect(phases).toEqual(['restoring']);
       vi.advanceTimersByTime(1);
       expect(phases).toEqual(['restoring', 'incomplete']);
     });
 
-    it('Refresh re-enters restoring with the next seq; the stale hydrate is ignored; the new one completes', async () => {
+    it('Refresh re-enters restoring, tells the page to fill everything from a fresh page, and a report completes it (nothing is asked of the host)', async () => {
       const ws = await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1, degraded: true } });
+      claude().remote.reportFill({ failed: 1 });
       expect(phases[phases.length - 1]).toBe('incomplete');
 
-      const refreshing = claude().remote.rehydrate();
-      const req = ws.sentOf('remote:rehydrate')[0];
-      expect(req.payload).toEqual({ seq: 2 });
+      const asked: number[] = [];
+      window.addEventListener('youcoded:remote-refresh', () => asked.push(1));
+      await expect(claude().remote.rehydrate()).resolves.toEqual({ ok: true });
+      expect(asked).toHaveLength(1);
       expect(phases[phases.length - 1]).toBe('restoring');
-      ws.receive({ type: 'remote:rehydrate:response', id: req.id, payload: { ok: true } });
-      await expect(refreshing).resolves.toEqual({ ok: true });
-
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });   // a slow answer to the old ask
-      expect(hydrates.map((h) => h.seq)).toEqual([1]);
-      expect(phases[phases.length - 1]).toBe('restoring');
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 2 } });
+      expect(ws.sentOf('remote:rehydrate')).toEqual([]);
+      claude().remote.reportFill({ failed: 0 });
       expect(phases[phases.length - 1]).toBe('complete');
     });
 
-    it('a report for a seq it did not ask for last changes nothing', async () => {
-      const ws = await firstConnect();
+    it('a report from an older round changes nothing', async () => {
+      await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
       claude().remote.rehydrate();
       const before = [...phases];
-      claude().remote.reportHydrate({ seq: 1, kept: [] });
+      claude().remote.reportFill({ round: 1, failed: 0 });
       expect(phases).toEqual(before);
     });
 
-    it('an old host that sends no seq still reaches complete', async () => {
-      const ws = await firstConnect();
-      mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]] } });
-      expect(phases[phases.length - 1]).toBe('complete');
-    });
-
     it('the unsubscribe it returns stops the pushes', async () => {
-      const ws = await firstConnect();
+      await firstConnect();
       const off = mountApp();
       off();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+      claude().remote.reportFill({ failed: 0 });
       expect(phases).toEqual(['restoring']);
-    });
-
-    // Review of T4 (2026-09-10).
-    it('a Refresh the host refuses ends "may be out of date", never a busy strip forever', async () => {
-      const ws = await firstConnect();
-      mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
-      const refreshing = claude().remote.rehydrate();
-      const req = ws.sentOf('remote:rehydrate')[0];
-      ws.receive({ type: 'remote:rehydrate:response', id: req.id, payload: { ok: false } });
-      await expect(refreshing).resolves.toEqual({ ok: false });
-      expect(phases[phases.length - 1]).toBe('incomplete');
     });
 
     it('a Refresh while disconnected sends nothing and leaves the strip saying reconnecting', async () => {
       const ws = await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+      claude().remote.reportFill({ failed: 0 });
       ws.close();
       const before = [...phases];
       await expect(claude().remote.rehydrate()).resolves.toEqual({ ok: false });
       expect(phases).toEqual(before);
-      expect(ws.sentOf('remote:rehydrate')).toEqual([]);
     });
 
     it('a host that refuses this device for good is not shown as reconnecting', async () => {
       const ws = await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+      claude().remote.reportFill({ failed: 0 });
       ws.close(4003);
       expect(phases).not.toContain('reconnecting');
     });
 
     it('leaving a paired computer forgets the phase instead of showing "reconnecting"', async () => {
-      const ws = await firstConnect();
+      await firstConnect();
       mountApp();
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+      claude().remote.reportFill({ failed: 0 });
       void shim.disconnectFromHost().catch(() => {});
-      // Wait on the signal itself: disconnectFromHost opens the local-bridge socket right
-      // after it disconnects (it first awaits a module import, so one microtask is not enough).
       for (let i = 0; i < 50 && FakeWebSocket.instances.length < 2; i++) await new Promise((r) => setImmediate(r));
       expect(FakeWebSocket.instances.length).toBe(2);
       expect(phases).not.toContain('reconnecting');
       const late: string[] = [];
       claude().on.remoteConversationStatus((s: { phase: string }) => late.push(s.phase));
       expect(late).toEqual([]);                     // no stale phase replayed to a new subscriber
+    });
+
+    it('the host\'s focus is kept from sign-in for App to read', async () => {
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      ws.open();
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop', focus: { sessionId: 's7' } });
+      await p;
+      expect(claude().remote.focus()).toBe('s7');
     });
 
     it('the desktop\'s focus reaches session:destroyed listeners', async () => {
@@ -883,8 +1020,30 @@ describe('remote-shim — conversation status', () => {
     });
   });
 
+  describe('watching on the Android app\'s own bridge', () => {
+    it('never sends session:unwatch to the on-device runtime: it is refused quietly, like session:open', async () => {
+      vi.resetModules();
+      FakeWebSocket.instances = [];
+      (globalThis as any).WebSocket = FakeWebSocket;
+      (globalThis as any).window = globalThis;
+      (globalThis as any).location = { protocol: 'file:', host: '', search: '?bridgeToken=t&bridgePort=9901' };
+      (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
+      const local = await import('../src/renderer/remote-shim');
+      local.installShim();
+      const p = local.connect('android-local', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', platform: 'android' });
+      await p;
+      await expect((window as any).claude.session.unwatch('s1')).rejects.toThrow(/remote-unsupported: session:unwatch/);
+      await expect((window as any).claude.session.open({ sessionId: 's1' })).rejects.toThrow(/remote-unsupported: session:open/);
+      expect(ws.sentOf('session:unwatch')).toEqual([]);
+      expect(ws.sentOf('session:open')).toEqual([]);
+    });
+  });
+
   describe('remote:conversation-status on the Android app\'s own bridge', () => {
-    it('pushes nothing — that bridge never hydrates, so there is no copy to describe', async () => {
+    it('pushes nothing — that bridge is not filled from a computer, so there is no copy to describe', async () => {
       vi.resetModules();
       FakeWebSocket.instances = [];
       (globalThis as any).WebSocket = FakeWebSocket;
@@ -900,7 +1059,7 @@ describe('remote-shim — conversation status', () => {
       await p;
       const seen: string[] = [];
       (window as any).claude.on.remoteConversationStatus((s: { phase: string }) => seen.push(s.phase));
-      (window as any).claude.on.chatHydrate(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       vi.advanceTimersByTime(20_000);
       expect(seen).toEqual([]);

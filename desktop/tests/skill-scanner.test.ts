@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -121,4 +122,33 @@ describe('scanSkills', () => {
     });
   });
 
+});
+
+// WHY: a SKILL.md that is a named pipe made the scan's synchronous read wait forever for a writer, freezing the whole main process
+// (and every skill list, the computer's and a phone's). The scan must look at the file kind first and never open anything that is
+// not a regular file. The read is stubbed so a regression fails fast instead of hanging the test run.
+describe.skipIf(process.platform === 'win32')('skill scan with a named pipe saved as SKILL.md', () => {
+  it('never opens it, still lists the skill by its folder name, and keeps reading the regular ones', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-skill-fifo-'));
+    try {
+      const pipeDir = path.join(cwd, '.claude', 'skills', 'piped');
+      const okDir = path.join(cwd, '.claude', 'skills', 'fine');
+      fs.mkdirSync(pipeDir, { recursive: true }); fs.mkdirSync(okDir, { recursive: true });
+      expect(spawnSync('mkfifo', [path.join(pipeDir, 'SKILL.md')]).status).toBe(0);
+      fs.writeFileSync(path.join(okDir, 'SKILL.md'), '---\nname: Fine One\ndescription: reads ok\n---\nbody\n');
+      const real = fs.readFileSync;
+      const touched: string[] = [];
+      const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(((p: any, ...rest: any[]) => {
+        if (String(p).includes('piped')) { touched.push(String(p)); return '---\nname: x\n---\n'; } // would have blocked
+        return (real as any)(p, ...rest);
+      }) as any);
+      try {
+        const skills = scanProjectSkills(cwd);
+        expect(touched).toEqual([]);
+        expect(skills.map((x) => x.id).sort()).toEqual(['fine', 'piped']);
+        expect(skills.find((x) => x.id === 'fine')!.description).toBe('reads ok');
+        expect(skills.find((x) => x.id === 'piped')!.description).toBe('');
+      } finally { spy.mockRestore(); }
+    } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+  });
 });

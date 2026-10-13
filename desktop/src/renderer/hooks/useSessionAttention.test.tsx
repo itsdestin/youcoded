@@ -63,7 +63,7 @@ describe('useSessionAttention', () => {
     act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
     act(() => {
       result.current.dispatch({
-        type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 'bash-1',
+        type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's1', uuid: 'u1', toolUseId: 'bash-1',
         toolName: 'Bash', toolInput: { command: 'sudo apt update' },
       });
     });

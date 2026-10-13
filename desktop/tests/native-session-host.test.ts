@@ -1,3 +1,4 @@
+import { deadPid } from './helpers/dead-pid';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import fsModule from 'node:fs';
@@ -22,6 +23,7 @@ import type { DelegationRecord } from '../src/main/harness/specialists/delegatio
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
+import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
  *  10ms interval each loop already uses (1,500 x 10ms = 15s, matching the
@@ -1983,6 +1985,50 @@ describe('NativeSessionHost', () => {
       expect(host.send('ghost', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
     });
 
+    // One-core R5-4a: the waiting messages are announced as the host's queue, so every screen (not only the one that sent them) draws and
+    // can cancel the same strip. Each change is ONE announcement carrying the whole queue.
+    it('announces the queue on every change: a message waits, is cancelled, is sent next', async () => {
+      const seen: Array<Array<{ queueId: string; content: string }>> = [];
+      host.on('queue-changed', (e: any) => { expect(e.sessionId).toBe(id); seen.push(e.queue.map((q: any) => ({ queueId: q.queueId, content: q.content }))); });
+      expect(host.send(id, 'first').status).toBe('sent');
+      expect(seen, 'a message that starts a turn is not "waiting"').toEqual([]);
+      const a = host.send(id, 'second') as { queueId: string };
+      const b = host.send(id, 'third') as { queueId: string };
+      expect(seen).toEqual([
+        [{ queueId: a.queueId, content: 'second' }],
+        [{ queueId: a.queueId, content: 'second' }, { queueId: b.queueId, content: 'third' }],
+      ]);
+      expect(host.removeQueued(id, a.queueId)).toBe(true);
+      expect(seen.at(-1)).toEqual([{ queueId: b.queueId, content: 'third' }]);
+      expect(host.queuedMessagesFor(id).map((q) => q.content)).toEqual(['third']);
+      await waitForTurnComplete(host, 1);
+      await vi.waitFor(() => expect(host.queuedMessagesFor(id)).toEqual([]));
+      expect(seen.at(-1), 'once it is sent the strip is empty').toEqual([]);
+      expect(host.queuedMessagesFor(id)).toEqual([]);
+    });
+
+    it('a repeat with the same waiting messages is not announced again', () => {
+      const seen: unknown[] = [];
+      host.on('queue-changed', (e: any) => seen.push(e));
+      host.send(id, 'first');
+      host.send(id, 'second');
+      const n = seen.length;
+      (host as any).announceQueue(id);
+      expect(seen.length).toBe(n);
+    });
+
+    it('announces a compaction start, and an end only when it finished without a summary line', async () => {
+      const ev: any[] = [];
+      host.on('compaction', (e: any) => ev.push(e));
+      host.send(id, 'busy');
+      const refused = await host.compact(id);                 // a turn is in flight: refused
+      expect(refused).toEqual({ ok: false, reason: 'turn-in-flight' });
+      expect(ev).toEqual([
+        { sessionId: id, phase: 'start' },
+        { sessionId: id, phase: 'end', outcome: 'failed' },
+      ]);
+    });
+
     it('overlapping send queues FIFO and both turns complete in order', async () => {
       const events: string[] = [];
       host.on('transcript-event', (e) => { if (e.type === 'user-message') events.push(e.data.text); });
@@ -1996,6 +2042,71 @@ describe('NativeSessionHost', () => {
       expect((r2 as { queueId: string }).queueId.length).toBeGreaterThan(0);
       await waitForTurnComplete(host, 1);
       expect(events).toEqual(['first', 'second']); // user-message for 'second' fires only when drained
+    });
+
+    it('an over-limit picture queued behind a running turn still arrives as its prepared derivative', async () => {
+      // Same shape as the FIFO test above, but on a vision provider with the
+      // OpenAI picture limits (chatgpt), and a model that records each request.
+      const prompts: any[] = [];
+      const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+        prompts.push(o);
+        return { stream: delayedStream(CHUNKS, 15) };
+      } }) as any;
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), capturing, NO_CONTEXT, async () => 'chatgpt', async () => null);
+      const sid = 'q-picture';
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const events: any[] = [];
+        h.on('transcript-event', (e: any) => { if (e.type === 'user-message') events.push(e); });
+        const huge = path.join(root, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+        const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+        // One turn-complete, as in the FIFO test: the queued head is claimed into the running turn.
+        const done = waitForTurnComplete(h, 1);
+        // first send starts a turn and is held open; the second is queued with the derivative as its model-facing path
+        expect(h.send(sid, 'first')).toEqual({ status: 'sent' });
+        expect(h.send(sid, 'picture', [huge], [small]).status).toBe('queued');
+        await done;
+        const event = events.find((e) => e.type === 'user-message' && e.data.attachments?.[0] === huge)!;
+        expect(event.data.modelAttachments).toEqual([small]);
+        const prompt = prompts.at(-1);                                           // the queued turn's request
+        const user = prompt.prompt.filter((m: any) => m.role === 'user').at(-1);
+        expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
+      } finally { await h.destroyAll(); }
+    });
+
+    it('a picture queued during a notice pass is drained as its own turn with its prepared derivative', async () => {
+      // The host's drain loop (not the in-turn claim above) sends this one: it
+      // was queued while a notice — not a user turn — held the session.
+      const prompts: any[] = [];
+      const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+        prompts.push(o);
+        return { stream: simulateReadableStream({ chunks: CHUNKS }) };
+      } }) as any;
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), capturing, NO_CONTEXT, async () => 'chatgpt', async () => null);
+      const sid = 'q-picture-notice';
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const entry = (h as any).live.get(sid);
+        let entered!: () => void;
+        let release!: () => void;
+        const started = new Promise<void>((r) => { entered = r; });
+        const gate = new Promise<void>((r) => { release = r; });
+        vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+        const events: any[] = [];
+        h.on('transcript-event', (e: any) => { if (e.type === 'user-message') events.push(e); });
+        const huge = path.join(root, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+        const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+        (h as any).queueHostNotice(sid, 'notice', { kind: 'shell', runs: [] }, 'test');
+        await started;
+        expect(h.send(sid, 'picture', [huge], [small]).status).toBe('queued');
+        release();
+        await vi.waitFor(() => expect(events.some((e) => e.data.attachments?.[0] === huge)).toBe(true));
+        await entry.running;
+        const event = events.find((e) => e.data.attachments?.[0] === huge)!;
+        expect(event.data.modelAttachments).toEqual([small]);
+        const user = prompts.at(-1).prompt.filter((m: any) => m.role === 'user').at(-1);
+        expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
+      } finally { await h.destroyAll(); }
     });
 
     it.each(['idle notice pass', 'user turn tail'])('delivers FIFO sends accepted during an %s before stable idle', async (start) => {
@@ -5012,7 +5123,7 @@ describe('NativeSessionHost', () => {
         childId: 'child-dead', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
         workDir: root, description: 'd', background: true,
         status: 'running', startedAt: Date.now(), delivered: false,
-        owner: { pid: 999999, instanceId: 'dead-instance' }, missedSteers: [],
+        owner: { pid: deadPid(), instanceId: 'dead-instance' }, missedSteers: [],
       });
       // A record owned by THIS process (OWNER is a module singleton, so it
       // reads as alive to every host built in this test file) — reconcile
@@ -5192,7 +5303,7 @@ describe('NativeSessionHost', () => {
         workDir: root, description: 'find the config loader', background: true,
         status: 'completed', startedAt: Date.now() - 60_000, endedAt: Date.now(), steps: 2,
         rawReport: 'REPORT: config lives in src/config.ts', delivered: false, owner: OWNER,
-        missedSteers: [], claimedBy: { pid: 999999, instanceId: 'gone' }, claimedAt: Date.now() - 30_000,
+        missedSteers: [], claimedBy: { pid: deadPid(), instanceId: 'gone' }, claimedAt: Date.now() - 30_000,
       });
       await h.destroy('root-1');
 

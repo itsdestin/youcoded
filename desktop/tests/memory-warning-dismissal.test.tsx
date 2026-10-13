@@ -10,11 +10,13 @@ import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, act, screen, waitFor } from '@testing-library/react';
 import { useNativeBinding, NativeExtras } from '../src/renderer/components/RuntimeBinding';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../src/shared/capabilities';
 
 const TIGHT = { verdict: 'tight', headline: 'Needs about 9.5 GB; 11.0 GB free.', detail: '' };
 
 function bridge(setSettings: any) {
   (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
     // The hook hides the whole native selector unless main says the native
     // runtime is available, so the warning card never mounts without this.
     native: { supported: true },

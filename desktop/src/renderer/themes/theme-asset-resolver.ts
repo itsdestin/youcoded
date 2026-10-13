@@ -1,4 +1,4 @@
-import type { ThemeDefinition, LoadedTheme } from './theme-types';
+import type { ThemeDefinition, LoadedTheme, ThemeAppIconVariants } from './theme-types';
 
 /**
  * Resolves a single asset path to a theme-asset:// URI.
@@ -128,6 +128,18 @@ export function resolveAllAssetPaths<T extends ThemeDefinition | LoadedTheme>(th
   if (resolved.appIcon) {
     const r = resolveAssetPath(resolved.appIcon, slug);
     if (r) resolved.appIcon = r;
+  }
+  // WHY each variant is resolved like appIcon: main only accepts theme-asset:// addresses inside the
+  // theme's own folder. One that fails to resolve is dropped, and main falls back to appIcon.
+  if (resolved.appIconVariants) {
+    const v: Record<string, unknown> = { ...resolved.appIconVariants };
+    for (const key of ['windows', 'macGlass', 'tray', 'trayAlert'] as const) {
+      const val = v[key];
+      if (typeof val !== 'string') { delete v[key]; continue; }
+      const r = resolveAssetPath(val, slug);
+      if (r) v[key] = r; else delete v[key];
+    }
+    resolved.appIconVariants = v as ThemeAppIconVariants;
   }
 
   // Scrollbar thumb image

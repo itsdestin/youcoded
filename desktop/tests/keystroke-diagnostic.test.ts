@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
+import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 
 /**
  * The keystroke contract, per menu shape.

@@ -5,7 +5,7 @@
 // banner on resume would describe a failure that isn't happening anymore); the
 // streaming-watchdog heartbeats (stall warning + clear — a text-less, partId-less
 // assistant-thinking) are display-only for the same reason.
-import type { TranscriptEvent } from '../../shared/types';
+import { looseData, type TranscriptEvent, type EventOf } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 // WHY nativeStoreSlug (NOT the CC mirror): the slug is the FROZEN app-private
 // rule (slug-encoding.ts) — deliberately NOT CC's; changing it orphans
@@ -46,6 +46,26 @@ export interface NativeSessionListEntry extends NativeSessionHeader {
 // get merged by partId in the chat reducer — so they can be merged the same
 // way on disk without changing what a replay produces.
 const COALESCED_TYPES = new Set(['assistant-text', 'assistant-thinking']);
+/** The two coalescible event shapes. A guard (not just the Set) so the coalescing
+ *  branch below can read/append `data.text` and `data.partId` with the compiler's
+ *  blessing. The Set stays the single source of truth for WHICH types. */
+type CoalescedEvent = EventOf<'assistant-text' | 'assistant-thinking'>;
+/** The buffered CLONE of a part's first delta ({...} on both levels so later
+ *  caller-side mutation can't reach into what we'll persist). The inner spread is
+ *  SHALLOW — safe because delta data is text+partId only; revisit if a coalesced
+ *  delta ever gains a nested field. Generic so the clone keeps the event's own
+ *  type (a spread of a union otherwise loses which `data` goes with which `type`). */
+function withFirstReference<E extends CoalescedEvent>(event: E): E {
+  return { ...event, data: { ...event.data,
+    // WHY: persist the first UUID and every later range so a reopened
+    // checkpoint can prove a tail endpoint in this coalesced part.
+    ...(event.uuid ? { deltaReferences: [{ eventUuid: event.uuid, start: 0,
+      end: String(event.data?.text ?? '').length }] } : {}),
+  } };
+}
+function isCoalesced(event: TranscriptEvent): event is CoalescedEvent {
+  return COALESCED_TYPES.has(event.type);
+}
 
 // Resume Browser fallback title length — native sessions have no CC
 // auto-title hook, so the first user message stands in (spec §2.6).
@@ -62,11 +82,14 @@ export interface PersistedEventReference {
 
 /** Verify that every UUID/offset survived coalescing in the persisted anchor.
  * Missing metadata is an older transcript, NOT evidence for a later delta. */
+// WHY the loose view (M5): `event` came off DISK, so `deltaReferences` is
+// UNTRUSTED — only checked by the loop below, never assumed to be a DeltaRef[].
 export function validatedDeltaReferences(event: TranscriptEvent): Array<{ eventUuid: string; start: number; end: number }> | null {
-  const candidates: unknown = event.data?.deltaReferences;
+  const data = looseData(event);
+  const candidates: unknown = data.deltaReferences;
   if (!Array.isArray(candidates) || !candidates.length || !event.uuid ||
-      !COALESCED_TYPES.has(event.type) || event.data?.partId == null) return null;
-  const length = String(event.data?.text ?? '').length;
+      !COALESCED_TYPES.has(event.type) || data.partId == null) return null;
+  const length = String(data.text ?? '').length;
   const seen = new Set<string>();
   let end = 0;
   for (const item of candidates) {
@@ -113,7 +136,7 @@ export class SessionStore {
   // session-error — all three flush the open part (session-error flushes even
   // though its own line is never persisted) — so in practice parts flush every
   // turn, and a hard crash mid-stream loses at most the one in-flight part.
-  private open = new Map<string, { slug: string; event: TranscriptEvent }>();
+  private open = new Map<string, { slug: string; event: CoalescedEvent }>();
   // Successful append authority, kept separately from the buffered public event.
   // Later deltas map to byte ranges under the first event UUID that reaches disk.
   private references = new Map<string, Map<string, PersistedEventReference>>();
@@ -145,7 +168,9 @@ export class SessionStore {
     const refs = this.referenceMap(sessionId);
     for (const event of events) {
       if (!event.uuid || refs.has(event.uuid)) continue;
-      const partId = event.data?.partId;
+      // Loose view: these events were read off disk, so any field may be absent.
+      const data = looseData(event);
+      const partId = data.partId;
       const coalesced = COALESCED_TYPES.has(event.type) && partId != null;
       if (coalesced) {
         const deltas = validatedDeltaReferences(event);
@@ -156,13 +181,13 @@ export class SessionStore {
           continue;
         }
         // Corrupt witness metadata is not the same as a pre-witness transcript.
-        if (event.data?.deltaReferences !== undefined) continue;
+        if (data.deltaReferences !== undefined) continue;
       }
       refs.set(event.uuid, {
         eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
         ...(coalesced ? { partId: String(partId) } : {}),
         start: 0,
-        end: coalesced ? String(event.data?.text ?? '').length : JSON.stringify(event.data ?? {}).length,
+        end: coalesced ? String(data.text ?? '').length : JSON.stringify(event.data ?? {}).length,
       });
     }
   }
@@ -222,9 +247,11 @@ export class SessionStore {
     }
 
     const slug = nativeStoreSlug(cwd);
-    const partId = event.data?.partId;
+    // Loose view of the payload: callers also hand this store events that are not
+    // coalescible, and a malformed one may lack `data` (hence the `?.`s below).
+    const partId = looseData(event).partId;
 
-    if (COALESCED_TYPES.has(event.type) && partId) {
+    if (isCoalesced(event) && partId) {
       const open = this.open.get(event.sessionId);
       if (open && open.event.type === event.type && open.event.data?.partId === partId) {
         // Same still-streaming part: concatenate into the buffered CLONE.
@@ -255,12 +282,7 @@ export class SessionStore {
       await this.flush(event.sessionId);
       this.open.set(event.sessionId, {
         slug,
-        event: { ...event, data: { ...event.data,
-          // WHY: persist the first UUID and every later range so a reopened
-          // checkpoint can prove a tail endpoint in this coalesced part.
-          ...(event.uuid ? { deltaReferences: [{ eventUuid: event.uuid, start: 0,
-            end: String(event.data?.text ?? '').length }] } : {}),
-        } },
+        event: withFirstReference(event),
       });
       if (event.uuid) {
         const textLength = String(event.data?.text ?? '').length;
@@ -395,10 +417,12 @@ export class SessionStore {
     const seen = new Set<string>();
     const out: TranscriptEvent[] = [];
     for (const line of lines.slice(1)) {
+      // WHY the cast: `line` is an UNTRUSTED disk shape; it is only checked to be an object
+      // with a string `type` below, and every payload read of it uses a default (M5).
       const e = line as TranscriptEvent;
       // Skip anything that isn't a typed event (e.g. a stray header written
       // by a buggy future writer, or junk that happens to parse as JSON).
-      if (!e || typeof e !== 'object' || typeof (e as any).type !== 'string') continue;
+      if (!e || typeof e !== 'object' || typeof e.type !== 'string') continue;
       // Only dedup when a uuid is present — events without one can't be told
       // apart, and dropping ALL uuid-less events after the first would eat
       // legitimate lines.
@@ -501,6 +525,7 @@ export class SessionStore {
     let title = header.title;
     if (!title) {
       for (const line of lines.slice(1)) {
+        // Untrusted disk shape (see eventsFromLines); `data?.text != null` below is the check.
         const e = line as TranscriptEvent;
         if (e && typeof e === 'object' && e.type === 'user-message' && e.data?.text != null) {
           // Keep the Resume Browser's raw opening excerpt and cap; only make

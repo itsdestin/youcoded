@@ -15,6 +15,8 @@
 // conversation, every honored toolUseId is remembered for the life of this
 // renderer: the same result can never open twice, however fresh. What remains
 // (spec §8): an app relaunch within a minute of a render result opens it once.
+import type { TranscriptEvent } from '../../shared/types';
+
 export const FRESH_WINDOW_MS = 60_000;
 const PENDING_CAP = 200;
 const HONORED_CAP = 500;
@@ -33,16 +35,10 @@ export interface DeliverableAutoOpenDeps {
 }
 
 export interface DeliverableAutoOpen {
-  handle: (event: unknown) => void;
+  // WHY a TranscriptEvent, not `unknown` (M5): see the artifact tool-use tracker.
+  handle: (event: TranscriptEvent) => void;
   dispose: () => void;
 }
-
-type Ev = {
-  type?: string;
-  sessionId?: string;
-  timestamp?: number;
-  data?: { toolName?: string; toolUseId?: string; toolInput?: Record<string, unknown>; isError?: boolean; recordedAt?: number };
-} | null;
 
 export function createDeliverableAutoOpen(deps: DeliverableAutoOpenDeps): DeliverableAutoOpen {
   const now = deps.now ?? (() => Date.now());
@@ -55,9 +51,8 @@ export function createDeliverableAutoOpen(deps: DeliverableAutoOpenDeps): Delive
   const honored = new Set<string>();
   let disposed = false;
 
-  const handle = (raw: unknown) => {
+  const handle = (event: TranscriptEvent) => {
     if (disposed) return;
-    const event = raw as Ev;
     if (!event?.type || !event.sessionId) return;
 
     if (event.type === 'user-message') { openedThisReply.delete(event.sessionId); return; }

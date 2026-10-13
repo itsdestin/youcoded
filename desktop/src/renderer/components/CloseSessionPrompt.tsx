@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { SessionHeaderCard, SessionListsCard, SessionTagsCard } from './tags/SessionDetails';
@@ -53,7 +54,7 @@ const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 // yes/no facts. Unlike Session details nothing here writes until Close session: the cards
 // edit local state and the caller writes the delta (tag renames/colours still write at once,
 // as everywhere).
-export default function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
+function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
   const [sel, setSel] = useState<Record<FlagName, boolean>>({ priority: false, complete: false });
   // "Don't show again" — persisted to localStorage so the caller can skip this
   // prompt on future closes. Default off so users see it at least once.
@@ -247,3 +248,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     </>
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(CloseSessionPrompt);

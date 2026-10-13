@@ -1,13 +1,12 @@
 // Builds the workbench's chat timelines by replaying conversation fixtures
 // through the REAL chat reducer, then serializing the result into the payload
-// App.tsx's `on.chatHydrate` subscriber already understands (App.tsx:1465).
+// App.tsx's `on.seedChat` subscriber hands to the reducer (CHAT_STATE_SEEDED).
 //
-// WHY the hydrate channel rather than dispatching into ChatProvider directly:
+// WHY a seed subscriber rather than dispatching into ChatProvider directly:
 // `dispatch` lives inside <App/>'s provider tree, so nothing outside it can
-// reach the reducer. `on.chatHydrate` is a real channel (remote-shim.ts serves
-// it so a remote browser gets its timelines on connect), and App already
-// subscribes to it unconditionally — so the workbench feeds the timeline through
-// a shipping code path instead of an injection point carved into App.
+// reach the reducer. (A real screen is filled from the computer's record,
+// `session.open`; this seed is the workbench's own, and no real bridge has it —
+// until one-core R5-2 it rode `on.chatHydrate`, the remote snapshot's channel.)
 //
 // This also satisfies spec §3.3's objection to hand-authored SerializedChatState:
 // nothing here is hand-authored. The shape is produced by the reducer and the
@@ -61,9 +60,10 @@ function stalledRequested(): boolean {
 
 /** `?planLimit=1`: replay the chatgpt fixture's used-up-plan error (see
  *  LoadOptions.includePlanLimit). Same node-test guard as stalledRequested(). */
-function planLimitRequested(): boolean {
+function planLimitRequested(): boolean | 'official' {
   if (typeof location === 'undefined') return false;
-  return new URLSearchParams(location.search).get('planLimit') === '1';
+  const v = new URLSearchParams(location.search).get('planLimit');
+  return v === 'official' ? 'official' : v === '1';
 }
 
 /** `?providerError=<case>`: replay one OpenRouter failure card on the native

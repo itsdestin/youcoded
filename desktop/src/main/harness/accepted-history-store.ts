@@ -2,10 +2,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import type { ModelMessage } from 'ai';
-import type { TranscriptEvent } from '../../shared/types';
+// WHY looseData everywhere below (M5): every event here was read back off DISK
+// (the accepted-history reader parses JSONL lines and checks only `type`/`uuid`),
+// and these helpers look at a field BY EVENT KIND LOOKED UP AT RUNTIME, not by a
+// narrowed compile-time type. The loose view says exactly that: any payload field
+// may be there or not, and the existing `?? ''` / `?? {}` defaults stay in force.
+import { looseData, type TranscriptEvent } from '../../shared/types';
 import type { PersistedEventReference } from './session-store';
 import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, prunedToolResultText } from './compaction';
 import { restoreContinuationSizing, durableContinuationSizing } from './openai-continuation';
+import { imageDimensions, withinImageLimits, imageNote, parseImageNote, type ImageNote } from './image-support';
+import type { ImageLimits } from './capability-profile';
 
 const VERSION = 1;
 export const ACCEPTED_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
@@ -18,7 +25,9 @@ const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 
 type FailureReason = 'ineligible' | 'malformed' | 'oversized' | 'missing-transcript' | 'transcript-unreadable'
-  | 'transcript-advanced' | 'binding-mismatch' | 'assembly-mismatch' | 'image-mismatch';
+  | 'transcript-advanced' | 'binding-mismatch' | 'assembly-mismatch' | 'image-mismatch'
+  /** A cited picture is over the session's image limits (restoreImage's WHY). */
+  | 'image-oversized';
 
 /** Which persisted event type owns each referenceable field, and how its text is
  *  derived. One table so publish and restore can never disagree about an anchor. */
@@ -64,11 +73,18 @@ const PROVIDER_OPTIONS_ALLOWLIST: Record<'text' | 'reasoning' | 'tool-call' | 't
  *  carry a partId and must tile the whole persisted text. */
 const COALESCED_TYPES = new Set(['assistant-text', 'assistant-thinking']);
 
-type PrunedDescriptor = { keepChars: number } | { imageCollapsed: true };
+/** `oversized` (2026-10-07): the live part carries one or more image notes
+ *  (image-support.imageNote). Fields only — restore RECOMPUTES the sentence, so
+ *  the manifest never holds prose that could drift from the writer. May coexist
+ *  with `images` on a mixed content result. */
+type PrunedDescriptor = { keepChars: number } | { imageCollapsed: true } | { oversized: ImageNote[] };
 interface ImageDescriptor { path: string; mediaType: string; digest: string; filename?: string }
 
 type PartDescriptor =
   | { kind: 'event'; uuid: string; field: Field; providerOptions?: unknown; images?: ImageDescriptor[]; pruned?: PrunedDescriptor }
+  /** A trailing text part a user message carries for an attachment the model did
+   *  not get. Fields only, recomputed through imageNote on restore. */
+  | { kind: 'note'; note: ImageNote }
   | { kind: 'concat'; uuids: string[]; field: 'assistant-text' | 'reasoning-text'; providerOptions?: unknown }
   /** The ONE descriptor that cites no transcript content, because there is none to
    *  cite: an encrypted reasoning item whose summary never produced a single token.
@@ -102,7 +118,8 @@ function replayableOrigin(content: ContentDescriptor): string[] | null {
   if (content.kind !== 'parts') return null;
   const uuids: string[] = [];
   for (const part of content.parts) {
-    if (part.kind === 'empty' || part.kind === 'image' || part.field === 'reasoning-text' ||
+    // WHY 'note': it is private reconstruction (no transcript text says it), like a pruned part.
+    if (part.kind === 'empty' || part.kind === 'image' || part.kind === 'note' || part.field === 'reasoning-text' ||
         ('pruned' in part && part.pruned) ||
         (part.kind === 'event' && part.providerOptions &&
           (part.providerOptions as { openai?: { parallelToolCall?: unknown } }).openai?.parallelToolCall)) return null;
@@ -254,6 +271,8 @@ function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
+      // WHY the cast: an UNTRUSTED disk line — only `type`/`uuid` are checked below; every
+      // payload read in this file goes through looseData() with its existing defaults (M5).
       const value = JSON.parse(line) as TranscriptEvent;
       if (value && typeof value.type === 'string' && typeof value.uuid === 'string') {
         if (events.has(value.uuid)) return false;
@@ -372,12 +391,12 @@ function eventText(event: TranscriptEvent, field: TextField): string | null {
   switch (field) {
     case 'skill-text': {
       // Mirrors history-rebuild: a body-less skill event never entered history.
-      const body = event.data?.body;
+      const body = looseData(event).body;
       if (!body) return null;
-      return event.data?.args ? `${String(body)}\n\n${String(event.data.args)}` : String(body);
+      return looseData(event).args ? `${String(body)}\n\n${String(looseData(event).args)}` : String(body);
     }
-    case 'summary-text': return `${SUMMARY_PREFIX}${String(event.data?.summary ?? '')}`;
-    default: return String(event.data?.text ?? '');
+    case 'summary-text': return `${SUMMARY_PREFIX}${String(looseData(event).summary ?? '')}`;
+    default: return String(looseData(event).text ?? '');
   }
 }
 
@@ -457,8 +476,16 @@ class AnchorSet {
   findAttachment(wanted: string): string | null {
     for (const uuid of this.uuids) {
       const event = this.events.get(uuid);
-      if (event?.type !== 'user-message' || !Array.isArray(event.data?.attachments)) continue;
-      for (const candidate of event.data.attachments as string[]) {
+      if (event?.type !== 'user-message') continue;
+      // WHY modelAttachments first: the model was sent the PREPARED copy where one
+      // was made (history-rebuild reads the same list), so its bytes match that
+      // path, never the oversized original the picker named. The stored path is
+      // whatever matched, so a derivative restores by its own path.
+      const data = looseData(event);
+      const candidates = Array.isArray(data.modelAttachments) ? data.modelAttachments
+        : Array.isArray(data.attachments) ? data.attachments : null;
+      if (!candidates) continue;
+      for (const candidate of candidates as string[]) {
         if (this.digestOf(candidate) === wanted) return candidate;
       }
     }
@@ -489,7 +516,7 @@ function acceptedAnchors(references: PersistedEventReference[], events: Map<stri
     const coalesced = group.length > 1 || (COALESCED_TYPES.has(event.type) && group[0].partId !== undefined);
     if (!coalesced) { if (group.length !== 1) return null; continue; }
     if (!COALESCED_TYPES.has(event.type)) return null;
-    const length = String(event.data?.text ?? '').length;
+    const length = String(looseData(event).text ?? '').length;
     const sorted = [...group].sort((a, b) => a.start - b.start);
     let at = 0;
     for (const reference of sorted) {
@@ -554,7 +581,7 @@ export class AcceptedHistoryStore {
         let eventUuids = allAccepted;
         if (proposal.transformation?.kind === 'summary') {
           const marker = raw.events.get(proposal.transformation.summaryEventUuid);
-          const record = marker?.data?.compactionRecord;
+          const record = (marker && looseData(marker).compactionRecord);
           const chronological = [...raw.events.keys()];
           const summary = chronological.indexOf(proposal.transformation.summaryEventUuid);
           if (!marker || summary < 0) return { ok: false, reason: 'unreferenced-history' } as const;
@@ -620,11 +647,13 @@ export class AcceptedHistoryStore {
    *  Now that they yield, running them on the same per-session chain as
    *  publish()/invalidate() keeps the answer a consistent snapshot — a publish
    *  can no longer land between reading the fence and reading the manifest. */
-  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): Promise<AcceptedHistoryRestore> {
+  /** `imageLimits`: the session's provider limits; a cited picture over them
+   *  fails the restore with `image-oversized` (restoreImage's WHY). */
+  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string; imageLimits?: ImageLimits }): Promise<AcceptedHistoryRestore> {
     return this.enqueue(input.sessionId, () => this.restoreNow(input));
   }
 
-  private async restoreNow(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): Promise<AcceptedHistoryRestore> {
+  private async restoreNow(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string; imageLimits?: ImageLimits }): Promise<AcceptedHistoryRestore> {
     const eligibility = await this.readBoundedJsonAsync(this.eligibilityPath(input.sessionId)) as Eligibility | null;
     if (!eligibility || eligibility.v !== VERSION || eligibility.sessionId !== input.sessionId || !eligibility.eligible) return { ok: false, reason: 'ineligible' };
     const file = this.manifestPath(input.sessionId);
@@ -650,7 +679,7 @@ export class AcceptedHistoryStore {
       // unrecognised one is a corrupt manifest, not something to pass through.
       if (!record(descriptor) || !ROLES.includes(descriptor.role) ||
         (descriptor.appGenerated !== undefined && (descriptor.appGenerated !== true || descriptor.role !== 'user' || descriptor.content?.kind !== 'literal'))) return { ok: false, reason: 'malformed' };
-      const content = await restoreContent(descriptor?.content, raw.events, accepted);
+      const content = await restoreContent(descriptor?.content, raw.events, accepted, input.imageLimits);
       if ('reason' in content) return { ok: false, reason: content.reason };
       const message = { role: descriptor.role, content: content.value } as ModelMessage;
       // A transcript reference proves origin; text that merely LOOKS like a
@@ -658,7 +687,7 @@ export class AcceptedHistoryStore {
       // recorded at publish time, not a guess based on their text.
       if (message.role === 'user' && (descriptor.appGenerated === true || (descriptor.content?.kind === 'event' &&
         (descriptor.content.field === 'skill-text' || descriptor.content.field === 'summary-text' ||
-          (descriptor.content.field === 'user-text' && Boolean(raw.events.get(descriptor.content.uuid)?.data?.injected)))))) {
+          (descriptor.content.field === 'user-text' && Boolean((raw.events.get(descriptor.content.uuid) && looseData(raw.events.get(descriptor.content.uuid)!).injected))))))) {
         markAppGenerated(message);
       }
       if (descriptor.sizing) restoreContinuationSizing(message, descriptor.sizing);
@@ -777,8 +806,8 @@ function textDescriptor(uuids: string[], field: 'assistant-text' | 'reasoning-te
  *  pruned, image-collapsed, or image-bearing. Null when it is none of those, in
  *  which case the part cannot be rebuilt exactly and the publish must fail. */
 function describeToolResult(part: Record<string, any>, event: TranscriptEvent, digestOf: (file: string) => string | null): { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null {
-  const text = String(event.data?.toolResult ?? '');
-  const paths = Array.isArray(event.data?.images) ? (event.data.images as string[]) : [];
+  const text = String(looseData(event).toolResult ?? '');
+  const paths = Array.isArray(looseData(event).images) ? looseData(event).images! : [];
   const output = record(part.output);
   if (!output) return null;
 
@@ -787,12 +816,21 @@ function describeToolResult(part: Record<string, any>, event: TranscriptEvent, d
     const keepChars = prunedKeepChars(text, output.value);
     if (keepChars !== null) return { pruned: { keepChars } };
     if (output.value === imageCollapsedToolResultText(text, part.toolName)) return { pruned: { imageCollapsed: true } };
+    // WHY: every image the tool delivered was over the session's limits, so the
+    // live driver (and history-rebuild) appended a note per picture to the text.
+    const oversized = describeImageNotes(text, output.value);
+    if (oversized) return { pruned: { oversized } };
     return null;
   }
 
   if (output.type !== 'content' || !Array.isArray(output.value) || !onlyKeys(output, ['type', 'value'])) return null;
   const [first, ...files] = output.value as any[];
-  if (!record(first) || first.type !== 'text' || first.text !== text || !onlyKeys(first, ['type', 'text'])) return null;
+  if (!record(first) || first.type !== 'text' || typeof first.text !== 'string' || !onlyKeys(first, ['type', 'text'])) return null;
+  // WHY: a MIXED result — a fitting sibling delivered beside a picture that
+  // collapsed to its note — carries the notes on the leading text part. Either the
+  // text is the event text exactly, or it is that text plus notes that recompute.
+  const oversized = first.text === text ? null : describeImageNotes(text, first.text);
+  if (first.text !== text && !oversized) return null;
   const images: ImageDescriptor[] = [];
   let scan = 0;
   for (const file of files) {
@@ -811,7 +849,24 @@ function describeToolResult(part: Record<string, any>, event: TranscriptEvent, d
     if (!found) return null;
     images.push({ path: found, mediaType: file.mediaType, digest: wanted, ...(file.filename !== undefined ? { filename: String(file.filename) } : {}) });
   }
-  return images.length ? { images } : null;
+  // WHY images are still required: restore rebuilds a `content` output only from
+  // images; notes alone come back as a `text` output, so describing a file-less
+  // content result here would restore a DIFFERENT shape than the model was sent.
+  return images.length ? { images, ...(oversized ? { pruned: { oversized } } : {}) } : null;
+}
+
+/** `value` must be `text` followed by '\n'-separated notes that recompute to it exactly.
+ *  WHY recompute rather than trust the parse: the manifest keeps only fields, so a
+ *  value the writer could not have produced (extra text, a drifted sentence) must
+ *  fail the publish instead of restoring as something different. */
+function describeImageNotes(text: string, value: string): ImageNote[] | null {
+  if (!value.startsWith(text) || value.length <= text.length) return null;
+  const lines = value.slice(text.length).split('\n');
+  if (lines[0] !== '') return null;
+  const notes = lines.slice(1).map(parseImageNote);
+  if (!notes.length || notes.some(n => n === null)) return null;
+  const recomputed = text + notes.map(n => `\n${imageNote(n!)}`).join('');
+  return recomputed === value ? (notes as ImageNote[]) : null;
 }
 
 /** Recover the prune keep-length from a trailer'd value, verified by recomputation.
@@ -852,7 +907,15 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
         // WHY: user text has no concat descriptor, so only a single-anchor run may be
         // claimed — asking for one keeps a rejected longer run from spending anchors.
         const uuids = anchors.matchText(field, part.text, 1);
-        if (!uuids) return null;
+        if (!uuids) {
+          // WHY: a user message carries a trailing note per attachment the model
+          // did not get (harness-session imagePartsFor / history-rebuild). It has
+          // no anchor of its own; store its fields, never the sentence. No
+          // providerOptions: the writers never attach any to a note.
+          const note = !part.providerOptions ? parseImageNote(part.text) : null;
+          if (note && imageNote(note) === part.text) { parts.push({ kind: 'note', note }); continue; }
+          return null;
+        }
         parts.push({ kind: 'event', uuid: uuids[0], field, ...options });
       } else {
         const uuids = anchors.matchText(field, part.text);
@@ -866,9 +929,9 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
       if (!onlyKeys(part, ['type', 'toolCallId', 'toolName', 'input', 'providerOptions'])) return null;
       const options = providerOptionsFor(part.providerOptions, 'tool-call');
       if (!options) return null;
-      const match = anchors.matchEvent('tool-call', event => String(event.data?.toolUseId ?? '') === part.toolCallId
-        && String(event.data?.toolName ?? '') === part.toolName
-        && canonical(event.data?.toolInput ?? {}) === canonical(part.input ?? {}));
+      const match = anchors.matchEvent('tool-call', event => String(looseData(event).toolUseId ?? '') === part.toolCallId
+        && String(looseData(event).toolName ?? '') === part.toolName
+        && canonical(looseData(event).toolInput ?? {}) === canonical(part.input ?? {}));
       if (!match) return null;
       parts.push({ kind: 'event', uuid: match.uuid, field: 'tool-call', ...options });
       continue;
@@ -884,7 +947,7 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
         // longer relates to its event text must not claim that anchor. The result
         // is kept rather than recomputed so images are digested once.
         described = null;
-        if (String(event.data?.toolUseId ?? '') !== part.toolCallId || String(event.data?.toolName ?? '') !== part.toolName) return false;
+        if (String(looseData(event).toolUseId ?? '') !== part.toolCallId || String(looseData(event).toolName ?? '') !== part.toolName) return false;
         described = describeToolResult(part, event, anchors.digestOf);
         return described !== null;
       });
@@ -945,7 +1008,7 @@ function describeString(message: ModelMessage, anchors: AnchorSet): ContentDescr
   // message can claim an anchor. Skills, summaries and injected user events
   // really are persisted; an anchorless rule must never spend a human event.
   if (isAppGenerated(message)) {
-    const injected = anchors.matchEvent('user-text', event => Boolean(event.data?.injected) && eventText(event, 'user-text') === text);
+    const injected = anchors.matchEvent('user-text', event => Boolean(looseData(event).injected) && eventText(event, 'user-text') === text);
     if (injected) return { kind: 'event', uuid: injected.uuid, field: 'user-text' };
     for (const field of ['skill-text', 'summary-text'] as const) {
       const uuids = anchors.matchText(field, text, 1);
@@ -998,18 +1061,51 @@ function concatText(uuids: unknown, field: TextField, events: Map<string, Transc
 
 /** WHY async (2026-09-24 blocking-calls B8): up to 10 MB per image, read on
  *  each Resume of a native chat that saw images. */
-async function restoreImage(image: ImageDescriptor): Promise<Buffer | null> {
+async function restoreImage(image: ImageDescriptor, limits?: ImageLimits): Promise<Buffer | 'oversized' | null> {
   let data: Buffer;
   try { data = await fs.promises.readFile(image.path); } catch { return null; }
-  return digest(data) === image.digest ? data : null;
+  if (digest(data) !== image.digest) return null;
+  // WHY: a checkpoint published before the pixel gate existed can cite a picture
+  // the session's provider rejects. Refusing (not silently dropping) makes the
+  // host fall back to the gated rebuild, which writes the honest note instead —
+  // the deliberate durability path for old sessions.
+  const dims = imageDimensions(data);
+  if (limits && dims && !withinImageLimits(dims, limits)) return 'oversized';
+  return data;
 }
 
-async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>): Promise<Resolved> {
+const NOTE_REASONS: readonly string[] = ['missing', 'too-many-bytes', 'undeliverable', 'prepare-failed'];
+
+/** WHY: a note's fields go straight into text the provider will read, so a field
+ *  imageNote could not have been called with is a corrupt manifest. */
+function validNote(value: unknown): value is ImageNote {
+  const note = record(value);
+  if (!note || typeof note.label !== 'string' || note.label === '') return false;
+  if (note.kind === 'oversized') {
+    return Number.isSafeInteger(note.width) && Number.isSafeInteger(note.height) && onlyKeys(note, ['kind', 'label', 'width', 'height']);
+  }
+  // A composer picture the model got as a smaller prepared copy (image-history userAttachmentParts).
+  if (note.kind === 'downscaled') {
+    return [note.width, note.height, note.shownWidth, note.shownHeight].every(Number.isSafeInteger)
+      && onlyKeys(note, ['kind', 'label', 'width', 'height', 'shownWidth', 'shownHeight']);
+  }
+  return note.kind === 'unavailable' && NOTE_REASONS.includes(note.reason)
+    && (note.detail === undefined || (note.reason === 'prepare-failed' && typeof note.detail === 'string'))
+    && onlyKeys(note, ['kind', 'label', 'reason', 'detail']);
+}
+
+async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>, limits?: ImageLimits): Promise<Resolved> {
   if (!record(raw)) return { reason: 'malformed' };
   const part = raw as PartDescriptor;
   if (part.kind === 'image') {
-    const data = await restoreImage(part);
-    return data ? { value: { type: 'file', mediaType: part.mediaType, data } } : { reason: 'image-mismatch' };
+    const data = await restoreImage(part, limits);
+    if (data === 'oversized') return { reason: 'image-oversized' };
+    if (!data) return { reason: 'image-mismatch' };
+    return { value: { type: 'file', mediaType: part.mediaType, data } };
+  }
+  if (part.kind === 'note') {
+    // Recomputed from fields: the manifest never holds the sentence.
+    return validNote(part.note) ? { value: { type: 'text', text: imageNote(part.note) } } : { reason: 'malformed' };
   }
   if (part.kind === 'concat') {
     const text = concatText(part.uuids, part.field, events, accepted);
@@ -1028,29 +1124,39 @@ async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEv
   const providerOptions = part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {};
 
   if (part.field === 'tool-call') {
-    return { value: { type: 'tool-call', toolCallId: String(event.data?.toolUseId ?? ''), toolName: String(event.data?.toolName ?? ''), input: event.data?.toolInput ?? {}, ...providerOptions } };
+    return { value: { type: 'tool-call', toolCallId: String(looseData(event).toolUseId ?? ''), toolName: String(looseData(event).toolName ?? ''), input: looseData(event).toolInput ?? {}, ...providerOptions } };
   }
   if (part.field === 'tool-result') {
-    const toolName = String(event.data?.toolName ?? '');
-    const text = String(event.data?.toolResult ?? '');
+    const toolName = String(looseData(event).toolName ?? '');
+    const text = String(looseData(event).toolResult ?? '');
     let output: any;
+    // The oversized notes, recomputed from fields (PrunedDescriptor's WHY); '' when none.
+    let notesText = '';
+    if (part.pruned && 'oversized' in part.pruned) {
+      const notes: unknown = part.pruned.oversized;
+      if (!Array.isArray(notes) || !notes.length || !notes.every(validNote)) return { reason: 'malformed' };
+      notesText = notes.map(n => `\n${imageNote(n)}`).join('');
+    }
     if (part.pruned && 'keepChars' in part.pruned) {
       // WHY: keepChars indexes into the event text; a value the text cannot support
       // would silently produce a DIFFERENT string than the model was sent.
       const keepChars = part.pruned.keepChars;
       if (!Number.isSafeInteger(keepChars) || keepChars < 0 || keepChars > text.length) return { reason: 'malformed' };
       output = { type: 'text', value: prunedToolResultText(text, keepChars) };
-    } else if (part.pruned) output = { type: 'text', value: imageCollapsedToolResultText(text, toolName) };
+    } else if (part.pruned && 'oversized' in part.pruned && !part.images?.length) output = { type: 'text', value: text + notesText };
+    else if (part.pruned && !('oversized' in part.pruned)) output = { type: 'text', value: imageCollapsedToolResultText(text, toolName) };
     else if (part.images?.length) {
       const files: any[] = [];
       for (const image of part.images) {
-        const data = await restoreImage(image);
+        const data = await restoreImage(image, limits);
+        if (data === 'oversized') return { reason: 'image-oversized' };
         if (!data) return { reason: 'image-mismatch' };
         files.push({ type: 'file', mediaType: image.mediaType, data: { type: 'data', data }, ...(image.filename !== undefined ? { filename: image.filename } : {}) });
       }
-      output = { type: 'content', value: [{ type: 'text', text }, ...files] };
+      // notesText is '' unless this is a MIXED result (a sibling collapsed to its note).
+      output = { type: 'content', value: [{ type: 'text', text: text + notesText }, ...files] };
     } else output = { type: 'text', value: text };
-    return { value: { type: 'tool-result', toolCallId: String(event.data?.toolUseId ?? ''), toolName, output, ...providerOptions } };
+    return { value: { type: 'tool-result', toolCallId: String(looseData(event).toolUseId ?? ''), toolName, output, ...providerOptions } };
   }
 
   const text = eventText(event, part.field);
@@ -1058,7 +1164,7 @@ async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEv
   return { value: { type: part.field === 'reasoning-text' ? 'reasoning' : 'text', text, ...providerOptions } };
 }
 
-async function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, TranscriptEvent>, accepted: Set<string>): Promise<Resolved> {
+async function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, TranscriptEvent>, accepted: Set<string>, limits?: ImageLimits): Promise<Resolved> {
   if (!record(raw)) return { reason: 'malformed' };
   const descriptor = raw as ContentDescriptor;
   if (descriptor.kind === 'literal') return typeof descriptor.value === 'string' ? { value: descriptor.value } : { reason: 'malformed' };
@@ -1077,7 +1183,7 @@ async function restoreContent(raw: ContentDescriptor | undefined, events: Map<st
   if (descriptor.kind !== 'parts' || !Array.isArray(descriptor.parts)) return { reason: 'malformed' };
   const parts: any[] = [];
   for (const part of descriptor.parts) {
-    const resolved = await restorePart(part, events, accepted);
+    const resolved = await restorePart(part, events, accepted, limits);
     if ('reason' in resolved) return resolved;
     parts.push(resolved.value);
   }

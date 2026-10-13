@@ -25,14 +25,41 @@ export interface BuddyTrayHandle {
   destroy(): void;
 }
 
+// The active theme's tray pictures (file paths), or null for the app's own. Set by the theme icon
+// swap (theme-icon-swap.ts, via the window:set-icon entry in ipc/window.ts) and read by every tray, including one created later — the
+// buddy can switch to its taskbar style long after the theme was applied.
+let themeTray: { idle: string; alert?: string } | null = null;
+const liveTrays = new Set<() => void>();
+
+/** WHY not on macOS: the Mac menu-bar icon is one colour (brand round 31, "J1") so macOS can turn
+ *  it black or white with the menu bar; it never follows the theme. */
+export function setBuddyTrayTheme(paths: { idle: string; alert?: string } | null): void {
+  themeTray = paths;
+  for (const refresh of liveTrays) refresh();
+}
+
 export function createBuddyTray(assetsDir: string, handlers: BuddyTrayHandlers): BuddyTrayHandle {
   const isMac = process.platform === 'darwin';
-  // WHY separate mac files: menu-bar icons are ~18pt, and a 32px image there
-  // renders oversized. nativeImage picks up the @2x twin automatically.
-  const load = (name: string): NativeImage =>
-    nativeImage.createFromPath(path.join(assetsDir, `${name}${isMac ? '-mac' : ''}.png`));
-  const idle = load('tray');
-  const alert = load('tray-alert');
+  // WHY "-macTemplate": Electron treats a file whose name ends in "Template" as a template image —
+  // one colour, which macOS draws black or white to match the menu bar. 18px (+@2x twin, which
+  // nativeImage picks up automatically) because menu-bar icons are ~18pt.
+  const bundled = (name: string): NativeImage =>
+    nativeImage.createFromPath(path.join(assetsDir, `${name}${isMac ? '-macTemplate' : ''}.png`));
+  // A theme picture that fails to load falls back to the app's own, never to an empty tray.
+  const themed = (file: string | undefined, fallback: NativeImage): NativeImage => {
+    if (!file) return fallback;
+    const img = nativeImage.createFromPath(file);
+    return img.isEmpty() ? fallback : img;
+  };
+  const baseIdle = bundled('tray'), baseAlert = bundled('tray-alert');
+  let idle = baseIdle, alert = baseAlert;
+  const pickThemed = () => {
+    if (isMac) return;
+    idle = themed(themeTray?.idle, baseIdle);
+    // A theme with no alert picture keeps the default red-dot icon rather than losing the dot.
+    alert = themed(themeTray?.alert, baseAlert);
+  };
+  pickThemed();
 
   const tray = new Tray(idle);
   tray.setToolTip('YouCoded buddy');
@@ -53,6 +80,12 @@ export function createBuddyTray(assetsDir: string, handlers: BuddyTrayHandlers):
   else tray.on('right-click', () => tray.popUpContextMenu(menu));
 
   let attention = false;
+  const refresh = () => {
+    if (tray.isDestroyed()) return;
+    pickThemed();
+    tray.setImage(attention ? alert : idle);
+  };
+  liveTrays.add(refresh);
   return {
     setAttention(needed) {
       if (needed === attention || tray.isDestroyed()) return;
@@ -66,6 +99,7 @@ export function createBuddyTray(assetsDir: string, handlers: BuddyTrayHandlers):
       return b.width > 0 && b.height > 0 ? b : null;
     },
     destroy() {
+      liveTrays.delete(refresh);
       if (!tray.isDestroyed()) tray.destroy();
     },
   };

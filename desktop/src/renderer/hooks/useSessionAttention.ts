@@ -4,6 +4,7 @@ import { useChatStore } from '../state/chat-context';
 import type { AttentionState, SessionChatState } from '../state/chat-types';
 import type { SessionStatusColor } from '../components/StatusDot';
 import { hasHelperAsk } from '../utils/specialist-cards';
+import type { SessionSummary } from '../../shared/session-summary-types';
 
 // Attention states that mean "act now" get the same red the permission prompt
 // uses. Amber is reserved for the one state that genuinely means "I don't know"
@@ -18,6 +19,60 @@ const RED_ATTENTION = new Set<AttentionState>(['stalled', 'session-died', 'error
 export function attentionDotColor(state: AttentionState): 'red' | 'amber' | null {
   if (state === 'ok') return null;
   return RED_ATTENTION.has(state) ? 'red' : 'amber';
+}
+
+/**
+ * One session's dot, drawn from the computer's per-session summary instead of from that session's own events (one-core R5-3).
+ *
+ * WHY: a phone no longer receives the events of conversations it is not watching, so it cannot derive their dots from a chat it does
+ * not hold. The summary carries exactly the inputs the derivation in `useSessionAttention` reads (an ask waiting, the attention state,
+ * a turn in flight, any history), and this applies the SAME priority: red (needs a decision) -> amber (may be wrong) -> green
+ * (working) -> blue (unseen activity) -> gray. Only blue is not in the summary: it depends on what THIS screen has looked at, so the
+ * caller says `unseen`. tests/session-summary-dots.test.ts drives every state through the real chat reducer and through this and
+ * requires the same colour.
+ */
+export function statusFromSummary(summary: SessionSummary, unseen: boolean): SessionStatusColor {
+  if (summary.awaitingCount > 0) return 'red';
+  const attention = attentionDotColor(summary.attention as AttentionState);
+  if (attention) return attention;
+  if (summary.working) return 'green';
+  if (summary.hasHistory && unseen) return 'blue';
+  return 'gray';
+}
+
+/**
+ * A conversation that starts working is no longer "viewed" (so finishing it while the person is elsewhere turns its dot blue). The
+ * computer does this from each chat's `isThinking`; a phone does it from the summaries, because it does not hold the chats of
+ * conversations it is not watching (one-core R5-3). Returns `prev` itself when nothing changes, so the caller's setState is a no-op.
+ */
+export function viewedAfterSummaries(prev: ReadonlySet<string>, summaries: Record<string, SessionSummary>): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+  for (const [id, summary] of Object.entries(summaries)) {
+    if (summary.working && prev.has(id)) { next ??= new Set(prev); next.delete(id); }
+  }
+  return next ?? prev;
+}
+
+/**
+ * Every session's colour on a phone: the summary's where the computer has one, else what this screen derived itself.
+ * Pure so the precedence is unit-testable without mounting App.
+ */
+export function mergeSummaryStatuses(args: {
+  base: Map<string, SessionStatusColor>;
+  sessionIds: readonly string[];
+  summaries: Record<string, SessionSummary> | null;
+  viewedSessions: ReadonlySet<string>;
+  activeSessionId: string | null;
+}): Map<string, SessionStatusColor> {
+  const { base, sessionIds, summaries, viewedSessions, activeSessionId } = args;
+  if (!summaries) return base;
+  const m = new Map(base);
+  for (const id of sessionIds) {
+    const summary = summaries[id];
+    if (!summary) continue;
+    m.set(id, statusFromSummary(summary, !viewedSessions.has(id) && id !== activeSessionId));
+  }
+  return m;
 }
 
 /**

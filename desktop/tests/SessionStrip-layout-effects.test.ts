@@ -61,4 +61,21 @@ describe('SessionStrip layout effects', () => {
     expect(src).toMatch(/motionWindowMs\(pillBarRef\.current\)[\s\S]{0,120}\}, \[themeApplied\]\);/);
     expect(src).not.toMatch(/\}, \[[^\]]*\b(themeSlug|theme|reducedEffects)\b[^\]]*\]\);/);
   });
+
+  // WHY (2026-10-05, perf-switch): repack depended on the active session id, so the
+  // ResizeObserver effect re-subscribed on every switch (each observe() delivers an
+  // initial callback = one more repack and render), and stripBudget — getComputedStyle
+  // plus clientWidth — ran in the layout phase right after the commit: 1.2 s of forced
+  // layout over ~200 switches in a real window. jsdom has no ResizeObserver or layout, so
+  // the render-budget test cannot see the re-subscription; this pins its shape.
+  it('repack is stable and the room is read in the observer, not on every switch', () => {
+    const src = readStripped(FILE);
+    // Behaviour-level: repack has no dependencies of its own (stable identity), and the observer effect is
+    // not keyed on the active session — so a switch cannot tear the observer down.
+    const repack = /const repack = useCallback\([\s\S]*?\}, (\[[^\]]*\])\);/.exec(src);
+    expect(repack?.[1], 'repack deps').toBe('[]');
+    const observer = /new ResizeObserver\([\s\S]*?\n  \}, (\[[^\]]*\])\);/.exec(src);
+    expect(observer?.[1], 'observer effect deps').not.toMatch(/activeSessionId|measurementsOf/);
+    expect(src).toMatch(/new ResizeObserver\([\s\S]{0,80}stripBudget\(/);
+  });
 });

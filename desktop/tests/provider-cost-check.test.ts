@@ -16,6 +16,7 @@ import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os'
 import { streamText } from 'ai';
 import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import {
   providerCostFromMetadata, costDisagreement,
@@ -80,7 +81,7 @@ describe('reading the provider’s own cost off a recorded response', () => {
   let root: string; let reg: ProviderRegistry;
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-provcost-'));
-    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root));
+    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root, getSecretStorage()));
     await reg.init();
     await reg.setKey('openrouter', 'sk-or-test');
   });

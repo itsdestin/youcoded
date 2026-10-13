@@ -146,6 +146,7 @@ vi.mock('../src/main/harness/native-session-host', () => {
 
 import { EventEmitter } from 'node:events';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { IPC } from '../src/shared/types';
 
 /**
@@ -224,6 +225,12 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     releaseSession: vi.fn(),
     getOwner: vi.fn((sessionId: string) => owners.get(sessionId)),
     getSubscribers: vi.fn(() => [] as number[]),
+    // The real registry's answer for this fake: the owner, else the primary-window fallback (one-core R5-1).
+    resolveAudience: vi.fn((sessionId: string) => {
+      const owner = owners.get(sessionId);
+      const windowIds = owner != null ? [owner] : [];
+      return { windowIds, socketIds: [] as number[], fallbackToPrimary: windowIds.length === 0 };
+    }),
     getKind: vi.fn(() => 'main'),
     getLeaderId: vi.fn(() => 1),
     getWindowIds: vi.fn(() => [1, senderWindowId]),
@@ -236,7 +243,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
     removeAllListeners: vi.fn(),
   };
 
-  registerIpcHandlers(
+  registerWithRuntime(registerIpcHandlers, 
     mockIpcMain as any,
     mockSessionManager as any,
     mainWindow as any,

@@ -6,7 +6,7 @@ import * as path from 'node:path';
  * Three-surface parity for `transcript:page` (perf cycle 2).
  *
  * Android is DELIBERATELY absent: on-device paging is a later cycle (Destin's
- * decision 1a, 2026-08-27). The phone hydrates over `chat:hydrate` today and
+ * decision 1a, 2026-08-27). A phone is filled by `session:open` (one-core R5-2) and
  * pages through the remote bridge when connected to a desktop, so the Kotlin
  * surface has nothing to answer yet. When on-device paging lands, this block
  * grows a SessionService.kt assertion.
@@ -21,8 +21,8 @@ const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', rel), '
 describe('transcript:page channel parity (desktop + remote; Android is a later cycle)', () => {
   const CHANNEL = 'transcript:page';
 
-  it('declared in shared/types.ts and preload.ts with the same value', () => {
-    expect(read('src/shared/types.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
+  it('declared in shared/backend-contract.ts and preload.ts with the same value', () => {
+    expect(read('src/shared/backend-contract.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
     expect(read('src/main/preload.ts')).toContain(`TRANSCRIPT_PAGE: '${CHANNEL}'`);
   });
 
@@ -30,8 +30,10 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
     expect(read('src/main/preload.ts')).toMatch(/requestTranscriptPage:\s*\(/);
   });
 
-  it('handled in ipc-handlers.ts', () => {
-    expect(read('src/main/ipc-handlers.ts')).toContain('IPC.TRANSCRIPT_PAGE');
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors (main/ipc/session.ts).
+  it('handled by the channel table entry, which serves the computer and a phone', () => {
+    expect(read('src/main/ipc/session.ts')).toContain('IPC.TRANSCRIPT_PAGE');
+    expect(read('src/main/remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
   });
 
   it('sent by remote-shim.ts as a real call, not a no-op stub', () => {
@@ -42,9 +44,6 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
     expect(shim).not.toMatch(/requestTranscriptPage:\s*\([^)]*\)\s*=>\s*\{\s*\}/);
   });
 
-  it('answered by a remote-server.ts WS case', () => {
-    expect(read('src/main/remote-server.ts')).toContain(`'${CHANNEL}'`);
-  });
 
   // "I could not locate the transcript" vs "you have reached the beginning of
   // the conversation" were the same answer until 2026-09-07, and the renderer
@@ -55,6 +54,5 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
   it('both answering surfaces distinguish "unresolved" from "no more history"', () => {
     expect(read('src/shared/types.ts')).toMatch(/unresolved\?: true/);
     expect(read('src/main/ipc-handlers.ts')).toMatch(/unresolved: true/);
-    expect(read('src/main/remote-server.ts')).toMatch(/unresolved: true/);
   });
 });

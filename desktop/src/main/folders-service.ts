@@ -16,10 +16,8 @@ import { readFolders, writeFolders, type SavedFolder } from './saved-folders';
 import { getManagedRoots, isRemovedProject } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
-export interface PickerFolder extends SavedFolder {
-  exists: boolean;
-  managed?: true;
-}
+import type { PickerFolder } from '../shared/prefs-types';
+export type { PickerFolder };
 
 const keyOf = (p: string) => {
   const r = path.resolve(p);

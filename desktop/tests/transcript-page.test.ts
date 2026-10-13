@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { readTranscriptPage, PAGE_TURNS, PAGE_MAX_BYTES } from '../src/main/transcript-page';
+import { looseData } from '../src/shared/types';
 
 // A minimal CC-shaped transcript: one user prompt line + one assistant end_turn
 // line per turn, each with a unique uuid. Mirrors the rig fixture's
@@ -156,12 +157,12 @@ describe('readTranscriptPage — CC transcript', () => {
     }
 
     const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null, subagentsDir });
-    const texts = page.events.map((e) => e.data.text ?? '');
+    const texts = page.events.map((e) => looseData(e).text ?? '');
     expect(texts).toContain('NEW-SUBAGENT');
     expect(texts).not.toContain('OLD-SUBAGENT');
     // And the replayed subagent event is stamped with its parent Agent tool_use.
-    const sub = page.events.find((e) => e.data.text === 'NEW-SUBAGENT');
-    expect(sub?.data.parentAgentToolUseId).toBe('tu-45');
+    const sub = page.events.find((e) => looseData(e).text === 'NEW-SUBAGENT');
+    expect(sub && looseData(sub).parentAgentToolUseId).toBe('tu-45');
   });
 
   it('a cursor whose offset is past the current file size yields an empty final page', async () => {
@@ -254,7 +255,7 @@ describe('readTranscriptPage — CC transcript', () => {
     }
     // The multi-byte replies survive intact (no U+FFFD from a torn character).
     const last = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });
-    expect(last.events.some((e) => String(e.data.text ?? '').includes('\uFFFD'))).toBe(false);
+    expect(last.events.some((e) => String(looseData(e).text ?? '').includes('\uFFFD'))).toBe(false);
   });
 
   // Moved from transcript-watcher.test.ts when TranscriptWatcher.getHistory

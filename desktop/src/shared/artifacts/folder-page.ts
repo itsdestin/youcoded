@@ -23,6 +23,7 @@ type FolderListError =
   | 'not-a-folder'       // something is there, but it is a file
   | 'outside-project'    // the path (or a link on it) leaves the project folder
   | 'protected-path'     // a credential location artifacts:get also refuses
+  | 'kept-on-computer'   // a PHONE only: the phone deny list (.git, keys, saved logins), main/phone-read-deny.ts
   | 'permission-denied'  // the operating system refused to list it
   | 'unavailable';       // any other filesystem failure; `detail` carries its code
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -122,7 +123,7 @@ export function ModelInfoTooltip({ model }: { model: ModelAlias }) {
 }
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max', 'auto'] as const;
-export type EffortLevel = typeof EFFORT_LEVELS[number];
+type EffortLevel = typeof EFFORT_LEVELS[number];
 
 // `max` effort is only accepted by the top-tier models (Opus 1M + Fable);
 // Claude Code rejects it elsewhere. Keep this list in sync with the disable
@@ -158,7 +159,7 @@ interface Props {
   sendPtyCommand: (text: string) => boolean;
 }
 
-export default function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, onNativeSummaryPending, sendPtyCommand }: Props) {
+function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, onNativeSummaryPending, sendPtyCommand }: Props) {
   useEscClose(open, onClose);
   const [fast, setFast] = useState(false);
   const [effort, setEffort] = useState<EffortLevel>('auto');
@@ -489,6 +490,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
                 includeNative={isNative}
+                runsOn="host" // the conversation lives on the computer; a phone switching its model is executed there
                 defaultOpen
                 layout="flat"
                 pinSelectedToTop
@@ -628,3 +630,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     document.body,
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(ModelPickerPopup);

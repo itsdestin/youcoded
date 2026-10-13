@@ -4,7 +4,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 
 const state = vi.hoisted(() => ({ attention: false, reducedEffects: false, poses: [] as string[], platform: 'win32' as string | null }));
-vi.mock('../src/renderer/state/platform', () => ({ useCurrentPlatform: () => state.platform }));
+// The OS name hook lives in renderer/platform.ts since the one-core merge of platform helpers (was state/platform.ts).
+vi.mock('../src/renderer/platform', async (importActual) => ({ ...(await importActual<typeof import('../src/renderer/platform')>()), useCurrentPlatform: () => state.platform }));
 vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ theme: 'light', activeTheme: null, reducedEffects: state.reducedEffects }),
 }));

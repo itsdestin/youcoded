@@ -17,7 +17,8 @@
 //
 // The channel names keep their Office prefix from when this lived beside the Office handshake.
 import path from 'node:path';
-import { BrowserWindow, app, ipcMain } from 'electron';
+import { BrowserWindow, app } from 'electron';
+import { officeIpc } from './ipc/office';
 import { isUnresponsive } from './crash-diagnostics';
 
 export const OFFICE_UNSAVED_PROMPT = 'office:unsaved-prompt';
@@ -44,7 +45,7 @@ interface ReportingSender {
 }
 const watchedSenders = new Set<number>();
 /** Call once at startup: records each window's "unsaved edits" state. */
-export function watchUnsavedEdits(ipc: UnsavedIpc = ipcMain): void {
+export function watchUnsavedEdits(ipc: UnsavedIpc = officeIpc): void {
   ipc.on(OFFICE_OTHER_UNSAVED, (e: unknown, names: unknown) => {
     const s = (e as { sender?: ReportingSender } | null)?.sender;
     if (!s || typeof s.id !== 'number') return;
@@ -119,7 +120,7 @@ function listenForProceed(ipc: UnsavedIpc): void {
 }
 
 function refuseIn(w: PromptWindow, mode: 'quit' | 'close', act: () => void, opts: { afterTeardown?: boolean; restartDropped?: boolean; ipc?: UnsavedIpc }): boolean {
-  listenForProceed(opts.ipc ?? ipcMain);
+  listenForProceed(opts.ipc ?? officeIpc);
   held.set(w.webContents.id, act);
   w.focus?.();
   if (!w.webContents.isDestroyed()) {

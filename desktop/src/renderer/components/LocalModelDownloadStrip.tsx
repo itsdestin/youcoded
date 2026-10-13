@@ -4,6 +4,7 @@ import { useOnScreen } from '../state/on-screen-context';
 import { Button } from './ui';
 import { ProgressBar } from './ui/ProgressBar';
 import { StatusStrip } from './ui/StatusStrip';
+import type { SetupDownloadStatus } from '../../shared/first-run-types';
 
 /**
  * The band above the message box while a model chosen at setup is still
@@ -20,12 +21,8 @@ import { StatusStrip } from './ui/StatusStrip';
  * started from Local models is not announced here.
  */
 
-export interface SetupDownloadStatus {
-  state: 'downloading' | 'stopped' | 'done';
-  modelLabel: string;
-  percent: number;
-  minutesLeft: number | null;
-}
+// WHY (2026-09-30 one-core R3-3): declared once in shared/first-run-types.ts.
+export type { SetupDownloadStatus };
 
 /** Seconds a showing band keeps polling through null answers before hiding. */
 const NULL_GRACE_READS = 3;
@@ -68,7 +65,10 @@ export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | nul
     // has a setup download to report, and a strip must never claim one.
     if (typeof read !== 'function') { setPolling(false); return; }
     let alive = true;
-    Promise.resolve(read(sessionId))
+    // WHY no argument (2026-09-30 one-core R3-3): main's handler never read the sessionId this used to
+    // send (the band describes the computer's one setup download, not a chat). sessionId stays in
+    // this effect's deps only so switching chats re-reads the band, exactly as before.
+    Promise.resolve(read())
       .then((s: SetupDownloadStatus | null) => {
         if (!alive) return;
         // WHY keep polling briefly after a null that follows a showing band
@@ -94,8 +94,8 @@ export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | nul
   }, [sessionId, readKey, wake]);
 
   const resume = useCallback(() => {
-    void (window as any).claude?.firstRun?.resumeLocalDownload?.(sessionId);
-  }, [sessionId]);
+    void (window as any).claude?.firstRun?.resumeLocalDownload?.();
+  }, []);
 
   if (!status || status.state === 'done') return null;
 

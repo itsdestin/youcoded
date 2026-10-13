@@ -4375,7 +4375,7 @@ class SessionService : Service() {
             // remote-server.ts), never through Android's own native runtime.
             "native:submit-admin-password",
             // "What the assistant was given" (2026-09-10). The context record
-            // itself is PUSHED, and reaches a phone inside chat:hydrate over the
+            // itself is PUSHED, and reaches a phone through session:open over the
             // remote WebSocket — there is nothing to answer here. This is the
             // on-demand read of one file's text, which lives on the desktop
             // beside the session that was given it; a phone paired to a desktop
@@ -4426,6 +4426,19 @@ class SessionService : Service() {
             "pages:saved-keys",
             "pages:delete-saved-key",
             "pages:fetch",
+            // Plaid bank balances run in the desktop main process only.
+            "pages:plaid",
+            // The live socket to a home device lives in the desktop's main process;
+            // Android answers not-implemented. pages:socket-event is outbound-only
+            // (a push), so it needs no entry here.
+            "pages:socket-open",
+            "pages:socket-send",
+            "pages:socket-close",
+            "pages:socket-ping",
+            // Camera video (also main-process only; its events ride pages:socket-event).
+            "pages:video-start",
+            "pages:video-stop",
+            "pages:video-ping",
             // Remembered "Always allow" rules (M5 2a — permissions management UI).
             // These read/revoke the DESKTOP native harness's ~/.youcoded/permissions.json;
             // Android has no native harness to hold those grants until M8, which is

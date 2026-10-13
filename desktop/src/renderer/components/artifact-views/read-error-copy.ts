@@ -14,6 +14,11 @@ function describeFsCode(code: unknown): string {
 }
 
 export function describeReadError(error: unknown, code?: unknown): string {
+  // WHY (2026-10-01 one-core R3-SEC): a phone asked for a file on the computer's phone deny list (keys, saved logins,
+  // .git, the app's own secrets). Said plainly: the file exists and stays on the computer.
+  if (error === 'kept-on-computer') {
+    return 'This file is kept on the computer and isn’t available over remote access.';
+  }
   if (error === 'protected-path') {
     return 'YouCoded won’t open this file because it’s in a protected location (like saved passwords, keys or settings folders).';
   }

@@ -506,7 +506,9 @@ describe('download hardening', () => {
         expect(opened.every((h) => h.fd === -1)).toBe(true);
         expect(dl.liveStreams(who.socketId)).toBe(0);
       });
-      expect(waiting[1].status).toBe(200);
+      // WHY waitFor (flaky under load, 2026-10-05): the server frees its slot as soon as the stream finishes, which can be
+      // a moment BEFORE this client's response callback has set `status`; a bare read then saw null.
+      await vi.waitFor(() => expect(waiting[1].status).toBe(200));
     } finally {
       releaseOpen();
       for (const r of reqs) r.req.destroy();
@@ -630,7 +632,10 @@ describe('download hardening', () => {
   it.skipIf(!canSymlink)('a folder on the path swapped for a link to a secret while the mint is authorizing is refused', async () => {
     const dir = path.join(root, 'swapdir');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'id_rsa'), 'a harmless file that shares a name');
+    // WHY shared-name.txt, not id_rsa (2026-10-01 one-core R3-SEC): a file NAMED id_rsa is now refused by the phone deny list
+    // before the swap guard under test is ever reached; this fixture needs a harmless name that also exists in the secret folder.
+    fs.writeFileSync(path.join(dir, 'shared-name.txt'), 'a harmless file that shares a name');
+    fs.writeFileSync(path.join(secretDir, '.ssh', 'shared-name.txt'), 'PRIVATE');
     const dl = makeDownloads({
       beforePinForTest: async () => {
         fs.renameSync(dir, `${dir}-gone`);
@@ -638,7 +643,7 @@ describe('download hardening', () => {
       },
     });
     try {
-      expect(await dl.mint({ absolutePath: path.join(dir, 'id_rsa') }, phone)).toMatchObject({ ok: false, error: 'not-allowed' });
+      expect(await dl.mint({ absolutePath: path.join(dir, 'shared-name.txt') }, phone)).toMatchObject({ ok: false, error: 'not-allowed' });
     } finally {
       fs.unlinkSync(dir);
       fs.rmSync(`${dir}-gone`, { recursive: true, force: true });
@@ -790,7 +795,10 @@ describe('download hardening, second review', () => {
   it.skipIf(process.platform !== 'linux' || !canSymlink)('a folder swapped for a link and swapped back while the mint opens the file is refused', async () => {
     const dir = path.join(root, 'swapback');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'id_rsa'), 'a harmless file that shares a name');
+    // WHY shared-name.txt, not id_rsa (2026-10-01 one-core R3-SEC): a file NAMED id_rsa is now refused by the phone deny list
+    // before the swap guard under test is ever reached; this fixture needs a harmless name that also exists in the secret folder.
+    fs.writeFileSync(path.join(dir, 'shared-name.txt'), 'a harmless file that shares a name');
+    fs.writeFileSync(path.join(secretDir, '.ssh', 'shared-name.txt'), 'PRIVATE');
     const dl = makeDownloads({
       beforePinForTest: async () => {
         fs.renameSync(dir, `${dir}-real`);
@@ -803,7 +811,7 @@ describe('download hardening, second review', () => {
       },
     } as any);
     try {
-      expect(await dl.mint({ absolutePath: path.join(dir, 'id_rsa') }, phone)).toMatchObject({ ok: false, error: 'not-allowed' });
+      expect(await dl.mint({ absolutePath: path.join(dir, 'shared-name.txt') }, phone)).toMatchObject({ ok: false, error: 'not-allowed' });
     } finally {
       try { fs.unlinkSync(dir); } catch { /* already a folder again */ }
       fs.rmSync(dir, { recursive: true, force: true });

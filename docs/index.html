@@ -3,17 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YouCoded Assistant — Agentic AI for Everyone</title>
+<!-- Lowercase "youcoded", as in the logo (Destin, brand-website-v1 TAB note); the wording, the logo's own tagline, was picked in brand-website-v2 (TITLE b). -->
+<title>youcoded — agents for everyone</title>
 <meta name="description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <!-- Social preview. og-image.png is a PHOTOGRAPH OF THIS PAGE, rebuilt by
      docs/tools/gen-og-image.mjs — regenerate it whenever the hero changes.
      It used to be a dark screenshot of the app from before the redesign, so
      every shared link showed a grey window that looked nothing like the site
-     it opened (reported 2026-09-04). The favicon is NO LONGER carried over: the old
-     favicon-*.svg files were the previous page's "YC" index card, which looked
-     nothing like the redesign's nav mark, so a tab and the page it belonged to
-     did not read as the same product. favicon.svg is now that mark, and
-     applyTheme() re-tints it live to whichever theme the visitor picks. -->
+     it opened (reported 2026-09-04). The favicon is the app icon (docs/brand/,
+     brand identity 2026-10-04) so a tab, the header and the installed app
+     read as one product; applyTheme() swaps it to the theme the visitor picks. -->
 <meta property="og:title" content="YouCoded Assistant — Agentic AI for Everyone">
 <meta property="og:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <meta property="og:type" content="website">
@@ -22,7 +21,7 @@
      and Twitter all cache a preview image BY URL, for days, and a link Destin
      had already shared kept showing the old picture after the file was
      replaced. Bump the number whenever og-image.png is regenerated. -->
-<meta property="og:image" content="https://youcoded.ai/og-image.png?v=5">
+<meta property="og:image" content="https://youcoded.ai/og-image.png?v=6">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
@@ -30,12 +29,13 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="YouCoded Assistant — Agentic AI for Everyone">
 <meta name="twitter:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
-<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=5">
+<meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=6">
 <meta name="twitter:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
-<link rel="icon" type="image/svg+xml" href="favicon.svg" id="favicon">
+<link rel="icon" type="image/png" sizes="32x32" href="brand/default-32.png" id="favicon">
+<link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400;1,9..40,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400;1,9..40,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <!-- WHY (2026-09-11): the two wallpapers the opening intro crossfades through start
      downloading while the page is still being read. Measured on fresh visits, the
      "Useful." one was only requested when its word arrived and landed after it.
@@ -107,14 +107,6 @@ a{color:inherit}
 .nav{position:fixed;top:14px;left:0;right:0;z-index:60;pointer-events:none}
 .nav-in{pointer-events:auto;max-width:var(--wide);margin:0 auto;height:64px;padding:0 12px 0 16px;
   display:flex;align-items:center;gap:20px;border-radius:var(--radius)}  /* match the footer card, not a full pill (Destin 2026-08-30) */
-.logo{display:flex;align-items:center;gap:10px;text-decoration:none}
-.mark{width:26px;height:26px;border-radius:8px;background:var(--accent);color:var(--on-accent);
-  display:grid;place-items:center;font:700 .66rem/1 var(--font-mono);letter-spacing:.02em;flex:none}
-.wm{font-weight:600;font-size:.95rem;letter-spacing:-.01em;line-height:1.1}
-.wm b{font-weight:800;color:var(--accent)}
-.wm i{font-style:normal;font-weight:500;opacity:.62}
-.wm em{display:block;font-style:normal;font-family:var(--font-mono);font-size:.54rem;letter-spacing:.1em;
-  text-transform:uppercase;opacity:.5;margin-top:1px}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:18px}
 .swatches{display:flex;gap:5px;padding:4px;border-radius:999px;background:rgba(var(--fg-rgb),.07)}
 .sw{width:22px;height:22px;border-radius:50%;border:1px solid var(--hair);cursor:pointer;padding:0;
@@ -123,7 +115,8 @@ a{color:inherit}
 .sw:hover{transform:scale(1.16)}
 .sw.on{outline:2px solid var(--accent);outline-offset:2px}
 .nav-links{display:flex;gap:20px;list-style:none}
-.nav-links a{text-decoration:none;font-size:.86rem;font-weight:600;opacity:.72}
+/* Outfit, the logo's typeface, so the bar reads as one set (Destin, brand-website-v1 SHARE note). */
+.nav-links a{text-decoration:none;font:500 .92rem/1 'Outfit',system-ui,sans-serif;letter-spacing:-.005em;opacity:.72}
 .nav-links a:hover{opacity:1}
 
 /* ---- hero ---- */
@@ -653,43 +646,46 @@ body.pill-accent.legend-on .dl-legend{border-color:transparent;color:var(--fg);
   -webkit-backdrop-filter:none;backdrop-filter:none;
   box-shadow:0 0 0 1.5px rgba(var(--accent-rgb),.9)}
 /* ===========================================================================
-   THE HEADER LOCKUP — final, 2026-09-04. Destin signed this off in round 6 of
-   docs/archive/reviews/2026-09-04-nav-header/ (workspace repo). This block
-   REPLACES the brand-variant and wordmark-treatment menus that lived here while
-   the decision was open; every rejected option is recoverable from git history.
-
-   Four deliberate departures from what shipped before:
-   1. The mark is GLASS -- the same frosted material as the bar -- with the
-      mascot painted IN the accent instead of knocked out of a solid block. The
-      bar no longer has one solid anchor point; that is the intended read.
-   2. The name is pinned to DM Sans. It used to inherit var(--font-theme), so
-      the logo was literally drawn in a different typeface in all eight themes.
-   3. Everything is uppercase and tracked out to .12em. Caps live or die on
-      tracking: at the old -.01em these same words read as a mistake rather
-      than as a logo. .22em was tried first and read as too airy (Destin,
-      2026-09-04); the tagline shares the value so the two lines stay one block.
-   4. The accent lands on "YOU", not on "Coded" -- the emphasis is the person.
-
-   Scoped to .nav on purpose: the FOOTER logo shares .mark and .wm with a
-   different payload ("YC" text, no tagline) and is deliberately untouched here.
+   THE LOGO — the brand identity approved 2026-10-04 (workspace repo,
+   docs/archive/design/2026-10-01-brand-identity-v2/DECISIONS.md, rounds 5–31; site decks brand-website-v1/v2).
+   REPLACES the 2026-09-04 glass-robot + wide-caps lockup; every number below is
+   a ratio from the approved boards, so the lockups stay true at any size:
+   - The name is lowercase "youcoded" in Outfit SemiBold, tracking -3.5%;
+     "you" a gradient, "coded" ink. In each theme the colours come from that
+     theme's icon face, toned down; on dark themes "coded" turns light
+     (--wm-a/--wm-b/--wm-ink, set per theme by applyTheme()).
+   - Icon and name sit a quarter of the icon's height apart; the name is
+     raised 3.5% of the icon's height (.lockup).
+   - With the tagline (header): the name is 42/64 of the icon, the tagline
+     0.33x the name, tucked up beside the "y"'s tail — its top 0.42x the
+     name's size above the bottom of the name's line, starting 0.8x the "y"'s
+     width in — and the text block sits 2/64 of the icon lower (.lockup-tag).
+   The icon itself is the app's, per theme, from docs/brand/ — generated by
+   youcoded/scripts/build-icons.mjs --site docs/brand, never hand-edited.
    =========================================================================== */
-.nav .mark,.foot .mark{width:38px;height:38px;border-radius:32%;
-  background:var(--glass);color:var(--accent);
-  border:1px solid var(--hair);
-  box-shadow:inset 0 1px 0 var(--glass-hi)}
-.nav .mark-bot,.foot .mark-bot{display:block;width:62%;height:62%}
-.nav .mark-bot path,.nav .mark-bot rect,.nav .mark-bot circle,.nav .mark-bot g,
-.foot .mark-bot path,.foot .mark-bot rect,.foot .mark-bot circle,.foot .mark-bot g{fill:currentColor}
-.nav .wm,.foot .wm{font-family:'DM Sans',system-ui,sans-serif;font-weight:700;font-size:.94rem;
-  line-height:1.14;letter-spacing:.08em;text-transform:uppercase}
-.nav .wm .wm-a,.foot .wm .wm-a{color:var(--accent)}
-.nav .wm b,.foot .wm b{font-weight:700;color:inherit}
-.nav .wm i,.foot .wm i{font-weight:700;opacity:.45}
-/* The tagline joins the name's typeface and tracking so the two lines read as
-   one block rather than as a logo with a caption stuck under it. */
-.nav .wm em{display:block;font-family:inherit;font-weight:500;
-  font-size:.564rem;letter-spacing:.12em;text-transform:uppercase;
-  opacity:.5;margin-top:2px}
+.logo{--icon:36px;display:flex;align-items:center;gap:calc(var(--icon) * .25);text-decoration:none;flex:none}
+.logo-icon{width:var(--icon);height:var(--icon);display:block;flex:none;
+  filter:drop-shadow(0 calc(var(--icon) * .04) calc(var(--icon) * .08) rgba(60,20,100,.22))}
+.wm{display:block;font:600 calc(var(--icon) * .71875)/1 'Outfit',system-ui,sans-serif;letter-spacing:-.035em;
+  white-space:nowrap;transform:translateY(calc(var(--icon) * -.035));color:var(--wm-ink,#21152C)}
+/* .02em of padding so the gradient's clip does not shave the "u"'s right edge. */
+.wm-you{padding-right:.02em;color:var(--wm-a,#9D5BD0);
+  background:linear-gradient(100deg,var(--wm-a,#9D5BD0),var(--wm-b,#D25AA0));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+/* With the tagline. The text block keeps the height it had BEFORE the tagline
+   was tucked (name line + tagline line, 1.44 of the name's size) — that is how
+   the approved board centred it against the icon. */
+.lockup-tag .wm{position:relative;font-size:calc(var(--icon) * .65625);height:1.44em;
+  transform:translateY(calc(var(--icon) * .03125))}
+/* WHY 1.276em / 2.545em: an em on the tagline is ITS OWN size (0.33 of the
+   name's), so the board's .421 and .84 of the name's size are divided by .33. */
+.wm-tag{position:absolute;left:1.276em;top:2.545em;font:400 .33em/normal 'Outfit',system-ui,sans-serif;
+  letter-spacing:-.005em;color:var(--wm-tag,#8a7b96)}
+/* Header carries the tagline, footer the plain name (Destin, brand-website-v1 HEADER/FOOTER notes).
+   44px, not 36: with the tagline at a third of the name's size, a smaller icon
+   shrinks "agents for everyone" below 9px. */
+.nav .logo{--icon:44px}
+.foot .logo{--icon:44px}
 
 /* ==========================================================================
    HEADER ARRANGEMENTS (D1–D4)
@@ -1571,13 +1567,8 @@ body.motion-on .m-rise{transform-origin:50% 0}
 
   /* the bar's own rules are in the block above this one -- they apply to a
      phone on its SIDE as well, which is 844px wide. */
-  /* Caps are wider than the mixed-case lockup this replaced, so a phone shrinks
-     the type more than the mark. The tracking is NOT eased here: at .12em the
-     desktop value already fits 390px, and overriding it would leave a phone
-     tracked WIDER than the desktop it shrank from. */
-  .nav .mark{width:30px;height:30px}
-  .nav .wm{font-size:.8rem}
-  .nav .wm em{font-size:.48rem}
+  /* A phone shrinks the whole lockup together: every size in it is a share of --icon. */
+  .nav .logo{--icon:40px}
 
   /* ---- hero ------------------------------------------------------------ */
   .hero{padding-top:calc(var(--nav-h) + 10px)}
@@ -1688,7 +1679,9 @@ body.motion-on .m-rise{transform-origin:50% 0}
   .foot{flex-direction:column;align-items:flex-start;gap:14px;padding:22px 18px}
   /* logo and badge share the first line; `order` does the rest of the stack. */
   .foot .logo{order:1}
-  .foot .badge{order:2;margin-top:-38px;margin-left:150px}
+  /* Beside the 44px name-only lockup (about 185px wide), centred on its icon:
+     back up the 14px gap and the icon, then down half the icon less half the badge. */
+  .foot .badge{order:2;margin-top:-47px;margin-left:200px}
   .flinks{order:3;margin-left:0;flex-wrap:wrap;gap:4px 6px}
   /* 44px tall, not 23px -- these were the smallest tap targets on the page. */
   .flinks a{font-size:.9rem;padding:11px 10px;margin:0 -10px}
@@ -1748,16 +1741,7 @@ html{-webkit-tap-highlight-color:transparent}
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
 <nav class="nav"><div class="nav-in">
-  <a href="#top" class="logo"><span class="mark"><svg class="mark-bot" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-  <!-- The app's built-in fallback mascot (AppIcon, Icons.tsx) — what YouCoded
-       actually renders for a theme that ships no mascot of its own. Pure
-       currentColor, so it takes whichever theme colour we set on the button. -->
-  <path fill-rule="evenodd" d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M8.5 8 L10.5 10 L8.5 12 L9.5 12 L11.5 10 L9.5 8 Z M15.5 8 L13.5 10 L15.5 12 L14.5 12 L12.5 10 L14.5 8 Z"/>
-  <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z"/>
-  <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z"/>
-  <rect x="7.2" y="17" width="3.5" height="4" rx="1.2"/>
-  <rect x="13.3" y="17" width="3.5" height="4" rx="1.2"/>
-</svg></span><span class="wm"><span class="wm-name"><span class="wm-a">You</span><b>Coded</b></span> <i>Assistant</i><em>Agents for everyone</em></span></a>
+  <a href="#top" class="logo lockup-tag" aria-label="YouCoded, agents for everyone. Back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded<span class="wm-tag">agents for everyone</span></span></a>
   <div class="nav-right">
     
     <ul class="nav-links"><li><a href="#about">About</a></li><li><a href="#demo">Features</a></li><li><a href="#faq">FAQ</a></li></ul>
@@ -2248,7 +2232,7 @@ Contract: mascots/README.md (from the repo root)
 </div></div></section>
 
 <footer><div class="wrap"><div class="panel foot">
-  <a href="#top" class="logo"><span class="mark"><svg class="mark-bot" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M8.5 8 L10.5 10 L8.5 12 L9.5 12 L11.5 10 L9.5 8 Z M15.5 8 L13.5 10 L15.5 12 L14.5 12 L12.5 10 L14.5 8 Z"/><path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z"/><path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z"/><rect x="7.2" y="17" width="3.5" height="4" rx="1.2"/><rect x="13.3" y="17" width="3.5" height="4" rx="1.2"/></svg></span><span class="wm"><span class="wm-a">You</span><b>Coded</b> <i>Assistant</i></span></a>
+  <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
   <span class="badge">Open Source</span>
   <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md" target="_blank" rel="noopener">Privacy</a><a href="https://github.com/itsdestin/youcoded/blob/master/TERMS.md" target="_blank" rel="noopener">Terms</a></div>
   <p class="legal">MIT License &middot; YouCoded is an independent, community-built project. Not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.</p>
@@ -2285,26 +2269,37 @@ function backdropCss(t){
 }
 function rgb(h){ h=(h||'#000').replace('#',''); if(h.length===3) h=h.split('').map(function(c){return c+c}).join('');
   return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)].join(','); }
-// The tab icon IS the nav mark: same rounded accent square, same built-in
-// mascot, re-tinted for whichever theme is showing (inset 72% not the header's
-// 60% -- a 16px tab needs the bigger glyph; see docs/favicon.svg). Built
-// as a data: URL rather than eight static files, so a theme added to THEMES gets
-// a matching favicon with nothing else to remember. Chrome re-reads the <link>
-// on href change; swapping the whole element is not needed and flickers.
-// MASCOT_PATHS is the one copy of the silhouette -- docs/favicon.svg (the
-// resting state a bookmark or a crawler gets) draws the identical paths.
-var MASCOT_PATHS =
-  '<path fill-rule="evenodd" d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M8.5 8 L10.5 10 L8.5 12 L9.5 12 L11.5 10 L9.5 8 Z M15.5 8 L13.5 10 L15.5 12 L14.5 12 L12.5 10 L14.5 8 Z"/>' +
-  '<path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z"/>' +
-  '<path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z"/>' +
-  '<rect x="7.2" y="17" width="3.5" height="4" rx="1.2"/>' +
-  '<rect x="13.3" y="17" width="3.5" height="4" rx="1.2"/>';
-function setFavicon(t){
-  var link = document.getElementById('favicon'); if (!link) return;
-  var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">' +
-    '<rect width="48" height="48" rx="16.6" fill="' + t.accent + '"/>' +
-    '<g transform="translate(6.72 6.72) scale(1.44)" fill="' + t.onAccent + '">' + MASCOT_PATHS + '</g></svg>';
-  link.setAttribute('href', 'data:image/svg+xml,' + encodeURIComponent(svg));
+// The logo per theme (brand identity, approved 2026-10-04; see the LOGO block
+// in the styles). icon: which docs/brand/<icon>-<px>.png the theme wears —
+// Cotton Candy Sky IS the default icon, and a built-in theme (Midnight) has no
+// icon of its own, exactly as in the app. a/b: the "you" gradient, ink: "coded",
+// from each theme's icon face, toned down (round 20, THEMECOL "cc"). On a dark
+// theme "coded" and the tagline take the theme's own light text colours so they
+// stay readable (round 23, L2). Halftone was never drawn on a board: its pair
+// is picked the same way, from its pink-and-blue face.
+var BRAND = {
+  'cotton-candy-sky':   {icon:'default',            a:'#9D5BD0', b:'#D25AA0', ink:'#21152C'},
+  'meadow-mist':        {icon:'meadow-mist',        a:'#4D90B1', b:'#59A5A1', ink:'#0E3A24'},
+  'strawberry-kitty':   {icon:'strawberry-kitty',   a:'#AF4F52', b:'#A55964', ink:'#5A1428'},
+  'kuromi-dreamer':     {icon:'kuromi-dreamer',     a:'#A658A4', b:'#8059A5', ink:'#2A1748'},
+  'golden-sunbreak':    {icon:'golden-sunbreak',    a:'#72A559', b:'#A59A59'},
+  'devils-garden':      {icon:'devils-garden',      a:'#B56049', b:'#A56459'},
+  'halftone-dimension': {icon:'halftone-dimension', a:'#C95A86', b:'#7A7BC8'},
+  'midnight':           {icon:'default',            a:'#9D5BD0', b:'#D25AA0'}
+};
+// The browser-tab icon is the app icon in the theme on show (round 23, L4).
+// Chrome re-reads the <link> on href change; swapping the whole element is not
+// needed and flickers. docs/brand/default-32.png is the resting state a
+// bookmark or a crawler gets.
+function setBrand(slug, t){
+  var b = BRAND[slug] || BRAND['cotton-candy-sky'];
+  var r = document.documentElement.style;
+  r.setProperty('--wm-a', b.a); r.setProperty('--wm-b', b.b);
+  r.setProperty('--wm-ink', t.dark ? t.fg : b.ink);
+  r.setProperty('--wm-tag', t.dark ? t.dim : '#8a7b96');
+  document.querySelectorAll('.logo-icon').forEach(function(img){ img.src = 'brand/' + b.icon + '-128.png'; });
+  var link = document.getElementById('favicon');
+  if (link) link.setAttribute('href', 'brand/' + b.icon + '-32.png');
 }
 function applyTheme(slug){
   var t = THEMES[slug]; if(!t) return;
@@ -2346,7 +2341,7 @@ function applyTheme(slug){
     s.classList.toggle('on', on);
     s.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  setFavicon(t);
+  setBrand(slug, t);
   try { localStorage.setItem('yc-mock-theme', slug); } catch(e){}
   // The demo is the real app's interface, and it keeps its theme under this
   // key (same origin, so we share storage): set it before boot, sync it after.

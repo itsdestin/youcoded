@@ -29,6 +29,7 @@
 //         → "Main — src/main/voice/" → voice-worker.ts.
 import * as path from 'path';
 import { createRequire } from 'module';
+import { verifyVoiceVocabularyAsset } from './voice-recognizer-vocabulary';
 import { splitAtLastSentenceEnd } from '../../shared/voice-types';
 import { addonPath, wrapperEntryPath, modelDir, MODEL_FILES } from './voice-pin';
 
@@ -119,6 +120,8 @@ export type VoiceWorkerInbound =
   /** Open the microphone session. Sound may arrive before the engine has finished
    *  loading; it is kept and folded into the first pass. */
   | { type: 'start' }
+  /** One immutable worker configuration, sent before the first start only. */
+  | { type: 'vocabulary'; phrases: readonly string[] }
   /** One slice of microphone sound, as raw 16-bit samples. */
   | { type: 'audio'; chunk: ArrayBuffer }
   /** Close the microphone: one last pass, then exactly one `final`. */
@@ -234,7 +237,7 @@ export function joinSegments(parts: readonly string[]): string {
 export interface SherpaModule {
   OfflineRecognizer: {
     createAsync(config: unknown): Promise<{
-      createStream(): unknown;
+      createStream(hotwords?: string): unknown;
       decodeAsync(stream: unknown): Promise<void>;
       getResult(stream: unknown): { text: string };
     }>;
@@ -297,7 +300,13 @@ export interface RecognizerLike {
 
 /** Build the real recogniser. Async because construction takes about a second,
  *  and the worker must keep accepting sound from the microphone while it waits. */
-export async function createRecognizer(userDataPath: string, sherpa: SherpaModule): Promise<RecognizerLike> {
+export async function createRecognizer(
+  userDataPath: string, sherpa: SherpaModule, phrases: readonly string[] = [], vocabularyAssetPath?: string,
+): Promise<RecognizerLike> {
+  // WHY: capture before the asynchronous asset check/load; Save cannot change a
+  // running recording's native hotword graph, including its later final passes.
+  const hotwords = phrases.join('/');
+  const bpeVocab = hotwords ? await verifyVoiceVocabularyAsset(vocabularyAssetPath) : undefined;
   const models = modelDir(userDataPath);
   const recognizer = await sherpa.OfflineRecognizer.createAsync({
     featConfig: { sampleRate: VOICE_SAMPLE_RATE, featureDim: 80 },
@@ -314,11 +323,16 @@ export async function createRecognizer(userDataPath: string, sherpa: SherpaModul
       numThreads: 4,
       modelType: 'nemo_transducer',
       debug: 0,
+      ...(hotwords ? { modelingUnit: 'bpe', bpeVocab } : {}),
     },
+    // WHY: the native NeMo TDT hotword path requires beam search. Keep the exact
+    // greedy defaults for empty lists; conservative fixed values were measured
+    // with complete speech/noise fixtures, not a transcript replacement rule.
+    ...(hotwords ? { decodingMethod: 'modified_beam_search', maxActivePaths: 2, hotwordsScore: 0.5 } : {}),
   });
   return {
     async decode(samples: Float32Array): Promise<string> {
-      const stream = recognizer.createStream() as {
+      const stream = (hotwords ? recognizer.createStream(hotwords) : recognizer.createStream()) as {
         acceptWaveform(w: { samples: Float32Array; sampleRate: number }): void;
       };
       stream.acceptWaveform({ samples, sampleRate: VOICE_SAMPLE_RATE });
@@ -753,12 +767,23 @@ export class VoiceWorkerCore {
 export function runWorker(userDataPath: string, port: {
   on(event: 'message', cb: (e: { data: VoiceWorkerInbound }) => void): void;
   postMessage(message: VoiceWorkerOutbound): void;
-}): VoiceWorkerCore {
+}, vocabularyAssetPath?: string): VoiceWorkerCore {
+  let phrases: readonly string[] = [];
+  let configured = false;
   const core = new VoiceWorkerCore({
-    create: async () => createRecognizer(userDataPath, loadSherpa(userDataPath)),
+    create: async () => createRecognizer(userDataPath, loadSherpa(userDataPath), phrases, vocabularyAssetPath),
     send: (message) => port.postMessage(message),
   });
-  port.on('message', (e) => core.handle(e.data));
+  port.on('message', (e) => {
+    // WHY: large saved lists exceed Windows argv limits. The host sends one
+    // ordered configuration message before start; ignore all later changes.
+    if (e.data.type === 'vocabulary') {
+      if (!configured) { phrases = Object.freeze([...e.data.phrases]); configured = true; }
+      return;
+    }
+    if (e.data.type === 'start') configured = true;
+    core.handle(e.data);
+  });
   return core;
 }
 
@@ -768,5 +793,5 @@ const parentPort = (process as unknown as { parentPort?: Parameters<typeof runWo
 if (parentPort) {
   // The app's data folder, handed down as the first argument because a forked
   // process cannot ask Electron for it.
-  runWorker(process.argv[2], parentPort);
+  runWorker(process.argv[2], parentPort, process.argv[3]);
 }

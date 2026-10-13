@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from './ui';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { type PromptButton } from '../parser/ink-select-parser';
+import { type PromptButton } from '../../shared/ink-select-parser';
 import { keptCardButtons } from '../parser/kept-card-binding';
 
 // --- Kept-card actions (a hook socket died, Claude Code's menu may be live) ---

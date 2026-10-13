@@ -1,5 +1,8 @@
-import React, { useContext } from 'react';
+import React, { useContext, useMemo } from 'react';
 import { Button } from './ui/Button';
+import { useOptionalChatStore } from '../state/chat-context';
+import { stopTurn } from '../state/phone-actions';
+import { usePendingKeys } from '../state/pending-action';
 
 /** How the button moves while the turn is working. Three candidates are under
  *  review (docs/active/design/2026-09-10-stop-button-alive/); the workbench's
@@ -45,15 +48,21 @@ interface StopButtonProps {
  */
 export default function StopButton({ sessionId, provider, visible, live = false }: StopButtonProps) {
   const motion = useContext(StopMotionContext);
+  // One-core R6-2: on a phone the stop is drawn at once ("stopping": still, and not pressable twice) and the computer's own end of the turn takes it away.
+  const store = useOptionalChatStore();
+  const stopping = usePendingKeys('stop:').has(`stop:${sessionId}`);
+  const turn = useMemo(() => store ? {
+    running: () => store.getSession(sessionId).isThinking,
+    subscribe: (cb: () => void) => store.subscribeSession(sessionId, cb),
+  } : null, [store, sessionId]);
   if (!visible) return null;
   return (
     <Button
       size="icon"
       aria-label="Stop generating"
-      onClick={() => {
-        if (provider === 'native') window.claude.native.interrupt(sessionId);
-        else window.claude.session.sendInput(sessionId, '\x1b');
-      }}
+      onClick={() => stopTurn({ sessionId, provider, turn })}
+      disabled={stopping}
+      aria-busy={stopping}
       // WHY round (deck Q-3, 2026-09-10): Stop and Send were two identical filled
       // squares side by side. Round tells them apart even with motion off, and
       // matches the mic — the other control in the box that shows something live.
@@ -63,8 +72,9 @@ export default function StopButton({ sessionId, provider, visible, live = false 
       // WHY 24px, not size="icon"'s 28 (live deck L-1, 2026-09-10: "make the button
       // and glow circumference a bit smaller"). w-/h- replace the size's classes via
       // mergeClasses; `coarse-hit` stays, so the touch target does not shrink.
-      className={`relative shrink-0 rounded-full w-6 h-6 ${live ? `stop-live stop-live--${motion}` : ''}`}
-      data-live={live ? 'true' : 'false'}
+      className={`relative shrink-0 rounded-full w-6 h-6 ${live && !stopping ? `stop-live stop-live--${motion}` : ''}`}
+      data-live={live && !stopping ? 'true' : 'false'}
+      data-stopping={stopping ? 'true' : undefined}
     >
       {/* Square stop glyph, currentColor — same inline-svg-in-Button pattern
           as the send button's arrow (InputBar.tsx). */}

@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore, type NativeSessionHeader } from '../src/main/harness/session-store';
+import { looseData } from '../src/shared/types';
 
 const HEADER: NativeSessionHeader = {
   v: 1,
@@ -187,7 +188,7 @@ describe('SessionStore', () => {
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'lo', partId: 'p1' }, 'a2') as any);
     await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
     expect(store.readEvents('s-1', HEADER.cwd).map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
-    expect(store.readEvents('s-1', HEADER.cwd)[0].data.text).toBe('Hello');
+    expect(looseData(store.readEvents('s-1', HEADER.cwd)[0]).text).toBe('Hello');
   });
 
   // A watchdog heartbeat is display-only but — unlike session-error — is NOT a
@@ -229,11 +230,11 @@ describe('SessionStore', () => {
     const replay = store.readEvents('s-1', HEADER.cwd);
     // WHY: a reasoning event can flush the earlier text to JSONL; the durable
     // tombstone must still precede replacement so replay removes that part.
-    const drop = replay.findIndex(e => e.data.dropPart);
+    const drop = replay.findIndex(e => looseData(e).dropPart);
     expect(drop).toBeGreaterThan(0);
-    expect(replay[drop].data.dropPart!.partIds).toEqual(['text-0', 'reasoning-0']);
-    expect(replay.slice(drop + 1).filter(e => e.type === 'assistant-text').map(e => e.data.text)).toEqual(['replacement']);
-    expect(replay.slice(drop + 1).some(e => e.data.text === 'old thought')).toBe(false);
+    expect(looseData(replay[drop]).dropPart!.partIds).toEqual(['text-0', 'reasoning-0']);
+    expect(replay.slice(drop + 1).filter(e => e.type === 'assistant-text').map(e => looseData(e).text)).toEqual(['replacement']);
+    expect(replay.slice(drop + 1).some(e => looseData(e).text === 'old thought')).toBe(false);
   });
 
   it('dropPart discards the buffered open part instead of writing it', async () => {

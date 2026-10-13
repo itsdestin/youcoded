@@ -1,4 +1,4 @@
-import type { PromptButton } from '../parser/ink-select-parser';
+import type { PromptButton } from '../../shared/ink-select-parser';
 import { answerInkMenu, type InkMenuResult } from './ink-menu-driver';
 import { getVisibleScreenText, onBufferReady } from '../hooks/terminal-registry';
 import { nextTerminalUpdate } from '../hooks/usePlanMenu';

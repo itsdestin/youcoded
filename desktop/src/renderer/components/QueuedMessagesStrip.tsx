@@ -15,14 +15,8 @@ import { EditPencilButton } from './EditPencilButton';
 // no-pending-match fallback in chat-reducer.ts), which always appends at the
 // true, current end of the timeline.
 //
-// Known accepted limit: this list is renderer-local state. A reload loses the
-// strip's visual rows while the host queue keeps draining underneath it —
-// confirms still land correctly in the timeline; the rows just don't come
-// back until a fresh QUEUED_MESSAGE_ADDED (there isn't one, since the reload
-// didn't send anything). Rehydrating from the host's live queue on connect is
-// a possible later nicety, not required here. Remote clients that didn't
-// enqueue the message also never see it in their own strip — same
-// renderer-local scope.
+// The rows are the HOST's queue (one-core R5-4a): every screen draws the same strip from the computer's `session:live` queue snapshot, so a reload,
+// a phone and the screen that sent the message all show it, and Cancel on any of them reaches native:queue-remove.
 
 /** Same trash glyph as the doc-comments delete action (comments/CommentActions
  *  .tsx on its branch, Destin 2026-09-28: "matching ... delete a comment") —

@@ -5,6 +5,7 @@ import os from 'os';
 import { isDeepStrictEqual } from 'util';
 import { listInstalledPluginDirs } from './claude-code-registry';
 import { NativeHome } from './native-home';
+import { getSecretStorage } from './providers/secret-storage';
 import { SecretsStore } from './providers/secrets-store';
 import { McpRegistry, type ResolvedMcpServer } from './harness/mcp/mcp-registry';
 import { log } from './logger';
@@ -439,7 +440,7 @@ export async function reconcileMcp(): Promise<ReconcileMcpResult> {
   // fresh, cheap NativeHome/SecretsStore pair — same construction ipc-
   // handlers.ts already uses for ProviderRegistry; no shared connections to
   // pool here (that's McpManager's job for LIVE sessions), just a read.
-  const registry = new McpRegistry(new NativeHome(), new SecretsStore(app.getPath('userData')));
+  const registry = new McpRegistry(new NativeHome(), new SecretsStore(app.getPath('userData'), getSecretStorage()));
   const resolved = await registry.resolveAllEnabled();
   const { claudeJson: projected, skippedCollisions } = projectToClaudeJson(claudeJson, resolved);
 

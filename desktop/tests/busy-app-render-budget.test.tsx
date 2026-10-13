@@ -36,6 +36,23 @@ vi.mock('../src/renderer/components/TerminalView', async (importOriginal) => {
   return { ...real, default: (await import('./helpers/busy-app-probes')).probe(real.default, 'terminal') };
 });
 
+// Named-component counters for the switching budgets (busy-app-probes.tsx: countProbe).
+vi.mock('../src/renderer/components/SettingsPanel', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'SettingsPanel' }));
+vi.mock('../src/renderer/components/CommandDrawer', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'CommandDrawer' }));
+vi.mock('../src/renderer/components/SkillCard', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'SkillCard' }));
+vi.mock('../src/renderer/components/development/ReportDesign', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { ReportDesign: 'ReportDesign' }));
+vi.mock('../src/renderer/components/SessionStrip', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'SessionStrip' }));
+vi.mock('../src/renderer/components/HeaderBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'HeaderBar' }));
+vi.mock('../src/renderer/components/StatusBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'StatusBar' }));
+vi.mock('../src/renderer/components/InputBar', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { default: 'InputBar' }));
+vi.mock('../src/renderer/components/VoiceButton', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { VoiceButton: 'VoiceButton' }));
+vi.mock('../src/renderer/components/ui/Tooltip', async (importOriginal) => (await import('./helpers/busy-app-probes')).countedModule(await importOriginal<any>(), { Tooltip: 'Tooltip' }));
+vi.mock('../src/renderer/components/ui/Dialog', async (importOriginal) => {
+  const real = await importOriginal<any>();
+  return { ...real, Dialog: (await import('./helpers/busy-app-probes')).dialogProbe(real.Dialog) };
+});
+
+import { act, fireEvent } from '@testing-library/react';
 import { mountBusyApp, FAKE_TIMERS, type BusyApp } from './helpers/busy-app';
 import { terminalWrites } from './helpers/busy-app-probes';
 
@@ -212,6 +229,70 @@ describe('eight tabs open: switching tabs', () => {
     await app.resetCounts();
     await app.switchTo(first);
     expect(app.otherTabRenders(first, sixth)).toEqual(zeros(first, sixth));
+  });
+});
+
+// The switching budgets (2026-10-05, perf-switch). A switch changes the current
+// session, which lives in AppInner state, so the shell re-renders; everything a
+// switch does not concern must not follow it. Profile of a real window: Settings,
+// the command drawer, every closed dialog and the strip's layout read ran on every
+// switch although none of them was on screen.
+describe('eight tabs open: one plain switch', () => {
+  const SWITCH = {
+    /** Everything that is closed: nothing of it is rebuilt by a switch. */
+    closed: ['SettingsPanel', 'ReportDesign', 'CommandDrawer', 'SkillCard', 'Dialog(closed)'],
+    /** What a switch genuinely changes, each at the count it costs today (2026-10-05). These
+     *  were already met before the fix: they are a ratchet, so a new re-render has to be argued for. */
+    shell: 2,         // the selection, plus the provider-type hook settling on the new session
+    sessionStrip: 3,  // the new active id, its repack, and the "arrival" window closing
+    headerBar: 3,
+    statusBar: 2,
+    inputBar: 2,
+  };
+  const count = (n: string) => app.namedRenders(n);
+  const snapshot = () => ({
+    closed: Object.fromEntries(SWITCH.closed.map((n) => [n, count(n)])),
+    shell: app.shellRenders(), sessionStrip: count('SessionStrip'), headerBar: count('HeaderBar'),
+    statusBar: count('StatusBar'), inputBar: count('InputBar'),
+    reads: app.stripLayoutReads(),
+  });
+  const EXPECTED = {
+    closed: Object.fromEntries(SWITCH.closed.map((n) => [n, 0])),
+    shell: SWITCH.shell, sessionStrip: SWITCH.sessionStrip, headerBar: SWITCH.headerBar,
+    statusBar: SWITCH.statusBar, inputBar: SWITCH.inputBar,
+    reads: { getComputedStyle: 0, getBoundingClientRect: 0 },
+  };
+
+  // Met by: memoWhileClosed on SettingsPanel, CommandDrawer, ReportDesign, FirstTimeWarning,
+  // ResumeBrowser, CloseSessionPrompt, PreferencesPopup, ModelPickerPopup, OpenTasksPopup and
+  // UnsavedBeforeQuit; and SessionStrip's cached room (no getComputedStyle on a switch, no
+  // repack per ResizeObserver re-subscription).
+  // Before (master): per switch SettingsPanel 2, ReportDesign 2, CommandDrawer 2, SkillCard 18,
+  // closed Dialogs 28, and 1 getComputedStyle on the strip. Now: 0 of each.
+  it('rebuilds nothing that is closed and reads no layout in the strip', async () => {
+    const [first, second] = app.sessionIds;
+    await app.switchMeasured(second);
+    expect(snapshot()).toEqual(EXPECTED);
+    await app.switchMeasured(first);
+    expect(snapshot()).toEqual(EXPECTED);
+  });
+
+  // The cost of the saving above must not be a stale surface: a panel that skipped renders while
+  // closed has to open showing the CURRENT state, and its handlers must act on the CURRENT session.
+  it('a drawer closed through several switches still opens on the current session', async () => {
+    const [, second] = app.sessionIds;
+    await app.switchTo(second);
+    await app.switchTo(app.sessionIds[2]);
+    const gear = document.querySelector('[data-session-strip]')?.ownerDocument
+      .querySelector('path[d^="M10.325 4.317"]')?.closest('button');
+    expect(gear, 'the settings button').toBeTruthy();
+    const panel = () => document.querySelector('.settings-drawer')?.parentElement;
+    expect(panel()?.className).toContain('-translate-x-full');
+    await act(async () => { fireEvent.click(gear!); });
+    await app.wait(400);
+    expect(panel()?.className).toContain('translate-x-0');
+    expect(panel()?.className).not.toContain('-translate-x-full');
+    expect(document.querySelector('.settings-drawer h2')?.textContent).toBe('Settings');
   });
 });
 

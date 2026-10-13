@@ -1,7 +1,7 @@
 // Review B1 (2026-09-23): pins the WIRING in social-handlers.ts that releases
 // the presence suspend latch — the input-type filter on webContents
 // 'input-event' and the poller's wakeEvidence() call. The pure pieces are
-// pinned in presence-socket.test.ts; this drives the real registration with a
+// pinned in presence-socket.test.ts; this drives the real start-up with a
 // fake Electron (no windows, no network, no real sleep).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
@@ -35,7 +35,7 @@ vi.mock('../src/main/presence-socket', async (orig) => ({
   createPresenceSocket: () => h.sock,
 }));
 
-import { registerSocialHandlers, destroySocialHandlers } from '../src/main/social-handlers';
+import { startSocial, destroySocialHandlers, getSocialOps } from '../src/main/social-handlers';
 
 const MIN = 60_000;
 
@@ -44,8 +44,9 @@ describe('presence suspend latch — social-handlers wiring', () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000_000);
     for (const f of Object.values(h.sock)) (f as ReturnType<typeof vi.fn>).mockClear?.();
-    registerSocialHandlers({ getToken: () => 'tok' } as never);
-    h.handlers.get('social:presence-connect')!();
+    startSocial({ getToken: () => 'tok' } as never);
+    // WHY the operations (2026-10-01 one-core R3-8): social:presence-connect is a channel-table entry that calls this.
+    getSocialOps()!.presenceConnect();
     h.powerMonitor.emit('suspend');
     expect(h.sock.setSuspended).toHaveBeenLastCalledWith(true);
     h.sock.setSuspended.mockClear();

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
-import { TranscriptEvent } from '../shared/types';
+import { TranscriptEvent, StampableEvent } from '../shared/types';
 import { SubagentIndex } from './subagent-index';
 import { SubagentWatcher } from './subagent-watcher';
 import { ccProjectSlug } from './slug-encoding';
@@ -53,7 +53,11 @@ export function parseTranscriptLine(
   line: string,
   sessionId: string,
   tally: TurnUsageTally = emptyTurnUsageTally(),
-): TranscriptEvent[] {
+// WHY StampableEvent[] (M5): a Claude Code transcript line can only yield the types
+// SubagentWatcher stamps onto a specialist's events — never replay-complete,
+// session-error, context-clear, skill-invoked or subagent-usage. Declaring that
+// lets the stamp be type-checked and a wrong-shaped payload below fail the build.
+): StampableEvent[] {
   let parsed: any;
   try {
     parsed = JSON.parse(line);
@@ -96,7 +100,7 @@ export function parseTranscriptLine(
   const parsedTs = Date.parse(parsed.timestamp);
   const recordedAt = Number.isFinite(parsedTs) ? parsedTs : 0;
   const message = parsed.message;
-  const events: TranscriptEvent[] = [];
+  const events: StampableEvent[] = [];
 
   // --- User messages ---
   if (parsed.type === 'user') {
@@ -391,9 +395,9 @@ const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>
  * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
  * a helper a <result> holding its final report. Mirrored in TranscriptWatcher.kt.
  */
-function taskNotificationEvents(raw: string, sessionId: string, uuid: string): TranscriptEvent[] {
+function taskNotificationEvents(raw: string, sessionId: string, uuid: string): StampableEvent[] {
   if (!raw || !raw.includes('<task-notification>')) return [];
-  const out: TranscriptEvent[] = [];
+  const out: StampableEvent[] = [];
   let i = 0;
   for (const m of raw.matchAll(TASK_NOTIFICATION_RE)) {
     const body = m[1];

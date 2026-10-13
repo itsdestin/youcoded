@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
 import { openRouterCostExtractor } from '../src/main/harness/pricing';
@@ -20,7 +21,7 @@ describe('ProviderRegistry', () => {
   let root: string; let reg: ProviderRegistry; let secrets: SecretsStore;
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-provreg-'));
-    secrets = new SecretsStore(root);
+    secrets = new SecretsStore(root, getSecretStorage());
     reg = new ProviderRegistry(new NativeHome(root), secrets);
     await reg.init();
   });
@@ -323,6 +324,8 @@ describe('ProviderRegistry', () => {
       blockedReason?: string;
       token?: string;
       credentialEpoch?: string;
+      /** Which door into the plan; default 'codex'. */
+      route?: 'codex' | 'official';
       /** What the fake network answers with; default = a one-message stream. */
       reply?: () => Response | Promise<Response>;
     }
@@ -334,6 +337,7 @@ describe('ProviderRegistry', () => {
       const token = o.token ?? 'real-access-token';
       const requests: Captured[] = [];
       const auth = {
+        route: o.route ?? 'codex',
         isSignedIn: () => signedIn && !o.blockedReason,
         status: () =>
           !signedIn ? { state: 'signed-out' }
@@ -506,6 +510,24 @@ describe('ProviderRegistry', () => {
       // chatgpt-account-id are fine, the VALUE is what must not leak.
       expect(Object.values(req.headers)).not.toContain('Bearer chatgpt');
       expect(JSON.stringify(req.body)).not.toContain('Bearer chatgpt');
+    });
+
+    it('languageModel(chatgpt) on the official route: the public Responses API, the same body, no Codex headers', async () => {
+      const { auth, requests } = fakeChatGpt({ token: 'tok-1', route: 'official' });
+      const text = await turn(make(auth), { system: 'Be terse.', cacheKey: 'sess-42' });
+      expect(text).toBe('Hello there');
+      const [req] = requests;
+      expect(req.url).toBe('https://api.openai.com/v1/responses');
+      // The body is the Codex route's, unchanged: every field was accepted
+      // by the official endpoint when measured (2026-10-05).
+      expect(req.body).toMatchObject({ store: false, stream: true, instructions: 'Be terse.', prompt_cache_key: 'sess-42' });
+      // The cache-affinity headers stay — reuse needed them on this route too.
+      expect(req.headers['session-id']).toBe('sess-42');
+      // A Codex-style originator was REFUSED there (400), and the account is the token's.
+      expect(req.headers['originator']).toBeUndefined();
+      expect(req.headers['chatgpt-account-id']).toBeUndefined();
+      expect(req.headers['openai-beta']).toBeUndefined();
+      expect(Object.entries(req.headers).filter(([k]) => k === 'authorization')).toEqual([['authorization', 'Bearer tok-1']]);
     });
 
     // The `include` assertion on gpt-5.5 above cannot fail: the SDK recognises

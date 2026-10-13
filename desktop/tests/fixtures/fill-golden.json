@@ -1,0 +1,451 @@
+{
+  "cc: two plain turns": {
+    "truth": {
+      "timeline": [
+        "user: hello",
+        "assistant: text(hi there) [stop=end_turn]",
+        "user: what is 2+2",
+        "assistant: text(four) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: hello",
+        "assistant: text(hi there) [stop=end_turn]",
+        "user: what is 2+2",
+        "assistant: text(four) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: hello",
+        "assistant: text(hi there) [stop=end_turn]",
+        "user: what is 2+2",
+        "assistant: text(four) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "cc: tool run, an ask raised before anyone connected, still open": {
+    "truth": {
+      "timeline": [
+        "user: list the files",
+        "assistant: text(Looking.) | tools[Bash:awaiting-approval#cc-ask-1]"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [
+        "tool-1#cc-ask-1"
+      ],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: list the files",
+        "assistant: text(Looking.) | tools[Bash:awaiting-approval#cc-ask-1]"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [
+        "tool-1#cc-ask-1"
+      ],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: list the files",
+        "assistant: text(Looking.) | tools[Bash:running]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "cc: an ask answered on the computer, tool finished, turn over": {
+    "truth": {
+      "timeline": [
+        "user: list the files",
+        "assistant: tools[Bash:complete*elsewhere] | text(There is one file.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: list the files",
+        "assistant: tools[Bash:complete*elsewhere] | text(There is one file.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: list the files",
+        "assistant: tools[Bash:complete] | text(There is one file.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "cc: compaction in the middle": {
+    "truth": {
+      "timeline": [
+        "user: first question",
+        "assistant: text(first answer) [stop=end_turn]",
+        "user: after compaction",
+        "assistant: text(still here) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: first question",
+        "assistant: text(first answer) [stop=end_turn]",
+        "user: after compaction",
+        "assistant: text(still here) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: first question",
+        "assistant: text(first answer) [stop=end_turn]",
+        "user: after compaction",
+        "assistant: text(still here) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "cc: resumed session (a tool left running by the old process) with new work after": {
+    "truth": {
+      "timeline": [
+        "user: start a build",
+        "assistant: tools[Bash:failed]",
+        "user: are you still there",
+        "assistant: text(Yes, I am back.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: start a build",
+        "assistant: tools[Bash:failed]",
+        "user: are you still there",
+        "assistant: text(Yes, I am back.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: start a build",
+        "assistant: tools[Bash:failed]",
+        "user: are you still there",
+        "assistant: text(Yes, I am back.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: streamed answer, a tool and an ask answered, turn over": {
+    "truth": {
+      "timeline": [
+        "user: fix the bug",
+        "assistant: text(Let me look at it) | tools[Bash:complete*elsewhere] | text(Done.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: fix the bug",
+        "assistant: text(Let me look at it) | tools[Bash:complete*elsewhere] | text(Done.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: fix the bug",
+        "assistant: text(Let me look at it) | tools[Bash:complete] | text(Done.) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: a retry drops the half-written answer (dropPart)": {
+    "truth": {
+      "timeline": [
+        "user: explain it",
+        "assistant: text(REPLACEMENT) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: explain it",
+        "assistant: text(REPLACEMENT) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: explain it",
+        "assistant: text(REPLACEMENT) [stop=end_turn]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: a provider error ends the turn": {
+    "truth": {
+      "timeline": [
+        "user: go",
+        "assistant: text(Starting)"
+      ],
+      "thinking": false,
+      "attention": "error",
+      "error": "the provider said no",
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: go",
+        "assistant: text(Starting)"
+      ],
+      "thinking": false,
+      "attention": "error",
+      "error": "the provider said no",
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: go",
+        "assistant: text(Starting)"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: a turn parked by a stall (the stalled card)": {
+    "truth": {
+      "timeline": [
+        "user: go"
+      ],
+      "thinking": true,
+      "attention": "stalled",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: go"
+      ],
+      "thinking": true,
+      "attention": "stalled",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: go"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: compaction summary lands mid-conversation": {
+    "truth": {
+      "timeline": [
+        "user: one",
+        "assistant: text(answer one) [stop=end_turn]",
+        "user: compact please",
+        "marker: Compacted · freed 90 tokens"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: one",
+        "assistant: text(answer one) [stop=end_turn]",
+        "user: compact please",
+        "marker: Compacted · freed 90 tokens"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: one",
+        "assistant: text(answer one) [stop=end_turn]",
+        "user: compact please"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  },
+  "native: connected mid-answer (the text so far exists only in memory) with a tool waiting on an ask": {
+    "truth": {
+      "timeline": [
+        "user: refactor it",
+        "assistant: text(First paragraph.) | tools[Write:awaiting-approval#native-r9]"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [
+        "tool-9#native-r9"
+      ],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: refactor it",
+        "assistant: text(First paragraph.) | tools[Write:awaiting-approval#native-r9]"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [
+        "tool-9#native-r9"
+      ],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: refactor it",
+        "assistant: text(First paragraph.) | tools[Write:awaiting-approval#native-r9]"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [
+        "tool-9#native-r9"
+      ],
+      "hasMore": false
+    }
+  },
+  "native: connected mid-answer, text still streaming": {
+    "truth": {
+      "timeline": [
+        "user: write a poem",
+        "assistant: text(Roses are red, violets are blue)"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "phone": {
+      "timeline": [
+        "user: write a poem",
+        "assistant: text(Roses are red, violets are blue)"
+      ],
+      "thinking": true,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    },
+    "window": {
+      "timeline": [
+        "user: write a poem"
+      ],
+      "thinking": false,
+      "attention": "ok",
+      "error": null,
+      "awaiting": [],
+      "hasMore": false
+    }
+  }
+}

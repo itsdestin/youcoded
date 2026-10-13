@@ -11,7 +11,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { registerDocCommentsHandlers } from '../src/main/doc-comments/ipc-handlers';
+import { wireDocCommentsPush } from '../src/main/doc-comments/ipc-handlers';
+import { registerDesktopChannels } from '../src/main/ipc/channel-table';
 import { DOC_COMMENTS_IPC } from '../src/main/doc-comments/ipc-channels';
 import { addComment } from '../src/main/doc-comments/doc-comments-store';
 import { __resetDocCommentsWatcherForTest } from '../src/main/doc-comments/doc-comments-watcher';
@@ -28,6 +29,15 @@ function fakeIpcMain() {
     handle: (channel: string, fn: any) => { handlers.set(channel, fn); },
     call: (channel: string, payload: any, e: any = fakeEvent()) => handlers.get(channel)!(e, payload),
   };
+}
+
+/** WHY (2026-10-01 one-core R3-8): the docComments:* request channels are channel-table entries now, so this registers the table's entries (the
+ *  document-comment ones are what the fake records) behind the SAME deps the old registration took: the change push, and the
+ *  live-session folders the project-root gate counts as known. */
+function registerDocCommentsHandlers(ipcMain: ReturnType<typeof fakeIpcMain>, deps: { getAllWebContents: () => any[]; sessionRoots: () => string[] }): void {
+  wireDocCommentsPush(deps);
+  const docOnly = { handle: (channel: string, fn: any) => { if (channel.startsWith('docComments:')) ipcMain.handle(channel, fn); }, on: () => {} };
+  registerDesktopChannels(docOnly, () => null, () => {}, () => ({ sessionManager: {} as any, sendToWindows: () => {}, sendToPhones: () => {}, sessionRoots: deps.sessionRoots }));
 }
 
 function fakeEvent(senderId = 1) {

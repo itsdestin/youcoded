@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTheme } from '../../state/theme-context';
 import { isTypingTarget } from '../../utils/is-typing-target';
-import { isAndroid, isRemoteMode } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { sanitizeRigSvg } from '../mascot/sanitize-rig-svg';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
@@ -205,7 +205,7 @@ function useWingedRig(): string | null {
   // Rig rendering is Electron-desktop-only, the same gate ThemeMascot uses:
   // rigs are fetched over theme-asset://, which does not exist in the Android
   // WebView or the remote-browser shim.
-  const themeRig = !isAndroid() && !isRemoteMode() ? activeTheme?.mascot?.rig ?? null : null;
+  const themeRig = getCapabilities().themeRigs ? activeTheme?.mascot?.rig ?? null : null;
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {

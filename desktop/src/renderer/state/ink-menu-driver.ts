@@ -22,7 +22,7 @@
 // Same IO contract and checking discipline as plan-menu-driver.ts, which
 // answers the plan-approval menu the same way.
 
-import { parseInkSelect, type ParsedMenu } from '../parser/ink-select-parser';
+import { parseInkSelect, type ParsedMenu } from '../../shared/ink-select-parser';
 import type { PlanDriverIO } from './plan-menu-driver';
 
 export type InkMenuIO = PlanDriverIO & {

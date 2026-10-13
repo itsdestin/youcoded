@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { log } from './logger';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
+import { deployClaudeCodePagesMcp, personalPagesRoot } from './claude-code-pages-mcp';
 
 // Optional — which may not be installed; fall back to bare command name
 let whichSync: ((cmd: string) => string) | null = null;
@@ -161,6 +162,19 @@ export class SessionManager extends EventEmitter {
   setPipeName(name: string) {
     this.pipeName = name;
   }
+
+  /**
+   * One place that numbers every terminal chunk in the session's record, and answers where it sits (epoch and offset). Set by the core
+   * (ipc-handlers) so the stream is kept WHETHER OR NOT the phone server is running; it used to be noted only by RemoteServer, so with remote
+   * access off the record had no terminal bytes and the computer's own reading of the screen (session-screens.ts) had nothing to start from.
+   * The result rides the `pty-output` event as its third argument, so every listener sees the same position.
+   */
+  private chunkNoter: ((sessionId: string, data: string) => { epoch: string; offset: number } | null) | null = null;
+  setChunkNoter(fn: ((sessionId: string, data: string) => { epoch: string; offset: number } | null) | null): void { this.chunkNoter = fn; }
+
+  /** Each PTY session's current size (the spawn size, then every resize), so a headless copy of its terminal lays text out at the same width. */
+  private readonly ptySizes = new Map<string, { cols: number; rows: number }>();
+  getPtySize(id: string): { cols: number; rows: number } | null { return this.ptySizes.get(id) ?? null; }
 
   createSession(opts: CreateSessionOpts): SessionInfo {
     const provider: SessionProvider = opts.provider || 'claude';
@@ -320,6 +334,14 @@ export class SessionManager extends EventEmitter {
       } catch (err) {
         log('WARN', 'SessionManager', 'doc-comments MCP deploy failed — this session starts without comment tools', { error: String(err) });
       }
+      // Page data (finance dashboard): read any page's saved data freely; a change asks with the normal
+      // permission card, because UpdatePageData is deliberately left off --allowedTools. Best-effort, like the others.
+      try {
+        const pages = deployClaudeCodePagesMcp(app.getPath('userData'), nodePath, [personalPagesRoot() ?? '', resolvedCwd ? path.join(resolvedCwd, 'Pages') : '']);
+        if (pages) { mcpConfigPaths.push(pages.configPath); allowedToolNames.push(...pages.allowedTools); }
+      } catch (err) {
+        log('WARN', 'SessionManager', 'pages MCP deploy failed — this session starts without page-data tools', { error: String(err) });
+      }
       if (mcpConfigPaths.length) args.push('--mcp-config', ...mcpConfigPaths);
       if (allowedToolNames.length) args.push('--allowedTools', ...allowedToolNames);
       // The docx/xlsx pending-mutation queue's main-process half (T9b) is
@@ -387,8 +409,7 @@ export class SessionManager extends EventEmitter {
       log('ERROR', 'SessionManager', 'Worker spawn failed', { sessionId: id, error: String(err) });
       if (this.sessions.has(id)) {
         this.sessions.get(id)!.info.status = 'destroyed';
-        this.sessions.delete(id);
-        this.inputBlocked.delete(id);
+        this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
         this.emit('session-exit', id, 1);
       }
     });
@@ -442,8 +463,14 @@ export class SessionManager extends EventEmitter {
 
     worker.on('message', (msg: any) => {
       switch (msg.type) {
+        case 'size':
+          // The worker changed the PTY size (a real resize or the repaint nudge) — in stream order with the data around it.
+          // Keep our record of it and tell the computer's screen copy, so output made at that size is laid out at that size.
+          this.ptySizes.set(id, { cols: msg.cols, rows: msg.rows });
+          this.emit('pty-size', id, msg.cols, msg.rows);
+          break;
         case 'data':
-          this.emit('pty-output', id, msg.data);
+          this.emit('pty-output', id, msg.data, this.chunkNoter?.(id, msg.data) ?? null);
           // Type the command onto the prompt, exactly once.
           flushCommand();
           break;
@@ -471,8 +498,7 @@ export class SessionManager extends EventEmitter {
           const exitingSession = this.sessions.get(id)!;
           exitingSession.info.status = 'destroyed';
           this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
-          this.sessions.delete(id);
-          this.inputBlocked.delete(id);
+          this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
           break;
       }
     });
@@ -491,8 +517,7 @@ export class SessionManager extends EventEmitter {
       const exitingSession = this.sessions.get(id)!;
       exitingSession.info.status = 'destroyed';
       this.emit('session-exit', id, 0);
-      this.sessions.delete(id);
-      this.inputBlocked.delete(id);
+      this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
     });
 
     // Tell the worker to spawn the CLI, passing our session ID
@@ -516,6 +541,7 @@ export class SessionManager extends EventEmitter {
         sessionId: isShell ? '' : id,
         pipeName: isShell ? '' : this.pipeName,
       });
+      this.ptySizes.set(id, { cols: opts.cols || 80, rows: opts.rows || 24 });
     } catch {
       // The 'error' handler above will clean up the session asynchronously.
     }
@@ -564,8 +590,7 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session) return false;
     session.info.status = 'destroyed';
-    this.sessions.delete(id);
-    this.inputBlocked.delete(id);
+    this.sessions.delete(id); this.ptySizes.delete(id); this.inputBlocked.delete(id);
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
@@ -591,6 +616,36 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
+    // WHY no ptySizes.set here: the worker reports every size change in stream order ('size' below) and is the ONE authority. Setting it at
+    // request time ran before the PTY had resized and before old-size output had drained, and made the screen copy wobble when a request
+    // landed mid repaint-nudge. A session with no worker (native) has no PTY and no screen copy, so there is nothing to keep in step.
+    return true;
+  }
+
+  /**
+   * The terminal finished parsing `chars` characters of this session's output: tell the PTY worker so
+   * it can lift its brake. WHY here and not in the worker's own bookkeeping: only the renderer knows
+   * when xterm has actually consumed the text — that is the whole point of flow control (the old
+   * pipeline forwarded everything instantly and xterm silently discarded the overflow).
+   * Fire-and-forget; a session with no worker (native) or a closed channel is simply a no-op.
+   */
+  ackOutput(id: string, chars: number): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'ack', n: chars }); } catch { return false; }
+    return true;
+  }
+
+  /**
+   * Ask the program to repaint its whole screen: the PTY worker nudges the PTY size (one column narrower, then back).
+   * The single owner of that nudge — main's router (a cut pre-mount buffer) and the renderer (a cut hidden-window
+   * backlog, via session:terminal-repaint) both come here, so overlapping requests and real resizes (a phone's
+   * included) are arbitrated in one place. Not on Windows (the worker skips it: ConPTY re-emits its buffer).
+   */
+  bounceSize(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'bounce' }); } catch { return false; }
     return true;
   }
 
@@ -648,13 +703,12 @@ export class SessionManager extends EventEmitter {
     }, delayMs);
   }
 
-  /** Per session: the renderer read a pop-up holding the keyboard (see
-   *  setInputBlocked). Absent = not blocked. */
+  /** Per session: a pop-up holds the keyboard (see setInputBlocked). Absent = not blocked. */
   private inputBlocked = new Set<string>();
 
-  /** The renderer's screen verdict (parser/cc-input-focus.ts): a Claude Code
-   *  pop-up no hook reported holds this session's keyboard. Main has no screen
-   *  of its own, so its automated writes ask this as well as the hook gate. */
+  /** The computer's own screen verdict (main/session-screens.ts, reading shared/cc-input-focus.ts): a Claude Code pop-up no hook reported holds this
+   *  session's keyboard. Its automated writes ask this as well as the hook gate. (Master's version had the window report this over a channel;
+   *  main reads every terminal itself now, so nothing reports it.) */
   setInputBlocked(id: string, blocked: boolean): void {
     if (blocked && this.sessions.has(id)) this.inputBlocked.add(id);
     else this.inputBlocked.delete(id);

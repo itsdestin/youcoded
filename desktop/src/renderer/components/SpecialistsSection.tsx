@@ -368,6 +368,7 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           value={choice}
           onSelect={onPick}
           includeClaude={false}
+          runsOn="host" // the tier model is run by the computer
           emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
           // Card-levels sweep: nested inside this section's level-1 card, so
           // the trigger matches every other nested control (level-2 default).

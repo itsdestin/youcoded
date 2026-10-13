@@ -5,7 +5,6 @@
 // never touches disk (pinned by tests/secrets-store.test.ts).
 import * as fs from 'fs';
 import * as path from 'path';
-import { getSecretStorage } from './secret-storage';
 import { KeychainHelperError, KeychainTransportError } from './keychain-client';
 import type { SecretStorage } from './recoverable-safe-storage';
 import { ulid } from 'ulid';
@@ -24,14 +23,16 @@ const LOCK_MAX_RETRIES = 5;
 export class SecretsStore {
   private readonly file: string;
 
-  constructor(userDataDir: string, private readonly storage?: SecretStorage) {
+  // WHY `storage` is required (2026-09-29 one-core R1): the default used to be
+  // getSecretStorage(), which imports Electron's safeStorage — that dragged Electron into
+  // everything the runtime builds. The host now supplies it (Platform.secretStorage). The
+  // old laziness is unchanged: the Electron adapter only touches the keychain per call.
+  constructor(userDataDir: string, private readonly storage: SecretStorage) {
     this.file = path.join(userDataDir, FILE);
   }
 
   private get crypto(): SecretStorage {
-    // WHY: presence checks and deletes need no crypto backend. Resolve it only
-    // on actual reads/writes, not while constructing stores during app startup.
-    return this.storage ?? getSecretStorage();
+    return this.storage;
   }
 
   /** Throws with a user-showable message when the OS keychain is unavailable

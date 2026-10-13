@@ -10,7 +10,6 @@ import {
   writeRemotePlace,
   choosePlaceOnHydrate,
   chooseAfterDestroyed,
-  shouldLoadFirstPage,
 } from '../src/renderer/state/remote-place';
 
 function memoryStorage() {
@@ -91,20 +90,5 @@ describe('when the conversation on screen goes away', () => {
   });
   it('nothing remaining: nothing', () => {
     expect(chooseAfterDestroyed({ destroyedId: 's1', currentId: 's1', remainingIds: [], focusSessionId: null })).toBeNull();
-  });
-});
-
-describe('the computer\'s copy is the only source', () => {
-  it('a remote client waits for its copy before asking for any first page', () => {
-    expect(shouldLoadFirstPage({ remote: true, placeDecided: false, hydrated: false })).toBe(false);
-  });
-  it('a session the copy delivered never loads its own first page', () => {
-    expect(shouldLoadFirstPage({ remote: true, placeDecided: true, hydrated: true })).toBe(false);
-  });
-  it('a session created after the copy — or one an incomplete first copy omitted — loads its first page', () => {
-    expect(shouldLoadFirstPage({ remote: true, placeDecided: true, hydrated: false })).toBe(true);
-  });
-  it('the desktop is unaffected', () => {
-    expect(shouldLoadFirstPage({ remote: false, placeDecided: false, hydrated: false })).toBe(true);
   });
 });

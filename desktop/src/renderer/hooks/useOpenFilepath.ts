@@ -17,7 +17,7 @@ import type { ArtifactAction } from '../state/artifact-actions';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { findBestMatch, buildArtifactifyArgs } from '../components/filepath-match';
 import { describeReadError } from '../components/artifact-views/read-error-copy';
-import { isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 import { plainMessage } from '../utils/ipc-error';
 
 export interface OpenFilepathCtx {
@@ -110,6 +110,8 @@ function describeRefusal(error: string, name: string): string {
       return `Couldn’t open ${name} — that path isn’t a file (folders can’t be opened here).`;
     case 'protected-path':
       return `Couldn’t open ${name}. ${describeReadError('protected-path')}`;
+    case 'kept-on-computer':
+      return `Couldn’t open ${name}. ${describeReadError('kept-on-computer')}`;
     case 'not-allowed':
       // Remote host only: the folder is not a saved project, an indexed
       // project, or the folder of a chat running on the computer, so NOTHING
@@ -271,14 +273,15 @@ export async function openFilepath(
           if (drawerOpensImmediately || !answer.artifact.discovered) { show(answer.artifact); return; }
           // Deferred + discovered: record it first (desktop), as before. Over
           // remote access there is no write to do it with — silent, like any miss.
-          if (isRemoteMode()) return;
+          // R4-1: `projectWrites` capability (a screen watching a computer only reads), was isRemoteMode().
+          if (!getCapabilities().projectWrites) return;
           await artifactify();
           return;
         }
         // Outside the folder, the desktop still records and opens the file (a temp
         // xlsx the assistant made, say) exactly as before. A remote device cannot
         // write, so it is told instead of getting a request that can only fail.
-        if (answer.error === 'outside-project' && !isRemoteMode()) {
+        if (answer.error === 'outside-project' && getCapabilities().projectWrites) {
           // A `~/` path cannot be recorded (the renderer can't expand it): say
           // what the host established — outside the folder — not "not found"
           // (review 2026-09-11, finding 6).

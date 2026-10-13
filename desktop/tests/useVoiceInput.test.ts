@@ -35,6 +35,7 @@ vi.mock('../src/renderer/voice-capture', async (importOriginal) => {
 });
 
 import { useVoiceInput } from '../src/renderer/hooks/useVoiceInput';
+import { VoiceService } from '../src/main/voice/voice-service';
 
 const READY: VoiceReadiness = { state: 'ready', engine: 'Parakeet' };
 const REFUSED = "Microphone access was refused by your computer. Allow it for YouCoded in your system's privacy settings, then check again.";
@@ -130,6 +131,50 @@ describe('useVoiceInput — readiness composition (desktop only)', () => {
 });
 
 describe('useVoiceInput — who opens the microphone', () => {
+  it.each(['error', 'final'] as const)('closes a microphone that finishes opening after a terminal %s during start', async (type) => {
+    const { emit } = installBridge({ desktop: true });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    cap.open.mockImplementationOnce(async () => { await held; return { close: () => { cap.closes += 1; }, finish: async () => {} }; });
+    const h = mount();
+    await settle();
+    let started!: Promise<void>;
+    await act(async () => { started = h.result.current.start(); await Promise.resolve(); });
+    expect(cap.open).toHaveBeenCalledTimes(1);
+    act(() => emit(type === 'error' ? { type, message: 'Voice tokenizer checksum does not match' } : { type, text: '' }));
+    await act(async () => { release(); await started; });
+    expect(cap.closes).toBe(1);
+    expect(h.result.current.phase).toBe('idle');
+    if (type === 'error') expect(h.result.current.error).toBe('Voice tokenizer checksum does not match');
+  });
+
+  it('does not open capture when a vocabulary worker replacement times out', async () => {
+    vi.useFakeTimers();
+    const { bridge, emit } = installBridge({ desktop: true });
+    const installed = { voiceRoot: '', addonPath: '', wrapperEntryPath: '', modelDir: '' };
+    const service = new VoiceService({
+      assets: { installed: () => installed, install: async () => installed },
+      platform: 'linux', arch: 'x64',
+      isWindowAlive: () => true, onWindowGone: () => () => {},
+      deliver: (_id, event) => emit(event),
+      // WHY: no exit acknowledgment models the actual stalled retirement path,
+      // rather than merely mocking bridge.start as a rejected promise.
+      spawnWorker: () => ({ send: () => {}, kill: () => {}, onMessage: () => {}, onExit: () => {}, onStderr: () => {} }),
+    });
+    try {
+      await service.start(1, ['Old name']);
+      service.cancel();
+      bridge.start = () => service.start(1, ['New name']);
+      const h = mount();
+      await settle();
+      let started!: Promise<void>;
+      await act(async () => { started = h.result.current.start(); await Promise.resolve(); });
+      await act(async () => { vi.advanceTimersByTime(60000); await started; });
+      expect(cap.open).not.toHaveBeenCalled();
+      expect(h.result.current.phase).toBe('idle');
+      expect(h.result.current.error).toContain('previous speech engine did not report closing');
+    } finally { service.shutdown(); }
+  });
   it('ANDROID: start() is the bridge call alone and opens no microphone', async () => {
     installBridge({ desktop: false });
     const { result } = mount();

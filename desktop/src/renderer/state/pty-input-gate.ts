@@ -1,7 +1,9 @@
 import type { SessionChatState } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { readInputFocus, inputIsBlocked, type InputFocus } from '../parser/cc-input-focus';
+import { readInputFocus, inputIsBlocked, type InputBlock } from '../../shared/cc-input-focus';
+import { getCapabilities } from '../platform';
+import { getScreenInputBlock } from './screen-input-store';
 
 // Shared safety gate for programmatic PTY writes.
 //
@@ -84,12 +86,17 @@ export function pendingInteractionKind(session: SessionChatState): 'approval' | 
  * opening MID-REPLY), a compaction menu — and a chat send typed into one was
  * swallowed while its bubble looked sent; the lost-message Enter could then
  * answer it ("Yes" started an auto-mode scan). This reads the live terminal
- * (parser/cc-input-focus.ts). Returns null when the message box is live — or
+ * (shared/cc-input-focus.ts). Returns null when the message box is live — or
  * when there is no readable terminal (no verdict, so no new refusal).
  */
-export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }> | null {
+export function screenInputBlock(sessionId: string): InputBlock | null {
+  // WHERE THE VERDICT COMES FROM (sync with master's popups work, 2026-10-01): wherever `capabilities.sessionRecord` is true (the computer's windows and
+  // every phone) the COMPUTER reads each terminal (main/session-screens.ts, same shared/cc-input-focus.ts) and publishes what holds the keyboard; every
+  // screen asks that one reading, so a phone refuses a send typed into an open "Switch model?" exactly as the window does, and the two cannot disagree.
+  // Only a host with no record of its own (the Android app's own runtime) reads its own terminal here, and reports it to its host (usePromptDetector).
+  if (getCapabilities().sessionRecord) return getScreenInputBlock(sessionId);
   const focus = readInputFocus(getVisibleScreenText(sessionId));
-  return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
+  return inputIsBlocked(focus) ? (focus as InputBlock) : null;
 }
 
 /**

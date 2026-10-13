@@ -575,6 +575,19 @@ const BASE = [
     ],
   },
   {
+    name: 'switch-model-confirm',
+    description: 'a typed /model mid-conversation opens the "Switch model?" cache-cost confirmation; answered Yes (Enter)',
+    script: [{ text: 'A reply so the conversation has history.' }, { text: 'ok' }],
+    steps: [
+      ...sendMessage('hello'), { waitFor: 'has history', state: 'none', note: 'after reply' }, { wait: 800 },
+      { keys: '/model haiku', type: true, state: 'none', note: 'typing /model haiku' }, { wait: 500 },
+      { keys: '\r', pending: true, note: 'submitted' },
+      { waitFor: 'Switch model\\?', state: 'popup', note: 'Switch model? confirmation' }, { wait: 1500 },
+      { keys: '\r', pending: true, note: 'Yes' },
+      { waitFor: BOX, state: 'none', note: 'after answering' }, { wait: 1500 },
+    ],
+  },
+  {
     name: 'popup-over-draft',
     description: 'a permission pop-up opens while the user has a draft typed in the box (a queued message)',
     args: ['--permission-mode', 'default'],

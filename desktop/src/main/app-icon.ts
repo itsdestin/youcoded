@@ -73,3 +73,27 @@ export function fitForMacDock(img: NativeImage): NativeImage {
   if (sBitmap.length !== s.width * s.height * 4) return img;
   return nativeImage.createFromBitmap(centerOnCanvas(sBitmap, s.width, s.height, width, height), { width, height });
 }
+
+// ── The Mac Dock while a theme is on (brand round 28) ──
+// macOS 26 ("Tahoe") draws the bundled Liquid Glass icon itself and re-colours it for the user's
+// icon look (Default, Dark, Clear, Tinted). A picture the app swaps in while it runs is flat — the
+// Mac adds no glass to it — so Destin chose, per look:
+//   Default        → the theme's icon (white tile, theme face)
+//   Dark, Clear    → the theme's face on see-through glass (`macGlass`)
+//   Tinted         → no swap: the Liquid Glass icon stays, tinted like every other app
+// When the look can't be read, the Dock is left alone (the one choice that never clashes).
+// Macs before 26 have no looks and no Liquid Glass: they always get the theme's icon.
+export type MacIconLook = 'default' | 'dark' | 'clear' | 'tinted' | 'unknown';
+export type DockChoice = 'bundle' | 'app' | 'glass';
+
+export function chooseDockIcon(look: MacIconLook, hasTheme: boolean, hasGlass: boolean): DockChoice {
+  if (!hasTheme) return 'bundle';
+  if (look === 'default') return 'app';
+  if (look === 'dark' || look === 'clear') return hasGlass ? 'glass' : 'app';
+  return 'bundle';
+}
+
+/** macOS 26 is Darwin 25. `os.release()` gives the Darwin version. */
+export function hasLiquidGlass(darwinRelease: string): boolean {
+  return parseInt(darwinRelease, 10) >= 25;
+}

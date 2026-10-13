@@ -129,7 +129,7 @@ durable again on that device at its next publication.
 ## Provider seam (Phase 0, PR #115)
 
 - **`'native'` has NO runtime in Phase 0.** `SessionManager.createSession` throws loudly for any non-claude provider — a deliberate guard so a stray native create (e.g. from a remote client payload) fails instead of spawning a broken PTY. Phase 1 branches BEFORE the PTY worker spawn.
-- **`window.claude.native.supported` is the ONLY gate** (no settings flag, decided 2026-07-10). preload computes it as `true` by default since 2026-07-16 (`YOUCODED_NATIVE=0` is the kill switch); remote-shim still hardcodes `false` (remote/Providers-UI parity gap not yet reconciled — see Plan A note below); shape parity pinned in `ipc-channels.test.ts` ("native runtime capability parity"). It is a plain boolean, NOT an IPC channel — no ipc-handlers/SessionService.kt row exists on purpose.
+- **`window.claude.native.supported` is the ONLY gate** (no settings flag, decided 2026-07-10). preload computes it as `true` by default since 2026-07-16 (`YOUCODED_NATIVE=0` is the kill switch); remote-shim's `native.supported` is a getter on the host's handshake `capabilities.nativeSessions` (R6-1, 2026-10-01: true from a current computer unless it runs with `YOUCODED_NATIVE=0`, so a phone can start and drive a native session that runs on the computer; false before the handshake, on an older computer and on Android's own runtime); shape parity pinned in `ipc-channels.test.ts` ("native runtime capability parity"). It is a plain boolean, NOT an IPC channel — no ipc-handlers/SessionService.kt row exists on purpose.
 - **Sandboxed preload DOES have `process.env`** (verified empirically 2026-07-10 against the built preload in a production-identical sandboxed window). The sandbox blocks module imports, not Electron's polyfilled `process`.
 - **The Runtime selector** (`Claude Code | YouCoded`) renders in the new-session form ONLY when `native.supported`; the YouCoded option is disabled until Phase 1; `handleCreate` is hardwired to `'claude'` — wiring the selector into create is a Phase 1 task.
 - **Reasoning segments are dormant on the CC path — don't "light them up" casually.** `assistant-thinking` events WITH `data.text` dispatch `TRANSCRIPT_ASSISTANT_REASONING` (per-token deltas merged by `partId` — UNLIKE the text path, which appends whole blocks); payload-less events remain heartbeats. CC's transcript-watcher emits `data:{}`, so no CC user sees the disclosure today. Making the watcher emit thinking text needs a parity-fixture update AND a UX decision first. App.tsx and BubbleFeed.tsx MUST use the identical predicate (`event.data?.text` truthiness) — divergence puts main and buddy windows out of sync.
@@ -147,7 +147,7 @@ Cloud-first slice: `~/.youcoded/` home, provider registry + keychain keys, `Harn
 - **Step limits are explicit snapshots, never model guesses.** `HarnessSession` applies the existing `max_steps` continuation ask only when its manifest has `limits.maxSteps`. For an ordinary root, `NativeSessionHost` reads `native.stepGuard` once at fresh creation, persists that normalized value in `NativeSessionHeader.stepGuard`, and resumes from the header only; changing Settings cannot alter an existing session, and an old header means no guard. Specialist children have no step cap at all since 2026-09-08 (`fix: remove specialist child step budgets`; a legacy `stepCap` in a personal definition file is ignored); evaluator runs explicitly use `maxSteps: 100`. There is no model-name or model-tier fallback.
 - **`quiesce(id)` (M2) is a SEPARATE, STRONGER teardown than `interrupt()` — cross-device takeover only, never the Stop button.** `interrupt()` aborts only the in-flight turn and leaves the M1 send queue draining (a queued message starts a new turn right after). `quiesce()` additionally clears the queue synchronously, awaits one macrotask (lets a same-tick `send()` finish its deferred dispatch before the abort), and awaits the turn settling + append chain — its postcondition is "no further appends", which a cross-device transcript flush depends on. From its first line until the session is destroyed, `send()`, `/clear`, `/compact`, `/skill` and idle report delivery are refused (`not-live`) — the takeover's flush and lease release come after `quiesce()` returns; `endQuiesce()` lifts the refusal only for a handoff that stopped BEFORE the lease release — after it the conversation belongs to another device, so a session that failed to destroy keeps refusing. `createHolderTakeover` (conversations/takeover.ts) branches to it for a native holder instead of sending the ESC byte. Depth + full 5-step order: `docs/conversations.md` → "Native provider participation".
 - **M1 send queue** — per-session FIFO capped at `SEND_QUEUE_LIMIT` (10) in the host; drains ONLY on the dispatched `send()`'s turn settling, one queued message per drain step. Interrupt aborts the current turn only — the queue is untouched and still drains after. Past the cap, `send()` refuses honestly (`{status:'failed', reason:'queue-full'}`) rather than silently accepting. Pinned: `native-session-host.test.ts` "send queue (M1)" block.
-- **`native:send` is an `ipcMain.handle` invoke on ALL transports** (desktop IPC and remote WS) over the SAME transcript-event pipe CC uses — same `NativeSendResult` shape either side, no throw-vs-`{ok:false}` divergence (contrast the provider IPC parity gap above). Emits `user-message`/`assistant-text`/`assistant-thinking`/`turn-complete`/`user-interrupt`/`session-error`, forwarded via `sendForSession(…, IPC.TRANSCRIPT_EVENT, …)` + `remoteServer.broadcast`. `TRANSCRIPT_REPLAY` falls through `nativeHost.getHistory(id) ?? transcriptWatcher.getHistory(id)`.
+- **`native:send` is an `ipcMain.handle` invoke on ALL transports** (desktop IPC and remote WS) over the SAME transcript-event pipe CC uses — same `NativeSendResult` shape either side, no throw-vs-`{ok:false}` divergence (contrast the provider IPC parity gap above). Emits `user-message`/`assistant-text`/`assistant-thinking`/`turn-complete`/`user-interrupt`/`session-error`, forwarded by ONE `publish(sessionId, IPC.TRANSCRIPT_EVENT, event)` (main/publish.ts: the session's windows, every phone, and the session's record in main/session-record.ts — a hand-written `sendForSession` + `broadcast` pair is rejected by the ast-grep rule `no-paired-session-send-and-broadcast`). `TRANSCRIPT_REPLAY` falls through `nativeHost.getHistory(id) ?? transcriptWatcher.getHistory(id)`.
 - **Renderer send branch** — `sendChatMessage` (`native-send.ts`): native → `window.claude.native.send(sessionId, text)` with NO `\r`, no 56-byte chunking, no echo wait, no `FILE_GAP_MS` paste timing, no `hasPendingInteraction` gate. **The native send string MUST equal `buildOutgoingMessage(...).content`** or the optimistic USER_PROMPT bubble never dedups (permanent pending bubble). ESC → `native.interrupt`. `useSubmitConfirmation` is gated OFF for native. The entire claude/PTY path is byte-unchanged below the native early-return.
 - **`createSession` native branch** builds NO PTY worker (`ManagedSession.worker` is now optional — guard every `session.worker.X`). Requires a `binding` UNLESS `resumeSessionId` is set (resume reads the binding from the stored header). On a resume whose stored header is gone, `SESSION_CREATE` emits a `session-error` event so the user gets the banner, not a silent empty chat.
 - **Provider IPC error semantics differ by transport** (latent parity gap, reconcile before Phase 2 ungates the Providers UI on remote): desktop `ipcMain.handle` THROWS → renderer promise REJECTS; remote WS resolves `{ok:false, error}`. `ProvidersSection`'s `safeProviders` normalizes BOTH into a thrown error for one try/catch — except `test()`, where `ok:false` is a real result to display. preload passes provider args positionally; remote-shim wraps them as objects (`{id}`, `{id,key}`).
@@ -1151,3 +1151,99 @@ cap is gone). `BashOutput` reads new output since the last look (or lists this c
   `null` ("at least N") and the hint names the log, which holds everything.
 
 Rule: `.claude/rules/harness-tools.md` → the "Background Bash" bullet.
+
+## Pictures: admission gate, shrink-once, enforcement, bounded recovery (2026-10-07)
+
+What broke: Read handed a 2,904×17,528 px contact sheet (6.8 MB, under the 10 MB byte cap) to a
+ChatGPT session; OpenAI rejected it — "requires 49868 patches after processing, exceeding the
+limit of 30000" — and because failed turns keep history, every later message resent it. Three
+resume paths re-read pictures by path, so nothing short of `/clear` recovered.
+
+- **Limits are provider-type facts** on the capability profile (`imageLimits`,
+  `capability-profile.ts`): OpenAI/ChatGPT `30,000` patches (the one verified number; its `8192`
+  edge is an explicit, unverified guess); everyone else a conservative `4096 px / 16,384`
+  placeholder. 32-px patches, rounded up per axis (`image-support.ts` `patchCount`).
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/capability-profile.ts", "contains": "IMAGE_LIMITS_OPENAI"} -->
+- **The ONE reader gates by header** (`readImageFromDisk(path, limits)`): dimensions parsed from
+  the bytes already read (PNG/JPEG/GIF/WebP), still one stat + one read. Over budget →
+  `[image not attached: <basename> is W×H px, above this model's image size limit]`, written
+  identically by the live driver, the reopen rebuild, the portable checkpoint and a collapse. The
+  private checkpoint refuses such an image (`image-oversized`) so the host falls back to the gated
+  rebuild; collapsed results and attachment notes are describable (`pruned.oversized`, `note`).
+- **Shrink once, as a real file, only when the limits fail** (`image-prepare.ts`;
+  `image-resize-service.ts` starts one `worker_threads` Worker per job — `image-resize-worker.ts`,
+  `pngjs`/`jpeg-js`, a box filter — and terminates it after; `nativeImage` is not available off the
+  main thread). Cache: `<userData>/image-cache/<hash>-<basename>.png|jpg`. The target is the
+  largest size under both limits with a 10% margin (the incident sheet → 1221×7372 on OpenAI).
+  Read prepares before it promises and discloses the downscale; `native:send` prepares composer
+  attachments (serialised per session) and the message persists `modelAttachments` beside
+  `attachments` (the UI keeps the original path). A prepared composer picture is DISCLOSED to the
+  model: `userAttachmentParts` appends `[image downscaled: <basename> was W×H px, shown at w×h px
+  (pct%); small text may be unreadable]` (`ImageNote` kind `downscaled`). The original's size rides
+  the `ModelAttachment` from `native:send` (the preparer already read that header, async) and is
+  persisted as `originalSizes`; the shown size comes from the bytes the reader already returned —
+  no new blocking read. Reopen (`history-rebuild.ts`) and the accepted-history store's `note`
+  descriptor reproduce the same sentence; events from before `originalSizes` reopen without it. Decode bound 80 MP; PNG first, JPEG only if still
+  over 10 MB. The service answers a typed result, and each refusal says its own cause: the worker
+  checks the first bytes and only GIF/WebP/junk is `undecodable` (declined with a convert hint); a
+  job past its time limit is `timeout` ("took longer than 15 s on this computer"); a worker crash,
+  a corrupt PNG/JPEG or jpeg-js's memory cap is `failed` ("the shrinking step failed"). A refused or
+  failed attachment gets a note, never silence. Measured at the incident size: ~1.9 s (flat pixels) to
+  ~3.1 s (noise) per resize. Memory: 951 MB / 1.56 GB were WHOLE-PROCESS RSS at job end, including
+  the smoke test's own synthetic 203 MB source bitmap — not the worker's share, which is roughly
+  0.6–1.2 GB. `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
+  The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
+  <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
+- **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
+  history on every provider/profile change (`setBinding`) and before any compaction or summary
+  (`maybeCompact`, `compactNow`). The history rewrite itself lives in `harness/image-history.ts`.
+- **Recovery** (`providers/image-too-large.ts`, `collapseOversizedImages`): on that exact 400 —
+  accepted in `error.message`, `detail` or a top-level `message`; the live object was never
+  captured — with no output started, image parts over the reported limit collapse to the note,
+  the capture revision bumps, and the step is retried once. A second rejection surfaces the
+  provider's own words. **Count-disagreement fallback** (`image-history.ts`
+  `collapseLargestImageParts`): when the provider rejected but no part is over its limit by OUR
+  count (so the size-based pass changed nothing) and history holds a measurable picture, the
+  largest pictures by our count (ties: most recent first) collapse to the same oversized note,
+  with their real W×H, until `requiredPatches − removed ≤ limit`; then the same single retry.
+  Without it the picture was resent on every message. No picture in history → no retry.
+
+### Accepted limitations (declared, not bugs)
+
+- **The image cache is never swept.** Deleting it is safe: a missing derivative becomes a
+  "no longer available" / "could not be read" note on reopen.
+- **After a switch to stricter limits, a derivative that no longer fits is COLLAPSED to the note,
+  not re-prepared** — a fresh Read of the original prepares a copy for the new provider.
+- **A user-message picture collapsed in memory is labelled `image`** until a reopen relabels it by
+  basename (the rebuild knows the path).
+- **A picture whose preparation failed** is told to the model with the preparer's reason live; on
+  reopen the original is re-gated and gets the "above size limit" note instead.
+- **The live ChatGPT error object was never captured**: the classifier matches the sentence read
+  off a screenshot, in three envelopes.
+- **A non-vision session reopened after pictures** carries size/missing notes where the live
+  session had none.
+- **A phone can mark a picture message "unsure".** The phone's request times out at 30 s
+  (`remote-shim.ts` `REQUEST_TIMEOUT_MS`), and a worst-case preparation is two resize passes (PNG,
+  then JPEG) of up to 15 s each, serialised behind earlier sends. Nothing is resent automatically;
+  the message's echo clears the mark when it lands. Pressing "Send again" meanwhile sends a NEW
+  copy, so the message would arrive twice.
+- **No "preparing" indicator on the desktop.** After sending a huge picture the chat can sit silent
+  for up to ~30 s while it is shrunk; the reply then starts normally.
+- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder**, so 5K
+  screenshots and 48 MP photos are downscaled for providers that might accept them as they are.
+  The model is told (Read's text, the composer's "downscaled" note); the person is not.
+- **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
+  picture it actually objected to may not be the largest one we measure, so a still-rejected retry
+  surfaces the provider's words (one retry only, as above). When the provider's reported count is
+  far above our total, the fallback may collapse every measurable picture in the conversation
+  before its single retry.
+- **One resize at the incident's size adds roughly 0.6–1.2 GB to the app's process** (the smoke
+  test's whole-process RSS of up to 1.56 GB included its own 203 MB source bitmap) — transient,
+  released when the worker terminates. Streaming decode is the candidate fix.
+
+Guards: `tests/image-support.test.ts`, `image-prepare.test.ts`, `image-resize.test.ts`,
+`image-too-large.test.ts`, the over-limit pictures suite in `harness-session-loop.test.ts`, the
+oversized cases in `accepted-history-store.test.ts`, `harness-history-rebuild.test.ts`,
+`harness-tools-core.test.ts`, `native-image-attachments.test.ts` and
+`native-session-host-continuation.test.ts`, and the attachment-preparation cases in
+`native-channels.test.ts`.

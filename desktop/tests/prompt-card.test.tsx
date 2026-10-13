@@ -24,7 +24,7 @@ import React from 'react';
 import PromptCard from '../src/renderer/components/PromptCard';
 import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 import { Dialog } from '../src/renderer/components/ui/Dialog';
-import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
+import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 import type { InteractivePrompt } from '../src/renderer/state/chat-types';
 
 const RESUME_SCREEN = [

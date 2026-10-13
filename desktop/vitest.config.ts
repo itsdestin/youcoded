@@ -1,4 +1,4 @@
-import { configDefaults, defineConfig, type UserWorkspaceConfig } from 'vitest/config';
+import { defineConfig, type UserWorkspaceConfig } from 'vitest/config';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -181,51 +181,17 @@ function project(test: NonNullable<UserWorkspaceConfig['test']>): UserWorkspaceC
 
 export default defineConfig({
   test: {
-    // Two projects, run one after the other (sequence.groupOrder).
+    // One project, built by project() (SHARED_TEST plus its own files), not `extends: true`, which re-loads this whole file
+    // per project.
     //
-    // WHY (2026-09-29): tests/render-cost/ holds CPU-time RATIO pins — "1,000
-    // comments cost about N times what 100 do" — which catch a per-comment
-    // cost turning into a per-PAIR cost. Inside the full parallel suite they
-    // flaked with nothing regressed: a fresh fork per file already (isolate is
-    // the vitest-4 default), but process.cpuUsage() itself inflated 2.4x on the
-    // small mount and 4x on the large one while ~30 sibling workers fought for
-    // cores and cache, so the RATIO moved (ReadingHighlights 8.4-9.2x alone,
-    // 14.1x in verify.sh --full). Rounds of wider bounds and more trials
-    // followed — the treadmill test-suite-hygiene.md forbids — and each wider
-    // bound let more of a real regression through. Running them AFTER every
-    // other file, one file at a time, removes the contention instead of
-    // budgeting for it; a forced gc() before every measured mount (the
-    // --expose-gc below) removes the other noise source — each trial paying
-    // to collect the previous trial's garbage. Measured bounds: the comments
-    // in tests/render-cost/.
-    //
-    // Nothing to wire elsewhere: CI's `npm test` and verify.sh's `vitest run` /
-    // `vitest related` run both projects, on every OS.
-    //
-    // Each project is SHARED_TEST plus its own files, built by project() —
-    // not `extends: true`, which re-loads this whole file once per project.
-    // globalSetup is in SHARED_TEST, so it runs once per project (twice);
-    // vitest runs every project's globalSetup before any test starts, so the
-    // second run only re-creates the same empty sandbox.
+    // WHY no separate 'render-cost' project any more (one-core merge, 2026-10-04): master ran its CPU-time RATIO pins alone,
+    // after the parallel suite, with gc() between mounts. The stack had already replaced those ratios with COUNTED work
+    // (tests/CommentsMargin.test.tsx, tests/ReadingHighlights.test.tsx), which does not move with machine load, so there is
+    // nothing left to isolate. The elden-ring fixture case is among the counted ones.
     projects: [
       project({
         name: 'unit',
         include: ['tests/**/*.{test,spec}.{ts,tsx}', 'src/**/*.{test,spec}.{ts,tsx}'],
-        exclude: [...configDefaults.exclude, 'tests/render-cost/**'],
-      }),
-      project({
-        name: 'render-cost',
-        include: ['tests/render-cost/**/*.test.{ts,tsx}'],
-        // Group 1 starts only once group 0 ('unit', the default 0) has
-        // finished — so no sibling worker is burning CPU while these measure.
-        sequence: { groupOrder: 1 },
-        // One file at a time: the two files would otherwise contend with
-        // each other, which is the very thing this project exists to avoid.
-        fileParallelism: false,
-        // Lets each stress test call gc() before every measured mount, so a
-        // trial never pays to collect the previous trial's garbage (see
-        // tests/helpers/render-cost.ts).
-        execArgv: ['--expose-gc'],
       }),
     ],
   },

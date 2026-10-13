@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HarnessSession } from '../src/main/harness/harness-session';
 import { summaryProvenanceNote } from '../src/main/harness/compaction';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent } from '../src/shared/types';
 import type { TriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
 import { drainTurn, fakeTool, makeOpts, makeSession, scriptModel } from './helpers/harness-fakes';
@@ -86,7 +86,7 @@ describe('HarnessSession accepted history', () => {
     expect(accepted.eventUuids).toContain(uuidOfText(events, 'replacement'));
     expect(JSON.stringify(accepted.messages)).not.toContain('abandoned text');
     expect(accepted.messages).toEqual((session as any).history);
-    expect(events.find(e => e.data.dropPart)!.data.dropPart!.partIds).toEqual(['old', 'old-reasoning']);
+    expect(looseData(events.find(e => looseData(e).dropPart)!).dropPart!.partIds).toEqual(['old', 'old-reasoning']);
   });
   it('a text + tool-call turn accepts exactly the emitted user/text/tool uuids, in emit order', async () => {
     const events: TranscriptEvent[] = [];

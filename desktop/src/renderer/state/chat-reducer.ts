@@ -13,8 +13,10 @@ import {
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
+import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
+import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -405,6 +407,11 @@ function injectPlanSegment(
   return updated;
 }
 
+// Is a divider with this id already drawn? One helper (sync-fix6) for the compaction, clear and model-switch dividers: every divider draws once because of it.
+function hasMarker(timeline: readonly TimelineEntry[], markerId: string): boolean {
+  return timeline.some((e) => e.kind === 'system-marker' && e.marker.id === markerId);
+}
+
 /**
  * Shared cleanup for turn endings (both normal completion and timeout).
  * Marks orphaned running/awaiting tools as failed and clears turn tracking.
@@ -465,7 +472,6 @@ function endTurn(
     // re-rendered the PREVIOUS turn's "Reading your prompt — N%" line while the
     // model was mid-generation (2026-07-28 audit).
     promptProcessing: null,
-    streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
     activeTurnToolIds: new Set(),
@@ -864,71 +870,6 @@ function patchNestedAsk(
   return null;
 }
 
-/** A hydrated copy counts as empty when it carries no conversation at all — the blank
- *  slot a window seeds for every session it has heard of. */
-function isEmptyCopy(ser: SerializedChatState['sessions'][number][1]): boolean {
-  return (ser.timeline?.length ?? 0) === 0 && (ser.assistantTurns?.length ?? 0) === 0;
-}
-
-/**
- * Which of the phone's sessions a hydrate leaves as the phone's own copy (remote access
- * batch 2, design §6). The shim turns a non-empty answer into "may be out of date",
- * because a kept session's turn state is only as current as the phone's last event.
- * The ONE definition, used by HYDRATE_CHAT_STATE and by App's report to the shim.
- */
-export function keptByHydrate(prev: ChatState, snapshot: SerializedChatState): string[] {
-  if (snapshot.sessions.length === 0) return [...prev.keys()];
-  if (!snapshot.degraded) return [];
-  const replaced = new Set(snapshot.sessions.filter(([, ser]) => !isEmptyCopy(ser)).map(([id]) => id));
-  return [...prev.keys()].filter((id) => !replaced.has(id));
-}
-
-/**
- * The phone's own unsent actions survive a hydrate (design §6, R2-13): pending user
- * bubbles and queued messages. Only the ones the computer's copy has NOT already echoed
- * — an echo the copy holds would otherwise show twice, because the reducer drops a
- * transcript message whose uuid the copy has already seen, so that pending bubble would
- * never clear.
- *
- * WHICH copy entries are unapplied echoes (T4 review, 4): user entries the phone never
- * saw (by transcript uuid) that come AFTER the last user entry it did see. Counting all
- * entries with the same text broke whenever the two copies had loaded older history to
- * different depths — a phone that scrolled further showed an echoed "yes" twice, and a
- * computer that scrolled further swallowed a freshly typed "continue". Unapplied echoes
- * are consumed oldest-first by pending bubbles, then queued rows, matching text the way
- * TRANSCRIPT_USER_MESSAGE confirms a bubble. A copy from a host that predates the uuid
- * counts every entry, as the phone had nothing better to go on.
- *
- * A first copy (no phone copy yet) adopts NO queued rows: the computer's queue is the
- * computer's own, not an action this phone took (T4 review, 12).
- */
-function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState): SessionChatState {
-  if (!prev) return { ...copy, queuedMessages: [] };
-  const seen = prev.seenUuids;
-  let lastKnown = -1;
-  copy.timeline.forEach((e, i) => {
-    if (e.kind === 'user' && !e.pending && e.uuid && seen.has(e.uuid)) lastKnown = i;
-  });
-  const unapplied = new Map<string, number>();
-  copy.timeline.forEach((e, i) => {
-    if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
-    if (e.uuid && seen.has(e.uuid)) return;
-    const key = visibleText(e.message.content);
-    unapplied.set(key, (unapplied.get(key) ?? 0) + 1);
-  });
-  // visibleText, like sameUserMessage: the copy holds CC's RECORDED text, spacing may differ.
-  const consume = (text: string) => {
-    const key = visibleText(text);
-    const n = unapplied.get(key) ?? 0;
-    if (n <= 0) return false;
-    unapplied.set(key, n - 1);
-    return true;
-  };
-  const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
-  const queuedMessages = prev.queuedMessages.filter((q) => !consume(q.content));
-  return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
-}
-
 /** A stall WARNING belongs to the amber 'stuck' state and nothing else.
  *
  *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
@@ -940,6 +881,15 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
  *  amber card for a countdown the host never announced, and the next warning
  *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
  *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
+/**
+ * USER_PROMPT turns the working spinner on at send time. When the message turns out never to have reached the computer, that spinner is cleared, but ONLY
+ * if nothing else is going on in the conversation (no turn in flight, no tool, no compaction): a message sent mid-turn must not stop the running turn's spinner.
+ */
+function spinnerWithNoTurn(session: SessionChatState): Partial<SessionChatState> {
+  const idle = !session.currentTurnId && session.activeTurnToolIds.size === 0 && !session.compactionPending;
+  return idle && session.isThinking ? { isThinking: false } : {};
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
@@ -988,47 +938,37 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return new Map();
     }
 
-    case 'HYDRATE_CHAT_STATE': {
-      // Fix: an empty snapshot is what the host sends when its renderer times
-      // out (chat-snapshot.ts TIMEOUT_MS) or serialization throws — NOT a
-      // signal that there are no sessions. Applying it blanked a reconnecting
-      // client's entire chat with no error surfaced. Never replace real state
-      // with nothing.
-      if (action.sessions.sessions.length === 0) {
-        console.warn('[chat-reducer] ignoring empty chat:hydrate snapshot');
-        return state;
-      }
-      try {
-        const copies = deserializeChatState(action.sessions);
-        const hydrated = (s: SessionChatState): SessionChatState => ({ ...s, history: { ...s.history, hydrated: true } });
-        // Remote access batch 2 (design §6, R1-1): a COMPLETE copy replaces the whole
-        // state — the computer's copy is the only source (§4). An INCOMPLETE one replaces
-        // only the sessions it holds with a non-empty copy, keeps the phone's copy of
-        // every other and deletes nothing: a window that did not answer must not empty
-        // the phone (contract R3). Both keep the phone's own unsent actions, and every
-        // delivered session is marked so the phone never loads a first page on top of it.
-        if (!action.sessions.degraded) {
-          const out: ChatState = new Map();
-          for (const [id, ser] of action.sessions.sessions) {
-            const merged = carryUnsent(state.get(id), copies.get(id)!);
-            // A blank copy is not a delivery (T4 review, 5): a window that gave up loading
-            // that conversation's first page sends it empty, and marking it would stop the
-            // phone from loading its own.
-            out.set(id, isEmptyCopy(ser) ? merged : hydrated(merged));
-          }
-          return out;
-        }
-        const out: ChatState = new Map(state);
-        for (const [id, ser] of action.sessions.sessions) {
-          const copy = copies.get(id)!;
-          if (!isEmptyCopy(ser)) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
-          else if (!out.has(id)) out.set(id, copy);   // a blank slot, not a delivered copy
-        }
-        return out;
-      } catch (err) {
-        console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
-        return state;
-      }
+    // WHY (one-core R5-2): a screen is filled by `session:open` (main/session-open.ts), not by a copy of another window's chat
+    // state, so the old HYDRATE_CHAT_STATE (the phone's snapshot apply, with its degraded/kept/carry-unsent rules) is gone. What is
+    // left is the dev workbench's seeding: it builds timelines by replaying fixtures through this reducer and hands the result in
+    // whole (workbench/seed-chat.ts). Nothing on a real screen dispatches it.
+    case 'CHAT_STATE_SEEDED': {
+      if (action.sessions.sessions.length === 0) return state;
+      const copies = deserializeChatState(action.sessions);
+      for (const [id, copy] of copies) next.set(id, copy);
+      return next;
+    }
+
+    // A fresh page is about to be applied to a session this screen already shows (a reconnect that found the record changed or
+    // the gap too old, a Refresh, or the first open): start the session over so the answer is the only source. What is
+    // renderer-local survives: rows this screen queued (a native queued send waits for the host to drain it).
+    case 'SESSION_FILL_RESET': {
+      const prev = next.get(action.sessionId);
+      // Also kept: this screen's own sends the transcript has not echoed yet (pending bubbles). The echo, when the fill's recent past or a
+      // later live event carries it, confirms the oldest matching pending (TRANSCRIPT_USER_MESSAGE) instead of appending a second copy.
+      const pending = prev ? prev.timeline.filter((e) => e.kind === 'user' && e.pending) : [];
+      next.set(action.sessionId, { ...createSessionChatState(), ...(prev ? { queuedMessages: prev.queuedMessages, timeline: pending } : {}) });
+      return next;
+    }
+
+    // The record says a turn is in flight and this screen's copy, filled from a page, does not show it (a page read from disk cannot
+    // say; a Claude Code turn that was mid-answer when this screen opened). Only ever turns the thinking indicator ON: ending a
+    // turn is the transcript's job (turn-complete / the idle marker), never a fill's.
+    case 'SESSION_WORKING_SYNCED': {
+      const session = next.get(action.sessionId);
+      if (!session || !action.working || session.isThinking) return state;
+      next.set(action.sessionId, { ...session, isThinking: true });
+      return next;
     }
 
     case 'SESSION_INIT': {
@@ -1063,14 +1003,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...(action.attachments?.length ? { attachments: action.attachments } : {}),
       };
 
-      // Task 12: the queued-send branch that used to live here (append a
-      // pending+queued bubble without touching turn state) is gone — a
-      // queued native send now dispatches QUEUED_MESSAGE_ADDED instead of
-      // USER_PROMPT (see InputBar.tsx), which never touches the timeline at
-      // all. USER_PROMPT is unconditionally the 'sent' path again.
+      // USER_PROMPT is unconditionally the 'sent' path: a queued native send never reaches it (the host announces its queue, QUEUE_SYNCED).
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message, pending: true }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}) }],
         isThinking: true,
         // A message sent while a reply is still streaming does not end that reply: Claude
         // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
@@ -1093,20 +1029,56 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // Task 12: native send acked 'queued' — add to the docked-strip list.
-    // Deliberately does NOT touch the timeline or turn/group/isThinking state
-    // (that was the Task 3/11 bug: an enqueue-time timeline bubble froze
-    // above content the still-streaming prior turn hadn't emitted yet).
-    case 'QUEUED_MESSAGE_ADDED': {
+    // One-core R5-4b: what the computer's record said about a message this screen sent and has no echo for. Touches only that one still-pending bubble.
+    case 'SEND_NOTE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      next.set(action.sessionId, {
-        ...session,
-        queuedMessages: [
-          ...session.queuedMessages,
-          { queueId: action.queueId, content: action.content, timestamp: action.timestamp },
-        ],
-      });
+      const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
+      if (idx < 0) return state;
+      const entry = session.timeline[idx] as Extract<TimelineEntry, { kind: 'user' }>;
+      if ((entry.sendNote ?? null) === action.note || (entry.sendNoteDismissed && action.note === 'unsure')) return state; // WHY: after Dismiss a later "unsure" must not bring the note back
+      const timeline = session.timeline.slice();
+      const { sendNote: _old, ...rest } = entry;
+      timeline[idx] = action.note ? { ...rest, sendNote: action.note } : action.dismissed ? { ...rest, sendNoteDismissed: true } : rest;
+      // A message the computer never got starts no turn: the spinner USER_PROMPT put up has nothing behind it (review fix, R5-4b).
+      next.set(action.sessionId, { ...session, timeline, ...(action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
+      return next;
+    }
+
+    case 'SEND_DISCARD': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
+      if (idx < 0) return state;
+      next.set(action.sessionId, { ...session, timeline: [...session.timeline.slice(0, idx), ...session.timeline.slice(idx + 1)], ...spinnerWithNoTurn(session) });
+      return next;
+    }
+
+    // One-core R5-4a: the host's queue as it is now. Same rows and order = the very same state back (no redraw).
+    case 'QUEUE_SYNCED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const cur = session.queuedMessages;
+      if (cur.length === action.queue.length && cur.every((q, i) => q.queueId === action.queue[i].queueId && q.content === action.queue[i].content)) return state;
+      next.set(action.sessionId, { ...session, queuedMessages: action.queue.map((q) => ({ queueId: q.queueId, content: q.content, timestamp: q.timestamp })) });
+      return next;
+    }
+
+    case 'MODEL_SWITCH_RETRACT': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const timeline = session.timeline.filter((e) => !(e.kind === 'system-marker' && e.marker.id === action.markerId));
+      if (timeline.length === session.timeline.length) return state;
+      next.set(action.sessionId, { ...session, timeline });
+      return next;
+    }
+
+    // One-core R5-4a: the host announced the session's model (see SessionChatState.modelAnnounced for why it waits for a later turn).
+    case 'MODEL_ANNOUNCED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      if (session.modelAnnounced?.model === action.model) return state;
+      next.set(action.sessionId, { ...session, modelAnnounced: { model: action.model, turnId: session.currentTurnId } });
       return next;
     }
 
@@ -1300,6 +1272,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       if (session.attentionState === action.state) return state;
+      // WHY onlyFrom (R5-4b): the computer says "no longer stuck" about ITS own reading; it must not wipe a state another writer set (died, error).
+      if (action.onlyFrom !== undefined && session.attentionState !== action.onlyFrom) return state;
       next.set(action.sessionId, { ...session, attentionState: action.state });
       return next;
     }
@@ -1452,8 +1426,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // Task 12 (drain-side removal): independent of whether a pending
       // TIMELINE bubble matches below — clear the OLDEST queuedMessages entry
       // with matching content, if any. WHY independent rather than gated on
-      // confirmedIdx: a `sent` message never wrote a queuedMessages entry (no
-      // QUEUED_MESSAGE_ADDED fired for it), so this scan simply finds nothing
+      // confirmedIdx: a `sent` message never has a queuedMessages entry (the host
+      // never announced it as waiting), so this scan simply finds nothing
       // and is a no-op on that path — running it unconditionally is correct,
       // not "unconditionally-but-harmless-because-usually-empty." A `queued`
       // message, symmetrically, never has a pending bubble to match (Task 12
@@ -1739,6 +1713,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...session, assistantTurns, timeline, currentTurnId, seenUuids,
         currentGroupId: null, // next tool_use creates a new group
         lastActivityAt: Date.now(),
+        // A reply from a LATER turn carries the model that really answered, so it replaces the host's announcement (R5-4a); the turn that
+        // was already running when the announcement came keeps the old model's name on its text and must not undo it.
+        ...(session.modelAnnounced && action.model && !isPlaceholderModelId(action.model) && currentTurnId !== session.modelAnnounced.turnId
+          ? { modelAnnounced: null } : {}),
         // Visible OUTPUT arrived (not merely activity). The thinking indicator
         // suppresses itself while this is fresh — a filling bubble is already proof
         // the model is alive, so a spinner beside it is noise.
@@ -1931,6 +1909,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // tool-use replacing it — the note, and the id a later expiry needs.
             answeredElsewhere: synTool.answeredElsewhere,
             resolvedRequestId: synTool.resolvedRequestId,
+            answerPending: synTool.answerPending, // R6-2: an answer still unconfirmed survives the real tool-use replacing the synthetic card
+            answerUnconfirmed: synTool.answerUnconfirmed,
             permissionSuggestions: synTool.permissionSuggestions,
             denyListed: synTool.denyListed,
             // Carried for the same reason as denyListed: ToolCard gates the
@@ -2020,7 +2000,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
-        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
+        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId, answerPending: superseded?.answerPending, answerUnconfirmed: superseded?.answerUnconfirmed };
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
@@ -2420,18 +2400,21 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // tool finished before the process died, and a card claiming success for
       // work that may never have run is the misleading-success failure
       // docs/error-message-standards.md exists to prevent.
-      // NOTE the asymmetry with NATIVE_SESSION_ERROR, which spreads endTurn()
-      // and then RE-ASSERTS attentionState/errorMessage. This spread does not,
-      // so it resets attentionState to 'ok' and clears errorMessage — which
-      // would wipe an error banner and unblock the input gate
+      // NOTE the asymmetry with NATIVE_SESSION_ERROR, which spreads endTurn() and then RE-ASSERTS attentionState/errorMessage: endTurn
+      // resets attentionState to 'ok' and clears errorMessage, which would wipe an error banner and unblock the input gate
       // (pty-input-gate.ts keys on attentionState !== 'ok').
-      // Safe today only because no replay lands on a session holding an error:
-      // onOwnershipLost dispatches SESSION_REMOVE, which deletes the state, so
-      // every re-dock replays into a fresh slot. If that ever changes, this
-      // needs the same re-assert NATIVE_SESSION_ERROR does.
+      //
+      // WHY it is re-asserted here now (one-core R5-2): this used to be safe only because no replay landed on a session holding an error
+      // (a window that inherited a session started from a blank slot). A screen that is filled by `session:open` replays the record's
+      // recent past FIRST (a provider error is a live-only event, so it is in that past) and then this marker, so the marker lands on
+      // exactly such a session. An error the turn died of is not something "the session was closed" undoes.
+      const ended = endTurn(withShells, 'Session was closed while this was running');
       next.set(action.sessionId, {
         ...withShells,
-        ...endTurn(withShells, 'Session was closed while this was running'),
+        ...ended,
+        ...(session.attentionState === 'error'
+          ? { attentionState: 'error' as const, errorMessage: session.errorMessage, errorCode: session.errorCode }
+          : {}),
       });
       return next;
     }
@@ -2533,6 +2516,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       for (const tool of session.toolCalls.values()) {
         if (tool.requestId === action.requestId && tool.status === 'awaiting-approval') return state;
       }
+      // One-core R6-2: this screen has answered this ask and drawn it as answered. A beat sent before the answer landed must not bring the
+      // card back; one that arrives after the answer's reply was lost means the computer still has the ask open (the card goes back).
+      const again = reannounced(session.toolCalls, action.requestId);
+      if (again === 'ignore') return state;
+      if (again) { next.set(action.sessionId, { ...session, toolCalls: again }); return next; }
       const toolCalls = new Map(session.toolCalls);
 
       // This action is REPEATABLE (2026-08-16): main re-announces every
@@ -2835,6 +2823,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    // One-core R6-2: a phone's instant permission answer (state/permission-answer.ts).
+    case 'PERMISSION_ANSWER': {
+      const session = next.get(action.sessionId);
+      const tools = session && answerStep(session.toolCalls, action);
+      if (!session || !tools) return state;
+      next.set(action.sessionId, { ...session, toolCalls: tools });
+      return next;
+    }
+
     case 'PERMISSION_EXPIRED': {
       const session = next.get(action.sessionId);
       if (!session) return state;
@@ -2937,6 +2934,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // socket closed. The result arrives through the transcript or a Refresh.
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // One-core R6-2: the fill's list of asks still open is the computer's own word on every answer this screen drew and has no reply for.
+      if (action.type === 'PERMISSION_REPLAY_COMPLETE') {
+        const answered = reconcileAnswers(session.toolCalls, new Set(action.pendingRequestIds));
+        if (answered) return chatReducer(new Map(next).set(action.sessionId, { ...session, toolCalls: answered }), action);
+      }
       const single = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' ? action.requestId : null;
       const silent = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' && action.silent === true;
       const pending = action.type === 'PERMISSION_REPLAY_COMPLETE' ? new Set(action.pendingRequestIds) : null;
@@ -3144,7 +3146,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         : endedSess;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...pageSess.timeline, ...session.timeline],
+        timeline: [...pageSess.timeline.filter((e) => !(e.kind === 'system-marker' && session.timeline.some((l) => l.kind === 'system-marker' && l.marker.id === e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
         // Union the maps page-first so a live entry always wins over a replayed
         // one for the same key (it is the fresher of the two).
         toolCalls: new Map([...pageSess.toolCalls, ...session.toolCalls]),
@@ -3194,7 +3196,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
         compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
-          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+          ...(action.awaitsResult ? { awaitsResult: true } : {}), ...(action.hostOwned ? { hostOwned: true } : {}) },
       });
       return next;
     }
@@ -3228,7 +3230,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
       // WHY: live replay can deliver the same automatic summary again while the
       // turn is still running. The marker's event ID is the dedupe authority.
-      if (session.timeline.some(e => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
+      if (hasMarker(session.timeline, action.markerId)) return state;
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
@@ -3335,6 +3337,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'CLEAR_TIMELINE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // The same divider delivered twice (a replay of the host's numbered event) is drawn once (one-core R5-4a).
+      const id = action.markerId;
+      if (id !== undefined && hasMarker(session.timeline, id)) return state;
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
@@ -3350,17 +3355,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // This also de-fangs the reason CLEAR_TIMELINE was called irreversible:
         // nothing is destroyed, so a clear the runtime later refuses costs a
         // stray marker rather than a conversation.
-        timeline: [
+        // WHY no marker without an id (sync-fix6): a live native `context-clear` only resets the turn here; the record's `clear` line draws the divider.
+        timeline: id === undefined ? session.timeline : [
           ...session.timeline,
-          {
-            kind: 'system-marker',
-            marker: {
-              id: action.markerId,
-              timestamp: action.timestamp,
-              label: 'Conversation cleared',
-              variant: 'clear',
-            },
-          },
+          { kind: 'system-marker', marker: { id, timestamp: action.timestamp, label: 'Conversation cleared', variant: 'clear' } },
         ],
       });
       return next;
@@ -3373,6 +3371,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      if (hasMarker(session.timeline, action.markerId)) return state; // see CLEAR_TIMELINE
       next.set(action.sessionId, {
         ...session,
         timeline: [

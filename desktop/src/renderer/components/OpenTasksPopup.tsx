@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import type { TaskState } from '../state/task-state';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FoldRow, Pill, SectionLabel, SettingRow } from './ui';
 
@@ -101,7 +102,7 @@ function FoldedRow({ t, onUnhide }: { t: TaskState; onUnhide?: (id: string) => v
 
 const countWords = (n: number) => `${n} ${n === 1 ? 'task' : 'tasks'}`;
 
-export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
+function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
   // WHY no useEscClose here any more: the shared popup already takes Escape (Dialog.tsx), and a
   // second entry on the Escape stack is what that file says a caller must not add.
 
@@ -173,3 +174,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
     </Dialog>
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(OpenTasksPopup);

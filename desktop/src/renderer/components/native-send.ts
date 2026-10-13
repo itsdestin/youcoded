@@ -34,12 +34,14 @@ export function sendChatMessage(
   sessionId: string,
   ptyText: string,
   filePaths?: string[],
+  sendId?: string,
 ): Promise<NativeSendResult>;
 export function sendChatMessage(
   provider: 'claude' | undefined,
   sessionId: string,
   ptyText: string,
   filePaths?: string[],
+  sendId?: string,
 ): void;
 // Fix (ROADMAP L732): a caller holding the provider in a VARIABLE (typed
 // `'claude' | 'native' | undefined`, e.g. `session.provider` read off state)
@@ -54,12 +56,15 @@ export function sendChatMessage(
   sessionId: string,
   ptyText: string,
   filePaths?: string[],
+  sendId?: string,
 ): Promise<NativeSendResult> | void;
 export function sendChatMessage(
   provider: 'claude' | 'native' | undefined,
   sessionId: string,
   ptyText: string,
   filePaths: string[] = [],
+  /** The screen's id for this send (one-core R5-4b): the host notes it, so a phone that loses the answer can ask whether the message arrived. */
+  sendId?: string,
 ): Promise<NativeSendResult> | void {
   if (provider === 'native') {
     const text = [...filePaths, ptyText].filter(Boolean).join(' ');
@@ -67,11 +72,12 @@ export function sendChatMessage(
     // attachments, so a vision-capable model receives the actual pixels instead
     // of only a path it would have to Read. Main filters to image types and
     // drops them entirely when the bound model can't see images.
-    return window.claude.native.send(sessionId, text, filePaths);
+    return sendId ? window.claude.native.send(sessionId, text, filePaths, sendId) : window.claude.native.send(sessionId, text, filePaths);
   }
   // Claude/PTY path — for file-bearing sends InputBar keeps its own
   // FILE_GAP_MS scheduling + echo-driven `\r` submit; this helper only owns the
   // native branch. For a plain (no-file) claude send this convenience appends
   // the submit `\r` the same way the PTY worker expects.
-  window.claude.session.sendInput(sessionId, ptyText + '\r');
+  if (sendId) window.claude.session.sendInput(sessionId, ptyText + '\r', undefined, sendId);
+  else window.claude.session.sendInput(sessionId, ptyText + '\r');
 }

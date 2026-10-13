@@ -89,6 +89,19 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `buildAuthOkResponse carries the protocol version and what this screen can do`() {
+        val result = MessageRouter.buildAuthOkResponse("android")
+        assertEquals(1, result.getInt("protocolVersion"))
+        val caps = result.getJSONObject("capabilities")
+        // The Android app's own runtime: raw terminal bytes, a readable buffer, and none of the computer-only features.
+        assertEquals("raw-bytes", caps.getString("terminalTransport"))
+        assertTrue(caps.getBoolean("terminalScreenRead"))
+        assertFalse(caps.getBoolean("nativeWindows"))
+        assertFalse(caps.getBoolean("openInOs"))
+        assertFalse(caps.getBoolean("nativeSessions"))
+    }
+
+    @Test
     fun `buildAuthOkResponse includes the platform field`() {
         val result = MessageRouter.buildAuthOkResponse("android")
         assertEquals("android", result.getString("platform"))

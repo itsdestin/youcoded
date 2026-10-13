@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProfile, effectiveContextForModel, CLOUD_DEFAULT, type DiscoveredModel } from '../src/main/harness/capability-profile';
+import { resolveProfile, effectiveContextForModel, CLOUD_DEFAULT, IMAGE_LIMITS_OPENAI, type DiscoveredModel } from '../src/main/harness/capability-profile';
 import type { KnownModelEntry } from '../src/main/harness/known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from '../src/main/harness/specialists/limits';
 import type { ProviderType } from '../src/shared/provider-types';
@@ -471,7 +471,9 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
     const viaPlan = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-5.6', contextLength: null });
     const viaOpenRouter = resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null, supportsVision: true });
     expect(viaPlan.injectionBudgetTokens).toBe(viaOpenRouter.injectionBudgetTokens);
-    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt' });
+    // WHY imageLimits differs: it is a provider-TYPE fact and the plan rides
+    // OpenAI's wire (30,000-patch budget), while OpenRouter keeps the default.
+    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt', imageLimits: IMAGE_LIMITS_OPENAI });
     // And without the catalog fact, OpenRouter alone falls to "no vision" — the
     // plan does not, because it is not a transport.
     expect(resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null }).supportsVision).toBe(false);
@@ -493,5 +495,23 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
       const p = resolveProfile({ providerType, modelId: 'x', contextLength: null });
       expect(typeof p.injectionBudgetTokens, providerType).toBe('number');
     }
+  });
+});
+
+describe('resolveProfile — imageLimits is a provider-type fact', () => {
+  it('OpenAI and Sign-in-with-ChatGPT share the one verified patch budget', () => {
+    for (const providerType of ['openai', 'chatgpt'] as const) {
+      expect(resolveProfile({ providerType, modelId: 'x', contextLength: null }).imageLimits).toEqual({ maxEdgePx: 8192, maxPatches: 30_000 });
+    }
+  });
+  it('every other provider type gets the conservative default, local and registry-matched included', () => {
+    for (const providerType of ['anthropic', 'google', 'openrouter', 'openai-compatible'] as const) {
+      expect(resolveProfile({ providerType, modelId: 'x', contextLength: null }).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+    }
+    expect(resolveProfile(local('mystery-3b', 8_192)).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+    expect(resolveProfile(local('qwen2.5-7b-instruct', 32_768)).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+  });
+  it('CLOUD_DEFAULT carries the conservative default, never the OpenAI budget', () => {
+    expect(CLOUD_DEFAULT.imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
   });
 });

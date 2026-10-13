@@ -35,6 +35,14 @@ export function useActiveSessionModel(sessionId: string | null): ModelAlias | nu
     const session = store.getState().get(sid);
     if (!session) return null;
 
+    // The model the computer announced for this session (a /model typed or picked on ANY screen) until a later reply proves otherwise.
+    // WHY first (one-core R5-4a): the walk below only learns of a switch from the next assistant turn, so a screen that did not make the
+    // switch kept the old model on its chip until the next reply (roadmap: "model label corrects only on the next reply").
+    if (session.modelAnnounced) {
+      const announced = claudeAliasForModelId(session.modelAnnounced.model);
+      if (announced) return announced;
+    }
+
     // Walk backward through the timeline for the most recent assistant-turn
     // with a known model. turn.model is null until the first assistant-text
     // arrives, so new/empty sessions return null here.

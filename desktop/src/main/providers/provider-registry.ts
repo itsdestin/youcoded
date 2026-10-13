@@ -6,7 +6,6 @@
 // Thrown error messages here surface DIRECTLY in the UI error banner, so they
 // are written as plain language telling the user what to do — not debug codes.
 import { ulid } from 'ulid';
-import { app } from 'electron';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
@@ -23,7 +22,7 @@ import type { LocalEngineHook } from '../engine/engine-manager';
 import { NativeHome } from '../native-home';
 import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
-import { CHATGPT_CODEX_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
+import { CHATGPT_CODEX_BASE_URL, CHATGPT_OFFICIAL_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
 import { chatGptMiddleware } from './chatgpt-model';
 import { promptCacheMiddleware, type PromptCacheProvider } from './prompt-cache';
 import { openRouterTurnFetch, type OpenRouterHealth } from './openrouter-health';
@@ -80,7 +79,11 @@ export class ProviderRegistry {
               /** What OpenRouter last said about this profile's key
                *  (connection-trust §3.1). null = a unit test without it: the
                *  OpenRouter Test falls back to reporting nothing it can't prove. */
-              private health: OpenRouterHealth | null = null) {}
+              private health: OpenRouterHealth | null = null,
+              /** The profile folder (Electron's userData). WHY a value, not `app.getPath` (2026-09-29
+               *  one-core R1): this file must load without Electron. null = a unit test without it:
+               *  ChatGPT request diagnostics are simply not written. */
+              private userDataDir: string | null = null) {}
 
   /** Seed the built-in entries. Runs under the file lock so two processes
    *  (dev instance + built app share ~/.youcoded) can't double-seed. */
@@ -451,12 +454,21 @@ export class ProviderRegistry {
           // request with the live token (refreshing when needed) — pinned:
           // 'Bearer chatgpt' never reaches the network.
           apiKey: 'chatgpt',
-          baseURL: CHATGPT_CODEX_BASE_URL,
-          headers: {
-            'chatgpt-account-id': acct.accountId,
-            originator: CHATGPT_ORIGINATOR,
-            'OpenAI-Beta': 'responses=experimental',
-          },
+          // WHY two shapes: the official route (OpenAI's own Sign in with
+          // ChatGPT) is the public Responses API, addressed by the token alone;
+          // the Codex endpoint wants its account and client headers. The
+          // official endpoint REFUSED a Codex-style `originator` (400, measured
+          // 2026-10-05), so it gets none of them.
+          ...(this.chatgpt.route === 'official'
+            ? { baseURL: CHATGPT_OFFICIAL_BASE_URL }
+            : {
+                baseURL: CHATGPT_CODEX_BASE_URL,
+                headers: {
+                  'chatgpt-account-id': acct.accountId,
+                  originator: CHATGPT_ORIGINATOR,
+                  'OpenAI-Beta': 'responses=experimental',
+                },
+              }),
           // Bind the SDK model to the account generation whose continuation
           // passed the harness check; auth rechecks after async serialization.
           fetch: this.chatgpt.fetch(acct),
@@ -467,9 +479,11 @@ export class ProviderRegistry {
         // WHY: profile-private diagnostics must never enter synced NativeHome.
         // Even profile-path lookup failure must not prevent model construction.
         try {
-          this.diagnostics ??= new ChatGptRequestDiagnostics({
-            directory: join(app.getPath('userData'), 'private-diagnostics', 'chatgpt-cache'),
-          });
+          if (this.userDataDir) {
+            this.diagnostics ??= new ChatGptRequestDiagnostics({
+              directory: join(this.userDataDir, 'private-diagnostics', 'chatgpt-cache'),
+            });
+          }
         } catch { /* diagnostics are optional; never log a sensitive exception */ }
         const model = wrapLanguageModel({
           model: provider.responses(binding.modelId),

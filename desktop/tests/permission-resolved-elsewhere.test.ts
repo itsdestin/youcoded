@@ -10,7 +10,7 @@ function withAsk(requestId: string, toolName = 'Bash'): ChatState {
   let s: ChatState = new Map();
   s = chatReducer(s, { type: 'SESSION_INIT', sessionId: 's1' });
   s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's1', uuid: 'm1', text: 'go', timestamp: 1 });
-  s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 't1', toolName, toolInput: { command: 'ls' } });
+  s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's1', uuid: 'u1', toolUseId: 't1', toolName, toolInput: { command: 'ls' } });
   s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName, input: { command: 'ls' }, requestId });
   return s;
 }
@@ -51,7 +51,7 @@ describe('PermissionResolved reaches the reducer', () => {
 describe('hook:replay-complete clears every card not in the pending list', () => {
   it('leaves listed asks awaiting and resolves the rest with the note', () => {
     let s = withAsk('r1');
-    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u2', toolUseId: 't2', toolName: 'Read', toolInput: { p: 1 } });
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's1', uuid: 'u2', toolUseId: 't2', toolName: 'Read', toolInput: { p: 1 } });
     s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Read', input: { p: 1 }, requestId: 'r2' });
     expect(tool(s, 't2').status).toBe('awaiting-approval');
 
@@ -134,7 +134,7 @@ describe('answered elsewhere, against the events that follow it', () => {
     s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's1', uuid: 'm1', text: 'go', timestamp: 1 });
     s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, requestId: 'early' });
     s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'early' });
-    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 'real', toolName: 'Bash', toolInput: { command: 'ls' } });
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's1', uuid: 'u1', toolUseId: 'real', toolName: 'Bash', toolInput: { command: 'ls' } });
     const real = s.get('s1')!.toolCalls.get('real')!;
     expect(real).toMatchObject({ answeredElsewhere: true, resolvedRequestId: 'early' });
     s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'early' });

@@ -23,14 +23,15 @@ import {
   underWords,
 } from '../src/main/harness/eval/assertions';
 import type { CaseRun } from '../src/main/harness/eval/case-types';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 const FIXTURE = path.join(os.tmpdir(), 'youcoded-review-fixture-abc123');
 
 let seq = 0;
-function ev(type: TranscriptEvent['type'], data: TranscriptEvent['data']): TranscriptEvent {
+function ev<T extends TranscriptEventType>(type: T, data: DataOf<T>): EventOf<T> {
   seq += 1;
-  return { type, sessionId: 'eval', uuid: `u${seq}`, timestamp: seq, data };
+  return mkEv(type, data, { sessionId: 'eval', uuid: `u${seq}`, timestamp: seq });
 }
 // Every tool-use carries a toolUseId, because HarnessSession stamps one on
 // every tool-use AND its matching tool-result (harness-session.ts:1370 / :1403).

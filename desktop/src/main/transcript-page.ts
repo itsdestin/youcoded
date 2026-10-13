@@ -65,6 +65,9 @@ function nativeLineEvents(line: string, sessionId: string): TranscriptEvent[] {
   let e: any;
   try { e = JSON.parse(line); } catch { return []; }
   if (!e || typeof e !== 'object' || typeof e.type !== 'string' || !e.data || typeof e.data !== 'object') return [];
+  // WHY the cast: `e` is an UNTRUSTED line off disk — only `type` and `data` were checked
+  // above, never that `data` has the fields this event type declares. Readers of a page
+  // keep their own defaults (`?? ''`, `|| {}`), exactly as before the union (M5).
   return [{ ...e, sessionId } as TranscriptEvent];
 }
 

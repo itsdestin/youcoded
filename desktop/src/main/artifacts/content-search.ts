@@ -16,6 +16,7 @@
 import { spawn } from 'child_process';
 import { SENSITIVE_SEGMENTS, SENSITIVE_BASENAMES, SENSITIVE_SUBPATHS } from '../../shared/artifacts/editable-path-policy';
 import { resolveRgPath } from '../harness/tools/grep';
+import { PHONE_DENY_SEARCH_GLOBS } from '../harness/tools/credential-paths';
 
 export interface ContentHit {
   /** Project-relative path, forward slashes. */
@@ -82,12 +83,14 @@ export function parseRgJsonLine(line: string): ContentHit | null {
   };
 }
 
-export function searchProjectContent(projectRoot: string, query: string): Promise<ContentSearchResult> {
+export function searchProjectContent(projectRoot: string, query: string, opts?: { refusePrivate?: boolean }): Promise<ContentSearchResult> {
   const q = query.trim();
   if (!q) return Promise.resolve({ ok: true, hits: [], truncated: false });
 
   const rgArgs = [
     '--no-config', '--hidden', '--json',
+    // WHY (2026-10-01 one-core R3-SEC review): a phone's deny globs must also match ID_RSA / X.KEY on a case-insensitive disk.
+    ...(opts?.refusePrivate ? ['--glob-case-insensitive'] : []),
     '-F', '-i',                          // literal, case-insensitive
     '--max-count', String(MAX_PER_FILE),
     // rg respects .gitignore in git projects; these keep non-git projects from
@@ -99,6 +102,8 @@ export function searchProjectContent(projectRoot: string, query: string): Promis
     // files every other read hides — and over remote access (batch 3) a phone
     // can search a root (2026-09-10 review of T6, finding 1).
     ...SENSITIVE_GLOBS.flatMap((g) => ['--glob', g]),
+    // WHY (2026-10-01 one-core R3-SEC): a phone's search also skips the phone deny list (keys, .git-credentials, .npmrc…).
+    ...(opts?.refusePrivate ? PHONE_DENY_SEARCH_GLOBS.flatMap((g) => ['--glob', g]) : []),
     '--', q, '.',
   ];
 

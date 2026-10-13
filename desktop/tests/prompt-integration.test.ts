@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // (sendPromptInput talks to window.claude — .ts tests default to the node env)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
+import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 import { sendPromptInput, answerPrompt, PROMPT_SUBMIT_DELAY_MS } from '../src/renderer/state/prompt-input';
 
 /**

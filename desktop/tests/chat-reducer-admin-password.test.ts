@@ -24,7 +24,7 @@ function dispatch(state: ChatState, action: ChatAction): ChatState {
 
 function bashCard(state: ChatState, toolUseId: string): ChatState {
   return dispatch(state, {
-    type: 'TRANSCRIPT_TOOL_USE',
+    type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
     sessionId: SESSION,
     uuid: `uuid-${toolUseId}`,
     toolUseId,
@@ -35,7 +35,7 @@ function bashCard(state: ChatState, toolUseId: string): ChatState {
 
 function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
   return dispatch(state, {
-    type: 'TRANSCRIPT_TOOL_USE',
+    type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
     sessionId: SESSION,
     uuid: `uuid-${toolUseId}`,
     toolUseId,
@@ -130,7 +130,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
   it('sets passwordAsk and flips to awaiting-approval on the CHILD\'s own segment inside the Task card, not a top-level card', () => {
     let state = seedTaskCard(initState());
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
       toolName: 'Bash', toolInput: { command: 'apt update' }, parentAgentToolUseId: TASK_ID,
     });
     state = dispatch(state, {
@@ -149,7 +149,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
   it('a repeat for the nested segment is a heartbeat no-op', () => {
     let state = seedTaskCard(initState());
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
       toolName: 'Bash', toolInput: { command: 'apt update' }, parentAgentToolUseId: TASK_ID,
     });
     const ask: ChatAction = {
@@ -165,7 +165,7 @@ describe('PASSWORD_REQUEST / PASSWORD_RESOLVED — nested under a specialist\'s 
   it('PASSWORD_RESOLVED clears the nested segment\'s field and flips it back to running', () => {
     let state = seedTaskCard(initState());
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-child-bash', toolUseId: 'child-bash-1',
       toolName: 'Bash', toolInput: { command: 'apt update' }, parentAgentToolUseId: TASK_ID,
     });
     state = dispatch(state, {

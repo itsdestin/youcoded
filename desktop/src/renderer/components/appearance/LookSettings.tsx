@@ -21,7 +21,7 @@ import {
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides, type LookParticles,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, Slider, FOCUS_RING } from '../ui';
+import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, Slider, Toggle, FOCUS_RING } from '../ui';
 
 // "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
 // request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
@@ -226,11 +226,14 @@ function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode
   );
 }
 
-function GlassSettings({ active, raw, look, set, reducedEffects }: {
+export function GlassSettings({ active, raw, look, set, reducedEffects }: {
   active: LoadedTheme; raw: LoadedTheme; look: LookOverrides; set: (next: LookOverrides) => void; reducedEffects: boolean;
 }) {
+  const { pagesSeeThrough, setPagesSeeThrough } = useTheme();
   const [fineTune, setFineTune] = useState(look.glass === 'custom');
   const seeThrough = hasSeeThroughBackground(raw);
+  // The layout actually painted (the user's pick laid over the theme's own): Framed has an opaque pane, so nothing shows through.
+  const framed = (active.layout?.['chrome-style'] ?? 'default') === 'default';
   const bakedTerminal = raw.background?.type === 'image' && !!raw.background?.['terminal-value'];
   const tabs = [
     // "Auto", not Destin's "Auto (Theme)": in a four-way strip the longer label wrapped
@@ -270,6 +273,21 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
       <StackedRow title="Glass" hint={hint}>
         <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
       </StackedRow>
+      {/* WHY here (owner, 2026-10-05): the ONE global switch for pages and Office showing the wallpaper through their frosted
+          pane — it belongs with the glass choices, and replaces the per-page switch that sat in each page's top bar. It does
+          nothing without a wallpaper or in the Framed layout, so it greys out with a plain reason, the same way the Glass
+          row says "No effect on this theme" (never a control that silently does nothing). */}
+      <SettingRow
+        variant="item"
+        title="Show theme background behind pages"
+        description={!seeThrough ? 'This theme has no wallpaper'
+          : framed ? 'Works with the Floating bars or Minimalist layout'
+          : 'Pages and Office frost over your wallpaper'}
+        // WHY the row is not `disabled` (ux review 2, U3/U4): that dims the whole row, note included, so the reason was too faint
+        // to read. Only the switch is disabled; it SHOWS off while it cannot apply, but the saved choice is untouched, so picking a
+        // layout/theme where it works shows the saved value again.
+        control={<Toggle checked={pagesSeeThrough && seeThrough && !framed} onChange={setPagesSeeThrough} disabled={!seeThrough || framed} aria-label="Show theme background behind pages" />}
+      />
       {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
       <FoldRow
         title="Fine-tune glass"
@@ -441,7 +459,7 @@ export function LookSettings() {
     // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
     <FoldRow
       title="Additional customizations"
-      description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
+      description={changed === 0 ? 'Bubbles, corners, glass, particles, page background' : `${changed} changed from the theme`}
       open={open}
       onToggle={setOpen}
     >

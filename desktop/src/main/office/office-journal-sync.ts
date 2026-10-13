@@ -7,7 +7,7 @@
 // (OFFICE_JOURNAL_DONE). The answer travels behind the edits on the same IPC pipe, so by the time it
 // arrives main has journaled them. Capped: a hung or slow page never holds a close past 1.5 s.
 // This is not a save — the file is written by autosave or recovered at the next open.
-import { ipcMain } from 'electron';
+import { officeIpc } from '../ipc/office';
 
 export const OFFICE_JOURNAL_REQUEST = 'office:journal-request';
 export const OFFICE_JOURNAL_DONE = 'office:journal-done';
@@ -22,7 +22,7 @@ interface SyncIpc {
 let seq = 0;
 /** Ask the window's editors to journal their newest edits. Never rejects; resolves on the answer,
  *  after `capMs`, or at once when the window is gone. */
-export function syncJournals(target: SyncTarget, ipc: SyncIpc = ipcMain, capMs = JOURNAL_SYNC_CAP_MS): Promise<void> {
+export function syncJournals(target: SyncTarget, ipc: SyncIpc = officeIpc, capMs = JOURNAL_SYNC_CAP_MS): Promise<void> {
   if (target.isDestroyed()) return Promise.resolve();
   const id = `journal-${++seq}`;
   return new Promise((resolve) => {

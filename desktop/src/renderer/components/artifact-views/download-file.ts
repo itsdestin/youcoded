@@ -23,6 +23,7 @@ const REFUSALS: Record<string, string> = {
   'outside-roots': 'this file is outside the folders remote access can read.',
   'not-a-file': 'that isn’t a file.',
   'orphan': 'the file is no longer on the computer.',
+  'kept-on-computer': 'this file is kept on the computer and isn’t sent over remote access.',
   'not-allowed': 'the computer won’t send this file.',
   'no path': 'the file has no path.',
 };

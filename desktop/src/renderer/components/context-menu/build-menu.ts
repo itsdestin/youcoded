@@ -1,4 +1,5 @@
-import { isAndroid, isRemoteMode } from '../../platform';
+import { getCapabilities } from '../../platform';
+import { getSheetSelectionText } from '../artifact-views/artifact-find-bridge';
 import { copyText, readText } from './clipboard';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
@@ -41,9 +42,8 @@ export type MenuEntry =
 
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 const mod = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
-// Reveal-in-folder / open-in-OS only do anything on the Electron desktop; on
-// Android and remote-browser the shell IPC is a no-op, so we hide those items.
-const isDesktop = () => !isAndroid() && !isRemoteMode();
+// Reveal-in-folder / open-in-OS only do anything where the screen says `openInOs` (the computer's own window); on
+// Android and a remote screen the shell IPC is a no-op, so those items stay hidden. (R4-1: was a local `isDesktop`.)
 
 // window.claude is the shared IPC surface (preload on desktop, remote-shim on
 // Android/remote). Typed loosely here to avoid coupling to the ambient global.
@@ -271,7 +271,7 @@ function filePillMenu(el: HTMLElement): MenuEntry[] {
   const abs = el.getAttribute('data-file-path') || '';
   const name = baseName(abs);
   const entries: MenuEntry[] = [];
-  if (isDesktop()) {
+  if (getCapabilities().openInOs) {
     entries.push(
       { type: 'item', id: 'open-file', label: 'Open file', icon: 'open', primary: true, run: () => shell()?.openPath(abs) },
       { type: 'item', id: 'reveal', label: 'View in folder', icon: 'folder', run: () => shell()?.showItemInFolder(abs) },
@@ -296,7 +296,11 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 }
 
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
-  const code = pre.innerText.replace(/\n+$/, '');
+  // WHY textContent, not innerText: while a long fence is still streaming its finished lines sit in
+  // block-level chunk spans (MarkdownContent FrozenFenceChunk), and innerText adds a blank line at each
+  // chunk edge (measured in Chromium) — the copied/quoted code would no longer be the fence's source.
+  // textContent is the code's exact characters, whether chunked, closed or never streamed.
+  const code = (pre.textContent ?? '').replace(/\n+$/, '');
   const firstLine = code.split('\n', 1)[0] ?? '';
   // quote + entryKey let the chip find and light up this block again
   // (chat-ref-highlight.ts); curly quotes match the file chips' labels.
@@ -490,7 +494,12 @@ function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[]
       run: () => { addDocComment(path, sel, sourceLabel, { ...lineOpts, ...quoteCtx, projectRoot }); },
     });
   }
-  entries.push(...textBasics(container));
+  const basics = textBasics(container);
+  // A spreadsheet's green selection is not text in the page (the viewer draws only the visible cells), so Copy
+  // takes it from the viewer — only when no ordinary text is selected.
+  const sheetText = !sel ? getSheetSelectionText() : null;
+  if (sheetText !== null) basics[0] = { ...basics[0], run: () => void copyText(sheetText) } as MenuEntry;
+  entries.push(...basics);
   return entries;
 }
 
