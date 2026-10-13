@@ -17,6 +17,7 @@ import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
+import { BackupLogo } from './BackupLogo';
 import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -232,58 +233,12 @@ const BACKEND_LABELS: Record<string, string> = {
   icloud: 'iCloud',
 };
 
-// Backend type icon + tint color for the circle background
-const BACKEND_STYLE: Record<string, { icon: string; tint: string }> = {
-  drive: { icon: '\u2601', tint: 'bg-blue-500/10 text-blue-400' },
-  github: { icon: '\u2302', tint: 'bg-purple-500/10 text-purple-400' },
-  icloud: { icon: '\u2B21', tint: 'bg-sky-500/10 text-sky-400' },
-};
+// (The emoji marks ☁ ⌂ ⬡ in coloured circles went with small-fixes-3#SF3-6: every place that names a
+// backup's service — these rows, the first-time buttons, the wizard's choices — shows its logo.)
 
-// What cross-device sync copies (sync-spaces/managed-roots.ts: ~/YouCoded's Personal + Projects).
-// WHY a fixed list (small-fixes-3, Destin): the GitHub card read "Includes Memory · Conversations ·
-// Encyclopedia · Skills · System Config" — the LEGACY Drive/iCloud categories, most of which GitHub
-// sync never copies, contradicting the (i) explainer. Those now sit under Additional backups.
-const SYNC_INCLUDES = ['conversations', 'personal-folder', 'projects'] as const;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  'personal-folder': 'Personal folder',
-  projects: 'Projects',
-  memory: 'Memory',
-  conversations: 'Conversations',
-  encyclopedia: 'Encyclopedia',
-  skills: 'Skills',
-  'system-config': 'System Config',
-  plans: 'Plans',
-  specs: 'Specs',
-};
-
-// Hover descriptions — shown via title attribute on each inline category label
-const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  'personal-folder': 'Any file you put in YouCoded’s Personal folder',
-  projects: 'Each project in YouCoded’s Projects folder',
-  memory: 'Your Claude memory files and preferences',
-  conversations: 'Chat history and conversation logs',
-  encyclopedia: 'Your personal encyclopedia entries',
-  skills: 'Custom skills you\'ve created or installed',
-  'system-config': 'App settings and preferences (not passwords or API keys)',
-  plans: 'Implementation plans and design documents',
-  specs: 'Technical specifications and reference docs',
-};
-
-/** "Includes Conversations · Personal folder · Projects": the card's grey hint line naming what it
- *  copies, each word with a hover description. Nothing when the list is empty. */
-function includesLine(lead: string, cats: readonly string[]): React.ReactNode {
-  if (cats.length === 0) return null;
-  return (
-    <div className="text-3xs mt-0.5 leading-relaxed text-fg-muted">
-      <span className="font-medium">{lead}</span>
-      {cats.flatMap((cat, i) => {
-        const label = <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>{CATEGORY_LABELS[cat] || cat}</span>;
-        return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
-      })}
-    </div>
-  );
-}
+// WHY no "Includes …" lines on the cards (small-fixes-3#SF3-7, Destin: "no, this is too much bare
+// text. should all just be hidden behind the i popup i think. too much nuance/confusion"): what each
+// copy includes is said once, in the (i) explainer (SYNC_EXPLAINER above).
 
 // --- Config display fields per backend type (read-only in edit form) ---
 const BACKEND_CONFIG_DISPLAY: Record<string, { key: string; label: string }[]> = {
@@ -1086,6 +1041,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 }
               }
               await refreshStatus();
+              // WHY (small-fixes-3#SF3-5, Destin: "we can probably just remove this page and dump
+              // them back on the main backup & sync page"): the wizard has no Done page now — it
+              // closes onto this list, where the new backup's row shows how its first upload went.
+              // A first upload that failed or went unconfirmed is the same error box under its row
+              // as a failed "Upload now" (handlePushBackend's three sentences).
+              if (typeof added?.id === 'string') {
+                const fail = first.kind === 'failed'
+                  ? (first.error
+                    ? { message: `Upload failed: ${plainMessage(first.error)}`, reportable: true }
+                    : { message: "Upload hasn't run yet — try again in a moment.", reportable: false })
+                  : first.kind === 'unknown' ? { message: "Couldn't confirm the upload finished.", reportable: true } : null;
+                if (fail) setUploadFailure(prev => ({ ...prev, [added.id]: fail }));
+              }
               return first;
             }}
             onClose={closeWizard}
@@ -1203,15 +1171,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 hk === 'syncing' ? syncingSub :
                 syncedSub;
 
-              // Destin, 2026-09-27: "is kinda randomly thrown on the page and
-              // doesn't seem attached to anything" — this used to be a loose
-              // line between the status card and "Additional backups" with no
-              // box or heading of its own. It describes what THIS status card
-              // backs up, so it moves inside it, as a second grey hint line
-              // under the GitHub/account sub-line, in every state (not only
-              // "All synced") — text about a card lives inside that card.
-              const categoriesLine = includesLine('Includes ', SYNC_INCLUDES);
-
               // Not-enabled + error + GitHub-authed collapses to the plain 'off'
               // header (only error + UNauthed gets 'waiting-github'), which used to
               // hide the failure entirely — e.g. an enable attempt that failed for a
@@ -1308,7 +1267,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-fg">{title}</div>
                           <div className="text-2xs mt-0.5 leading-relaxed text-fg-muted">{sub}</div>
-                          {categoriesLine}
                         </div>
                       </div>
                       {/* Enable toggle — migrated to the shared Toggle (spec changes
@@ -1495,14 +1453,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
                   {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
                       a boxed row here read as a card inside the card. */}
-                  {/* The daily copy's extra categories, moved here from the GitHub card (small-fixes-3):
-                      the same YouCoded folders plus these from ~/.claude (sync-service.ts pushDrive /
-                      pushiCloud). Conversations are already in the folders, so they are not repeated. */}
                   <SettingRow
                     variant="item"
                     header
                     title={<span className="flex items-center gap-2">Keep a second copy<Badge>Optional</Badge></span>}
-                    description={<>{sub}{includesLine('Also includes ', (status?.syncedCategories ?? []).filter((c) => c !== 'conversations'))}</>}
+                    description={sub}
                     control={
                       // Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
                       // on-state is the theme accent instead of hardcoded green-600.
@@ -1545,8 +1500,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           <div className={CARD_LEVEL_2}>
                           <div className="flex items-center gap-3 px-3 py-2.5">
                             {/* Type icon */}
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0 ${BACKEND_STYLE[b.type]?.tint ?? ''}`}>
-                              {BACKEND_STYLE[b.type]?.icon ?? '?'}
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-inset text-fg">
+                              <BackupLogo type={b.type} size={16} />
                             </div>
                             {/* Name + detail */}
                             <div className="flex-1 min-w-0">
@@ -1638,7 +1593,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         onClick={() => { setAddType('drive'); setView('add-config'); }}
                         className="flex-1"
                       >
-                        <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-blue-500/10 text-blue-400">{'☁'}</span>
+                        <BackupLogo type="drive" size={14} />
                         Google Drive
                       </Button>
                       <Button
@@ -1646,7 +1601,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         onClick={() => { setAddType('icloud'); setView('add-config'); }}
                         className="flex-1"
                       >
-                        <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-sky-500/10 text-sky-400">{'⬡'}</span>
+                        <BackupLogo type="icloud" size={14} />
                         iCloud
                       </Button>
                     </div>

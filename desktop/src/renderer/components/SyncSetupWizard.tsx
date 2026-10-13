@@ -20,6 +20,7 @@ export function githubBackupWorks(): boolean {
   return checkIsAndroid() && !isRemoteMode();
 }
 import { useEscClose } from '../hooks/use-esc-close';
+import { BackupLogo } from './BackupLogo';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { plainMessage } from '../utils/ipc-error';
 
@@ -38,7 +39,7 @@ function detectDesktopOS(): DesktopOS {
 // --- Types ---
 
 type BackendType = 'drive' | 'github' | 'icloud';
-type WizardStep = 'type' | 'prereqs' | 'auth' | 'configure' | 'done';
+type WizardStep = 'type' | 'prereqs' | 'auth' | 'configure';
 
 interface PrereqStatus {
   rcloneInstalled: boolean;
@@ -176,8 +177,6 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   // directly; the outer prereqs object was stored but never read. Found in
   // the 2026-08-06 unused-code sweep.
   const [error, setError] = useState<string | null>(null);
-  // Set just before the done step renders; null until then.
-  const [firstBackup, setFirstBackup] = useState<FirstBackup | null>(null);
 
   // Config fields — pre-populate label when jumping straight to auth/reconnect
   // so the Configure step has a sensible default even though selectType() was skipped.
@@ -232,38 +231,53 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
       <div className="flex flex-col h-full">
         <WizardHeader title="Add a backup" onClose={onClose} />
         <div ref={typeStepRef} className="scroll-fade flex-1">
-          <div className="px-4 py-4 space-y-4">
-          {/* WHY a label and one card of setting rows (small-fixes-3): each choice was its own
-              card with an emoji in a coloured circle (Destin: "i dont like the icon"). The guide's
-              choice list: choices that each need an explanation are a boxed list — the shared
-              setting row with its chevron, in one card under a small label ("A label comes
-              first"; Settings → Account's rows). No icon until there is a real logo (deck question). */}
-          <div>
-            <SectionLabel className="mb-2">Where the copy goes</SectionLabel>
-            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-            {types.map(({ type, desc }) => {
-              const existing = existingBackends.filter(b => b.type === type).length;
-              // Only Drive supports multiple accounts — rclone gives each its own remote.
-              // GitHub shares a single global `gh auth` identity, and iCloud uses a single
-              // auto-detected path, so both are limited to one backend each.
-              const supportsMultiple = type === 'drive';
-              const disabled = existing > 0 && !supportsMultiple;
-              const note = existing > 0
-                ? (disabled ? ` Already connected — ${BACKEND_LABELS[type]} only supports one backup.` : ` ${existing} already connected.`)
-                : '';
-              return (
-                <SettingRow
-                  key={type}
-                  variant="item"
-                  title={BACKEND_LABELS[type]}
-                  description={`${desc}${note}`}
-                  onClick={disabled ? undefined : () => selectType(type)}
-                  disabled={disabled}
-                />
-              );
-            })}
-            </div>
-          </div>
+          <div className="px-4 py-4 space-y-3">
+          {/* WHY the round-2 cards again, with logos (small-fixes-3#SF3-1 "this is worse" about
+              setting rows; #SF3-6 pick "logos"): each choice is its own first-level card — mark,
+              name, one line, the arrow — as Destin had approved before, and the emoji in a coloured
+              circle (SF2-8: "i dont like the icon") is the service's own logo, like the sign-in
+              choices carry their provider logos (guide "Sign-in and setup screens"). */}
+          {types.map(({ type, desc }) => {
+            const existing = existingBackends.filter(b => b.type === type).length;
+            // Only Drive supports multiple accounts — rclone gives each its own remote.
+            // GitHub shares a single global `gh auth` identity, and iCloud uses a single
+            // auto-detected path, so both are limited to one backend each.
+            const supportsMultiple = type === 'drive';
+            const disabled = existing > 0 && !supportsMultiple;
+            return (
+              <button
+                key={type}
+                onClick={() => !disabled && selectType(type)}
+                disabled={disabled}
+                // Card-levels sweep (2026-09-27): LEVEL-1 choice card.
+                className={`w-full ${CARD_LEVEL_1} p-4 flex items-center gap-3 text-left transition-colors ${
+                  disabled
+                    ? 'opacity-50 cursor-not-allowed'
+                    : 'hover:bg-inset cursor-pointer'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-inset text-fg">
+                  <BackupLogo type={type} size={20} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-fg font-medium">{BACKEND_LABELS[type]}</div>
+                  <div className="text-3xs text-fg-muted mt-0.5">{desc}</div>
+                  {existing > 0 && (
+                    <div className="text-3xs text-fg-muted mt-1">
+                      {disabled
+                        ? `Already connected — ${BACKEND_LABELS[type]} only supports one backup`
+                        : `${existing} already connected`}
+                    </div>
+                  )}
+                </div>
+                {!disabled && (
+                  <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
           </div>
         </div>
       </div>
@@ -360,15 +374,17 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           config.ICLOUD_PATH = icloudPath || '';
         }
 
-        const first = await onComplete({ type: backendType, label, syncEnabled, config });
+        await onComplete({ type: backendType, label, syncEnabled, config });
 
         // Restore-from-backup was removed in Plan 2c (2026-07-14) — the dated
         // Drive/iCloud snapshot reshape orphaned the flat-path readers, so
         // there is no "we found existing data → restore vs start fresh" gate
         // anymore. New backends always start fresh; a redesigned restore will
         // land later around the local-models/accounts/platform work.
-        setFirstBackup(first);
-        setStep('done');
+        // No Done page (small-fixes-3#SF3-5): back to Backup & sync, where the new backup's row
+        // and, if its first upload didn't finish, the error box under it say how it went.
+        onClose();
+        return;
       } catch (e: unknown) {
         // WHY plainMessage: a rejected save arrives as "Error invoking remote method
         // 'sync:add-backend': Error: <reason>" — forty characters of machinery in front
@@ -568,72 +584,6 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           </Button>
           )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Step: Done ---
-  if (step === 'done') {
-    return (
-      <div className="flex flex-col h-full">
-        <WizardHeader title="Backup added" onClose={onClose} />
-        {/* WHY the backup's own card, tagged (small-fixes-3): this was a big green check in a
-            circle over centred lines, floating mid-popup. The guide: when an action finishes,
-            keep its subject — the card it was about stays, tagged with a status pill, one line
-            at its foot saying what happened, the next button where the action's was (Submit a
-            ticket after sending). A problem with the first backup is a notice inside that card. */}
-        <div className="flex-1 px-4 py-4 space-y-4">
-          <div>
-            <SectionLabel className="mb-2">New backup</SectionLabel>
-            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-              <div className="flex items-center gap-2 min-w-0" data-centres-agree="backup name and status">
-                <span className="text-sm text-fg truncate">{label || (backendType ? BACKEND_LABELS[backendType] : 'Backup')}</span>
-                <Pill tone="ok">Added</Pill>
-              </div>
-              {/* WHY one sentence per outcome (error inventory 2026-09-10, false message 2):
-                  this said "Your first backup is syncing now. Backups happen automatically
-                  every 15 minutes." for every outcome. By the time this step renders, the first
-                  backup has already finished or failed (onComplete awaits it), auto-backup may
-                  be off so nothing ran, and the 15-minute timer was deleted — the service now
-                  checks hourly while the app is open (sync-service.ts SNAPSHOT_POLL_INTERVAL_MS).
-                  "Added" holds for every outcome: the destination WAS added. */}
-              {firstBackup?.kind === 'finished' && (
-                <p className="text-2xs text-fg-muted">
-                  Your first backup finished. YouCoded keeps backing up automatically while it's open.
-                </p>
-              )}
-              {firstBackup?.kind === 'paused' && (
-                <p className="text-2xs text-fg-muted">
-                  Automatic backup is off for this destination, so nothing has been uploaded yet.
-                  Use Upload now in its menu in Backup &amp; sync whenever you want a copy.
-                </p>
-              )}
-              {firstBackup?.kind === 'failed' && (
-                <Callout
-                  tone="warning"
-                  title={
-                    /* An empty reason means the upload never ran — another backup held the lock —
-                       so "didn't finish" would claim it started (code review 2026-09-11, F7). */
-                    firstBackup.error ? "Your first backup didn't finish." : "Your first backup hasn't run yet."
-                  }
-                >
-                  {firstBackup.error && <div className="mb-1">{firstBackup.error}</div>}
-                  YouCoded will try again automatically, or you can use Upload now in Backup &amp; sync.
-                </Callout>
-              )}
-              {/* null cannot normally reach here (it is set just before this step); if it
-                  does, "could not confirm" is the only sentence that is certainly true. */}
-              {(firstBackup === null || firstBackup.kind === 'unknown') && (
-                <Callout tone="warning">
-                  YouCoded couldn't confirm your first backup finished. Backup &amp; sync shows where it stands.
-                </Callout>
-              )}
-            </div>
-          </div>
-          <Button size="lg" onClick={onClose} className="w-full">
-            Done
-          </Button>
         </div>
       </div>
     );

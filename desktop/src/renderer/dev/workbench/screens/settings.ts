@@ -118,10 +118,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Install now'] },
   { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' }, escapeStepsBack: WIZARD_ESCAPE,
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google', 'Start backup'] },
-  // Every step of the add-a-backup wizard, rebuilt on small-fixes-3: sign-in, settings, done.
+  // The add-a-backup wizard's sign-in and settings steps (no Done page since small-fixes-3#SF3-5).
   { ...settings('settings/sync#add-auth', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…'] },
   { ...settings('settings/sync#add-configure', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google'] },
-  { ...settings('settings/sync#add-done', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', 'Google Drive…', 'Connect to Google', 'Start backup'] },
   // The add-a-backup picker: Google Drive (and iCloud on Mac and Windows) — no GitHub on a computer.
   { ...settings('settings/sync#add-picker', 'dialog'), escapeStepsBack: WIZARD_ESCAPE, open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup'] },
   // "Remove backup?" on the default fixture's one backend (drive-1).

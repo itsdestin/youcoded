@@ -48,7 +48,7 @@ const SETUP_WARNING = {
 };
 
 function stub(sync: Record<string, unknown>, warnings: unknown[]) {
-  const status = {
+  const status: { backends: any[]; [k: string]: unknown } = {
     backends: [DRIVE, ICLOUD], lastSyncEpoch: null, backupMeta: null, warnings,
     syncInProgress: false, syncingBackendId: null, syncedCategories: [], lastSyncByDevice: {},
   };
@@ -57,7 +57,13 @@ function stub(sync: Record<string, unknown>, warnings: unknown[]) {
     getLog: vi.fn(async () => []),
     force: vi.fn(async () => ({ success: true, output: '', error: '' })),
     pushBackend: vi.fn(async () => ({ success: true, error: '' })),
-    addBackend: vi.fn(async (instance: any) => ({ ...instance, id: 'icloud-new' })),
+    // The saved backup joins the list, as the real backend's next status does — the wizard
+    // closes onto Backup & sync (small-fixes-3#SF3-5), where the new row is the outcome.
+    addBackend: vi.fn(async (instance: any) => {
+      const added = { ...instance, id: 'icloud-new', connected: true, lastPushEpoch: null, lastError: null };
+      status.backends.push(added);
+      return added;
+    }),
     dismissWarning: vi.fn(async () => {}),
     setup: { checkPrereqs: vi.fn(async () => ({ icloudPath: '/Users/me/iCloud Drive' })) },
     ...sync,
@@ -182,8 +188,10 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup didn.t finish/i)).toBeInTheDocument();
-    expect(screen.getByText(/Some files didn.t upload/)).toBeInTheDocument();
+    // No Done page (small-fixes-3#SF3-5): the wizard closes onto Backup & sync, and the new
+    // backup's row carries the failed first upload in the same box a failed Upload now uses.
+    expect(await screen.findByText(/Upload failed: Some files didn.t upload/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull();
     expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
     expect(api.force).not.toHaveBeenCalled();
     expect(screen.queryByText("You're all set!")).toBeNull();
@@ -195,8 +203,8 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     stub({ pushBackend: vi.fn(async () => ({ success: false, error: '' })) }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup hasn.t run yet/i)).toBeInTheDocument();
-    expect(screen.queryByText(/didn.t finish/i)).toBeNull();
+    expect(await screen.findByText(/Upload hasn.t run yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Upload failed/i)).toBeNull();
   });
 
   it('a first backup whose outcome never came back says it could not confirm', async () => {
@@ -205,7 +213,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/couldn.t confirm/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn.t confirm the upload finished/i)).toBeInTheDocument();
     expect(screen.queryByText("You're all set!")).toBeNull();
   });
 
@@ -215,18 +223,20 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Back up automatically after changes' }));
     fireEvent.click(start);
 
-    expect(await screen.findByText(/automatic backup is off/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull());
+    expect(api.addBackend).toHaveBeenCalled();
     expect(api.pushBackend).not.toHaveBeenCalled();
     expect(api.force).not.toHaveBeenCalled();
-    expect(screen.queryByText(/syncing now/i)).toBeNull();
+    expect(screen.queryByText(/Upload failed|Couldn.t confirm|syncing now/i)).toBeNull();
   });
 
-  it('a first backup that finished says so, without the deleted 15-minute schedule', async () => {
+  it('a first backup that finished closes onto Backup & sync with no error, without the deleted 15-minute schedule', async () => {
     const api = stub({}, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup finished/i)).toBeInTheDocument();
-    expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
+    await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('icloud-new'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull());
+    expect(screen.queryByText(/Upload failed|Couldn.t confirm/i)).toBeNull();
     expect(screen.queryByText(/15 minutes/)).toBeNull();
   });
 });
@@ -334,10 +344,9 @@ describe('Backup & sync — a partial status must not crash the app', () => {
     // fatal. (small-fixes-3: it now reads "Also includes …" under Additional backups; the GitHub
     // card's own "Includes Conversations · Personal folder · Projects" is fixed text.)
     expect(document.body.textContent).not.toContain('Also includes');
-    expect(document.body.textContent).toContain('Personal folder');
   });
 
-  it('still renders the category strip when the field IS present', async () => {
+  it('shows no category strip on the cards even when the field IS present', async () => {
     installClaudeMock({
       backends: [],
       lastSyncEpoch: null,
@@ -348,10 +357,9 @@ describe('Backup & sync — a partial status must not crash the app', () => {
       syncedCategories: ['memory', 'conversations'],
     });
     await renderOpen();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('Memory');
-    }, { timeout: 3000 });
-    expect(document.body.textContent).toContain('Conversations');
+    // small-fixes-3#SF3-7 ("too much bare text … hidden behind the i popup"): the cards no longer
+    // list categories, even when the backend sends them; the (i) explainer says what is copied.
+    expect(document.body.textContent).not.toMatch(/Includes|Also includes/);
   });
 });
 
