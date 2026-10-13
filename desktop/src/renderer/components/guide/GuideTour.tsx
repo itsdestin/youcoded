@@ -107,6 +107,8 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
  *  screens in App — so Skip tour is back on top. Settings stops whose dialog
  *  opens ~350ms later still take one Escape for that dialog first. */
 function TourEscape({ onSkip }: { onSkip: (done: boolean, stay?: boolean) => void }) {
-  useEscClose(true, useCallback(() => onSkip(false, true), [onSkip]));
+  // Not a popup (final review F40): the bubble covers nothing, so Enter in the message box and on
+  // the chat's cards keeps working while the tour is up — a "do it now" step may ask for exactly that.
+  useEscClose(true, useCallback(() => onSkip(false, true), [onSkip]), { notPopup: true });
   return null;
 }

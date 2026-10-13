@@ -38,6 +38,8 @@ type Closer = {
   /** A panel entry that already took its one Escape while the keyboard was
    *  elsewhere — see activeTop. */
   spent?: boolean;
+  /** Takes Escape but is not a popup: the app under it stays usable (the guided tour's bubble). */
+  notPopup?: boolean;
 };
 
 type StoreListener = () => void;
@@ -90,7 +92,7 @@ class EscStore {
 
   /** A popup (not a panel beside the chat) is open somewhere. */
   hasPopup(): boolean {
-    return this.stack.some((c) => !c.layeredWhile);
+    return this.stack.some((c) => !c.layeredWhile && !c.notPopup);
   }
 
   /** The real top, spent or not — what the Android Back button acts on. */
@@ -159,7 +161,12 @@ export function useEscClose(
   onClose: () => void,
   // For a panel that stays open beside the chat: true while its layered
   // peeling should apply (keyboard focus inside it). See EscStore.activeTop.
-  opts?: { layeredWhile?: () => boolean },
+  opts?: { layeredWhile?: () => boolean;
+    // WHY (final review F40): the guided tour's corner bubble takes Escape (it ends the tour) but
+    // covers nothing — its "do it now" steps ask the user to use the app under it, sending a
+    // message with Enter among them. Counted as a popup, it made the message box and the chat
+    // cards stand down on Enter for the whole tour.
+    notPopup?: boolean },
 ): () => boolean {
   const store = useContext(EscStoreContext);
   const ref = useRef(onClose);
@@ -167,6 +174,7 @@ export function useEscClose(
   const layeredRef = useRef(opts?.layeredWhile);
   useEffect(() => { layeredRef.current = opts?.layeredWhile; });
   const isPanel = !!opts?.layeredWhile;
+  const notPopup = !!opts?.notPopup;
 
   // WHY useLayoutEffect (2026-09-24): registered in a passive effect, a popup
   // was on screen for a moment before it joined the Esc stack, so an Esc in
@@ -179,9 +187,9 @@ export function useEscClose(
     if (!store || !open) return;
     const id = nextId++;
     idRef.current = id;
-    store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}) });
+    store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}), ...(notPopup ? { notPopup } : {}) });
     return () => { store.remove(id); if (idRef.current === id) idRef.current = null; };
-  }, [open, store, isPanel]);
+  }, [open, store, isPanel, notPopup]);
 
   // WHY returned (close-session-friction proposal 2): a popup's Enter-to-confirm must not fire
   // while another overlay sits on top of it (the rename popup over the close prompt, a menu
