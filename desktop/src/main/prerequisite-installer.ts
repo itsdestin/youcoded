@@ -266,7 +266,7 @@ const LINUX_GIT_INSTALLERS: ReadonlyArray<{ test: string; args: string[]; manual
  */
 async function installGitLinux(): Promise<string | null> {
   const manualAll =
-    'Install Git with your distribution\'s package manager, then click Try Again:\n' +
+    'Install Git with your distribution\'s package manager, then click Try again:\n' +
     '  Debian / Ubuntu:  sudo apt install git\n' +
     '  Fedora / RHEL:    sudo dnf install git\n' +
     '  Arch:             sudo pacman -S git';
@@ -286,8 +286,8 @@ async function installGitLinux(): Promise<string | null> {
     const code = (err as { code?: unknown }).code;
     log('WARN', 'prereq', 'pkexec Git install did not complete', { code, error: String(err) });
     return code === 126
-      ? `Git wasn't installed because the password window was closed. Click Try Again, or run:\n  ${spec.manual}`
-      : `Git couldn't be installed automatically. Run this in a terminal, then click Try Again:\n  ${spec.manual}`;
+      ? `Git wasn't installed because the password window was closed. Click Try again, or run:\n  ${spec.manual}`
+      : `Git couldn't be installed automatically. Run this in a terminal, then click Try again:\n  ${spec.manual}`;
   }
 }
 

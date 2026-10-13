@@ -147,6 +147,9 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // The update's download failed: the notice box with its sentence, Open in browser instead and
+  // Try again, in the Update button's place (small-fixes-2).
+  { ...chat('chat/update#download-failed', 'dialog', 'error-state'), params: { update: 'available', fail: 'update.download' }, open: ['Update now…'] },
   // Files in the viewer: a chart image, a diagram, a PDF (fixture files).
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-diagram', 'pane', 'viewer'),

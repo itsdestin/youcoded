@@ -97,7 +97,7 @@ export default function MarketplaceDetailOverlay({
         installed={installed}
         favorited={favorited}
         isInstalling={mp.installingIds.has(installTrackingKey('skill', target.id))}
-        // Only an INSTALL failure feeds "Try installing again" — the key is shared with
+        // Only an INSTALL failure feeds its "Try again" — the key is shared with
         // uninstall and update (error inventory 2026-09-10, false message 14).
         installError={errEntry?.op === 'install' ? errEntry.message : null}
         updateAvailable={!!mp.updateAvailable[target.id]}
@@ -121,7 +121,7 @@ export default function MarketplaceDetailOverlay({
       screen={screen ?? 'marketplace/theme-detail'}
       onClose={onClose}
       isInstalling={mp.installingIds.has(installTrackingKey('theme', target.slug))}
-      // Same rule as SkillDetail above: only an INSTALL failure feeds "Try installing again".
+      // Same rule as SkillDetail above: only an INSTALL failure feeds its "Try again".
       installError={errEntry?.op === 'install' ? errEntry.message : null}
       updateAvailable={!!mp.updateAvailable[target.slug]}
       isActive={activeThemeSlug === target.slug}
@@ -355,7 +355,7 @@ function SkillDetail({
           (as a package or a remote service); add it from the source page.
         </Callout>
       )}
-      {!installed && installable && !isInstalling && installError && <InstallFailed message={installError} onRetry={onInstall} />}
+      {!installed && installable && !isInstalling && installError && <InstallFailed name={entry.displayName} message={installError} onRetry={onInstall} />}
       {installed && bundled && <p className="text-xs text-fg-muted">{BUNDLED_REASON}</p>}
     </DetailIdentity>
   );
@@ -622,7 +622,7 @@ function ThemeDetail({
       description={entry.description}
       actions={actions}
     >
-      {!installed && !isInstalling && installError && <InstallFailed message={installError} onRetry={onInstall} />}
+      {!installed && !isInstalling && installError && <InstallFailed name={entry.name} message={installError} onRetry={onInstall} />}
     </DetailIdentity>
   );
 

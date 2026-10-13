@@ -63,9 +63,9 @@ export const TIMEOUT_SENTINEL = '[timeout-killed]';
 // Universal patterns checked first regardless of backend type — these match
 // transport-layer failures (timeouts, missing binaries, local disk full) that
 // any backend can hit. Order matters: more specific patterns must come first.
-// WHY "Try again now", never "Retry now" (Destin, approved in chat 2026-10-12, after
-// error-notices-1#EN-Q1): these labels become Backup & sync's buttons, and the app says "Try
-// again" everywhere so it never shows both words for one action.
+// WHY exactly "Try again" (Destin, small-fixes-1#SF-1, 2026-10-12: "just "try again". as we just
+// did everywhere else"): these labels become Backup & sync's buttons, and every retry button in
+// the app reads the same two words — no "now", no variants (the earlier "Try again now" was one).
 const UNIVERSAL_PATTERNS: Pattern[] = [
   {
     code: 'TIMEOUT',
@@ -75,7 +75,7 @@ const UNIVERSAL_PATTERNS: Pattern[] = [
     body: (bt) =>
       `A ${backendLabel(bt)} upload didn't finish in time. This usually means a large file or slow connection. We'll try again on the next sync.`,
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -94,7 +94,7 @@ const UNIVERSAL_PATTERNS: Pattern[] = [
     body: () =>
       "Sync can't continue because this device's disk is full. Free up space and we'll try again on the next sync.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -159,7 +159,7 @@ const RCLONE_PATTERNS: Pattern[] = [
     body: () =>
       "Couldn't connect to Google Drive. We'll try again on the next sync.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -179,7 +179,7 @@ const RCLONE_PATTERNS: Pattern[] = [
     body: () =>
       "Google is asking us to slow down on Drive uploads. We'll back off and try again on the next sync.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -261,7 +261,7 @@ const GITHUB_PATTERNS: Pattern[] = [
     body: () =>
       "GitHub rejected the push because a file is over its 100 MB limit. The file needs Git LFS or to be excluded from sync.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -278,7 +278,7 @@ const GITHUB_PATTERNS: Pattern[] = [
     body: () =>
       "Another device pushed to the backup repo first. Sync will reconcile on the next pull cycle.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -295,7 +295,7 @@ const GITHUB_PATTERNS: Pattern[] = [
     body: () =>
       "Couldn't connect to GitHub. We'll try again on the next sync.",
     fixAction: (inst) => ({
-      label: 'Try again now',
+      label: 'Try again',
       kind: 'retry',
       payload: { backendId: inst.id },
     }),
@@ -326,7 +326,7 @@ const UNKNOWN: Pattern = {
   body: (bt) =>
     `Backups to ${backendLabel(bt)} are failing. See details in the sync panel.`,
   fixAction: (inst) => ({
-    label: 'Try again now',
+    label: 'Try again',
     kind: 'retry',
     payload: { backendId: inst.id },
   }),

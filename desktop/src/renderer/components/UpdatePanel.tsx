@@ -49,11 +49,23 @@ function downloadErrorCode(e: unknown): string {
 // instead of the generic launch error.
 function updateErrorMessage(code: string): string {
   if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
-  if (code === 'verify-failed') return 'The download looked corrupted — Try again';
+  // WHY a plain sentence (Destin, small-fixes-1#SF-1, 2026-10-12): "Download failed — Try again"
+  // put the failure inside the button's own label. The reason is a sentence in the notice box;
+  // the button beside it reads only "Try again".
+  if (code === 'verify-failed') return "The download was damaged, so it wasn't installed.";
+  if (code === 'disk-full') return "There isn't enough free space on this computer for the update.";
   // Installing a Linux system package needs an administrator password (2026-09-20).
   if (code === 'install-cancelled') return 'The password prompt was closed, so nothing was installed.';
   if (code === 'install-failed') return "Your package manager wouldn't install the update.";
   return 'Launch failed';
+}
+
+/** The one sentence a failed update shows in its notice: the code's own words when it has
+ *  some, else which step stopped — never a guessed cause. */
+function updateFailureSentence(code: string, stage: 'download' | 'launch'): string {
+  const own = updateErrorMessage(code);
+  if (own !== 'Launch failed') return own;
+  return stage === 'launch' ? "The installer didn't start." : "The update didn't download.";
 }
 
 interface UpdateStatus {
@@ -360,6 +372,28 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 className="w-full mb-2"
               />
             )}
+            {/* A failed update (all but a blocked one): the notice box in the button's place —
+                its sentence, then "Open in browser instead" where that is safe, and "Try again"
+                where a fresh attempt can help (guide "A failed action replaces the buttons it
+                came from"; small-fixes-1#SF-1). No browser fallback for a damaged download:
+                that file is the one the check refused (2026-09-10 #7 review). */}
+            {installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
+              <Callout
+                tone="danger"
+                actions={(
+                  <>
+                    {installState.code !== 'verify-failed' && (
+                      <Button size="sm" variant="secondary" onClick={handleFallbackBrowser}>Open in browser instead</Button>
+                    )}
+                    {isRetriableErrorCode(installState.code) && (
+                      <Button size="sm" onClick={handleUpdate}>Try again</Button>
+                    )}
+                  </>
+                )}
+              >
+                {updateFailureSentence(installState.code, installState.stage)}
+              </Callout>
+            ) : (
             <Button
               size="lg"
               className="w-full"
@@ -381,20 +415,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               {installState.kind === 'ready' && 'Launch installer'}
               {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
-              {installState.kind === 'error' && (
-                // A blocked/unverifiable update and a corrupt download read differently
-                // (security review #7, 2026-09-10). Every other failure names the step
-                // that failed. WHY the stage picks the WORD (error inventory 2026-09-10,
-                // false message 17): retriability alone chose between "Download failed —
-                // Try again" and "Launch failed", so a download that retry could not fix
-                // (busy, url-rejected) was reported as a launch that never happened.
-                installState.code === 'signature-invalid' ? 'Update blocked'
-                  : installState.code === 'verify-failed' ? 'Try the download again'
-                  : installState.stage === 'launch'
-                    ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Try again' : 'Launch failed')
-                    : (isRetriableErrorCode(installState.code) ? 'Download failed — Try again' : 'Download failed')
-              )}
+              {/* Only a blocked update still reaches here in the error state; every other failure
+                  is the notice above. WHY the stage picks the sentence there (error inventory
+                  2026-09-10, false message 17): a download that retry could not fix (busy,
+                  url-rejected) was once reported as a launch that never happened. */}
+              {installState.kind === 'error' && 'Update blocked'}
             </Button>
+            )}
             {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser
                 opens download_url — the raw installer binary — which for a
                 verify-failed (sha256/size mismatch, i.e. the installer was swapped
@@ -428,19 +455,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 {terminalError && <FieldError as="p" size="2xs" className="mt-1">{terminalError}</FieldError>}
               </div>
             )}
-            {installState.kind === 'error' && installState.code !== 'verify-failed' && (
+            {installState.kind === 'error' && installState.code === 'signature-invalid' && (
               <div className="text-xs mt-2">
-                {installState.code === 'signature-invalid' ? (
-                  // WHY FieldError (guide: no red/coloured body text for messages —
-                  // amber sentences are in scope too)
-                  <FieldError as="p" size="2xs">{updateErrorMessage('signature-invalid')}</FieldError>
-                ) : (
-                  // WHY an outlined full-width button (guide: never underlined text as a
-                  // button; a follow-up action is a full-width outlined button).
-                  <Button variant="secondary" className="w-full" onClick={handleFallbackBrowser}>
-                    Open in browser instead
-                  </Button>
-                )}
+                {/* WHY FieldError (guide: no red/coloured body text for messages —
+                    amber sentences are in scope too). Other failures carry "Open in browser
+                    instead" inside their notice above. */}
+                <FieldError as="p" size="2xs">{updateErrorMessage('signature-invalid')}</FieldError>
               </div>
             )}
           </div>

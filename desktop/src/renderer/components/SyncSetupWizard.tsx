@@ -526,7 +526,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
 
           {/* The failed save, said where Start backup was, with Try again inside it (small-fixes-1:
               this box had nothing to press; guide "A failed action replaces the buttons it came
-              from", Submit a ticket's failed send). The fields above stay editable — Try again
+              from", Submit a ticket's failed send). The fields above stay editable, and Try again
               uses what they say now. Rendered below, in the button's place. */}
 
           {/* Duplicate destination heads-up — informational only.

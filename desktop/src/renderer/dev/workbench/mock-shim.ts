@@ -5,6 +5,8 @@ import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
+// A pure string classifier (no imports but types): the practice Backup & sync shows its real words.
+import { classifyPushError, TIMEOUT_SENTINEL } from '../../../main/sync-error-classifier';
 import type {
   InstalledLocalModel, DownloadProgress, ModelSettingsWrite, StoredModelSettings,
 } from '../../../shared/model-manager-types';
@@ -2234,6 +2236,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // public landing page's live demo (reproduced 2026-09-04). Same failure shape
   // the syncSpaces comment above warns about; this is its second instance.
   const syncSetupMode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('syncSetup') : null;
+  const syncWarnMode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('syncWarn') : null;
   const sync = {
     getStatus: async () => ({
       backends: [
@@ -2250,7 +2253,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         platform: 'linux',
         toolkit_version: '1.3.0',
       },
-      warnings: [],
+      // `?syncWarn=timeout` (small-fixes-2): the Google Drive backup's "timed out" warning,
+      // made by the REAL classifier so its fix button reads whatever main writes ("Try again").
+      warnings: syncWarnMode === 'timeout'
+        ? [classifyPushError(TIMEOUT_SENTINEL, 'drive', { id: 'drive-1', type: 'drive', label: 'Google Drive', syncEnabled: true, config: {} } as never)]
+        : [],
       syncInProgress: false,
       syncingBackendId: null,
       syncedCategories: ['memory', 'conversations', 'encyclopedia', 'skills', 'system-config'],
@@ -3741,7 +3748,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let integrationList: WorkbenchIntegration[] = marketplaceEmpty ? [] : WORKBENCH_INTEGRATIONS.map((i) => ({ ...i, state: { ...i.state } }));
   // `?integration=failed` (small-fixes-1): Google Workspace's install failed, the way the real
   // installer records it (installed false, the reason in `error`) — so the integration page's
-  // failure notice and its Try installing again can be photographed.
+  // failure notice and its Try again can be photographed.
   const integrationFailed = mpParams.get('integration') === 'failed';
   const INTEGRATION_FAILURE = 'Plugin not found in marketplace: google-workspace (workbench practice failure)';
   if (integrationFailed) {

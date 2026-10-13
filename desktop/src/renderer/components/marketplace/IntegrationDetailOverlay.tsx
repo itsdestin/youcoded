@@ -58,7 +58,7 @@ export function IntegrationDetailOverlay({
   if (!unavailable) {
     if (!s.installed) {
       // WHY no button while it failed (small-fixes-1, guide "A failed action replaces the
-      // buttons it came from"): the failure notice below carries Try installing again inside
+      // buttons it came from"): the failure notice below carries Try again inside
       // it — the plugin and theme detail pages' InstallFailed, shared.
       if (!s.error) actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>Install</Button></DetailActions>;
     } else if (!s.connected) {
@@ -101,7 +101,7 @@ export function IntegrationDetailOverlay({
           (error-message-standards "Every error state offers an action"). The installer only
           records an error from install(), so its action is the install again. An installed
           integration with an error (none today) keeps its own buttons and a plain notice. */}
-      {s.error && !s.installed && !unavailable && <InstallFailed message={s.error} onRetry={() => { void onInstall(); }} />}
+      {s.error && !s.installed && !unavailable && <InstallFailed name={item.displayName} message={s.error} onRetry={() => { void onInstall(); }} />}
       {s.error && (s.installed || unavailable) && <Callout tone="danger">{s.error}</Callout>}
       {setupHint && (
         <SetupHint command={setupHint.command} onDismiss={onDismissSetupHint} onOpenSetupSession={onOpenSetupSession} />

@@ -35,7 +35,7 @@ const ICLOUD = { id: 'icloud-1', type: 'icloud', label: 'My iCloud', syncEnabled
 const RETRY_WARNING = {
   code: 'PUSH_FAILED', level: 'danger', backendId: 'drive-1',
   title: 'Backup failed', body: 'The last upload did not finish.',
-  fixAction: { label: 'Try again now', kind: 'retry', payload: { backendId: 'drive-1' } },
+  fixAction: { label: 'Try again', kind: 'retry', payload: { backendId: 'drive-1' } },
   dismissible: false, createdEpoch: 0,
 };
 // iCloud has no sign-in step, so "Fix it" lands on the prerequisite check and then
@@ -100,7 +100,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     );
     render(<SyncSection autoOpen />);
     // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
 
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('drive-1'));
     await waitFor(() => expect(screen.getByText("Upload failed: Some files didn't upload.")).toBeInTheDocument());
@@ -114,7 +114,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     const api = stub({ pushBackend }, [RETRY_WARNING]);
     render(<SyncSection autoOpen />);
     // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     const alert = await waitFor(() => {
       const hit = screen.getAllByRole('alert').find((a) => text.test(a.textContent ?? ''));
       if (!hit) throw new Error('no alert matching ' + text);
