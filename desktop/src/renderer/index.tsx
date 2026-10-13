@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
 import { RemoteGate } from './remote-gate';
+import { defaultThemeFor, guessThemeDefault } from '../shared/theme-default';
 
 // Perf lab startup mark (read over CDP by youcoded-dev/scripts/perf-lab). Free.
 // WHY the name says "modules-evaluated" and not "start": ESM hoists EVERY import
@@ -43,10 +44,11 @@ if (__liveTheme && __liveQuery.get('mode') === 'workbench' && __liveQuery.get('c
 }
 
 // Apply theme before React mounts to prevent FOUC (flash of unstyled content)
-// A new install's first paint matches what ThemeProvider will pick (defaultThemeSlug in
-// theme-context.tsx): the YouCoded pair, by the computer's light/dark setting.
+// The first paint matches what ThemeProvider will pick when no theme was ever chosen: the
+// YouCoded pair (by the computer's light/dark setting) on a new install, Midnight on an
+// install that was in use before it (final review F1 — shared/theme-default.ts).
 const storedTheme = localStorage.getItem('youcoded-theme')
-  || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'youcoded-night' : 'youcoded');
+  || defaultThemeFor(guessThemeDefault(localStorage), !!window.matchMedia?.('(prefers-color-scheme: dark)').matches);
 document.documentElement.setAttribute('data-theme', storedTheme);
 
 // Mark buddy windows on <html> SYNCHRONOUSLY (before first paint) so the

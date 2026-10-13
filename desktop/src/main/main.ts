@@ -29,6 +29,7 @@ import { PendingAcquireQueue } from './pending-acquire';
 import { bindApp } from './ipc/app';
 import { bindWindow } from './ipc/window';
 import { bindDetach } from './ipc/detach';
+import { settleThemeDefault } from './ipc/appearance';
 import { bindBuddy } from './ipc/buddy';
 import { registerIpcHandlers, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
@@ -1387,6 +1388,10 @@ void app.whenReady().then(async () => {
     log('ERROR', 'Main', 'First-run detection failed, skipping', { error: String(e) });
     isFirstRun = false;
   }
+  // WHY (final review F1): record, before any window can read the appearance file, whether this install
+  // is new (YouCoded theme by default) or was already in use (stays on Midnight). Not awaited: the
+  // appearance channels wait for it themselves, so startup is not held up.
+  void settleThemeDefault(isFirstRun);
   // Perf lab: everything between rotate-log and here — kicking off
   // startDailyHeartbeat() (whose readState + deviceIdHash run synchronously on
   // this stack, before its first await), the app.getGPUInfo('complete') call, and

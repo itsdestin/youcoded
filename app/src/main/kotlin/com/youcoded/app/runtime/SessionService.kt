@@ -1939,6 +1939,9 @@ class SessionService : Service() {
 
             "appearance:get" -> {
                 val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/youcoded-appearance.json")
+                // WHY (final review F1): a file with no default-theme answer belongs to an install set up
+                // before this release (a new one recorded "youcoded" during setup) — it stays on Midnight.
+                ThemeDefault.ensure(prefFile, isNewInstall = false)
                 val result: Any = try {
                     org.json.JSONObject(prefFile.readText())
                 } catch (_: Exception) { org.json.JSONObject.NULL }
@@ -1946,6 +1949,7 @@ class SessionService : Service() {
             }
             "appearance:set" -> {
                 val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/youcoded-appearance.json")
+                ThemeDefault.ensure(prefFile, isNewInstall = false) // same as appearance:get, so a set never drops it
                 try {
                     val existing = try {
                         org.json.JSONObject(prefFile.readText())

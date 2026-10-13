@@ -5,6 +5,7 @@ import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyl
 import { getCapabilities } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
+import { defaultCycleFor, defaultThemeFor, guessThemeDefault, parseThemeDefault, THEME_DEFAULT_MIRROR_KEY, type ThemeDefaultKind } from '../../shared/theme-default';
 import { applyLookOverrides, parseLookOverrides, PAGES_SOLID_ATTR, type LookOverrides } from '../themes/look-overrides';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
@@ -94,14 +95,18 @@ const CONTEXT_DISPLAY_KEY = 'youcoded-context-display';
 const LOOK_OVERRIDES_KEY = 'youcoded-look-overrides';
 // WHY the YouCoded pair, chosen by the computer's own light/dark setting (theme questions
 // deck T-1/T-5, Destin 2026-10-04): setup is brand lavender, and opening a new install in
-// near-black Midnight was the sharpest jump of the first run. Only a NEW install reads
-// this — anyone with a stored theme keeps it.
-function defaultThemeSlug(): string {
-  const dark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-  return dark ? 'youcoded-night' : 'youcoded';
+// near-black Midnight was the sharpest jump of the first run. NEW installs only (final review
+// F1): an install already in use before this release stays on Midnight and the old cycle —
+// see shared/theme-default.ts for how the host tells the two apart.
+function prefersDark(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 }
-const DEFAULT_THEME = defaultThemeSlug();
-const DEFAULT_CYCLE = ['youcoded', 'youcoded-night'];
+function safeStorage(): Storage | null {
+  try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+}
+/** Only the no-provider context default; the provider works out the install's own default. */
+const DEFAULT_THEME = defaultThemeFor('youcoded', prefersDark());
+const DEFAULT_CYCLE = defaultCycleFor('youcoded');
 
 /** How the StatusBar context pill renders the window: '45% Remaining' vs
  *  '35.2k / 64k'. Both are colored by the same percentage. */
@@ -274,8 +279,14 @@ function applyHighlightTheme(dark: boolean) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [activeSlug, setActiveSlug] = useState(() => getStored(STORAGE_KEY, DEFAULT_THEME));
-  const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
+  // Which default this install is on (new install → YouCoded pair, existing → Midnight). Starts as the
+  // renderer's guess and is replaced by the host's recorded answer in loadAppearance below.
+  const [defaultKind, setDefaultKind] = useState<ThemeDefaultKind>(() => guessThemeDefault(safeStorage()));
+  const installDefault = defaultThemeFor(defaultKind, prefersDark());
+  const installDefaultRef = useRef(installDefault);
+  installDefaultRef.current = installDefault;
+  const [activeSlug, setActiveSlug] = useState(() => getStored(STORAGE_KEY, installDefault));
+  const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, defaultCycleFor(defaultKind)));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
   const [pagesSeeThrough, setPagesSeeThroughState] = useState(() => getStored(PAGES_SEE_THROUGH_KEY, '1') !== '0');
@@ -436,12 +447,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // otherwise the fallback would treat _preview as "uninstalled" and reset to
     // DEFAULT, silently undoing every theme-builder preview activation.
     if (!allThemesInternal.find(t => t.slug === activeSlug)) {
-      setActiveSlug(DEFAULT_THEME);
-      try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
+      // The install's own default (final review F1): an existing install falls back to Midnight, as it always did.
+      setActiveSlug(installDefault);
+      try { localStorage.setItem(STORAGE_KEY, installDefault); } catch {}
       // A refresh after a reconnect is never a choice: it must not overwrite the saved theme for every screen (sync-fix3 review).
-      if (!reconnectRefreshing.current) persistAppearance({ theme: DEFAULT_THEME });
+      if (!reconnectRefreshing.current) persistAppearance({ theme: installDefault });
     }
-  }, [allThemesInternal, activeSlug, userThemesLoaded]);
+  }, [allThemesInternal, activeSlug, userThemesLoaded, installDefault]);
 
   // Re-read all user themes from disk. Exposed so install/uninstall flows
   // can refresh the list; the active-theme fallback effect (above) uses the
@@ -497,6 +509,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         const prefs = await claude.appearance.get();
         if (!prefs) return; // First launch — no file yet, keep localStorage/defaults
 
+        // WHY (final review F1): the host's record of which default this install is on. With no theme
+        // ever chosen (none in the file, none in this screen's storage), the install's default is shown —
+        // without saving it as a choice, so a later default change could still reach a new install.
+        const kind = parseThemeDefault(prefs.defaultTheme);
+        if (kind) {
+          setDefaultKind(kind);
+          try { localStorage.setItem(THEME_DEFAULT_MIRROR_KEY, kind); } catch {}
+          const chosenHere = (() => { try { return !!localStorage.getItem(STORAGE_KEY); } catch { return false; } })();
+          if (!(prefs.theme && typeof prefs.theme === 'string') && !chosenHere && generation === selectionGeneration.current) {
+            setActiveSlug(defaultThemeFor(kind, prefersDark()));
+          }
+          const cycleHere = (() => { try { return !!localStorage.getItem(CYCLE_KEY); } catch { return false; } })();
+          if (!(Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) && !cycleHere) {
+            setCycleListState(defaultCycleFor(kind));
+          }
+        }
         if (prefs.theme && typeof prefs.theme === 'string' && generation === selectionGeneration.current) {
           void applyIncomingTheme(prefs.theme);
         }
@@ -673,7 +701,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           setUserThemes(prev => prev.filter(t => t.slug !== PREVIEW_SLUG));
           setActiveSlug(prev => {
             if (prev !== PREVIEW_SLUG) return prev;
-            const revert = prePreviewSlug ?? DEFAULT_THEME;
+            const revert = prePreviewSlug ?? installDefaultRef.current;
             setPrePreviewSlug(null);
             try { localStorage.setItem(STORAGE_KEY, revert); } catch {}
             persistAppearance({ theme: revert });
@@ -746,11 +774,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setCycleList = useCallback((list: string[]) => {
-    const safe = list.length > 0 ? list : DEFAULT_CYCLE;
+    // An emptied list falls back to this install's own default cycle (final review F1).
+    const safe = list.length > 0 ? list : defaultCycleFor(defaultKind);
     setCycleListState(safe);
     try { localStorage.setItem(CYCLE_KEY, JSON.stringify(safe)); } catch {}
     persistAppearance({ themeCycle: safe });
-  }, []);
+  }, [defaultKind]);
 
   const setReducedEffects = useCallback((v: boolean) => {
     setReducedEffectsState(v);

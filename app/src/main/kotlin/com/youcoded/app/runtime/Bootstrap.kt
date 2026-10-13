@@ -115,7 +115,12 @@ class Bootstrap(internal val context: Context) {
 
     suspend fun setup(onProgress: (Progress) -> Unit) = withContext(Dispatchers.IO) {
         try {
+            // WHY (final review F1): a home folder that does not exist yet means this is the very first
+            // setup on this phone — the one case that gets the new YouCoded default theme. Recorded right
+            // after the folder is made, before the UI can ask which theme to show.
+            val newInstall = !homeDir.exists()
             setupHome()  // Must exist before any executeInRuntime calls (used as cwd)
+            if (newInstall) ThemeDefault.ensure(File(homeDir, ".claude-mobile/youcoded-appearance.json"), isNewInstall = true)
             if (!isExtracted) {
                 extractBootstrap(onProgress)
             }

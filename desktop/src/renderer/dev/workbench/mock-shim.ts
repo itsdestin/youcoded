@@ -2889,8 +2889,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     // Appearance prefs live in localStorage in the workbench (ThemeProvider
     // already persists there), so the IPC mirror is a no-op rather than a
-    // second source of truth that could disagree with it.
-    get: async () => null,
+    // second source of truth that could disagree with it. The one field it does answer is which default
+    // this "install" is on (final review F1): the workbench is a new install, so a screen with no theme
+    // chosen shows the YouCoded pair whatever keys an earlier run left in this browser.
+    get: async () => ({ defaultTheme: 'youcoded' }),
     set: async () => true,
     broadcast: () => {},
     // ThemeProvider subscribes here for cross-window theme changes and applies
