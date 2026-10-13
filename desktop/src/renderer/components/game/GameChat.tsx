@@ -43,9 +43,14 @@ export default function GameChat({ connection }: Props) {
     // `flex-1 min-h-0` instead of the old 120–160px cap: the chat fills the
     // rest of the pane so the input sits at the bottom, rather than the board
     // and a stub of chat huddling at the top of a tall pane (Destin, G-7).
-    <div className="border-t border-edge flex flex-col flex-1 min-h-0">
+    // WHY no border-t / border-b lines (decisions "Card levels": never a full-width
+    // horizontal line inside a card or popup; "Quick-fix batch": the games pane's short
+    // dividers): the label's own row carries the popups' tapered divider (`dialog-header`,
+    // ui/Dialog.css — the same one ArcadeShell's header uses), and the line above the
+    // composer is gone — the text box has its own outline.
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
-      <div className="px-3 py-1.5 border-b border-edge shrink-0">
+      <div className="dialog-header px-3 py-1.5 shrink-0">
         {/* WHY SectionLabel, sentence case (labels batch, guide: no spaced
             capitals — decisions H-3/L-1…L-4). This header labels the panel,
             not a chat bubble, so it isn't covered by the bubble exemption. */}
@@ -70,7 +75,7 @@ export default function GameChat({ connection }: Props) {
       </div>
 
       {/* Input */}
-      <div className="px-3 py-2 border-t border-edge shrink-0">
+      <div className="px-3 py-2 shrink-0">
         {/* Change 20: bg-well + the gray focus (`focus:border-fg-dim`) → the shared
             FIELD surface. Enter-to-send and the 200-char cap are unchanged. NOT an
             InputGroup: this composer has no visible submit button to move inside —

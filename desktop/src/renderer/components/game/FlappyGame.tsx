@@ -721,7 +721,9 @@ function PipeColumn({ width, height, cap }: { width: number; height: number; cap
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <span className="flex flex-col leading-tight">
-      <span className="text-2xs uppercase tracking-wide text-fg-muted">{label}</span>
+      {/* WHY no uppercase/tracking (decisions "Heading ladder": small labels in normal case,
+          no spaced-out capitals). */}
+      <span className="text-2xs text-fg-muted">{label}</span>
       <span className="text-sm font-semibold text-fg tabular-nums">{value}</span>
     </span>
   );

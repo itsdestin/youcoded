@@ -3,7 +3,7 @@ import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
-import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, LoadingState, SectionLabel, SettingRow } from '../ui';
+import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, FoldRow, LoadingState, SectionLabel, SettingRow } from '../ui';
 import type { HeadToHead } from '../../state/marketplace-api-client';
 import { recordSentence, recordsByOpponent } from './head-to-head';
 import { useFriends, type ApiResult } from './useFriends';
@@ -52,10 +52,24 @@ function classifyPartyError(msg: string | null): { hint: string } {
   return { hint: "Hang tight — we'll keep trying in the background." };
 }
 
+/** Splits the reducer's "Lost the connection (code 1006: reason) — trying again…" into the
+ *  plain words a person reads and the machine detail ("code 1006: reason").
+ *  WHY (guide "Game boards" known deviation; decisions "Failed install on a detail page" — the
+ *  approved Contribute failure shape, submit-ticket-5#ST5-9): a raw connection code never sits in
+ *  the sentence; it moves one click away under a Details fold, never dropped. The reducer keeps the
+ *  code in its string so classifyPartyError() above can still pick its hint. */
+function splitPartyError(msg: string | null): { words: string; detail: string | null } {
+  const text = msg ?? '';
+  const m = text.match(/\s*\((code [^)]*)\)/);
+  if (!m) return { words: text, detail: null };
+  return { words: text.replace(m[0], ''), detail: m[1] };
+}
+
 function ErrorScreen({ connection }: { connection: GameConnection }) {
   const state = useGameState();
   const dispatch = useGameDispatch();
   const { hint } = classifyPartyError(state.partyError);
+  const { words, detail } = splitPartyError(state.partyError);
   // Track retries so we can offer a harder reload after repeated failures —
   // partysocket reconnect can fail forever if e.g. the host name is bad or the
   // user is rate-limited. After 2 manual retries we surface "Reload app" too.
@@ -82,13 +96,19 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
     { label: 'Dismiss', onClick: () => dispatch({ type: 'CLEAR_CHALLENGE' }) },
   ];
   return (
-    <div className="flex-1 flex flex-col justify-center px-4 py-8">
+    <div className="flex-1 flex flex-col justify-center px-4 py-8 space-y-2">
       <ErrorState
-        message={<>{state.partyError} {hint}</>}
+        message={<>{words} {hint}</>}
         moreActions={more}
         busy={retrying}
         onRetry={handleRetry}
       />
+      {/* The machine detail under Details — copied from DetailPage's InstallFailed fold. */}
+      {detail && (
+        <FoldRow title="Details">
+          <p className="text-2xs text-fg-2 font-mono break-all">{detail}</p>
+        </FoldRow>
+      )}
     </div>
   );
 }
@@ -129,13 +149,27 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
         // stay under the words, each half-width — the pane can be narrow.
         <Callout>
           <p className="text-sm text-fg mb-2">
-            <span className="font-medium text-link">{state.challengeFrom.name}</span>
+            {/* WHY text-fg, not text-link (guide principle 2; decisions "Status colours out of
+                words"): the name is not a link, and colour never goes in words. */}
+            <span className="font-medium text-fg">{state.challengeFrom.name}</span>
             {state.challengeFrom.handle && (
               <span className="text-fg-muted text-xs ml-1">@{state.challengeFrom.handle}</span>
             )}
             <span> wants to play!</span>
           </p>
+          {/* WHY Decline first, Accept last (decisions "Button arrangement by width": side by
+              side, the filled button on the right, the outlined one directly left of it; the
+              friend request rows' "Accept (filled) on the right of Decline", decisions "Games:
+              friend rows and list"). Accept was the filled button on the left. */}
           <div className="flex gap-2" data-parts-agree="challenge buttons">
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={() => { connection.respondToChallenge(state.challengeFrom!.id, false); dispatch({ type: 'CLEAR_CHALLENGE' }); }}
+              className="flex-1"
+            >
+              Decline
+            </Button>
             <Button
               variant="primary"
               size="md"
@@ -148,14 +182,6 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
               className="flex-1"
             >
               Accept
-            </Button>
-            <Button
-              variant="secondary"
-              size="md"
-              onClick={() => { connection.respondToChallenge(state.challengeFrom!.id, false); dispatch({ type: 'CLEAR_CHALLENGE' }); }}
-              className="flex-1"
-            >
-              Decline
             </Button>
           </div>
         </Callout>

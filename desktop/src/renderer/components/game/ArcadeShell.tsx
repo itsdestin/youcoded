@@ -387,7 +387,9 @@ function ArcadeHeader({ title, onBack, onClose }: { title: string; onBack?: () =
           </svg>
         </button>
       )}
-      <span className={`text-sm font-semibold text-fg flex-1 min-w-0 truncate ${onBack ? '' : 'pl-1'}`}>{title}</span>
+      {/* WHY text-base (16px) semibold, not text-sm (decisions "Popup and side-panel titles", H-2:
+          every side panel uses the shared popup title — Dialog's h2 is `text-base font-semibold`). */}
+      <span className={`text-base font-semibold text-fg flex-1 min-w-0 truncate ${onBack ? '' : 'pl-1'}`}>{title}</span>
       {/* WHY the shared ✕ (decisions B-1): every popup and side panel closes
           with the same drawn button; this was a hand-drawn copy. */}
       <CloseButton label="Close games" onClick={onClose} />

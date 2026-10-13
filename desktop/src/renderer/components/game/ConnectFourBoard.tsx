@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useGameState, useGameDispatch } from '../../state/game-context';
 import { GameConnection } from '../../state/game-types';
 import type { ConnectFourPlay } from '../../game/connect-four';
-import { Button, StatusStrip } from '../ui';
+import { Button, Pill, StatusStrip } from '../ui';
 
 const COLS = 7;
 const ROWS = 6;
@@ -111,8 +111,11 @@ export default function ConnectFourBoard({ connection }: Props) {
           tone="busy"
           detail="They have a moment to come back before the game is called."
           action={
+            // WHY outlined, not ghost (decisions "Secondary buttons": a less-important action is
+            // outlined, never bare text; the other StatusStrip actions — LocalModelDownloadStrip's
+            // "Resume download", OfficeAlerts' "Open Office" — are secondary).
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
               onClick={() => { connection.leaveGame(); dispatch({ type: 'RETURN_TO_LOBBY' }); }}
             >
@@ -135,13 +138,11 @@ export default function ConnectFourBoard({ connection }: Props) {
           <span className="w-3 h-3 rounded-full bg-accent" />
           <span className="text-fg-dim">You</span>
         </div>
-        <div className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-          canMove
-            ? 'bg-inset/50 text-fg-2'
-            : 'bg-inset text-fg-muted'
-        }`}>
-          {isPlaying ? (canMove ? 'Your turn' : `${state.opponent ?? 'Opponent'}'s turn`) : ''}
-        </div>
+        {/* WHY the shared Pill (decisions "Status labels"; "Control shape follows the theme" — no
+            hand-set rounded-full on a hand-made chip): the turn is a status, the one tinted pill.
+            Neutral either way — the words say whose turn it is. Drawn only during play: the old
+            chip was an empty box before it. */}
+        {isPlaying ? <Pill>{canMove ? 'Your turn' : `${state.opponent ?? 'Opponent'}'s turn`}</Pill> : <span />}
         <div className="flex items-center gap-1.5">
           <span className="text-fg-dim">{state.opponent ?? 'Opponent'}</span>
           <span className="w-3 h-3 rounded-full bg-fg-muted" />
