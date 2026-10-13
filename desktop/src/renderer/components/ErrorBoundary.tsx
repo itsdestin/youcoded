@@ -1,5 +1,7 @@
 import React from 'react';
-import { ErrorState } from './ui';
+import { ErrorState, FoldRow } from './ui';
+import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 
 interface Props {
   /** Label shown in the fallback UI so users know which panel failed */
@@ -9,10 +11,12 @@ interface Props {
 
 interface State {
   error: Error | null;
+  /** The bug report opened from this crash (Report bug / Diagnose), or null. */
+  report: ReportContext | null;
 }
 
 export default class ErrorBoundary extends React.Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, report: null };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -24,17 +28,29 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 
   render() {
     if (this.state.error) {
-      // WHY ErrorState, not a hand-rolled text-destructive-fg title (guide: no
-      // red/coloured body text for messages) — this is exactly ErrorState's
-      // general shape (title + explainer + one action), just never routed
-      // through the shared primitive.
+      const raw = this.state.error.message || String(this.state.error);
+      // WHY the "we don't know why" shape (final review F19; docs/error-message-standards.md
+      // shape 2; guide "Status and notices"): a render crash has no known cause, so the box
+      // says so in plain words with a bold title in the normal colour, offers Report bug and
+      // Diagnose (both hand the real message to the bug report) beside Try again, and keeps
+      // JavaScript's own words under a Details fold — they were the sentence.
       return (
         <div className="flex items-center justify-center h-full p-4">
-          <ErrorState
-            title={`${this.props.name} crashed`}
-            explainer={this.state.error.message}
-            onRetry={() => this.setState({ error: null })}
-          />
+          <div className="w-full max-w-md space-y-2">
+            <ErrorState
+              title={`${this.props.name} stopped working`}
+              explainer="Something went wrong while showing this part of the app. Try again, or report it so it can be fixed."
+              onRetry={() => this.setState({ error: null })}
+              onReportBug={() => this.setState({ report: { surface: this.props.name, error: raw } })}
+              onDiagnose={() => this.setState({ report: { surface: this.props.name, error: raw, diagnose: true } })}
+            />
+            {raw.trim() && (
+              <FoldRow title="Details">
+                <p className="text-2xs text-fg-2 font-mono break-all">{raw}</p>
+              </FoldRow>
+            )}
+          </div>
+          <BugReportPopup open={!!this.state.report} onClose={() => this.setState({ report: null })} context={this.state.report ?? undefined} />
         </div>
       );
     }
