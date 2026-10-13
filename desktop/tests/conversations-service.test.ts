@@ -1069,6 +1069,7 @@ describe('conversations service composition root', () => {
       svc.stopConversationStore();
       let settled = false;
       const p = svc.noteFlagChanged('id2', 'complete', true, false).then((r) => { settled = true; return r; });
+      // settle (negative assertion): the write must stay buffered, not resolve.
       await new Promise((r) => setTimeout(r, 10));
       expect(settled).toBe(false);          // still buffered, not resolved yet
       await svc.startConversationStore(startOpts());

@@ -62,6 +62,7 @@ describe('git-watcher', () => {
     expect(events[0]).toEqual({ repoRoot: root });
     // The point of the debounce: a burst is ONE event, so it has to still be
     // one after everything has had time to arrive.
+    // settle (negative assertion): no second event may follow the burst.
     await wait(SETTLE_MS);
     expect(events.length).toBe(1);
   });
@@ -122,7 +123,9 @@ describe('git-watcher', () => {
     // This used to throw an uncaught exception (no 'error' listener on an
     // EventEmitter) and crash the Electron main process.
     expect(() => watchers[0].emit('error', new Error('simulated ENOENT'))).not.toThrow();
-    await wait(200);
+    // WHY no wait here (final review F55): the watcher's error handler tears the entry down
+    // synchronously inside emit(), so the 200 ms sleep that stood here guarded nothing — and a
+    // fixed sleep before a positive check is the shape that goes red under load.
 
     // Confirm the entry actually self-healed: a fresh subscribe on the now-
     // missing root goes back through the existsSync check and reports

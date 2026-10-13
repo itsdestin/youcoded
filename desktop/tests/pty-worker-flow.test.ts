@@ -335,9 +335,13 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
     kids.push(r.child);
     r.state.auto = false;
-    await new Promise((res) => setTimeout(res, 2500));
+    // WHY a signal first (final review F55): "more than 100 000 sent" was a fixed 2.5 s guess,
+    // which a busy machine can outrun. Wait for it, then settle so the reads already in flight
+    // when the brake went on have landed before the frozen point is read.
+    expect(await r.until(() => r.state.sent > 100_000, 60000)).toBe(true);
+    // settle (negative assertion): what is in flight lands; the brake then holds the count below the bound.
+    await new Promise((res) => setTimeout(res, 1000));
     const frozenAt = r.state.sent;
-    expect(frozenAt).toBeGreaterThan(100_000);
     expect(frozenAt).toBeLessThan(200_000 + 700_000);              // nowhere near the ~11 MB the program wants to print
     // settle: a NEGATIVE check — output that resumed would show up in this second; none should.
     await new Promise((res) => setTimeout(res, 1000));

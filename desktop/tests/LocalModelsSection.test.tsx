@@ -465,6 +465,7 @@ describe('fields main computes', () => {
       await openSettings({ ...SETTINGS, contextLength: 8192, pendingApply: true });
       const box = screen.getByLabelText('Context length for this model') as HTMLInputElement;
       fireEvent.change(box, { target: { value: '4096' } });
+      // settle (negative assertion): a poll tick passes and must not overwrite the draft.
       await new Promise((r) => setTimeout(r, APOLL));
       expect((screen.getByLabelText('Context length for this model') as HTMLInputElement).value).toBe('4096');
     });
@@ -564,7 +565,8 @@ describe('fields main computes', () => {
       await openDialog();
       const before = models.settings.mock.calls.length;
       await act(async () => { fireEvent.click(screen.getByLabelText('Keep loaded')); });
-      await new Promise((r) => setTimeout(r, APOLL));     // a poll tick passes
+      // settle (negative assertion): a poll tick passes with no re-read while the save is in the air.
+      await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(before);
       // …and once the save lands, polling resumes.
       await act(async () => { saves[0].resolve({ ...SETTINGS, keepLoaded: true }); await Promise.resolve(); });
@@ -652,6 +654,7 @@ describe('fields main computes', () => {
       await act(async () => { fireEvent.change(box, { target: { value: '8192' } }); fireEvent.blur(box); });
       expect(saves).toHaveLength(2);
       await act(async () => { saves[0].resolve({ ...SETTINGS, keepLoaded: true }); await Promise.resolve(); });
+      // settle (negative assertion): the second save is still in the air, so no poll may run.
       await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(before);
     });
@@ -664,6 +667,7 @@ describe('fields main computes', () => {
       const after = models.settings.mock.calls.length;
       // A late answer to a closed dialog must not try to draw into it.
       await act(async () => { reads[0].resolve({ ...SETTINGS, lastLoadError: 'too late' }); await Promise.resolve(); });
+      // settle (negative assertion): a closed dialog polls no more.
       await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(after);
       expect(screen.queryByText('too late')).toBeNull();

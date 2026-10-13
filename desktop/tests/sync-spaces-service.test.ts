@@ -219,6 +219,7 @@ describe('sync-spaces service transition serialization', () => {
     // Disable while the start is suspended inside addSpace. Serialization
     // means this must NOT stop the engine yet.
     const p2 = svc.syncSpacesEnable(false);
+    // settle (negative assertion): the queued disable must not stop the engine yet.
     await new Promise((r) => setTimeout(r, 10));
     expect(e1.stopped).toBe(false);
     // Release the start; it completes, THEN the queued disable stops it.

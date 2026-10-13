@@ -634,6 +634,7 @@ describe('registerDocCommentsHandlers', () => {
     e.__fireDestroyed(); // a crashed renderer never sends unwatch
     deps.sent.length = 0;
     await addComment({ path: 'docs/gone.md', projectRoot: root, selector: CELL_SELECTOR, text: 'x', author: 'user' });
+    // settle (negative assertion): no change push may reach the destroyed renderer.
     await new Promise((r) => setTimeout(r, 1200));
     expect(deps.sent.some((s) => s.channel === DOC_COMMENTS_IPC.CHANGED)).toBe(false);
   });

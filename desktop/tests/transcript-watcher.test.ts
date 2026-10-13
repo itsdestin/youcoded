@@ -766,6 +766,7 @@ describe('TranscriptWatcher read integrity', () => {
       () => expect(events.filter((e) => e.type === 'user-message').length).toBeGreaterThanOrEqual(1),
       { timeout: SETTLE_MS },
     );
+    // settle (negative assertion): a second, racing emit would land here.
     await wait(200);
 
     const userMessages = events.filter((e) => e.type === 'user-message');

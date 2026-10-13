@@ -2509,6 +2509,7 @@ describe('NativeSessionHost', () => {
       // Give the deferred runTurns (setImmediate) + the now-zombie turn's
       // delayed stream room to play out in the background — it must stay
       // silent (destroy() already tore down the session's listeners).
+      // settle (negative assertion): no user message may surface.
       await new Promise((r) => setTimeout(r, 150));
       expect(events.some((e) => e.type === 'user-message' && e.data.text === 'same-tick')).toBe(false);
     });
@@ -2577,6 +2578,7 @@ describe('NativeSessionHost', () => {
       const quiesced = qHost.quiesce('qz3');
       expect(qHost.send('qz3', 'mid-quiesce')).toEqual({ status: 'failed', reason: 'not-live' });
       await quiesced;
+      // settle (negative assertion): the refused send must never be written.
       await new Promise((r) => setTimeout(r, 80));
       expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
       // Still refused after quiesce returns: the takeover's flush and lease
@@ -6073,10 +6075,11 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     const a = startIn('p1', 'sleep 0.3', 'ta');
     await host.destroy('p1', { keepShells: true });
     await a.exited;
-    await new Promise((r) => setTimeout(r, 50));
-    const written = spy.mock.calls.map((c) => String(c[1]));
-    expect(written.some((l) => l.includes('a background command finished after its conversation was closed'))).toBe(true);
-    expect(written.some((l) => l.includes('late permission answer'))).toBe(false);
+    // WHY a signal, not a 50 ms sleep (final review F55): the note is written after the exit is
+    // handled, a moment that stretches on a busy machine; wait for the line itself.
+    const written = () => spy.mock.calls.map((c) => String(c[1]));
+    await vi.waitFor(() => expect(written().some((l) => l.includes('a background command finished after its conversation was closed'))).toBe(true));
+    expect(written().some((l) => l.includes('late permission answer'))).toBe(false);
     spy.mockRestore();
   });
 

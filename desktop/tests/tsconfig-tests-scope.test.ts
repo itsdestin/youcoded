@@ -12,4 +12,13 @@ describe('the test type-check covers every test', () => {
     const excluded = (JSON.parse(text).exclude as string[]).filter((p) => /(^|\/)tests?\//.test(p) || /\.test\.tsx?$/.test(p));
     expect(excluded, 'fix the file\'s types instead of excluding it').toEqual([]);
   });
+
+  // WHY (final review F56): the exclude pin alone missed the other way to hide a file — a
+  // narrowed `include` (say "tests/unit/**/*") would silently drop every other test from the
+  // check. Both trees that hold tests must stay in it whole.
+  it('includes the whole test tree and the whole source tree', () => {
+    const text = readFileSync(join(__dirname, '..', 'tsconfig.tests.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    const include = JSON.parse(text).include as string[];
+    expect(include).toEqual(expect.arrayContaining(['tests/**/*', 'src/**/*']));
+  });
 });
