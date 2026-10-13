@@ -12,7 +12,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { OverlayPanel, CONTENT_Z } from '../overlays/Overlay';
-import { Button } from '../ui';
+import { Button, CloseButton } from '../ui';
 import { ThemeMascot, WelcomeAppIcon } from '../Icons';
 import { HINT_FILL, HINT_EDGE } from '../ViewToggleHint';
 
@@ -33,9 +33,11 @@ interface Props {
   pose: 'welcome' | 'inquisitive';
   /** Names the dialog for assistive tech: "Tour" / "Tip". */
   label: string;
+  /** The ✕. When given, it sits at the top right, beside the eyebrow. */
+  onClose?: () => void;
 }
 
-export default function GuideBubble({ eyebrow, children, buttons, pose, label }: Props) {
+export default function GuideBubble({ eyebrow, children, buttons, pose, label, onClose }: Props) {
   return createPortal(
     <div
       role="dialog"
@@ -71,7 +73,17 @@ export default function GuideBubble({ eyebrow, children, buttons, pose, label }:
               spaced capitals). Kept a plain span, not SectionLabel — this
               sits on the bubble's accent fill, not the muted-grey surfaces
               SectionLabel assumes. */}
-          <span className="text-2xs font-medium text-on-accent/70">{eyebrow}</span>
+          {/* WHY the ✕ (decisions "Applied from earlier rules": the guided tour gets a ✕;
+              "Closing popups and side panels": every popup has the drawn ✕ top right). Drawn
+              exactly as the coach mark on this same accent fill draws its own ✕
+              (ViewToggleHint: CloseButton, on-accent, icon-sm). -mr/-mt pull it into the
+              corner so the eyebrow line keeps its height. */}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-2xs font-medium text-on-accent/70">{eyebrow}</span>
+            {onClose && (
+              <CloseButton label={`Close ${label.toLowerCase()}`} size="icon-sm" variant="on-accent" onClick={onClose} className="shrink-0 -mr-2 -my-1" />
+            )}
+          </div>
           <p className="text-sm leading-snug">{children}</p>
           {/* Right-aligned so the filled Next/Done button sits at the far
               right, with Skip tour beside it (review deck T-1). */}

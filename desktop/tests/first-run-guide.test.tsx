@@ -159,6 +159,13 @@ describe('GuideTour', () => {
     expect(screenClosed).not.toHaveBeenCalled();
   });
 
+  it('the ✕ closes only the bubble, the same as Escape', () => {
+    const onExit = vi.fn();
+    render(<GuideTour stops={STOPS} onOpenScreen={() => {}} onExit={onExit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close tour' }));
+    expect(onExit).toHaveBeenCalledWith(false, true);
+  });
+
   it('draws no ring for an anchor that is not on screen', () => {
     render(<GuideTour stops={STOPS.slice(1)} onOpenScreen={() => {}} onExit={() => {}} />);
     expect(document.querySelector('[data-guide-ring]')).toBeNull();

@@ -86,7 +86,9 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
     <>
       <TourEscape key={escKey} onSkip={onExit} />
       {stop.anchor && <GuideRing anchor={stop.anchor} />}
-      <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour">
+      {/* WHY onClose = Escape's action (decisions "Tour: Escape"): the ✕ closes only the
+          bubble and leaves the screen under it open, exactly as Escape does. */}
+      <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour" onClose={() => onExit(false, true)}>
         {!anchorPresent && stop.textWhenMissing ? stop.textWhenMissing : stop.text}
         {/* shoot's `tour/<stop>` screens prove the bubble is showing that stop
             (renders nothing outside the photo-only build). */}
