@@ -42,7 +42,8 @@ describe('Marketplace Details outer shell', () => {
     // scale the chips' bottom border fell outside it (marketplace-detail-5#M5-3). The fix
     // is padding inside the clip, cancelled by a negative margin outside. jsdom has no
     // layout, so this pins the cause; the geometry was checked in shoot at 1× and 1.5×.
-    const shell = readSource(join(components, 'DetailPage.tsx'));
+    // The row moved to FactChips.tsx so the item cards share it (decisions "Item card chips").
+    const shell = readSource(join(components, 'FactChips.tsx'));
     expect(shell).toMatch(/data-detail-chips[^>]*className="[^"]*overflow-x-auto[^"]*\bpy-1 -my-1\b/s);
   });
 });

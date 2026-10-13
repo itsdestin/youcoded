@@ -43,7 +43,11 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
   return (
     <div
       ref={headerRef}
-      className="header-bar !relative grid grid-cols-3 items-center h-10 px-2 sm:px-3 shrink-0 select-none"
+      // WHY max-sm:flex / justify-between (with the title and pinned pages hidden below 640px):
+      // at phone width three equal columns could not hold the clusters, and the title, the
+      // icons and "Back to chat" drew over each other. The lit Pages / Projects button still
+      // says where you are; pinned pages stay reachable from Pages.
+      className="header-bar !relative grid grid-cols-3 max-sm:flex max-sm:justify-between items-center h-10 px-2 sm:px-3 shrink-0 select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <MacTrafficLights headerRef={headerRef} />
@@ -54,9 +58,9 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
         <SettingsGearButton settingsOpen={settingsOpen} onToggleSettings={onToggleSettings} settingsBadge={settingsBadge} settingsDangerBadge={settingsDangerBadge} />
         <PagesButton active={active === 'pages'} />
         <ProjectsButton active={active === 'projects'} />
-        <PinnedPageButtons />
+        <PinnedPageButtons className="max-sm:hidden" />
       </div>
-      <div className="flex items-center justify-center gap-2 min-w-0 px-3 text-sm font-medium text-fg">
+      <div className="flex max-sm:hidden items-center justify-center gap-2 min-w-0 px-3 text-sm font-medium text-fg">
         {icon && <span className="shrink-0 text-fg-muted flex">{icon}</span>}
         {title}
       </div>

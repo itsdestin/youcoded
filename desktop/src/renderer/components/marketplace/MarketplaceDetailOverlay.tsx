@@ -20,7 +20,7 @@ import LikeButton from "./LikeButton";
 // Feedback section (thumbs + comments) replace star reviews.
 import { SourceBadge, ScanBadge, AuthorBadge } from "./TrustBadges";
 import { CapabilityList } from "./CapabilityList";
-import FeedbackSection, { MIN_VOTES_FOR_PCT, ThumbIcon, thumbsSummary } from "./FeedbackSection";
+import FeedbackSection from "./FeedbackSection";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // Task 1: an installed item with an update available needs a way to take it.
@@ -29,6 +29,7 @@ import { Button, Callout, CARD_LEVEL_1, Chip, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, InstallFailed, type DetailSection } from "./DetailPage";
+import { CountChip, ThumbsChip } from "./FactChips";
 import { workbenchThemeLiked } from "../../workbench-mode";
 
 export type DetailTarget =
@@ -217,32 +218,6 @@ function InstallingButton() {
       <span className="inline-block w-3 h-3 border-2 border-on-accent border-t-transparent rounded-full animate-spin" aria-hidden />
       Installing…
     </Button>
-  );
-}
-
-/** A number chip: bold number, grey word — "412 installs" (guide "Text and numbers"). Same
- *  chip recipe as the trust badges beside it (Chip — round 2, MD-1 "install is tiny"). */
-function CountChip({ n, word }: { n: number; word: string }) {
-  return (
-    <Chip>
-      <span className="font-medium text-fg">{n.toLocaleString()}</span>
-      {n === 1 ? word : `${word}s`}
-    </Chip>
-  );
-}
-
-/** "👍 93%" — or the raw count under MIN_VOTES_FOR_PCT, where a percentage would lie. Drawn
- *  inside Chip rather than reusing the card's ThumbsSummary, whose own 12px text made
- *  this chip taller than its neighbours in round 1. */
-function ThumbsChip({ up, down }: { up?: number; down?: number }) {
-  const s = thumbsSummary(up, down);
-  if (!s) return null;
-  const low = s.total < MIN_VOTES_FOR_PCT;
-  return (
-    <Chip title={low ? `${s.up} of ${s.total} found it helpful` : `${s.pct}% of ${s.total.toLocaleString()} people found it helpful`}>
-      <span className="inline-flex text-fg-dim"><ThumbIcon /></span>
-      {low ? s.up : `${s.pct}%`}
-    </Chip>
   );
 }
 

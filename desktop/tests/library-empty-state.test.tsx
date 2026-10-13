@@ -125,9 +125,10 @@ describe('LibraryScreen empty state', () => {
     const tablist = screen.getByRole('tablist', { name: 'Library sections' });
     // Pill container recipe shared with ProjectView's header switcher.
     expect(tablist.className).toContain('layer-surface');
-    expect(tablist.className).toContain('!rounded-full');
+    // The theme's control corner, not a fixed pill (decisions "Control shape follows the theme").
+    expect(tablist.className).toContain('!rounded-control-group');
     const skills = screen.getByRole('tab', { name: /Plugins/ });
-    expect(skills.className).toContain('rounded-full');
+    expect(skills.className).toContain('rounded-control');
     // Count of installed skills — 0 with an empty marketplace.
     expect(skills).toHaveTextContent('Plugins0');
     expect(screen.getByRole('tab', { name: /Themes/ })).toHaveTextContent('Themes0');

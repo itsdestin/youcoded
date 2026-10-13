@@ -24,6 +24,12 @@ import type { SkillEntry } from '../src/shared/types';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
+/** Each fact chip's words, with the number and word spaced as they read. */
+function chipTexts(root: HTMLElement): string[] {
+  return Array.from(root.querySelectorAll('[data-chip]')).map((el) =>
+    Array.from(el.childNodes).map((n) => n.textContent ?? '').filter(Boolean).join(' ').replace(/\s+/g, ' ').trim());
+}
+
 // WHY: each section below was its own file, so each started with an empty
 // /stats cache and the environment's own fetch. One section replaces
 // globalThis.fetch and fills the cache; put both back so it cannot leak.
@@ -284,10 +290,10 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3, installs: 412 } },
     });
-    const { getByTitle, getByText } = await renderCard();
-    // The count renders as a download arrow whose title is the pluralised words.
-    expect(getByTitle('412 installs')).toBeTruthy();
-    expect(getByText('412')).toBeTruthy();
+    const { container } = await renderCard();
+    // The count is a fact chip in the card's one chip row (decisions "Item card chips"):
+    // a bold number, then the word.
+    expect(chipTexts(container)).toContain('412 installs');
   });
 
   it('shows nothing when the theme has no installs yet', async () => {
@@ -296,8 +302,8 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3, installs: 0 } },
     });
-    const { queryByTitle } = await renderCard();
-    expect(queryByTitle('0 installs')).toBeNull();
+    const { container } = await renderCard();
+    expect(chipTexts(container).some((t) => t.includes('install'))).toBe(false);
   });
 
   it('survives an older Worker that reports no installs field at all', async () => {
@@ -306,10 +312,10 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3 } },
     });
-    const { queryByTitle, getByText } = await renderCard();
-    expect(queryByTitle('0 installs')).toBeNull();
+    const { container } = await renderCard();
+    expect(chipTexts(container).some((t) => t.includes('install'))).toBe(false);
     // The likes half still renders, so the card is not blank.
-    expect(getByText('3 likes')).toBeTruthy();
+    expect(chipTexts(container)).toContain('3 likes');
   });
 });
 
