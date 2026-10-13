@@ -66,7 +66,7 @@ let idlePoller: NodeJS.Timeout | null = null;
 let presenceIntentGen = 0;
 let hiddenRetry: NodeJS.Timeout | null = null;
 /** Seconds between capability re-checks after "couldn't check"; the last one repeats. */
-export const HIDDEN_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
+const HIDDEN_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
 function cancelPresenceIntent(): void {
   presenceIntentGen++;
   if (hiddenRetry) clearTimeout(hiddenRetry);

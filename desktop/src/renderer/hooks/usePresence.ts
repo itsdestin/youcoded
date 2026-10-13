@@ -23,7 +23,7 @@ function toOnlineUser(u: ServerUser): OnlineUser {
 }
 
 /** Backoff for re-reading the incognito choice after a failed read; the last value repeats. */
-export const INCOGNITO_READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000];
+const INCOGNITO_READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000];
 
 // isLeader: true when this renderer is the leader window (multi-window detach
 // feature). Only the leader should hold the presence socket open; non-leader

@@ -24,7 +24,7 @@ const PRESENCE_URL = 'wss://api.youcoded.ai/social/presence';
 //     the server did not honour it — disconnect at once and report 'hidden-unsupported'.
 // And while hidden this side never sends a status change or a challenge (the server refuses them
 // too). Desktop and Android (PresenceClient.kt) implement the same rules.
-export const PRESENCE_CAPABILITIES_URL = 'https://api.youcoded.ai/social/presence/capabilities';
+const PRESENCE_CAPABILITIES_URL = 'https://api.youcoded.ai/social/presence/capabilities';
 const HIDDEN_BLOCKED = new Set(['status', 'challenge', 'challenge-response']);
 
 /** The capability check's three answers. Only 'yes' ever opens a hidden connection.
