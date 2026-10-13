@@ -11,7 +11,7 @@ import MarkdownContent from "../MarkdownContent";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { useScrollFade } from "../../hooks/useScrollFade";
 import './FileViewerOverlay.css';
-import { CloseButton, LoadingState } from "../ui";
+import { Callout, CloseButton, ErrorState, FoldRow, LoadingState } from "../ui";
 
 export type FileViewerTarget = {
   pluginId: string;
@@ -28,10 +28,13 @@ interface Props {
 type LoadState =
   | { status: "loading" }
   | { status: "ok"; content: string; source: "local" | "remote" }
-  | { status: "error"; error: string };
+  | { status: "error"; error: string; retryable: boolean };
 
 export default function FileViewerOverlay({ target, onClose }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  // WHY a counter (guide "File viewers" known deviation, 2026-10-13): a failed load had nothing to
+  // press. Try again bumps it, which re-runs exactly the load below for the same file.
+  const [attempt, setAttempt] = useState(0);
 
   // Always mounted when open (parent conditionally renders) — so open=true is correct here.
   // Replaces the former raw keydown listener; useEscClose integrates with the LIFO stack
@@ -42,23 +45,23 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
     let cancelled = false;
     const api = (window as any).claude?.marketplace;
     if (!api?.readComponent) {
-      setState({ status: "error", error: "File viewer not available on this platform" });
+      setState({ status: "error", error: "File viewer not available on this platform", retryable: false });
       return;
     }
     setState({ status: "loading" });
     api.readComponent({ pluginId: target.pluginId, kind: target.kind, name: target.name })
       .then((res: any) => {
         if (cancelled) return;
-        if (res?.error) setState({ status: "error", error: res.error });
+        if (res?.error) setState({ status: "error", error: res.error, retryable: true });
         else if (res?.content != null) setState({ status: "ok", content: res.content, source: res.source });
-        else setState({ status: "error", error: "Empty response" });
+        else setState({ status: "error", error: "Empty response", retryable: true });
       })
       .catch((err: any) => {
         if (cancelled) return;
-        setState({ status: "error", error: String(err?.message || err) });
+        setState({ status: "error", error: String(err?.message || err), retryable: true });
       });
     return () => { cancelled = true; };
-  }, [target.pluginId, target.kind, target.name]);
+  }, [target.pluginId, target.kind, target.name, attempt]);
 
   const title = fileLabel(target);
   // WHY: the document body scrolls under a fixed header; fade only edges with
@@ -76,9 +79,10 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
         className="fixed inset-2 sm:inset-12 md:inset-24 flex flex-col overflow-hidden"
       >
         <header data-file-viewer-header className="flex items-center justify-between gap-2 p-3 sm:p-4">
-          {/* WHY: Destin selected the single-line file identity, matching the
-              16px medium headings on the other reviewed popup shells. */}
-          <h2 className="text-base font-medium text-fg truncate min-w-0">{title}</h2>
+          {/* WHY: Destin selected the single-line file identity. Semibold, not medium (guide "File
+              viewers" known deviation, 2026-10-13): decisions "Popup and side-panel titles" made
+              every popup title the shared 16px semibold one — Dialog.tsx's h2. */}
+          <h2 className="text-base font-semibold text-fg truncate min-w-0">{title}</h2>
           {/* WHY the ✕ at every width (decisions B-1; guide "Popups": the close control is
               always the ✕ — never the words "Esc" or "Close"). Was the words Esc and Close on wide
               windows and a bordered ✕ only on narrow ones. */}
@@ -89,9 +93,23 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
             <LoadingState what="file" />
           )}
           {state.status === "error" && (
-            <div className="text-center py-12">
-              <p className="text-fg-dim">Couldn't load this file.</p>
-              <p className="text-xs text-fg-muted mt-2">{state.error}</p>
+            // WHY this shape (guide "File viewers" known deviation, 2026-10-13): it was a grey
+            // sentence over the handler's raw words, with nothing to press. Now the approved
+            // failure shape of a plugin's detail page (DetailPage.tsx InstallFailed, decisions
+            // "Failed install on a detail page"): one plain sentence in the error box with Try
+            // again, the raw reason one click away under Details. "Not available on this
+            // platform" never changes on a second try, so it gets the box without the button.
+            <div className="max-w-3xl mx-auto space-y-2">
+              {state.retryable ? (
+                <ErrorState message="Couldn't load this file." onRetry={() => setAttempt((n) => n + 1)} />
+              ) : (
+                <Callout tone="danger">Couldn't load this file.</Callout>
+              )}
+              {state.error.trim() && (
+                <FoldRow title="Details">
+                  <p className="text-2xs text-fg-2 font-mono break-all">{state.error}</p>
+                </FoldRow>
+              )}
             </div>
           )}
           {state.status === "ok" && (

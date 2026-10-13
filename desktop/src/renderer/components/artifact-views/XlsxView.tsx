@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, CSSProperties } from 'react';
 import { Workbook } from 'exceljs';
 import type { ArtifactViewProps } from './types';
-import { BinaryContent } from './BinaryContent';
+import { BinaryContent, CenterLoading } from './BinaryContent';
 import {
   colLetter, formatCellNumber, cellRawValue, cellStyleToCss, colWidthToPx, parseMerges,
 } from './exceljs-cell';
@@ -209,7 +209,8 @@ function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
   }, [sheet, sel]);
 
   if (parseError || (sheets && !sheet)) return <Center>Couldn’t open this spreadsheet.</Center>;
-  if (!sheets || !sheet) return <Center>Loading spreadsheet…</Center>;
+  // WHY CenterLoading: the shared LoadingState (guide "File viewers" known deviation, 2026-10-13).
+  if (!sheets || !sheet) return <CenterLoading what="spreadsheet" />;
 
   return (
     <div className="flex flex-col h-full" style={{ background: PAPER, color: '#1d1d1d' }}>

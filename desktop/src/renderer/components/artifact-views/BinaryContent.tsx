@@ -1,7 +1,7 @@
 import React from 'react';
 import { useArtifactBytes } from './useArtifactBytes';
 import { getPlatform, isRemoteMode } from '../../platform';
-import { Button } from '../ui';
+import { Button, ErrorState, LoadingState } from '../ui';
 import { RemoteFileCard } from './RemoteFileCard';
 
 // Shared loading/error shell for every binary viewer (pdf/docx/xlsx/image).
@@ -37,14 +37,34 @@ export function CenterNote({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center justify-center h-full text-fg-muted text-sm p-4 text-center">{children}</div>;
 }
 
+/** A viewer's wait, centred in the pane.
+ *  WHY (guide "File viewers" known deviation, 2026-10-13): each viewer said its own loading words
+ *  in plain grey ("Loading…", "Loading viewer…") outside the shared LoadingState, so they read and
+ *  looked different. One shared piece now: the braille spinner and "Loading <what>…". */
+export function CenterLoading({ what }: { what: string }) {
+  return (
+    <div className="flex items-center justify-center h-full p-4">
+      <LoadingState what={what} />
+    </div>
+  );
+}
+
+/** The read failures a second try can fix: the file came back, or the read itself failed.
+ *  Size, permission and platform refusals answer the same way every time, so they keep their
+ *  note (and Open in default app) rather than gaining a Try again that cannot help. */
+const SAME_ANSWER_EVERY_TIME = new Set(['too-large', 'not-allowed', 'unavailable']);
+function isRetryableBytesError(error: string): boolean {
+  return !SAME_ANSWER_EVERY_TIME.has(error);
+}
+
 export function BinaryContent({ absolutePath, noun, children }: {
   absolutePath: string;
   /** What to call the file in messages: "document", "image", "spreadsheet", "PDF". */
   noun: string;
   children: (bytes: Uint8Array) => React.ReactElement;
 }) {
-  const { bytes, loading, error, sizeBytes } = useArtifactBytes(absolutePath);
-  if (loading) return <CenterNote>Loading {noun}…</CenterNote>;
+  const { bytes, loading, error, sizeBytes, reload } = useArtifactBytes(absolutePath);
+  if (loading) return <CenterLoading what={noun} />;
   if (error === 'too-large' && isRemoteMode()) {
     // Over remote access the host refuses a file over the phone's preview
     // ceiling with its size; the phone offers Download instead of a preview
@@ -56,10 +76,27 @@ export function BinaryContent({ absolutePath, noun, children }: {
     // the same reason BinaryFallback gates it: shell.openPath is a no-op on
     // remote and absent on Android, so the button would silently do nothing.
     const isElectron = getPlatform() === 'electron';
+    const code = error ?? 'read-failed';
+    if (isRetryableBytesError(code)) {
+      // WHY ErrorState (guide "File viewers" known deviation, 2026-10-13; CLAUDE.md "specific
+      // accurate detail + Try again for recoverable failures"): a failed Word / PDF / Excel /
+      // image read was a grey sentence with nothing to press on a phone. Now the shared error
+      // box, the same as the text viewer's failed read (ActiveArtifactView), with Try again
+      // re-running the read and Open in default app kept beside it on desktop.
+      return (
+        <div className="p-4">
+          <ErrorState
+            message={describeBytesError(code, noun)}
+            onRetry={reload}
+            moreActions={isElectron ? [{ label: 'Open in default app', onClick: () => (window.claude as any).shell?.openPath?.(absolutePath) }] : undefined}
+          />
+        </div>
+      );
+    }
     return (
       <CenterNote>
         <div className="flex flex-col items-center gap-3">
-          <span>{describeBytesError(error ?? 'read-failed', noun)}</span>
+          <span>{describeBytesError(code, noun)}</span>
           {isElectron && (
             <Button size="sm" onClick={() => (window.claude as any).shell?.openPath?.(absolutePath)}>
               Open in default app

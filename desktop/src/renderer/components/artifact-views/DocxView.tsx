@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ArtifactViewProps } from './types';
-import { BinaryContent, CenterNote } from './BinaryContent';
+import { BinaryContent, CenterLoading, CenterNote } from './BinaryContent';
 import { sanitizeDocHtml } from './sanitize-doc-html';
 // Doc comments (Destin, questions deck Q-4: Word comments "work fully
 // natively"): a Word document gets the same highlights, hover card and
@@ -47,7 +47,9 @@ function DocxContent({ bytes, path, commentsMode, onOpenComments, focusThreadId,
   }, [bytes]);
 
   if (parseError) return <CenterNote>Couldn’t open this document.</CenterNote>;
-  if (html === null) return <CenterNote>Loading document…</CenterNote>;
+  // WHY CenterLoading: the shared LoadingState, not hand-typed grey words (guide "File viewers"
+  // known deviation, 2026-10-13).
+  if (html === null) return <CenterLoading what="document" />;
 
   return (
     // .doc-html (globals.css) styles the converted headings/lists/tables with

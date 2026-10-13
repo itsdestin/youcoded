@@ -8,6 +8,7 @@ import { useMemo, useState, CSSProperties } from 'react';
 import type { ArtifactViewProps } from './types';
 import { colLetter } from './exceljs-cell';
 import { detectDelimiter, parseDelimited } from './csv-parse';
+import { CenterLoading } from './BinaryContent';
 import { PAPER, GUTTER_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 
 const MAX_ROWS = 2000;
@@ -46,7 +47,9 @@ export function CsvView({ path, content }: ArtifactViewProps) {
     };
   }, [content, path]);
 
-  if (!grid) return <div className="flex items-center justify-center h-full text-fg-muted text-sm p-4">Loading…</div>;
+  // WHY CenterLoading, not a bare "Loading…": the shared LoadingState names what is loading
+  // (guide "File viewers" known deviation, 2026-10-13).
+  if (!grid) return <CenterLoading what="spreadsheet" />;
 
   // Right-align numeric cells like a real sheet.
   const isNumeric = (v: string) => v !== '' && !Number.isNaN(Number(v));

@@ -11,13 +11,14 @@ const components = join(__dirname, '..', 'src', 'renderer', 'components');
 // WHY: these two special overlays do not share Dialog's header/body markup.
 // Pin each approved shell separately without applying styling to OverlayPanel.
 describe('approved custom popup shells', () => {
-  it('uses a single medium 16px file title and a contained 8% line', () => {
+  it('uses a single semibold 16px file title and a contained 8% line', () => {
     const { container } = render(<FileViewerOverlay target={{ pluginId: 'demo', pluginName: 'Plugin name', kind: 'skill', name: 'sample' }} onClose={() => {}} />);
     const header = container.querySelector('[data-file-viewer-header]')!;
     expect(header).not.toBeNull();
     expect(header.textContent).not.toContain('Plugin name');
     expect(header.querySelector('h2')!.textContent).toBe('sample/SKILL.md');
-    expect(header.querySelector('h2')!.className).toContain('text-base font-medium');
+    // Semibold since 2026-10-13: the shared popup title (decisions "Popup and side-panel titles").
+    expect(header.querySelector('h2')!.className).toContain('text-base font-semibold');
     expect(header.className).not.toContain('border-b');
     const css = readSource(join(components, 'marketplace', 'FileViewerOverlay.css'));
     expect(css).toMatch(/\[data-file-viewer-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);

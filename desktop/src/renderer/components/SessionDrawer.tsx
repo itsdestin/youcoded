@@ -137,20 +137,25 @@ function Ic({ name, size = 15 }: { name: keyof typeof PATHS | string; size?: num
 function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: () => void }) {
   const title = state.active ? 'Back to reading' : 'Comments';
   return (
-    <button
-      type="button"
+    // WHY the shared Button (guide "File viewers" known deviation, 2026-10-13; G-1 "one primitive,
+    // one look"): this was a hand-made pill (rounded-full, its own hover). `raised` is the shared
+    // button for a control sitting ON content — a solid panel fill and outline, so it stays
+    // readable over the document it floats on; its corners now come from the theme (decisions
+    // "Control shape follows the theme"). The accent ring while Comments is on stays (G-8: the
+    // accent may paint an on-state), as does the floating shadow.
+    <Button
+      variant="raised"
+      size="lg"
       aria-pressed={state.active}
       title={title}
       onClick={onClick}
-      className={`pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel border shadow-lg hover:text-fg hover:bg-well transition-colors ${
-        state.active ? 'text-fg border-accent ring-1 ring-accent' : 'text-fg-2 border-edge'
-      }`}
+      className={`pointer-events-auto gap-2 shadow-lg ${state.active ? 'text-fg border-accent ring-1 ring-accent' : ''}`}
     >
       <MenuIcon name="comment" className="w-4 h-4" />
       Comments
       {/* G-19: label + muted numeral, never an accent badge (G-8). */}
       {state.count > 0 && <span className="text-fg-muted">{state.count}</span>}
-    </button>
+    </Button>
   );
 }
 
@@ -1036,7 +1041,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           button for either case — SessionPreviewPane used to draw its own
           second title/close row in its body; that was the "two X's" bug
           Destin flagged, so it no longer renders one. Don't add one back. */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
+      {/* WHY data-session-files-header, not border-b (guide "File viewers" known deviation,
+          2026-10-13; decisions "Card levels": never a full-width line in a popup or panel, and
+          "Header divider colour"): the same tapered card-outline line the file list's own header
+          and every shared popup (Dialog.css) draw under their title. */}
+      <div data-session-files-header className="flex items-center gap-1 px-2 py-1.5 shrink-0">
         {narrowViewport && active && !listOpen ? (
           // A phone has no hover hint to explain a bare list glyph, and a file
           // that has replaced the list needs a way BACK that reads as one
@@ -1049,7 +1058,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {active ? (renaming ? (
           <div className="flex items-center gap-2 min-w-0 px-1 relative">
-            <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-red-500' : 'border-accent'}`}>
+            {/* WHY border-destructive, not border-red-500 (guide "File viewers" known deviation,
+                2026-10-13; principle 2, colours are theme tokens): the theme's own red, the one the
+                shared error box's border uses (Callout CALLOUT_DANGER_SURFACE). */}
+            <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-destructive' : 'border-accent'}`}>
               <input
                 ref={renameInputRef}
                 autoFocus
@@ -1355,32 +1367,41 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>
-                      {!editState.autosaves && <button
-                        type="button"
+                      {/* WHY the shared Button for Cancel / Save / Edit (guide "File viewers" known
+                          deviation, 2026-10-13; G-1 "one primitive, one look"): these were
+                          hand-made pills. Save and Edit are the filled `primary` — kept solid on
+                          wallpaper themes by solid-accent, as Ask Your Assistant beside them
+                          (CommentsFloatingActions) is; Cancel is `raised`, the shared button that
+                          sits on content, like Comments. Corners now follow the theme. */}
+                      {!editState.autosaves && <Button
+                        variant="raised"
+                        size="lg"
                         onClick={() => editRef.current?.cancelEdit()}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel text-fg-2 border border-edge shadow-lg hover:text-fg hover:bg-well transition-colors"
+                        className="gap-2 shadow-lg"
                       >
                         <Ic name="close" size={15} />
                         Cancel
-                      </button>}
-                      <button
-                        type="button"
+                      </Button>}
+                      <Button
+                        variant="primary"
+                        size="lg"
                         onClick={() => editRef.current?.saveEdit()}
-                        className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                        className="solid-accent gap-2 shadow-lg"
                       >
                         <Ic name="check" size={15} />
                         {editState.autosaves ? 'Done' : 'Save'}
-                      </button>
+                      </Button>
                     </>
                   ) : (
-                    <button
-                      type="button"
+                    <Button
+                      variant="primary"
+                      size="lg"
                       onClick={() => { editRef.current?.startEdit(); setListOpen(false); }}
-                      className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                      className="solid-accent gap-2 shadow-lg"
                     >
                       <Ic name="editdoc" size={15} />
                       Edit
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}
@@ -1420,9 +1441,8 @@ export function GitFooterEntry({
 }: {
   counts: { added: number; removed: number } | null;
   show: boolean;
-  /** mid-merge unmerged file — renders an amber "Conflict" word before the
-   *  counts (2026-07-22 bug: these files used to vanish from the footer).
-   *  Plain word, not a chip: the metadata strip speaks in words (statusWord). */
+  /** mid-merge unmerged file — renders the warning "Conflict" pill before the
+   *  counts (2026-07-22 bug: these files used to vanish from the footer). */
   conflicted?: boolean;
   onOpenReview: () => void;
 }) {
@@ -1443,13 +1463,13 @@ export function GitFooterEntry({
         </>
       )}
       <Tooltip text="Review this file's changes">
-      <button
-        type="button"
-        onClick={onOpenReview}
-        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-2xs text-fg-dim hover:text-fg hover:bg-inset transition-colors"
-      >
+      {/* WHY the shared outlined Button (known deviations fixed by existing rules, 2026-10-13):
+          it was grey text with its own hand-set corners — a bare text button. The guide: a
+          less-important action is outlined, never bare text (decisions "Secondary buttons");
+          small, as the inline row actions are (EngineCard, provider rows). */}
+      <Button variant="secondary" size="sm" onClick={onOpenReview}>
         Review changes <Ic name="forward" size={11} />
-      </button>
+      </Button>
       </Tooltip>
     </>
   );

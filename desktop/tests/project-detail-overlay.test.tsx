@@ -10,12 +10,13 @@ afterEach(cleanup);
 // WHY: the approved Project header, scroll hook and scoped CSS work together;
 // testing only a class or only a stylesheet would miss a disconnected edge fade.
 describe('Project detail overlay', () => {
-  it('renders a contained 8% divider and a 16px medium title', () => {
+  it('renders a contained 8% divider and a 16px semibold title', () => {
     const { container } = render(<ProjectDetailOverlay title="Notes" onClose={() => {}}>body</ProjectDetailOverlay>);
     const header = container.querySelector('[role="dialog"] > header')!;
     expect(header.className).toContain('project-detail-header');
     expect(header.className).not.toContain('border-b');
-    expect(header.querySelector('span')!.className).toContain('text-base font-medium');
+    // Semibold since 2026-10-13: the shared popup title (decisions "Popup and side-panel titles").
+    expect(header.querySelector('span')!.className).toContain('text-base font-semibold');
     const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'project-view', 'ProjectDetailOverlay.css'));
     expect(css).toMatch(/\.project-detail-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });

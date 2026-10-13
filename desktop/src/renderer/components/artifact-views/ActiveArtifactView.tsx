@@ -11,7 +11,8 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
-import { Button, Callout } from '../ui';
+import { Button, Callout, SectionLabel } from '../ui';
+import { CenterLoading } from './BinaryContent';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
@@ -841,6 +842,17 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   }
   if (!editing && readState.phase === 'missing') {
     // ONLY shown when artifacts:get genuinely returned orphan:true.
+    // WHY ErrorState when the host can re-read (guide "File viewers" known deviation, 2026-10-13):
+    // a missing file was a grey line with nothing to press. Try again re-runs the same read the
+    // failed-read box below uses (onRetryRead), so a file put back — a branch switched back, an
+    // undo — reappears without reopening it. A host with no re-read keeps the plain line.
+    if (onRetryRead) {
+      return (
+        <div className="p-4">
+          <ErrorState message="This file is no longer on disk." onRetry={onRetryRead} />
+        </div>
+      );
+    }
     return <div className="text-fg-muted text-sm p-4">This file is no longer on disk.</div>;
   }
   if (!editing && readState.phase === 'error' && readState.code === 'too-large' && isRemoteMode()) {
@@ -905,9 +917,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           diff at all (spec §6.2). */}
       {showDiff && conflict && (
         <div className="border-b border-edge shrink-0 overflow-auto max-h-[40%] p-2">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">
-            What keeping yours changes (disk → your draft)
-          </div>
+          {/* WHY SectionLabel (decisions "Heading ladder": small labels in normal case, no spaced
+              capitals): this was the retired `tracking-wider uppercase` eyebrow. */}
+          <SectionLabel className="mb-1">What keeping yours changes (disk → your draft)</SectionLabel>
           {/* fill: the wrapper above is already the scroll surface
               (overflow-auto max-h-[40%]) — without fill, UnifiedDiff's own
               15-line cap + button stacked a second scrollbar inside it and
@@ -922,7 +934,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               (Suspense alone can't — lazy() THROWS its rejection). Keyed by
               artifact so switching files retries with a clean slate. */}
           <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
-          <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
+          {/* WHY CenterLoading: the shared LoadingState, one wording ("Loading file…") with the read
+              above, not a second hand-typed "Loading viewer…" (guide "File viewers", 2026-10-13). */}
+          <Suspense fallback={<CenterLoading what="file" />}>
             {/* Photo-only build: inside Suspense, so `shoot` marks the file only once its viewer loaded. */}
             <ScreenMark name={`chat/files/open/${artifact.id}`} />
             <ViewerComponent

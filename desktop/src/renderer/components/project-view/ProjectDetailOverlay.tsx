@@ -53,7 +53,10 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
             overlay could not be closed. CloseButton is deliberately outside
             the wrapping group so it stays reachable on the first line. */}
         <header className="project-detail-header flex flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 shrink-0">
-          <span className="text-base font-medium text-fg truncate min-w-0 flex-1">{title}</span>
+          {/* WHY semibold (guide "File viewers" known deviation, 2026-10-13): decisions "Popup and
+              side-panel titles" made every popup title the shared 16px semibold one (Dialog.tsx's
+              h2); this overlay's title was 16px medium. */}
+          <span className="text-base font-semibold text-fg truncate min-w-0 flex-1">{title}</span>
           {/* order flips the close button: narrow keeps it on the title line
               (tools wrap underneath); sm+ restores the original title · tools ·
               close reading order. */}

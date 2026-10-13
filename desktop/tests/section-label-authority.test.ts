@@ -28,8 +28,9 @@ const CANONICAL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase';
 const ALLOWED_ADOPTERS = new Set([
   // Tool cards — exempt (owner's decision; not yet redesigned).
   'components/tool-views/ToolBody.tsx',
-  // The dedicated file viewer — exempt ("file viewers").
-  'components/artifact-views/ActiveArtifactView.tsx',
+  // (The file viewer, ActiveArtifactView.tsx, left this list 2026-10-13: the 2026-10-13 design
+  // guide lists its spaced-caps conflict-diff label as a known deviation, not an exemption, and
+  // it is now the shared SectionLabel. Closed list — it may only shrink.)
   // dev/** is workbench-only, never in the shipped bundle — exempt.
   'dev/workbench/compare/permission-modes.ts',
   'dev/workbench/WorkbenchToolbar.tsx',
