@@ -1032,9 +1032,14 @@ export class SyncService extends EventEmitter {
 
         // If a specific backend was requested (manual push), use just that one.
         // Otherwise, push to all sync-enabled backends (the daily-snapshot poll).
-        const instances = opts?.backendId
+        // WHY github-type backups are left out HERE (final review F33): they copy nothing on a computer
+        // any more (see the loop below), but a cycle whose only backups were GitHub ones still ran to
+        // the end, returned success and wrote backup-meta.json and the sync marker — so Backup & sync
+        // could read a fresh "last backup" for a cycle that copied nothing. With nothing that can run,
+        // the cycle ends exactly as one with no backups at all: nothing is stamped.
+        const instances = (opts?.backendId
           ? [this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
-          : this.getSyncEnabledBackends();
+          : this.getSyncEnabledBackends()).filter((i) => i.type !== 'github');
 
         if (instances.length === 0) return { success: true, errors: 0, backends: [] };
 

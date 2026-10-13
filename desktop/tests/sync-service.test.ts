@@ -491,3 +491,26 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
     expect(fs.readFileSync(warningsPath, 'utf8')).toBe(firstBody);
   });
 });
+
+// Final review F33: a cycle whose only backups are GitHub ones (which copy nothing on a computer)
+// must not stamp a fresh "last backup".
+describe('SyncService push with only GitHub backups', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-gh-${process.pid}-${Date.now()}`);
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  it('writes neither backup-meta.json nor the sync marker', async () => {
+    const svc = new SyncService(tmpHome);
+    vi.spyOn(svc as any, 'getBackendInstances').mockReturnValue([{ id: 'gh-1', type: 'github', syncEnabled: true, label: 'GitHub', config: {} }]);
+    const res = await svc.push({ force: true });
+    expect(res).toEqual({ success: true, errors: 0, backends: [] });
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'toolkit-state', '.sync-marker'))).toBe(false);
+    // ...and the same for "Upload now" on that one backup.
+    expect(await svc.push({ backendId: 'gh-1' })).toEqual({ success: true, errors: 0, backends: [] });
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
+  });
+});
