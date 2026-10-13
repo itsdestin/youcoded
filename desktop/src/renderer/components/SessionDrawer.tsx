@@ -1074,10 +1074,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               <span className="text-xs text-fg-muted font-mono px-2">{extOf(fileName)}</span>
             </span>
             {/* Inline failure note — keeps the field open so the user can correct it. */}
+            {/* WHY a solid bg-panel backing under the box (final review F18): this note floats over
+                the file list, and the shared FieldError is a see-through red tint — on its own the
+                rows showed through it. Same box, same corner, now opaque. */}
             {renameError && (
-              <FieldError size="2xs" className="absolute left-1 top-full mt-1 whitespace-nowrap z-10">
-                {renameError}
-              </FieldError>
+              <div className="absolute left-1 top-full mt-1 z-10 rounded-md bg-panel">
+                <FieldError size="2xs" className="whitespace-nowrap">
+                  {renameError}
+                </FieldError>
+              </div>
             )}
           </div>
         ) : (
