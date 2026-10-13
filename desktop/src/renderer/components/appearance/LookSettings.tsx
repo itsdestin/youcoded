@@ -459,7 +459,7 @@ export function LookSettings() {
     // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
     <FoldRow
       title="Additional customizations"
-      description={changed === 0 ? 'Bubbles, corners, glass, particles, page background' : `${changed} changed from the theme`}
+      description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
       open={open}
       onToggle={setOpen}
     >
