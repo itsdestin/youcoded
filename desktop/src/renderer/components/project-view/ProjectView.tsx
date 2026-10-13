@@ -21,6 +21,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
+import { ProjectsIcon } from '../screen-icons';
 import { workbenchScreenFrame } from '../../workbench-mode';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
@@ -798,6 +799,8 @@ export function ProjectView(props: ProjectViewProps) {
         settingsBadge={props.settingsBadge}
         settingsDangerBadge={props.settingsDangerBadge}
         active="projects"
+        // WHY: every full screen's title carries its icon (decisions "Full-screen titles", H-1).
+        icon={<ProjectsIcon />}
         title="Projects"
         onBack={() => dispatch({ type: 'PROJECT_VIEW_CLOSED' })}
       />

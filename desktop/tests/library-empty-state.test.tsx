@@ -17,6 +17,10 @@ import LibraryScreen from '../src/renderer/components/library/LibraryScreen';
 import { MarketplaceProvider } from '../src/renderer/state/marketplace-context';
 import { MarketplaceStatsProvider } from '../src/renderer/state/marketplace-stats-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
 // Minimal window.claude stub — every list call resolves empty so the provider
 // boots with nothing installed, nothing favorited, no themes.
@@ -70,7 +74,7 @@ async function renderLibrary(props: Partial<React.ComponentProps<typeof LibraryS
       <SkillProvider>
         <MarketplaceProvider>
           <MarketplaceStatsProvider>
-            <LibraryScreen onExit={() => {}} {...props} />
+            <ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><LibraryScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} {...props} /></ArtifactProvider>
           </MarketplaceStatsProvider>
         </MarketplaceProvider>
       </SkillProvider>,

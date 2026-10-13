@@ -21,7 +21,7 @@
 // toggle, file browser, or games panel). the old page icon page will now only
 // be accessible via manage pages."
 //
-//   ┌ [⚙][▤][▢]              ◷ Page name                    [Back to chat Esc] [– □ ×] ┐
+//   ┌ [⚙][▤][▢]              ◷ Page name                    [Esc · Back to chat] [– □ ×] ┐
 //   │╭─────────────────────╮ ╭──────────────────────────────────────────────────╮│
 //   ││ every page, grouped, │ │  the page — or "No page selected"                ││
 //   ││ pin beside each      │ │                                                  ││
@@ -420,8 +420,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         settingsDangerBadge={settingsDangerBadge}
         active={pageFocus ? null : 'pages'}
         onBack={backToChat}
+        // WHY icon for Pages home too (decisions "Full-screen titles", H-1: every full
+        // screen's title carries its icon): an open page shows its own glyph; the
+        // page list showed none.
+        icon={summary ? <PageGlyph icon={summary.icon} className="w-4 h-4" /> : <PagesIcon className="w-4 h-4" />}
         title={<>
-          {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
           <span className="truncate">{title || 'Pages'}</span>
           {/* Freshness belongs to the app, not the page (deck Q-last-updated):
               same place on every connected page, and true because the app made

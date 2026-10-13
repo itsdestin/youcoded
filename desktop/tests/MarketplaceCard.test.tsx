@@ -19,6 +19,10 @@ import {
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import { AccountProvider } from '../src/renderer/state/account-context';
 import type { SkillEntry } from '../src/shared/types';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
 // WHY: each section below was its own file, so each started with an empty
 // /stats cache and the environment's own fetch. One section replaces
@@ -806,7 +810,7 @@ describe('the Update action is wired to mp.update()', () => {
   });
 
   it('the Library Updates tab can actually update', async () => {
-    await renderWithProviders(<LibraryScreen onExit={() => {}} initialTab="updates" />);
+    await renderWithProviders(<ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><LibraryScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} initialTab="updates" /></ArtifactProvider>);
     const buttons = screen.getAllByRole('button', { name: 'Update' });
     expect(buttons.length).toBeGreaterThan(0);
     await act(async () => { fireEvent.click(buttons[0]); });

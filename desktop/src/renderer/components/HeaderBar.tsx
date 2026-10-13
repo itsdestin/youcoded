@@ -17,6 +17,7 @@ import { Tooltip } from './ui';
 import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
 import { FOCUS_RING } from './ui/Button';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
+import { ProjectsIcon } from './screen-icons';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -269,11 +270,9 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
       aria-label="Open projects"
       aria-pressed={active}
     >
-      {/* Folder icon — matches the document icon style used by ArtifactDrawerButton */}
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-      </svg>
+      {/* Folder icon — matches the document icon style used by ArtifactDrawerButton.
+          Shared with Projects' own band title (screen-icons.tsx). */}
+      <ProjectsIcon />
     </button>
     </Tooltip>
   );

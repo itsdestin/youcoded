@@ -3,7 +3,7 @@
 // 2026-09-17: "add the same styled frame/header in projects view. we will
 // unify these separate page/menu styles").
 //
-//   ┌ [⚙][▤][▢][pinned…]        ◷ Title            [Back to chat · Esc] [– □ ×] ┐
+//   ┌ [⚙][▤][▢][pinned…]        ◷ Title            [Esc · Back to chat] [– □ ×] ┐
 //
 // Same height, drag region and window buttons as the app's header; three
 // equal columns so the title is truly centred (it truncates before the clusters do). The left cluster is the app's own
@@ -14,7 +14,7 @@
 import React, { useRef } from 'react';
 import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from './HeaderBar';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
-import { ON_INSET_CONTROL } from './header/control-states';
+import { Button } from './ui/Button';
 import { useWallpaperHeaderInk } from '../hooks/use-wallpaper-header-ink';
 
 export interface ScreenBandProps {
@@ -26,12 +26,15 @@ export interface ScreenBandProps {
    *  pinned button instead (PinnedPageButtons reads that from state). */
   active: 'pages' | 'projects' | null;
   title: React.ReactNode;
+  /** The screen's own icon, drawn before the title (decisions "Full-screen
+   *  titles", H-1: "centered, small, with the screen's icon"). */
+  icon?: React.ReactNode;
   /** Back to chat. */
   onBack: () => void;
   backLabel?: string;
 }
 
-export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, active, title, onBack, backLabel = 'Back to chat' }: ScreenBandProps) {
+export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, active, title, icon, onBack, backLabel = 'Back to chat' }: ScreenBandProps) {
   const headerRef = useRef<HTMLDivElement>(null);
   // Float chrome only (a no-op elsewhere): the same wallpaper-derived icon tint
   // as the chat header. The chat's bottom controls are hidden under a screen and
@@ -54,25 +57,28 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
         <PinnedPageButtons />
       </div>
       <div className="flex items-center justify-center gap-2 min-w-0 px-3 text-sm font-medium text-fg">
+        {icon && <span className="shrink-0 text-fg-muted flex">{icon}</span>}
         {title}
       </div>
       <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
-        {/* Same inset pill and quiet text as the window buttons beside it
-            (round 5: "should match styling of max/min/exit"). */}
-        <div className="flex bg-inset rounded-md p-0.5">
-          <button
-            type="button"
-            onClick={onBack}
-            aria-label={backLabel}
-            className={`px-2 py-1 rounded-sm flex items-center gap-1.5 text-xs leading-none ${ON_INSET_CONTROL}`}
-          >
-            {/* One size and one baseline for all three parts (round 6), with a
-                dot between the words and the key. */}
-            <span>{backLabel}</span>
-            <span aria-hidden="true" className="hidden sm:inline text-fg-faint">·</span>
-            <span className="hidden sm:inline text-fg-muted">Esc</span>
-          </button>
-        </div>
+        {/* WHY a filled small Button reading "Esc · Back to chat", key first
+            (decisions "Way back to chat", ui-element-review-headers#H-5:
+            "Filled button on every full screen … key on the left"): this was
+            an inset pill reading "Back to chat · Esc" (shell deck round 5–6,
+            superseded by H-5), so the four full screens showed three exit
+            looks. At phone width "Esc ·" is dropped (old guide §4.8). A filled
+            button keeps its own colours under the float chrome's wallpaper ink
+            (float-chrome.css skips `.bg-accent`). */}
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={onBack}
+          aria-label={backLabel}
+          className="whitespace-nowrap"
+        >
+          <span aria-hidden="true" className="hidden sm:inline">Esc ·</span>
+          <span>{backLabel}</span>
+        </Button>
         {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>

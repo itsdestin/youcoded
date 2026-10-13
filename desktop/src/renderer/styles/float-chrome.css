@@ -319,8 +319,9 @@
 [data-wallpaper] [data-chrome-style='float'] .header-bar button[data-wallpaper-control-ink]:not(.bg-accent):not(.text-amber-700):not(.text-accent):not([aria-pressed='true']) > svg {
   color: var(--wallpaper-header-ink);
 }
-/* A worded header button (Projects / Pages' "Back to chat · Esc") takes the
-   same ink for its words; the key hint stays quieter. Badges (a span with its
+/* A worded header button in an inset pill takes the same ink for its words;
+   the key hint stays quieter. (The full screens' "Esc · Back to chat" is a
+   filled button now — `.bg-accent` — so it keeps its own colours.) Badges (a span with its
    own fill) keep their colours. */
 [data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:not([class*='bg-']) {
   color: var(--wallpaper-header-ink);

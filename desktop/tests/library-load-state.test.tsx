@@ -19,6 +19,10 @@ import LibraryScreen from '../src/renderer/components/library/LibraryScreen';
 import { MarketplaceProvider } from '../src/renderer/state/marketplace-context';
 import { MarketplaceStatsProvider } from '../src/renderer/state/marketplace-stats-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
 // `skills.list` is one of the calls inside fetchAll's Promise.all that has no catch of
 // its own, so its rejection is exactly the failure that leaves the lists empty.
@@ -64,7 +68,7 @@ async function renderLibrary() {
       <SkillProvider>
         <MarketplaceProvider>
           <MarketplaceStatsProvider>
-            <LibraryScreen onExit={() => {}} onOpenMarketplace={() => {}} />
+            <ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><LibraryScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} onOpenMarketplace={() => {}} /></ArtifactProvider>
           </MarketplaceStatsProvider>
         </MarketplaceProvider>
       </SkillProvider>,

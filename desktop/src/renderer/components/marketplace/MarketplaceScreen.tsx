@@ -20,9 +20,10 @@ import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetail
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
-import { Button, CloseButton, EmptyState, ErrorState, LoadingState } from "../ui";
+import { Button, EmptyState, ErrorState, LoadingState } from "../ui";
+import { ScreenBand } from "../ScreenBand";
+import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
-import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 import { useCurrentPlatform } from "../../platform";
 import { platformDisplayName } from "../../../shared/platform-display";
 import type { SkillEntry } from "../../../shared/types";
@@ -52,6 +53,12 @@ const SHOOT_DETAIL_IDS: Record<string, string> = {
 
 interface Props {
   onExit(): void;
+  // The band across the top (ScreenBand) carries the app's Settings button, as
+  // Projects and Pages do, so the screen needs Settings' state (App.tsx owns it).
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
+  settingsBadge?: boolean;
+  settingsDangerBadge?: boolean;
   // Phase 2 redesign — jump to Your library without round-tripping through
   // the command drawer. Optional so the screen still renders standalone.
   onOpenLibrary?(): void;
@@ -68,7 +75,7 @@ interface Props {
 }
 
 export default function MarketplaceScreen({
-  onExit, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
+  onExit, settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
 }: Props) {
   const mp = useMarketplace();
   const currentPlatform = useCurrentPlatform();
@@ -368,10 +375,6 @@ export default function MarketplaceScreen({
     if (match) setIntegrationDetail(match);
   }, [integrations]);
 
-  // P-1 #5: see the header below — decides whether the "Esc · Back to chat"
-  // button exists at all, not just whether it is displayed.
-  const compact = useNarrowViewport();
-
   // Task 8: both chunked grids (bottom catalog + search results) scroll the
   // SAME outer container (ref'd below) — draw-more triggers off it either way.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -423,7 +426,9 @@ export default function MarketplaceScreen({
       : null;
 
   return (
-    <div className="fixed inset-0 z-40">
+    // WHY flex column with the band on top (H-1/H-5): the band (ScreenBand) stays put
+    // while only the body below it scrolls, like Projects and Pages.
+    <div className="fixed inset-0 z-40 flex flex-col">
       {/* Marked once the catalog has loaded, so a picture never shows the spinner. */}
       {!mp.loading && <ScreenMark name="marketplace" />}
       {!mp.loading && !filter.query && filter.type === 'plugin' && <ScreenMark name="marketplace/skills" />}
@@ -433,19 +438,30 @@ export default function MarketplaceScreen({
           inside the FIXED outer wrapper (not the inner scroll container) so it
           stays pinned to the viewport while content scrolls over it. */}
       <WallpaperBackdrop />
+      <ScreenBand
+        settingsOpen={settingsOpen}
+        onToggleSettings={onToggleSettings}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        active={null}
+        icon={<MarketplaceIcon />}
+        title={<span className="truncate">Marketplace</span>}
+        onBack={onExit}
+      />
       {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
           stray horizontal wiggle from rail cards / wallpaper transform. Ref'd
           for both chunked grids' useChunkedReveal (Task 8) — it's the one
           scrolling root either mode uses. */}
-      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
-      <div className="flex items-center justify-between gap-2 p-3">
-        {/* Auth chip sits flush-left before the title so the GitHub sign-in
-            entry point is the first thing users see when entering the
-            marketplace — fixes the "no obvious way to sign in" gap. */}
-        <div className="flex items-center gap-2 pl-2 min-w-0">
+      <div ref={scrollRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* WHY no title or exit here any more (decisions "Full-screen titles", H-1, and
+          "Way back to chat", H-5): the screen names itself in the band above, centred
+          with its icon, and leaves by the band's filled "Esc · Back to chat" — the same
+          band Projects and Pages use. What stays is the screen's own tools: sign-in
+          first (the "no obvious way to sign in" fix keeps it the first thing seen) and
+          the jump to Your library at the right. */}
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 pt-3">
+        <div className="flex items-center gap-2 min-w-0">
           <MarketplaceAuthChip />
-          <h1 className="text-xl font-semibold text-fg truncate">Marketplace</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* panel-glass and the tighter py-1 stay as className overrides (spec
@@ -461,45 +477,13 @@ export default function MarketplaceScreen({
               aria-label="Open your library"
               title="Your library"
             >
-              {/* Wide: text label. Narrow: bookmark icon — matches the close-X
-                  treatment on the adjacent button. */}
+              {/* Wide: text label. Narrow: bookmark icon. */}
               <span className="hidden sm:inline">Your library</span>
               <span className="sm:hidden inline-flex p-0.5" aria-hidden>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                </svg>
+                <LibraryIcon className="w-4.5 h-4.5" />
               </span>
             </Button>
           )}
-          {/* Wide: "Esc · Back to chat", no border (the Esc key does the work).
-              Ghost Button rather than a bare <button> so it carries the hover
-              pill + focus ring — matched across all three screens, change 27.
-              P-1 #5: this was `className="hidden sm:inline-flex"`, which never
-              hid it — Tailwind v4 emits `.hidden` BEFORE `.inline-flex`, so the
-              Button's own base `inline-flex` won and the keyboard hint rendered
-              at phone width, ~150px that truncated the title to "Ma…". Rendering
-              it only when not compact (same 640px boundary) removes the thief;
-              the CloseButton below is the narrow exit. */}
-          {!compact && (
-            <Button
-              variant="ghost"
-              onClick={onExit}
-              className="text-sm px-2.5 py-1"
-              aria-label="Exit marketplace"
-            >
-              Esc · Back to chat
-            </Button>
-          )}
-          {/* Narrow: bordered close-X button — touch users have no Esc key, so we
-              give them an obvious close affordance with a button-shaped container
-              matching the Library button next to it. */}
-          {/* panel-glass + the border survive as className overrides — the bordered
-              container is what makes this match the Library button next to it. */}
-          <CloseButton
-            onClick={onExit}
-            label="Exit marketplace"
-            className="sm:hidden panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
-          />
         </div>
       </div>
 

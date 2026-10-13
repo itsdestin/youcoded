@@ -726,6 +726,14 @@ function AppInner() {
   const [artifactStore] = useState(() => createArtifactStore());
   const artifactState = useSyncExternalStore(artifactStore.subscribe, artifactStore.getState);
   const dispatchArtifact = artifactStore.dispatch;
+  // WHY: the Marketplace and Library now sit under the same band as Projects and Pages
+  // (ScreenBand, decisions "Full-screen titles"), whose Pages / Projects buttons open those
+  // screens. Both are drawn at the same layer as the Marketplace and earlier in the page,
+  // so they would open UNDER it — leave the Marketplace or Library when either opens.
+  useEffect(() => {
+    if (!artifactState.projectViewOpen && !artifactState.pageViewOpen) return;
+    setActiveView((v) => (v === 'marketplace' || v === 'library' ? 'chat' : v));
+  }, [artifactState.projectViewOpen, artifactState.pageViewOpen]);
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
@@ -4273,6 +4281,10 @@ function AppInner() {
         activeView === 'marketplace' ? (
           <MarketplaceScreen
             onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
+            settingsOpen={settingsOpen}
+            onToggleSettings={() => setSettingsOpen((v) => !v)}
+            settingsBadge={settingsBadge}
+            settingsDangerBadge={settingsDangerBadge}
             onOpenLibrary={() => { setActiveView('library'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
             onOpenShareSheet={(id) => setShareSkillId(id)}
             onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
@@ -4283,6 +4295,10 @@ function AppInner() {
         ) : (
           <LibraryScreen
             onExit={() => setActiveView('chat')}
+            settingsOpen={settingsOpen}
+            onToggleSettings={() => setSettingsOpen((v) => !v)}
+            settingsBadge={settingsBadge}
+            settingsDangerBadge={settingsDangerBadge}
             onOpenMarketplace={() => setActiveView('marketplace')}
             onOpenShareSheet={(id) => setShareSkillId(id)}
             onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
