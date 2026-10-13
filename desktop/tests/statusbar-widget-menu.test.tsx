@@ -348,8 +348,8 @@ describe('the bar and the Customize menu agree about Cost', () => {
       const rowEnabled = switchFor('Session cost') !== null;
       expect(rowEnabled).toBe(shape.rowEnabled);
       if (shape.reason === null) {
-        // No reason under the label — just the row's own one-line hint.
-        expect(label.nextElementSibling!.textContent).toBe('Estimated cost of this session in USD.');
+        // No reason under the label — just the row's own hint, which keeps its Pro/Max caveat.
+        expect(label.nextElementSibling!.textContent).toBe("Estimated cost in US dollars — only an estimate on Pro and Max plans, which aren't billed per token.");
       } else {
         expect(label.nextElementSibling!.textContent).toBe(shape.reason);
       }

@@ -74,7 +74,8 @@ describe('Button', () => {
 
   it('uses one control radius', () => {
     // Rule 2. Pills survive only as a documented className override.
-    expect(buttonClasses('primary')).toContain('rounded-lg');
+    // The theme's control corner (decisions "Control shape follows the theme").
+    expect(buttonClasses('primary')).toContain('rounded-control');
     expect(buttonClasses('primary')).not.toContain('rounded-sm');
     expect(buttonClasses('primary')).not.toContain('rounded-full');
   });
@@ -169,7 +170,8 @@ describe('Button', () => {
     });
 
     it('leaves the base untouched when nothing is overridden', () => {
-      expect(buttonClasses('primary', 'lg')).toContain('rounded-lg');
+      // The theme's control corner (decisions "Control shape follows the theme").
+      expect(buttonClasses('primary', 'lg')).toContain('rounded-control');
       expect(buttonClasses('primary', 'lg')).toContain('text-sm');
     });
   });
