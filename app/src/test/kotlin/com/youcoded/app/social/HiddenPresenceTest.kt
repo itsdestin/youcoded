@@ -22,9 +22,9 @@ class HiddenPresenceTest {
     @Before fun start() { server = MockWebServer(); server.start() }
     @After fun stop() { server.shutdown() }
 
-    private fun probe(): Boolean {
+    private fun probe(): HiddenPresence.Support {
         val latch = CountDownLatch(1)
-        var answer = true
+        var answer = HiddenPresence.Support.YES
         HiddenPresence.probe(OkHttpClient(), server.url("/social/presence/capabilities").toString()) { answer = it; latch.countDown() }
         assertTrue(latch.await(5, TimeUnit.SECONDS))
         return answer
@@ -32,19 +32,45 @@ class HiddenPresenceTest {
 
     @Test fun `a server that supports hidden mode says yes`() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"hidden":true}"""))
-        assertTrue(probe())
+        assertEquals(HiddenPresence.Support.YES, probe())
     }
 
     @Test fun `an older server (404) is a no, so the device never connects hidden`() {
         server.enqueue(MockResponse().setResponseCode(404).setBody("not found"))
-        assertFalse(probe())
+        assertEquals(HiddenPresence.Support.NO, probe())
     }
 
-    @Test fun `anything but an explicit yes is a no`() {
+    @Test fun `an answer without hidden true is a no`() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"hidden":false}"""))
-        assertFalse(probe())
+        assertEquals(HiddenPresence.Support.NO, probe())
+    }
+
+    // Final review F4: a check that could not be made is not "the server can't" — it is retried.
+    @Test fun `a server error, a rate limit or an unreadable answer is unknown, never yes`() {
+        server.enqueue(MockResponse().setResponseCode(503).setBody("down"))
+        assertEquals(HiddenPresence.Support.UNKNOWN, probe())
+        server.enqueue(MockResponse().setResponseCode(429).setBody("slow down"))
+        assertEquals(HiddenPresence.Support.UNKNOWN, probe())
         server.enqueue(MockResponse().setResponseCode(200).setBody("garbage"))
-        assertFalse(probe())
+        assertEquals(HiddenPresence.Support.UNKNOWN, probe())
+    }
+
+    @Test fun `no network at all is unknown`() {
+        val url = server.url("/social/presence/capabilities").toString()
+        server.shutdown()
+        val latch = CountDownLatch(1)
+        var answer = HiddenPresence.Support.YES
+        HiddenPresence.probe(OkHttpClient(), url) { answer = it; latch.countDown() }
+        assertTrue(latch.await(10, TimeUnit.SECONDS))
+        assertEquals(HiddenPresence.Support.UNKNOWN, answer)
+        server = MockWebServer().also { it.start() } // @After shuts this one down
+    }
+
+    @Test fun `the re-check backoff grows and then repeats its last step`() {
+        assertEquals(5_000L, HiddenPresence.retryDelay(0))
+        assertEquals(15_000L, HiddenPresence.retryDelay(1))
+        assertEquals(60_000L, HiddenPresence.retryDelay(3))
+        assertEquals(60_000L, HiddenPresence.retryDelay(40))
     }
 
     @Test fun `only the hello frame confirms hidden mode`() {

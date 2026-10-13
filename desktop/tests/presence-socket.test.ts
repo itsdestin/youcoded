@@ -492,15 +492,54 @@ describe('presence-socket hidden mode (incognito)', () => {
     sock.destroy();
   });
 
-  it('switching to hidden closes the visible connection before opening the hidden one', () => {
+  // Final review F2: switching to hidden used to open the `?hidden=1` socket at once — before the
+  // server had been asked whether it can hide this device, so an older server announced the user.
+  it('switching to hidden closes the visible connection and opens NOTHING until told to connect', () => {
     const { sock } = makeSocket(() => 'tok');
     sock.setDesired(true);
     const visible = FakeSocket.instances[0];
     visible.emit('open');
     sock.setHidden(true);
     expect(visible.closeCalls).toHaveLength(1);
+    expect(FakeSocket.instances).toHaveLength(1);
+    // A wake or an idle change in the meantime cannot open it either.
+    sock.setIdle(true); sock.setIdle(false);
+    sock.setSuspended(true); sock.setSuspended(false);
+    expect(FakeSocket.instances).toHaveLength(1);
+    sock.setDesired(true); // the caller's go-ahead, after the capability check said yes
     expect(FakeSocket.instances).toHaveLength(2);
     expect(FakeSocket.instances[1].url).toContain('?hidden=1');
+    sock.destroy();
+  });
+
+  // Final review F25: a late frame from the socket just replaced must not judge the new one.
+  it('a late frame from the replaced visible socket does not tear down the new hidden one', () => {
+    const { sock, events } = makeSocket(() => 'tok');
+    sock.setDesired(true);
+    const visible = FakeSocket.instances[0];
+    visible.emit('open');
+    sock.setHidden(true);
+    sock.setDesired(true);
+    const hiddenSock = FakeSocket.instances[1];
+    hiddenSock.emit('open');
+    visible.emit('message', JSON.stringify({ type: 'user-joined', user: { id: 'jake' } }));
+    expect(hiddenSock.closeCalls).toHaveLength(0);
+    expect(types(events)).not.toContain('hidden-unsupported');
+    hiddenSock.emit('message', JSON.stringify({ type: 'hello', hidden: true }));
+    expect(sock.isHiddenConfirmed()).toBe(true);
+    sock.destroy();
+  });
+
+  // Final review F30: a frame dropped because this device is hidden is reported as not sent.
+  it('send() reports whether the frame left the device', () => {
+    const { sock } = makeSocket(() => 'tok');
+    sock.setHidden(true);
+    sock.setDesired(true);
+    const inst = FakeSocket.instances[0];
+    inst.emit('open');
+    inst.emit('message', JSON.stringify({ type: 'hello', hidden: true }));
+    expect(sock.send({ type: 'status', status: 'in-game' })).toBe(false);
+    expect(sock.send({ type: 'game-result', game: 'chess' })).toBe(true);
     sock.destroy();
   });
 
@@ -508,10 +547,13 @@ describe('presence-socket hidden mode (incognito)', () => {
     const answer = (status: number, body: unknown) =>
       vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
     vi.useRealTimers();
-    expect(await probeHiddenPresence(answer(200, { hidden: true }))).toBe(true);
-    expect(await probeHiddenPresence(answer(404, { error: 'not found' }))).toBe(false); // older server
-    expect(await probeHiddenPresence(answer(200, { hidden: false }))).toBe(false);
+    expect(await probeHiddenPresence(answer(200, { hidden: true }))).toBe('yes');
+    expect(await probeHiddenPresence(answer(404, { error: 'not found' }))).toBe('no'); // older server
+    expect(await probeHiddenPresence(answer(200, { hidden: false }))).toBe('no');
+    // Final review F4: a check that could not be made is not a "no" — it is retried.
     const offline = vi.fn(async () => { throw new Error('offline'); }) as unknown as typeof fetch;
-    expect(await probeHiddenPresence(offline)).toBe(false);
+    expect(await probeHiddenPresence(offline)).toBe('unknown');
+    expect(await probeHiddenPresence(answer(503, { error: 'down' }))).toBe('unknown');
+    expect(await probeHiddenPresence(answer(429, { error: 'slow down' }))).toBe('unknown');
   });
 });

@@ -22,6 +22,9 @@ function toOnlineUser(u: ServerUser): OnlineUser {
   };
 }
 
+/** Backoff for re-reading the incognito choice after a failed read; the last value repeats. */
+export const INCOGNITO_READ_RETRY_MS = [2_000, 5_000, 15_000, 30_000];
+
 // isLeader: true when this renderer is the leader window (multi-window detach
 // feature). Only the leader should hold the presence socket open; non-leader
 // windows would otherwise double-register the same account as online.
@@ -38,24 +41,36 @@ export function usePresence(isLeader: boolean = true) {
   const [incognito, setIncognitoState] = useState(false);
   // State (not ref) so the desired-state effect re-runs once the preference loads.
   const [incognitoLoaded, setIncognitoLoaded] = useState(false);
+  const loadedRef = useRef(false);
+  loadedRef.current = incognitoLoaded;
 
   // Load incognito preference on mount — same persistence usePartyLobby used.
   // All three surfaces (preload / remote-shim / SessionService) currently
   // provide getIncognito, but guard the promise anyway: the optional-chained
   // CALL returns undefined when the method is absent, and `.then` on undefined
   // throws — so branch on the promise instead of chaining blindly.
+  // WHY a failed read keeps presence OFF and tries again (final review F5): it used to count as
+  // "not incognito" and connect VISIBLY, announcing a user who had chosen incognito. Until an answer
+  // arrives nothing connects; the read is retried on a backoff (and after a remote reconnect, below).
+  // A surface with no getIncognito at all cannot have stored a choice, so it connects as before.
   useEffect(() => {
-    const p = (window as any).claude?.getIncognito?.();
-    if (p) {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const read = (attempt: number) => {
+      const p = (window as any).claude?.getIncognito?.();
+      if (!p) { setIncognitoLoaded(true); return; }
       p.then((val: boolean) => {
+        if (!alive) return;
         setIncognitoState(val ?? false);
         setIncognitoLoaded(true);
       }).catch(() => {
-        setIncognitoLoaded(true);
+        if (!alive) return;
+        // Another path (a remote reconnect, a relayed switch) may answer first; then stop asking.
+        timer = setTimeout(() => { if (!loadedRef.current) read(attempt + 1); }, INCOGNITO_READ_RETRY_MS[Math.min(attempt, INCOGNITO_READ_RETRY_MS.length - 1)]);
       });
-    } else {
-      setIncognitoLoaded(true);
-    }
+    };
+    read(0);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, []);
   // After a remote reconnect, read the choice again. WHY: it was read once, and a read lost
   // during a phone's drop fell back to "not incognito" for the page's life (2026-09-11 phone
@@ -64,6 +79,22 @@ export function usePresence(isLeader: boolean = true) {
     const p = (window as any).claude?.getIncognito?.();
     p?.then((val: boolean) => { setIncognitoState(val ?? false); setIncognitoLoaded(true); }).catch(() => {});
   });
+  // WHY (final review F27): the choice is per device but was read once per window, so switching
+  // incognito in a detached window — or from a phone — never reached the window holding the
+  // connection, which stayed visible. A switch is now relayed to every other window and phone over
+  // the existing live appearance relay (appearance:broadcast → appearance:sync, which ThemeProvider
+  // ignores for keys it does not know), and each one applies it.
+  useEffect(() => {
+    const onSync = (window as any).claude?.appearance?.onSync;
+    if (typeof onSync !== 'function') return;
+    const unsub = onSync((prefs: any) => {
+      if (prefs && typeof prefs.incognito === 'boolean') {
+        setIncognitoState(prefs.incognito);
+        setIncognitoLoaded(true);
+      }
+    });
+    return () => { try { unsub?.(); } catch { /* already gone */ } };
+  }, []);
 
   // Desired-state effect: connect only when signed in, not incognito, and this
   // is the leader window. The platform layer owns the actual socket; we just
@@ -209,11 +240,15 @@ export function usePresence(isLeader: boolean = true) {
           // Liveness only — no state change.
           break;
 
-        // Incognito, but the server could not promise to hide this device (an older server, or
-        // no answer to the capability check): main stayed disconnected. Same silent state as a
-        // deliberate disconnect — the friends card says who's online is hidden.
+        // Incognito, but the server could not promise to hide this device: main stayed
+        // disconnected. Silent like a deliberate disconnect, but the reason is kept so the friends
+        // card says only what is true (final review F4): an older server ('hidden-unsupported') or
+        // a check that could not be made and is being retried ('hidden-check-failed').
         case 'hidden-unsupported':
-          dispatch({ type: 'PARTY_DISCONNECTED' });
+          dispatch({ type: 'PRESENCE_HIDDEN_BLOCKED', why: 'unsupported' });
+          break;
+        case 'hidden-check-failed':
+          dispatch({ type: 'PRESENCE_HIDDEN_BLOCKED', why: 'unreachable' });
           break;
 
         // The server refused something a hidden device tried to send. The UI never offers
@@ -256,6 +291,8 @@ export function usePresence(isLeader: boolean = true) {
     setIncognitoState(prev => {
       const next = !prev;
       (window as any).claude?.setIncognito?.(next);
+      // Tell the other windows and phones (F27 above); fire-and-forget, a single window has no peers.
+      try { (window as any).claude?.appearance?.broadcast?.({ incognito: next }); } catch { /* best effort */ }
       return next;
     });
   }, []);

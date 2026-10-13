@@ -57,6 +57,22 @@ function watchAppInput(wc: WebContents): void {
 }
 let idlePoller: NodeJS.Timeout | null = null;
 
+// WHY a generation and a retry timer at module scope (final review F4, F26): the hidden-mode
+// capability check is an await, and two things could land after it that no longer apply — a newer
+// connect (a quick incognito off/on) whose answer must win, or a disconnect / sign-out, after which
+// nothing may connect at all. Every connect, disconnect and sign-out bumps the generation; a check
+// that comes back under an older one does nothing. A check that could not be made ("unknown") is
+// retried on this timer, and while it waits the device stays disconnected — never visible.
+let presenceIntentGen = 0;
+let hiddenRetry: NodeJS.Timeout | null = null;
+/** Seconds between capability re-checks after "couldn't check"; the last one repeats. */
+export const HIDDEN_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
+function cancelPresenceIntent(): void {
+  presenceIntentGen++;
+  if (hiddenRetry) clearTimeout(hiddenRetry);
+  hiddenRetry = null;
+}
+
 // Presence idle threshold: no system input AND no remote-client activity for
 // this long → presence drops ("Last seen …"), because Online must mean a HUMAN
 // is around, not that the process exists. Discovered via tjmorin's Mac
@@ -216,6 +232,32 @@ export function startSocial(
   // replaces the operations (no removeHandler dance). All return ApiResult<T> so the renderer preserves HTTP status across the
   // contextBridge (structuredClone drops MarketplaceApiError.status): the friends UI needs .status to tell 404 (unknown or
   // blocked handle), 429 (caps) and 400 (self-request) apart.
+  // The hidden-mode capability check for presenceConnect (above). Resolves true only for a 'yes' that
+  // is still current. 'no' (an older server) is final and the renderer is told so; 'unknown' (no
+  // network, a timeout, a server error) tells the renderer the check failed and tries again on a
+  // backoff — each later 'yes' connects from here, since presenceConnect has already returned.
+  const checkHidden = async (gen: number, attempt: number): Promise<boolean> => {
+    const answer = await probeHiddenPresence();
+    if (gen !== presenceIntentGen) return false; // superseded by a newer connect, a disconnect or sign-out
+    if (answer === "yes") return true;
+    presence.setDesired(false);
+    if (answer === "no") {
+      broadcastPresenceEvent({ type: "hidden-unsupported" });
+      return false;
+    }
+    broadcastPresenceEvent({ type: "hidden-check-failed" });
+    const delay = HIDDEN_RETRY_MS[Math.min(attempt, HIDDEN_RETRY_MS.length - 1)];
+    hiddenRetry = setTimeout(() => {
+      hiddenRetry = null;
+      void checkHidden(gen, attempt + 1).then((ok) => {
+        if (!ok || gen !== presenceIntentGen) return;
+        presence.setDesired(true);
+        startIdlePoller();
+      });
+    }, delay);
+    return false;
+  };
+
   socialOps = {
     lookupHandle: (handle) => wrap(() => client.lookupHandle(handle)).then(clearSessionOn401),
     sendRequest: (handle) => wrap(() => client.sendRequest(handle)).then(clearSessionOn401),
@@ -234,25 +276,26 @@ export function startSocial(
     // asynchronously via social:presence-event.
     // `hidden` = incognito on THIS device (see HIDDEN MODE in presence-socket.ts). Guard 1 lives
     // here: a hidden connection is opened only after the server says it supports hidden mode; an
-    // older server (or no answer) leaves presence OFF and tells the renderer why — never a visible
-    // fallback. The probe is an async fetch, so the main process never blocks on it.
+    // older server leaves presence OFF and tells the renderer why — never a visible fallback. The
+    // probe is an async fetch, so the main process never blocks on it.
+    // ORDER IS THE PRIVACY GUARANTEE (final review F2): setHidden only closes a socket of the other
+    // mode and opens nothing; setDesired(true) — the only thing here that opens a socket — runs after
+    // the server said yes. A hidden socket this server already confirmed (its hello) needs no re-check.
     presenceConnect: async (opts) => {
       const hidden = opts?.hidden === true;
-      if (hidden) {
-        presence.setHidden(true);
-        if (!(await probeHiddenPresence())) {
-          presence.setDesired(false);
-          broadcastPresenceEvent({ type: "hidden-unsupported" });
-          return { ok: true };
-        }
-      } else {
-        presence.setHidden(false);
+      cancelPresenceIntent();
+      const gen = presenceIntentGen;
+      presence.setHidden(hidden);
+      if (hidden && !presence.isHiddenConfirmed()) {
+        const allowed = await checkHidden(gen, 0);
+        if (!allowed) return { ok: true };
       }
       presence.setDesired(true);
       startIdlePoller(); // see the poller's WHY: it lives with the renderer's intent
       return { ok: true };
     },
     presenceDisconnect: () => {
+      cancelPresenceIntent(); // a capability check still in flight must not connect afterwards (F26)
       presence.setDesired(false);
       stopIdlePoller();
       return { ok: true };
@@ -261,7 +304,9 @@ export function startSocial(
     // shape, status:0 = local/non-API) instead of returning a success the renderer would trust.
     presenceSend: (message) => {
       if (!presence.isConnected()) return { ok: false, status: 0, message: "not connected" };
-      presence.send(message);
+      // WHY the socket's own receipt (final review F30): a frame a hidden device must never send (status,
+      // challenge) is dropped by the socket, and reporting that as success broke this honest receipt.
+      if (!presence.send(message)) return { ok: false, status: 0, message: "not sent" };
       return { ok: true };
     },
   };
@@ -292,6 +337,7 @@ export function getSocialOps(): SocialOps | null { return socialOps; }
 // linger connected after the local token is cleared until its next server
 // interaction. No-op when presence was never registered.
 export function notifySignedOut(): void {
+  cancelPresenceIntent();
   presenceSocket?.setDesired(false);
   stopIdlePoller();
 }
@@ -299,6 +345,7 @@ export function notifySignedOut(): void {
 // App-quit teardown hook. Electron process death kills the socket anyway, but
 // this makes the intent explicit and cleans timers if called during teardown.
 export function destroySocialHandlers(): void {
+  cancelPresenceIntent();
   presenceSocket?.destroy();
   presenceSocket = null;
   stopIdlePoller();

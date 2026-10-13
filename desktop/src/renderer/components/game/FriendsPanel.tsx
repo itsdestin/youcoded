@@ -142,11 +142,16 @@ function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
   // able to see who else is online"), so once the server has confirmed it (state.connected) the
   // real count shows. If it could not — an older server, no answer — nothing about friends
   // reached this computer and there is no number to show; inventing one is not allowed.
+  // WHY three incognito lines (final review F4): "who's online is hidden" read as a choice when it
+  // was really a failure. Each now says what actually happened — the server cannot hide you yet, the
+  // check failed and is being retried, or the hidden connection is still opening.
   const hiddenConnected = social === 'incognito' && state.connected;
   const summary = !f.loaded ? 'Loading your friends…'
     : f.merged.length === 0 ? `No friends yet${requestText}`
     : hiddenConnected ? `${online.length} of ${total} online · they can't see you${requestText}`
-    : social === 'incognito' ? `${total} · who's online is hidden${requestText}`
+    : social === 'incognito' && state.hiddenBlocked === 'unsupported' ? `${total} · the game server can't hide you yet, so who's online isn't shown${requestText}`
+    : social === 'incognito' && state.hiddenBlocked === 'unreachable' ? `${total} · couldn't check who's online — trying again${requestText}`
+    : social === 'incognito' ? `${total} · connecting…${requestText}`
     : social === 'connecting' ? `${total} · connecting…${requestText}`
     : `${online.length} of ${total} online${requestText}`;
 

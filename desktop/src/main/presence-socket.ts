@@ -27,16 +27,24 @@ const PRESENCE_URL = 'wss://api.youcoded.ai/social/presence';
 export const PRESENCE_CAPABILITIES_URL = 'https://api.youcoded.ai/social/presence/capabilities';
 const HIDDEN_BLOCKED = new Set(['status', 'challenge', 'challenge-response']);
 
-/** Does the presence server support hidden mode? Never throws; anything but an explicit
- *  `{hidden: true}` (an older server's 404, no network, a timeout) is a no. */
-export async function probeHiddenPresence(fetchImpl: typeof fetch = fetch, timeoutMs = 5000): Promise<boolean> {
+/** The capability check's three answers. Only 'yes' ever opens a hidden connection.
+ *  - 'no'      the server definitely cannot hide this device: an older server's 404, or an answer
+ *              without `{hidden: true}`. Nothing will change until the server is updated.
+ *  - 'unknown' the check could not be made: no network, a timeout, a 5xx or 429, an unreadable answer.
+ *  WHY three (final review F4): a single "no" turned a flaky launch-time network into presence OFF for
+ *  the rest of the session and told the user "who's online is hidden". An 'unknown' is retried. */
+export type HiddenSupport = 'yes' | 'no' | 'unknown';
+
+/** Does the presence server support hidden mode? Never throws. */
+export async function probeHiddenPresence(fetchImpl: typeof fetch = fetch, timeoutMs = 5000): Promise<HiddenSupport> {
   try {
     const res = await fetchImpl(PRESENCE_CAPABILITIES_URL, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return false;
+    if (res.status === 404) return 'no';
+    if (!res.ok) return 'unknown';
     const body = (await res.json()) as { hidden?: unknown };
-    return body?.hidden === true;
+    return body?.hidden === true ? 'yes' : 'no';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 
@@ -48,8 +56,12 @@ export type WebSocketCtor = ReconnectingWebSocketCtor;
 
 export interface PresenceSocket {
   setDesired(want: boolean): void;
-  /** Hidden (incognito) mode for the NEXT connection; switching modes while connected reconnects. */
+  /** Hidden (incognito) mode for the NEXT connection. Switching modes closes the current socket and
+   *  opens NOTHING: the caller decides, with setDesired(true), when the new mode may connect — for
+   *  hidden, only after the server's capability check said yes (final review F2). */
   setHidden(hidden: boolean): void;
+  /** True while a hidden socket is open and its server has confirmed hidden mode (the hello). */
+  isHiddenConfirmed(): boolean;
   // System sleep gate (powerMonitor suspend/resume). Kept SEPARATE from
   // setDesired: desired is the RENDERER's intent (sign-in/incognito/leader)
   // and must survive a sleep/wake cycle unchanged.
@@ -59,7 +71,9 @@ export interface PresenceSocket {
   // presence means a HUMAN is around, so an app left running 24/7 on an awake
   // machine (remote-access keep-awake) must not read "Online" forever.
   setIdle(idle: boolean): void;
-  send(message: Record<string, unknown>): void;
+  /** True only when the frame was written to an open socket — false when dropped (not connected, or
+   *  a frame a hidden device must never send). */
+  send(message: Record<string, unknown>): boolean;
   isConnected(): boolean;
   /** Re-drive the connection ONLY if the engine is wedged (wanted on, no
    *  socket, no retry scheduled) — e.g. the 'wait' no-token policy after the
@@ -216,11 +230,17 @@ export function createPresenceSocket(opts: {
       if (hidden === next) return;
       // Switching modes needs a NEW connection (the mode is part of the URL): drop the current one
       // first, so a visible socket is closed — and announced as left — before a hidden one opens.
+      // WHY no reconnect here (final review F2): this used to call applyDesire(), which opened the
+      // `?hidden=1` socket at once — BEFORE social-handlers had asked the server whether it can hide
+      // this device, so an older server announced the user online. The wish to be connected is dropped
+      // with the old mode; setDesired(true) re-asserts it once the new mode is allowed to connect, and
+      // a wake or idle change in between cannot open anything (applyDesire reads rendererDesired).
+      rendererDesired = false;
       engine.setDesired(false);
       hidden = next;
       helloSeen = false;
-      applyDesire();
     },
+    isHiddenConfirmed() { return hidden && helloSeen && engine.isOpen(); },
     setSuspended(asleep) {
       if (suspended === asleep) return;
       suspended = asleep;
@@ -237,8 +257,8 @@ export function createPresenceSocket(opts: {
     send(message) {
       // While hidden, nothing a friend could notice leaves this computer (the server refuses these
       // too — this is the second lock on the same door).
-      if (hidden && HIDDEN_BLOCKED.has(String(message.type))) return;
-      engine.send(JSON.stringify(message));
+      if (hidden && HIDDEN_BLOCKED.has(String(message.type))) return false;
+      return engine.send(JSON.stringify(message));
     },
     // True only when a socket exists AND finished its handshake — lets the
     // presence-send handler return an honest failure instead of silently

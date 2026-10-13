@@ -3142,10 +3142,10 @@ class SessionService : Service() {
                         JSONObject().put("ok", false).put("status", 0).put("message", "missing message")
                     !presenceClient.isConnected() ->
                         JSONObject().put("ok", false).put("status", 0).put("message", "not connected")
-                    else -> {
-                        presenceClient.send(message)
-                        JSONObject().put("ok", true)
-                    }
+                    // A frame a hidden device must never send is dropped, and says so (final review F30, desktop parity).
+                    !presenceClient.send(message) ->
+                        JSONObject().put("ok", false).put("status", 0).put("message", "not sent")
+                    else -> JSONObject().put("ok", true)
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
             }

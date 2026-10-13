@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   state: {
     connected: true,
     partyError: null as string | null,
+    hiddenBlocked: null as 'unsupported' | 'unreachable' | null,
     username: 'Me',
     onlineUsers: [] as Array<{ id: string; name: string; handle: string | null; status: 'idle' | 'in-game' }>,
     screen: 'lobby' as string,
@@ -85,6 +86,7 @@ function makeSocial(over: Record<string, any> = {}) {
 beforeEach(() => {
   h.dispatch.mockClear();
   h.state.connected = true;
+  h.state.hiddenBlocked = null;
   h.state.onlineUsers = [];
   h.state.username = 'Me';
   h.state.challengeFrom = null;
@@ -351,12 +353,20 @@ describe('Friends panel — incognito', () => {
     expect(await u.findByText("1 of 2 friends online · they can't see you")).toBeTruthy();
   });
 
-  it('not connected (an older server refused hidden mode): says who is online is hidden, never a number', async () => {
+  // Final review F4: each not-connected line says what actually happened — never a number, and never
+  // "who's online is hidden", which read as a choice when it was a failure.
+  it.each([
+    ['unsupported', "1 friend · the game server can't hide you yet, so who's online isn't shown"],
+    ['unreachable', "1 friend · couldn't check who's online — trying again"],
+    [null, '1 friend · connecting…'],
+  ] as const)('not connected (%s): says only what is true, never a number', async (why, text) => {
     h.state.connected = false;
+    h.state.hiddenBlocked = why;
     (window as any).claude.social = makeSocial({
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' })])),
     });
     const u = render(<FriendsPanel social="incognito" incognito onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
-    expect(await u.findByText(/1 friend · who's online is hidden/)).toBeTruthy();
+    expect(await u.findByText(text)).toBeTruthy();
+    expect(u.queryByText(/who's online is hidden/)).toBeNull();
   });
 });

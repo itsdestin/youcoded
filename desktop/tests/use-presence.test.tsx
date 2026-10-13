@@ -162,6 +162,52 @@ describe('usePresence — incognito after a remote reconnect', () => {
   });
 });
 
+// Final review F5: a choice that could not be read must never count as "not incognito".
+describe('usePresence — the incognito choice cannot be read', () => {
+  it('connects nothing until an answer arrives, then honours it', async () => {
+    vi.useFakeTimers();
+    try {
+      const getIncognito = vi.fn().mockRejectedValueOnce(new Error('ipc down')).mockResolvedValueOnce(true);
+      (window as any).claude.getIncognito = getIncognito;
+      renderHook(() => usePresence());
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the retry
+      expect(getIncognito).toHaveBeenCalledTimes(2);
+      expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true });
+      expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalledWith({ hidden: false });
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+// Final review F27: a switch made in another window (or a phone) reaches the window holding the connection.
+describe('usePresence — a switch made elsewhere', () => {
+  it('a relayed incognito switch reconnects hidden; a local switch is relayed to the others', async () => {
+    let onSync: (prefs: unknown) => void = () => {};
+    const broadcast = vi.fn();
+    (window as any).claude.appearance = { onSync: (cb: (p: unknown) => void) => { onSync = cb; return () => {}; }, broadcast };
+    const { result } = renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: false }));
+    act(() => onSync({ incognito: true }));
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenLastCalledWith({ hidden: true }));
+    expect(result.current.incognito).toBe(true);
+    act(() => onSync({ theme: 'creme' })); // an appearance change is not an incognito one
+    expect(result.current.incognito).toBe(true);
+    act(() => result.current.toggleIncognito());
+    expect(broadcast).toHaveBeenCalledWith({ incognito: false });
+  });
+});
+
+// Final review F4: the reason incognito is not connected is kept, so the card can say what is true.
+describe('usePresence — why incognito is not connected', () => {
+  it.each([['hidden-unsupported', 'unsupported'], ['hidden-check-failed', 'unreachable']])('%s → PRESENCE_HIDDEN_BLOCKED %s', async (type, why) => {
+    renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.onPresenceEvent).toHaveBeenCalled());
+    act(() => eventCb({ type }));
+    expect(h.dispatch).toHaveBeenCalledWith({ type: 'PRESENCE_HIDDEN_BLOCKED', why });
+  });
+});
+
 describe('usePresence on a phone', () => {
   // A rejected promise nobody handles is an "unhandled rejection" in the console. The in-process hooks cannot observe that
   // reliably, so this watches for the handling itself: each refused call must have a .catch attached.
