@@ -171,6 +171,23 @@ describe('Voice vocabulary preview', () => {
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved'));
   });
 
+  // WHY (final review, guide "Status and notices"): the bridge's raw words are for a bug report,
+  // so the notice says one fixed sentence and the raw text waits under a Details fold.
+  it('a failed save says a plain sentence with Try again and keeps the raw words under Details', async () => {
+    const bridge = install().voiceVocabulary;
+    vi.spyOn(bridge, 'save').mockRejectedValueOnce(new Error('EACCES: permission denied, open vocab.json'));
+    const field = await open();
+    add(field, 'New phrase');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Your changes couldn’t be saved.');
+    expect(alert.textContent).not.toContain('EACCES');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText(/EACCES/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText(/EACCES/)).toBeTruthy();
+  });
+
   it.each([ANDROID_LOCAL_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES])('hides the vocabulary menu without local desktop capabilities', (capabilities) => {
     window.claude = { ...window.claude, capabilities };
     mount();

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
-import { Badge, Button, Dialog, ErrorState, LoadingState, TextInput } from '../ui';
+import { Badge, Button, Dialog, ErrorState, FoldRow, LoadingState, TextInput } from '../ui';
+import { ChipAction } from '../tags/TagChip';
 import { plainMessage } from '../../utils/ipc-error';
 import type { VoiceVocabularyBridge } from '../../../shared/voice-types';
 
@@ -8,9 +9,11 @@ import type { VoiceVocabularyBridge } from '../../../shared/voice-types';
 const VocabularyChip = React.memo(function VocabularyChip({ phrase, disabled, onRemove }: {
   phrase: string; disabled: boolean; onRemove: (phrase: string) => void;
 }) {
-  return <Badge className="max-w-full">
+  // WHY the shared remove disc (final review F52): a "×" letter in a ghost button was a
+  // hand-made remove beside the app's one (the tag pills' ChipAction, same aria name).
+  return <Badge className="max-w-full gap-1.5 py-1">
     <span className="text-xs break-all min-w-0">{phrase}</span>
-    <Button variant="ghost" size="sm" disabled={disabled} aria-label={`Remove ${phrase}`} onClick={() => onRemove(phrase)}>×</Button>
+    <ChipAction kind="remove" label={phrase} size="sm" disabled={disabled} onClick={() => onRemove(phrase)} />
   </Badge>;
 });
 
@@ -84,14 +87,26 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
               onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); add(); } }} />
             <Button variant="secondary" disabled={!candidate || duplicate || saving} onClick={add}>Add</Button>
           </div>
-          <p id="voice-vocabulary-hint" className="text-2xs text-fg-muted">{duplicate ? 'Already in your vocabulary.' : 'Press Enter to add. Use × to remove a phrase.'}</p>
+          <p id="voice-vocabulary-hint" className="text-2xs text-fg-muted">{duplicate ? 'Already in your vocabulary.' : 'Press Enter to add. Use the × on a phrase to remove it.'}</p>
         </div>
         <p role="status" aria-live="polite" className="text-2xs text-fg-muted">
           {phrases.length} {phrases.length === 1 ? 'phrase' : 'phrases'} · {saving ? 'Saving…' : dirty ? 'Unsaved changes' : confirmed ? 'Saved' : 'No unsaved changes'}
         </p>
       </>}
-      {error && <ErrorState message={error.detail} busy={saving}
-        onRetry={() => { if (error.action === 'load') setLoadAttempt((n) => n + 1); else void save(); }} />}
+      {/* WHY a fixed sentence with the raw words folded under Details (final review, guide
+          "Status and notices": machine words only under a Details fold, never the sentence —
+          the Contribute failure's and Git review's shape): the bridge's message is for a bug
+          report. The sentence says what happened and what still holds, guessing no cause. */}
+      {error && <div className="space-y-2">
+        <ErrorState busy={saving}
+          message={error.action === 'load'
+            ? 'Your vocabulary couldn’t be loaded.'
+            : 'Your changes couldn’t be saved. They’re still here, so you can try again.'}
+          onRetry={() => { if (error.action === 'load') setLoadAttempt((n) => n + 1); else void save(); }} />
+        {error.detail.trim() && <FoldRow title="Details">
+          <p className="text-2xs text-fg-2 font-mono break-all">{error.detail}</p>
+        </FoldRow>}
+      </div>}
       <p className="text-2xs text-fg-muted">Vocabulary stays on this computer. Changes apply to your next recording.</p>
       {saved !== null && !error && <div className="flex justify-end">
         <Button variant="primary" disabled={!dirty || saving} onClick={() => { void save(); }}>

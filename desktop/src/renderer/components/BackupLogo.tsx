@@ -6,6 +6,11 @@
 // company's own mark ("Sign-in and setup screens": each provider choice carries its provider
 // logo), as ProviderIcon does for model providers. Same source as ProviderIcon: the Simple Icons
 // brand paths on a 24×24 viewBox, one colour (currentColor), so the theme decides the colour.
+//
+// WHY this note (final review, 2026-10-13: "drawn from memory?"): each path below was checked
+// byte for byte against simple-icons@13.21.0 (cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/
+// googledrive.svg, icloud.svg, github.svg) — identical. Simple Icons is CC0-1.0; the marks
+// themselves remain their owners' trademarks. To update one, copy the `d` of the same file.
 import type { ReactElement } from 'react';
 
 export type BackupLogoKind = 'drive' | 'icloud' | 'github';

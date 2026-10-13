@@ -282,8 +282,11 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         <p className="text-xs font-semibold text-fg mb-1.5">Voice stopped</p>
         <p className="text-2xs text-fg-2 leading-snug">{error}</p>
         <div className="flex justify-end gap-2 mt-3">
-          {/* WHY secondary: same rule as Check again above — never a bare-text button. */}
-          <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>OK</Button>
+          {/* WHY secondary: same rule as Check again above — never a bare-text button.
+              WHY "Dismiss", not "OK" (final review F52; guide "A button names what it does",
+              close-session-6#CS6-4): it clears the notice and closes the card — the guide's word
+              for that is Dismiss; "OK" could read as agreeing to something. */}
+          <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Dismiss</Button>
         </div>
       </>
     );

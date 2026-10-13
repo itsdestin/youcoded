@@ -134,7 +134,7 @@ describe('VoiceButton card — the microphone will not open (R11, R12, R20, R21)
     expect(h.onRecheck).toHaveBeenCalledTimes(1);
   });
 
-  // WHY: the error card's only button is OK. When the microphone is unavailable AND
+  // WHY: the error card's only button is Dismiss. When the microphone is unavailable AND
   // something also errored, showing that card took away the Check again — the one
   // affordance that lets the user come back after plugging a microphone in. The more
   // useful of the two truths wins. Found reviewing T9, 2026-09-05.
@@ -197,7 +197,7 @@ describe('VoiceButton card — a download that failed (R3-6, R12)', () => {
     renderCard({ readiness: { state: 'ready', engine: 'Parakeet' }, error: 'The speech engine stopped: exit code 1' });
     expect(screen.getByText('Voice stopped')).toBeInTheDocument();
     expect(screen.getByText('The speech engine stopped: exit code 1')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'OK' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
   });
 });
 

@@ -24,11 +24,14 @@ import { tagColorCss } from '../../../shared/tags';
 // The pill's right padding drops to 4 px beside a button (resume-sheet-1#RS-1: "slightly
 // to the right within the pill for the plus/unselected pills").
 const DISC = { xs: 'w-2.5 h-2.5', sm: 'w-3 h-3', md: 'w-4 h-4' } as const;
-export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: keyof typeof DISC }) {
+// WHY `disabled` (final review F52, 2026-10-13): the voice vocabulary's word chips reuse this
+// remove disc instead of a hand-made "×" letter, and their remove must stand still while a save
+// is running. Tags never pass it, so their look is unchanged.
+export function ChipAction({ kind, label, onClick, size = 'sm', disabled = false }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: keyof typeof DISC; disabled?: boolean }) {
   return (
-    <button type="button" aria-label={`${kind === 'remove' ? 'Remove' : 'Add'} ${label}`}
+    <button type="button" aria-label={`${kind === 'remove' ? 'Remove' : 'Add'} ${label}`} disabled={disabled}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className={`${DISC[size]} shrink-0 inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
+      className={`${DISC[size]} shrink-0 inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}>
       <svg viewBox="0 0 12 12" className={size === 'md' ? 'w-2 h-2' : 'w-1.5 h-1.5'} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden>
         {kind === 'remove' ? <path d="M3 3l6 6M9 3l-6 6" /> : <path d="M6 2.5v7M2.5 6h7" />}
       </svg>
