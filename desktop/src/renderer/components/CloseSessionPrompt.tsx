@@ -4,7 +4,7 @@ import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { SessionHeaderCard, SessionListsCard, SessionTagsCard } from './tags/SessionDetails';
 import SessionRenameDialog from './SessionRenameDialog';
-import { Button, Callout, Dialog, FoldRow, Toggle } from './ui';
+import { Button, Callout, Dialog, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
 import { plainMessage } from '../utils/ipc-error';
 
@@ -223,13 +223,12 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
                 <SessionHeaderCard name={name} note="">
                   {readError !== null ? (
                     <>
-                      <Callout tone="danger" actionsPlacement="below"
+                      {/* WHY Details inside the error box (Destin: the "Details" card belongs in the
+                          error box if it is part of the error): the shared box folds it at its foot. */}
+                      <Callout tone="danger" actionsPlacement="below" details={readError}
                         actions={<Button size="sm" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>}>
                         Couldn’t load this conversation’s tags and note, so they can’t be changed here. Closing it still works.
                       </Callout>
-                      {readError && <FoldRow title="Details">
-                        <p className="text-2xs text-fg-2 font-mono break-all">{readError}</p>
-                      </FoldRow>}
                     </>
                   ) : (
                     <Callout tone="info">{metaReason}</Callout>

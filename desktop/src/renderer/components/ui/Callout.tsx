@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChevronDown } from './ChevronDown';
+import { FoldRow } from './FoldRow';
 
 /**
  * K4 — the callout. THE notice box: one geometry, three tones, used for every
@@ -96,13 +97,23 @@ export type CalloutProps = {
    *  THIS box and must keep announcing itself (`alert`); a wrapper div would add a layer
    *  around every error and take the caller's margins off the box. */
   role?: 'alert' | 'status';
+  /** The failure's own words (an operation's raw message), folded under "Details" INSIDE the box,
+   *  at its foot. WHY (final-fixes#CH-11 follow-up, Destin: the "Details" card belongs in the error
+   *  box if it is part of the error): the fold used to sit under the box, reading as a separate
+   *  thing. Blank text draws no fold. */
+  details?: string;
 };
 
 // WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
 // marked rows and fails when the buttons in one differ in height — a notice's buttons sit
 // side by side, so they must match.
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details }: CalloutProps) {
   const t = TONE[tone];
+  const fold = details?.trim() ? (
+    <FoldRow className="mt-2" title="Details">
+      <p className="text-2xs text-fg-2 font-mono break-all">{details}</p>
+    </FoldRow>
+  ) : null;
   if (collapsible && title) {
     return (
       <details role={role} className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
@@ -143,13 +154,14 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
     );
   }
   if (!actions) {
-    return <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}</div>;
+    return <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}{fold}</div>;
   }
   if (actionsPlacement === 'below') {
     return (
       <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
         {text}
         <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+        {fold}
       </div>
     );
   }
@@ -173,6 +185,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
         <div className="flex-1 min-w-48">{text}</div>
         <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>
+      {fold}
     </div>
   );
 }
