@@ -1,7 +1,7 @@
 import './Dialog.css';
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Scrim, OverlayPanel, CONTENT_Z, type OverlayLayer } from '../overlays/Overlay';
+import { Scrim, OverlayPanel, CONTENT_Z, stackLift, useOverlayDepth, type OverlayLayer } from '../overlays/Overlay';
 import { CloseButton } from './CloseButton';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { ScreenMark } from '../../shoot-mode';
@@ -251,18 +251,21 @@ export function Dialog({
   // registers after this one and sits on top of the stack.
   const isTop = useEscClose(open, close);
   useEnterToConfirm(open && !busy, isTop, onEnter);
+  // WHY a depth (final-review#CT-8): a popup opened over another popup lifts its scrim AND its
+  // panel above the one beneath, so the blur and dim cover that popup too (Overlay.tsx).
+  const depth = useOverlayDepth(open);
 
   if (!open) return null;
 
   return createPortal(
     <>
-      <Scrim layer={layer} onClick={close} />
+      <Scrim layer={layer} depth={depth} onClick={close} />
       {/* Outer wrapper centers and carries the stacking; the panel then runs at
           position:relative / z-index:auto. pointer-events-none lets clicks fall
           through to the Scrim beneath, which is what closes on outside-click. */}
       <div
         className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none"
-        style={{ zIndex: CONTENT_Z[layer] }}
+        style={{ zIndex: CONTENT_Z[layer] + stackLift(depth) }}
       >
         <OverlayPanel
           ref={panelRef}

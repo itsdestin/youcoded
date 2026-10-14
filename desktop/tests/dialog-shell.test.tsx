@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { readSource } from './helpers/guard-scope';
 import '@testing-library/jest-dom/vitest';
 import { Dialog, DIALOG_WIDTHS, DIALOG_MAX_HEIGHTS } from '../src/renderer/components/ui/Dialog';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
 
 // Guard for D1 — the one dialog shell.
 //
@@ -219,5 +220,34 @@ describe('Dialog — Escape', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(peel).toHaveBeenCalledTimes(1);
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+// A popup opened over another popup on the same layer must put its scrim (the blur and dim)
+// ABOVE the first popup's panel (final-review#CT-8, Destin: "these popups are stacking with no
+// blur"). Both used to share the same two numbers, so the first panel (61) sat above the second
+// scrim (60) and stayed sharp.
+const z = (el: Element | null | undefined) => Number((el as HTMLElement | null)?.style.zIndex ?? NaN);
+
+describe('a popup over a popup', () => {
+  it('lifts the second scrim above the first popup panel, and gives the depth back on close', () => {
+    const { rerender } = render(
+      <EscCloseProvider>
+        <Dialog open onClose={() => {}} title="First" noScreen="test">first</Dialog>
+        <Dialog open onClose={() => {}} title="Second" noScreen="test">second</Dialog>
+      </EscCloseProvider>,
+    );
+    const scrims = document.querySelectorAll('.layer-scrim');
+    const panels = document.querySelectorAll('[role="dialog"]');
+    expect(scrims).toHaveLength(2);
+    const firstContent = panels[0].parentElement; // the centring wrapper carries the z-index
+    const secondContent = panels[1].parentElement;
+    expect(z(scrims[1])).toBeGreaterThan(z(firstContent));
+    expect(z(secondContent)).toBeGreaterThan(z(scrims[1]));
+
+    // Close both, open one: it is back at the base numbers.
+    rerender(<EscCloseProvider><Dialog open={false} onClose={() => {}} title="First" noScreen="test">x</Dialog></EscCloseProvider>);
+    rerender(<EscCloseProvider><Dialog open onClose={() => {}} title="Again" noScreen="test">again</Dialog></EscCloseProvider>);
+    expect(z(document.querySelector('.layer-scrim'))).toBe(z(scrims[0]));
   });
 });
