@@ -1,4 +1,4 @@
-import { SectionLabel, Tooltip } from './ui';
+import { CARD_LEVEL_1, SectionLabel, Tooltip } from './ui';
 /**
  * SettingsExplainer.tsx — the explainer payload, and nothing else.
  *
@@ -45,36 +45,43 @@ interface Props {
 }
 
 export default function SettingsExplainer({ intro, sections }: Props) {
+  // WHY labelled cards (final-review#ST-21, Destin: "the inside of this (i) popup for appearance
+  // needs similar grouping to our new about popup. probably other (i) popups with bare text as
+  // well"): every (i) explainer — Appearance, Backup & sync, Remote access, Context, Permissions,
+  // Specialists, Performance and the rest that render this — now groups like About: each section
+  // is a small label over one first-level card holding its paragraphs and bullets. The opening
+  // summary is the card about the popup's own subject, so it opens the page unlabelled (guide
+  // "Spacing" → A label comes first, its exceptions). Labels over a card are plain, as About's are,
+  // so the reading underline (final#F-1) is gone with the bare text it marked.
   return (
     <>
-      <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
+      <div className={`${CARD_LEVEL_1} p-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
+      </div>
 
       {sections.map((section, i) => (
         <section key={i}>
           {/* h3 (SectionLabel renders one), matching K1 — the dialog title is h2,
-              so an h3 here announces as its child rather than its sibling.
-              WHY SectionLabel reading (fix batch 2, 2026-09-26): these head
-              sections of READING text ("About Permissions", the Remote access and
-              Sync explainers), so they are the guide's small label, normal case,
-              with the soft underline — no spaced-out capitals (decisions.md
-              "Labels over reading sections", final#F-1). */}
-          <SectionLabel reading className="mb-2">
+              so an h3 here announces as its child rather than its sibling. */}
+          <SectionLabel className="mb-2">
             {section.heading}
           </SectionLabel>
-          {section.paragraphs?.map((p, j) => (
-            <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
-          ))}
-          {section.bullets && (
-            <ul className="space-y-1.5 mt-1">
-              {section.bullets.map((b, j) => (
-                <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
-                  {b.term && <span className="font-semibold text-fg">{b.term}</span>}
-                  {b.term && ' — '}
-                  {b.text}
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className={`${CARD_LEVEL_1} p-3`}>
+            {section.paragraphs?.map((p, j) => (
+              <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
+            ))}
+            {section.bullets && (
+              <ul className={`space-y-1.5 ${section.paragraphs?.length ? 'mt-2' : ''}`}>
+                {section.bullets.map((b, j) => (
+                  <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
+                    {b.term && <span className="font-semibold text-fg">{b.term}</span>}
+                    {b.term && ' — '}
+                    {b.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </section>
       ))}
     </>

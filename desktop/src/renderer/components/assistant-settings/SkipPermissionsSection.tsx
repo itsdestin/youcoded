@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, ConsentRow, Dialog, SettingRow, Toggle } from '../ui';
+import { Button, CARD_LEVEL_1, ConsentRow, Dialog, SettingRow, Toggle } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
 
 // Claude Code's one permission setting: the Skip permissions switch. It lived
@@ -65,6 +65,9 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
           that must not be lost behind the thing it is confirming. */}
       <Dialog open={confirming} onClose={close} title="Skip permissions mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
         <div className="space-y-3 text-xs text-fg leading-relaxed">
+          {/* WHY a card around the words and the tick box (final-review#PR-7, #ST-12): the one
+              popup rule — a popup's body sits in a card, as About's does; one card, no label. */}
+          <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
           {/* Destin's copy (round 4, R4-3) — the three measured paragraphs it
               replaced read as a wall of grey. */}
           <p>
@@ -80,6 +83,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
           <ConsentRow checked={accepted} onChange={setAccepted}>
             I understand, and I use Skip permissions at my own risk.
           </ConsentRow>
+          </div>
           {/* WHY stacked, danger on top (fix batch 1, 2026-09-24): this is a
               `size="prompt"` (340px) dialog — a NARROW popup, so two buttons
               stack full width with the main action (here the destructive

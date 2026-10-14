@@ -3,8 +3,7 @@
 // and folder-picker). The move is consequence-gated: the copy spells out that
 // the folder itself MOVES (old path stops existing) before anything happens.
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, FieldError, TextInput } from './ui';
+import { Button, CARD_LEVEL_1, Callout, Dialog, FieldError, TextInput } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 
 interface Props {
@@ -55,9 +54,10 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
   // via plain onClose.
   const dismiss = doneWarnings && donePath ? () => onDone(donePath) : onClose;
 
-  // ESC is gated on !busy so it matches the Scrim/Cancel guards — dismissing
-  // mid-move would unmount the modal and lose the success/warnings handoff.
-  useEscClose(!busy, dismiss);
+  // Escape, the ✕ and an outside click all go through the shared popup, and its `busy` holds
+  // them while the move runs — dismissing mid-move would unmount the modal and lose the
+  // success/warnings handoff. (This used its own useEscClose before PR-8; the Dialog's own
+  // Esc made two closers.)
 
   const confirm = useCallback(async () => {
     const trimmed = name.trim();
@@ -87,78 +87,82 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
     }
   }, [name, busy, sourcePath, onDone]);
 
-  // Same note copy/styling AddProjectModal uses — shown only in the pre-move
-  // consent state (once the move succeeds the folder IS in the sync home).
+  // WHY the shared notice box (guide "Status and notices": every info notice is Callout), the
+  // same one AddProjectModal shows — this copy was still the hand-made inset box (PR-8).
+  // Shown only in the pre-move consent state (once the move succeeds the folder IS in the sync home).
   const syncOffNote = syncEnabled === false && (
-    <div className="mt-3 rounded-md border border-edge bg-inset px-3 py-2 text-xs text-fg-dim" role="note">
-      <span className="text-fg-2 font-medium">Sync is currently turned off.</span>{' '}
-      This project will start syncing once you turn on Sync in Settings.
-    </div>
+    <Callout tone="info">
+      Sync is currently turned off. This project will start syncing once you turn on Sync in Settings.
+    </Callout>
   );
 
+  // WHY rebuilt on the shared popup's own parts (final-review#PR-8, Destin: "this seems a little
+  // odd"). Against the guide it broke five rules: a hand-made 14px title with no ✕ and no
+  // tapered line (guide "Popups": the shared 16px title, ✕, tapered line); a bare-text Cancel
+  // (guide "Buttons": outlined, never bare text); its words and its field sitting bare on the
+  // popup (the popup rule, final-review#ST-21/#PR-7: body content sits in a card); a hand-made
+  // sync-off note box (Callout); and its own Escape handler beside the Dialog's. Now: the title is
+  // the Dialog's, the body is one card (explanation, the name field, its error, the note), and
+  // the two buttons sit under it — filled "Move and sync" on the right, outlined Cancel left of
+  // it. The words are unchanged.
   return (
-    <>
-      <Dialog
-        open
-        // Dismissal stays suppressed mid-import: an interrupted move would
-        // leave the folder half-relocated.
-        onClose={busy ? () => {} : dismiss}
-        size="panel"
-        aria-label="Import project"
-        scrollBody={false}
-        className="p-4"
-        screen="projects/turn-on-sync"
-      >
-        {doneWarnings ? (
-          <>
-            <div id="import-project-title" className="text-sm font-medium text-fg">Folder moved</div>
-            <div className="mt-2 text-xs text-fg-2">The folder now lives at <span className="text-fg break-all">{donePath}</span> and will sync across your devices. A couple of things need your attention:</div>
-            <ul className="mt-2 space-y-1 text-xs text-fg-dim list-disc pl-4">
+    <Dialog
+      open
+      onClose={dismiss}
+      busy={busy}
+      title={doneWarnings ? 'Folder moved' : 'Move and sync this folder?'}
+      size="panel"
+      screen="projects/turn-on-sync"
+    >
+      {doneWarnings ? (
+        <>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+            <p className="text-xs text-fg-2">The folder now lives at <span className="text-fg break-all">{donePath}</span> and will sync across your devices. A couple of things need your attention:</p>
+            <ul className="space-y-1 text-xs text-fg-dim list-disc pl-4">
               {doneWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
-            <div className="mt-4 flex justify-end">
-              <Button size="lg" className="py-1" onClick={() => onDone(donePath!)}>Done</Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div id="import-project-title" className="text-sm font-medium text-fg">Move and sync this folder?</div>
-            <div className="mt-2 text-xs text-fg-2">
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => onDone(donePath!)}>Done</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+            <p className="text-xs text-fg-2">
               YouCoded will <span className="text-fg">move</span> <span className="break-all">{sourcePath}</span> to{' '}
               <span className="text-fg break-all">~/YouCoded/Projects/{name.trim() || '…'}/</span> so it can sync across your devices.
-            </div>
-            <div className="mt-1 text-xs text-fg-dim">
+            </p>
+            <p className="text-xs text-fg-dim">
               The folder itself moves — anything pointing at the old location (shortcuts, open terminals, editors) will need the new path.
+            </p>
+            {/* htmlFor/id pair: screen readers announce the field by its caption. */}
+            <div className="pt-1">
+              <label htmlFor="import-project-name" className="text-xs font-medium text-fg-muted block mb-1">Project name</label>
+              {/* Shared TextInput (change 20). A plain field, NOT an InputGroup: "Move and
+                  sync" sits under the card with Cancel, not inside the field. */}
+              <TextInput
+                id="import-project-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') void confirm(); }}
+                className="w-full"
+                autoFocus
+              />
             </div>
-            {/* htmlFor/id pair added: the label was floating unassociated, so
-                screen readers announced this field with no name. */}
-            {/* WHY: field caption drops the spaced-caps eyebrow (labels batch,
-                guide: no spaced capitals). */}
-            <label htmlFor="import-project-name" className="text-xs font-medium text-fg-muted block mt-3">Project name</label>
-            {/* Shared TextInput (change 20). Stays a plain field, NOT an
-                InputGroup: the "Move and sync" button lives in the modal footer
-                below, not inline beside the field. */}
-            <TextInput
-              id="import-project-name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') void confirm(); }}
-              className="mt-1 w-full"
-              autoFocus
-            />
             {/* WHY FieldError (guide: no red/coloured body text for messages);
                 it already carries role="alert" itself. */}
-            {error && <FieldError as="div" className="mt-2">{error}</FieldError>}
+            {error && <FieldError as="div">{error}</FieldError>}
             {syncOffNote}
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" size="lg" className="py-1" onClick={onClose} disabled={busy}>Cancel</Button>
-              <Button size="lg" className="py-1" onClick={() => void confirm()} disabled={busy || !name.trim()}>
-                {busy ? 'Moving…' : 'Move and sync'}
-              </Button>
-            </div>
-          </>
-        )}
-      </Dialog>
-    </>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button onClick={() => void confirm()} disabled={busy || !name.trim()}>
+              {busy ? 'Moving…' : 'Move and sync'}
+            </Button>
+          </div>
+        </>
+      )}
+    </Dialog>
   );
 }

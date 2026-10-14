@@ -24,13 +24,10 @@ import React from 'react';
  * ahead of a sub-list, none at all inline in a header row) and guessing one
  * would just move the inconsistency inside this file instead of removing it.
  *
- * `reading` — a label heading a SECTION OF READING TEXT (About's Disclaimer,
- * an explainer's headings) also gets a soft underline under its words: edge
- * colour, 4px below the text (decisions.md "Labels over reading sections",
- * `ui-element-review-final#F-1`). Labels over short settings groups stay plain,
- * which is why this is opt-in rather than the default.
+ * The `reading` underline (decisions.md "Labels over reading sections", final#F-1) was
+ * retired 2026-10-14: its last users, the (i) explainers, moved their reading text into
+ * labelled cards like About's (final-review#ST-21), and a label over a card is plain.
  */
-export function SectionLabel({ children, className = '', reading = false }: { children: React.ReactNode; className?: string; reading?: boolean }) {
-  const underline = reading ? ' underline decoration-edge underline-offset-4' : '';
-  return <h3 className={`text-xs font-medium text-fg-muted${underline} ${className}`.trim()}>{children}</h3>;
+export function SectionLabel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <h3 className={`text-xs font-medium text-fg-muted ${className}`.trim()}>{children}</h3>;
 }

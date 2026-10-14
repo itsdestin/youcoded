@@ -14,7 +14,7 @@
 // site routes the ACTION through the gate rather than the state change.
 
 import React, { useCallback, useRef, useState, type ReactNode } from 'react';
-import { Button, Checkbox, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, ConsentRow, Dialog } from './ui';
 import { memoWhileClosed } from './memo-while-closed';
 import {
   hasAcknowledged,
@@ -50,9 +50,13 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
     // truncated title a bug. 420px fits every title and keeps the three
     // paragraphs at a comfortable measure.
     <Dialog open={open} onClose={() => close(onCancel)} title={copy.title} size="panel" screen={`chat/first-time-warning/${kind}`}>
-      {/* Paragraph style matches the Permissions page's mode definitions, so the
-          Full auto warning reads as the same voice as the page it echoes. */}
-      <div className="space-y-2">
+      {/* WHY one card holding the explanation, the tick box and the hint (final-review#PR-7,
+          #ST-12, #ST-21 — one popup rule): a popup's body sits in a card, as About's does, and its
+          tick box is the shared "I understand" box (ConsentRow), the same one Skip permissions
+          and Remove project use. It was a bare 12px square beside a sentence on the popup.
+          One card, so no label (the guide's single-card exception). Paragraph style matches the
+          Permissions page's mode definitions, so the Full auto warning reads in that voice. */}
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
         {copy.body.map((paragraph, i) => (
           <React.Fragment key={i}>
             <p className="text-2xs text-fg-2 leading-relaxed">{paragraph}</p>
@@ -65,29 +69,19 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
             )}
           </React.Fragment>
         ))}
+        {copy.checkbox && (
+          <ConsentRow checked={checked} onChange={setChecked}>
+            {copy.checkbox}
+          </ConsentRow>
+        )}
+        {/* Continue is disabled, not hidden, until the box is ticked so the person can see what
+            the checkbox unlocks — and one muted line at the card's foot says so (UX tester run 1,
+            U26: a greyed button with no hint; guide: the reason the main button is grey). */}
+        {needsConsent && !checked && (
+          <p className="text-2xs text-fg-muted">Tick the box to continue</p>
+        )}
       </div>
-      {copy.checkbox && (
-        // Same row shape as ProjectView's delete-consent checkbox (the
-        // primitive's intended site): a clickable div, because a <label> cannot
-        // associate with a button-role checkbox, and a stopPropagation span so
-        // the box's own click toggles exactly once instead of twice via the row.
-        <div
-          className="flex items-start gap-2 text-2xs text-fg cursor-pointer"
-          onClick={() => setChecked((v) => !v)}
-        >
-          <span className="mt-0.5" onClick={(e) => e.stopPropagation()}>
-            <Checkbox checked={checked} onChange={setChecked} aria-label={copy.checkbox} />
-          </span>
-          <span className="leading-relaxed">{copy.checkbox}</span>
-        </div>
-      )}
-      {/* Footer: a decision to confirm, so Cancel + one primary (design guide
-          G-4, §4.3). Continue is disabled, not hidden, until the box is ticked
-          so the person can see what the checkbox unlocks — and one muted line
-          says so (UX tester run 1, U26: a greyed button with no hint). */}
-      {needsConsent && !checked && (
-        <p className="text-2xs text-fg-muted text-right">Tick the box to continue</p>
-      )}
+      {/* Footer: a decision to confirm, so Cancel + one primary (design guide G-4, §4.3). */}
       <div className="flex gap-2 justify-end">
         <Button variant="secondary" onClick={() => close(onCancel)}>
           Cancel

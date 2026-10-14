@@ -10,6 +10,7 @@ vi.mock('../src/renderer/components/ui', () => ({
   TextInput: (props: any) => <input {...props} />,
   LoadingState: () => <span>Loading</span>,
   ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Try again</button></div>,
+  CARD_LEVEL_1: 'surface-1', // the popup's body card (final-review#PR-7); a class string only
 }));
 afterEach(cleanup);
 it('keeps a manual name protected with no automatic-name reset action', async () => {

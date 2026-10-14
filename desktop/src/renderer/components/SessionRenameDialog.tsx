@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Dialog, TextInput, LoadingState, ErrorState } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, TextInput, LoadingState, ErrorState } from './ui';
 import { namingApi } from './assistant-settings/naming-api';
 
 type Props = { id: string; name: string; onClose: () => void };
@@ -71,11 +71,16 @@ function RenameForm({ id, name, onClose }: Props) {
     {!loaded ? <LoadingState what="the session name" /> : <form className="space-y-3" onSubmit={(e) => {
       e.preventDefault(); if (draft.trim()) void save();
     }}>
-      <label className="block text-xs text-fg font-medium" htmlFor="session-name">Session name</label>
-      <TextInput id="session-name" value={draft} disabled={saving} onChange={(e) => setDraft(e.target.value)} autoFocus maxLength={160} className="w-full" />
-      <p className="text-xs text-fg-muted">{manual ? 'You named this session. Automatic naming won’t replace it.' : 'Automatic naming won’t change this name.'}</p>
+      {/* WHY a card around the field and its hint, and an outlined Cancel (final-review#PR-7 /
+          #ST-21, the one popup rule; guide "Buttons": the less important button is outlined,
+          never bare text): the field and its line sat bare on the popup. */}
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        <label className="block text-xs text-fg font-medium" htmlFor="session-name">Session name</label>
+        <TextInput id="session-name" value={draft} disabled={saving} onChange={(e) => setDraft(e.target.value)} autoFocus maxLength={160} className="w-full" />
+        <p className="text-xs text-fg-muted">{manual ? 'You named this session. Automatic naming won’t replace it.' : 'Automatic naming won’t change this name.'}</p>
+      </div>
       <div className="flex justify-end gap-2">
-        <Button variant="ghost" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
+        <Button variant="secondary" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
         <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save name'}</Button>
       </div>
     </form>}

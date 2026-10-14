@@ -39,7 +39,12 @@ export function ConsentRow({ checked, onChange, children, disabled, className = 
         'w-full flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left text-xs text-fg transition-colors',
         'disabled:opacity-50 disabled:cursor-not-allowed',
         FOCUS_RING,
-        checked ? 'border-accent bg-accent/15' : 'border-edge-dim bg-inset/50 hover:bg-inset',
+        // WHY `surface-1` + the card outline when unticked (final-review#PR-7/#ST-12, one rule for
+        // popup tick boxes): the box is a first-level card on the popup and, inside a popup's body
+        // card, takes the nested look automatically (globals.css "Surface levels") — so every tick
+        // box reads as a box at whatever depth it sits. Ticked keeps its accent tint, which the
+        // surface-level rule would otherwise paint over, so `surface-1` goes only on the unticked.
+        checked ? 'border-accent bg-accent/15' : 'surface-1 border-edge-card bg-inset/50 hover:bg-inset',
         className,
       ].filter(Boolean).join(' ')}
     >

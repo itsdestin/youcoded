@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
-import { Badge, Button, Dialog, ErrorState, FoldRow, LoadingState, TextInput } from '../ui';
+import { Badge, Button, CARD_LEVEL_1, Dialog, ErrorState, FoldRow, LoadingState, SectionLabel, TextInput } from '../ui';
 import { ChipAction } from '../tags/TagChip';
 import { plainMessage } from '../../utils/ipc-error';
 import type { VoiceVocabularyBridge } from '../../../shared/voice-types';
@@ -68,10 +68,19 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
   };
 
   return <Dialog screen="chat/voice/vocabulary" open onClose={onClose} size="panel" title="Voice vocabulary">
-    <div className="space-y-3">
-      <p className="text-sm text-fg-2">Add names, unusual words or phrases you say often. These are hints for Parakeet, not text replacements.</p>
+    {/* WHY labelled cards (final-review#ST-21/#PR-7, the one popup rule — group like About): the
+        opening words are the card about the popup's subject (unlabelled), then "Your words" holds
+        the phrases, the field and their lines; the closing note joins the subject card. Nothing
+        sits bare on the popup. Same words, same order of controls. */}
+    <div className="space-y-4">
+      <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+        <p className="text-xs text-fg-2 leading-relaxed">Add names, unusual words or phrases you say often. These are hints for Parakeet, not text replacements.</p>
+        <p className="text-2xs text-fg-muted">Vocabulary stays on this computer. Changes apply to your next recording.</p>
+      </div>
       {saved === null && !error && <LoadingState what="vocabulary" variant="inline" />}
-      {saved !== null && <>
+      {saved !== null && <section>
+        <SectionLabel className="mb-2">Your words</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <div ref={listRef} role="region" aria-label="Vocabulary phrases" className="max-h-48 overflow-y-auto">
           <div className="flex flex-wrap gap-2">
             {visible.map((phrase) => <VocabularyChip key={phrase} phrase={phrase} disabled={saving} onRemove={remove} />)}
@@ -92,7 +101,8 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
         <p role="status" aria-live="polite" className="text-2xs text-fg-muted">
           {phrases.length} {phrases.length === 1 ? 'phrase' : 'phrases'} · {saving ? 'Saving…' : dirty ? 'Unsaved changes' : confirmed ? 'Saved' : 'No unsaved changes'}
         </p>
-      </>}
+        </div>
+      </section>}
       {/* WHY a fixed sentence with the raw words folded under Details (final review, guide
           "Status and notices": machine words only under a Details fold, never the sentence —
           the Contribute failure's and Git review's shape): the bridge's message is for a bug
@@ -107,7 +117,6 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
           <p className="text-2xs text-fg-2 font-mono break-all">{error.detail}</p>
         </FoldRow>}
       </div>}
-      <p className="text-2xs text-fg-muted">Vocabulary stays on this computer. Changes apply to your next recording.</p>
       {saved !== null && !error && <div className="flex justify-end">
         <Button variant="primary" disabled={!dirty || saving} onClick={() => { void save(); }}>
           {saving ? 'Saving…' : 'Save'}

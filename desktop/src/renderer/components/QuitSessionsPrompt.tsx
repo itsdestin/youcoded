@@ -9,7 +9,7 @@
 // subtitle, a bold line under the header divider, and the switch on the same
 // row as Close window — `panel` width so that row fits.
 import { useState } from 'react';
-import { Button, Dialog, Toggle } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, Toggle } from './ui';
 
 export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
   count: number;
@@ -38,7 +38,10 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
           </Button>
         </div>
       }>
-      <div className="flex flex-col gap-1.5">
+      {/* WHY a card (final-review#PR-7/#ST-21, the one popup rule): the explanation is more than
+          a one-line question, so it sits in a card as About's text does. The switch stays on the
+          footer line, balanced by the main button (guide "Don't ask again" shape). */}
+      <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-1.5`}>
         <p className="text-xs font-bold text-fg">
           You have {count} active session{count === 1 ? '' : 's'} - proceed?
         </p>
