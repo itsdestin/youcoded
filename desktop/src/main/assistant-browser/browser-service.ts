@@ -34,14 +34,20 @@ const RESTART_DRAIN_MS = 10_000;
 /** A hidden browser renders a common laptop-sized page so sites serve desktop
  *  layouts — until a Browser panel reports its size (setViewSize). */
 const BACKGROUND_VIEWPORT = { width: 1280, height: 800 } as const;
-/** WHY 2: the panel's picture is small; at 1x its text is soft on a high-density
- *  screen. Only pictures get bigger — the assistant's screenshots stay page-sized
+/** The hidden browser's pixel density when the app names none (tests). The app
+ *  passes its screens' own (`pixelRatio`), so the picture is as sharp as the
+ *  screen. Only pictures get denser — the assistant's screenshots stay page-sized
  *  (`scale: 'css'` in browser-tool-runners.ts). */
 const HIDDEN_PIXEL_RATIO = 2;
-/** Bounds for a panel-fitted page (CSS px). Below 320 wide no site is usable. */
+/** Bounds for a panel-fitted page (CSS px). Below 320 wide no site is usable.
+ *  WHY 2560 wide (was 1280, Destin 2026-10-14): an expanded panel on a big
+ *  screen showed the page with empty bands either side, unlike any browser. */
 const VIEW_MIN = 320;
-const VIEW_MAX_W = 1280;
+const VIEW_MAX_W = 2560;
 const VIEW_MAX_H = 2000;
+/** The live picture's largest size in screen pixels. It bounds the cost of a
+ *  full-screen panel on a dense screen; anything bigger is scaled down to fit. */
+const PICTURE_MAX = 2560;
 /** Files kept per conversation's download folder. */
 const MAX_DOWNLOADS = 20;
 /** Picture rate cap while the person only watches; each frame also waits for
@@ -89,6 +95,8 @@ export interface BrowserServiceOptions {
   sessionIdleMs?: number;
   browserIdleMs?: number;
   forceHeadless?: boolean;
+  /** The screens' pixel density (1–2): the hidden browser draws at it. */
+  pixelRatio?: number;
 }
 
 /** A refusal the tools turn into a plain error result (not a crash). */
@@ -341,12 +349,13 @@ export class BrowserService extends EventEmitter {
       const v = this.cachedVersions.get(browser.executablePath);
       if (v) userAgent = normalUserAgent(v, this.opts.platform);
     }
+    const ratio = this.opts.pixelRatio ?? HIDDEN_PIXEL_RATIO;
     const ctx = await this.opts.chromium.launchPersistentContext(profileDir, {
       executablePath: browser.executablePath,
       headless,
       // A shown window follows its own size; a hidden one renders a laptop-sized page.
       viewport: headless ? BACKGROUND_VIEWPORT : null,
-      ...(headless ? { deviceScaleFactor: HIDDEN_PIXEL_RATIO } : {}),
+      ...(headless ? { deviceScaleFactor: ratio } : {}),
       userAgent,
       acceptDownloads: true,
       timeout: 60_000,
@@ -354,7 +363,14 @@ export class BrowserService extends EventEmitter {
       // sites refuse ordinary visits. This avoids sites that reject automation
       // flags outright; it does not defeat real bot checks (spec §2, honest).
       ignoreDefaultArgs: ['--enable-automation'],
-      args: ['--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check', '--hide-crash-restore-bubble'],
+      args: [
+        '--disable-blink-features=AutomationControlled', '--no-first-run', '--no-default-browser-check', '--hide-crash-restore-bubble',
+        // WHY: a hidden browser's live picture comes at 1x whatever
+        // deviceScaleFactor says (measured 2026-10-14: a 463-wide page gave a
+        // 463-wide picture at factor 2), so it looked soft on a 1.5x screen.
+        // This flag makes the picture follow the density.
+        ...(headless ? [`--force-device-scale-factor=${ratio}`] : []),
+      ],
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false,
@@ -1067,7 +1083,7 @@ class LiveView {
         if (this.screenReady) this.flush(l);
         else this.latest = l;
       });
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 1280, everyNthFrame: 1 });
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: PICTURE_MAX, maxHeight: PICTURE_MAX, everyNthFrame: 1 });
     } catch (err) {
       this.warn('Browser: the live picture could not start', err);
     }

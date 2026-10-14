@@ -49,6 +49,17 @@ let env: RunnerEnv;
 const answers: Array<(p: BrowserPrompt) => PromptAnswer | null> = [];
 const seenPrompts: BrowserPrompt[] = [];
 
+/** A JPEG's pixel width, read from its frame header (SOF0–SOF2). */
+function jpegWidth(buf: Buffer): number {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    const marker = buf[i + 1];
+    if (marker >= 0xc0 && marker <= 0xc2) return buf.readUInt16BE(i + 7);
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return 0;
+}
+
 function ctx(sessionId = 's1') {
   return { sessionId, signal: new AbortController().signal, vision: true };
 }
@@ -307,6 +318,37 @@ describe('Browser, live', () => {
     await vi.waitFor(async () => expect(await width()).toBe(420));
     const second = await service.newPage('s-fit');
     await vi.waitFor(async () => expect(await second.evaluate(() => window.innerWidth)).toBe(420));
+  }, 60_000);
+
+  // Destin, 2026-10-14: an expanded panel showed the page with empty bands either
+  // side (pages stopped at 1280 wide), and the picture was soft on a dense screen
+  // (it came at 1x whatever the page's density).
+  live()('a wide panel gets a page as wide as it, and the picture is as dense as the page', async () => {
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-wide'));
+    const page = service.pages('s-wide')[0];
+    service.setViewSize('s-wide', 1800, 900);
+    await vi.waitFor(async () => expect(await page.evaluate(() => window.innerWidth)).toBe(1800));
+    const frames: { data: string; width: number; sessionId: string }[] = [];
+    const onFrame = (f: { data: string; width: number; sessionId: string }) => { if (f.sessionId === 's-wide') { frames.push(f); service.ackFrame('s-wide'); } };
+    service.on('frame', onFrame);
+    try {
+      service.watch('s-wide');
+      await page.evaluate(() => { document.body.style.background = '#eee'; });
+      await vi.waitFor(() => expect(frames.some((f) => f.width === 1800)).toBe(true), { timeout: 15_000 });
+      // The picture's own pixel width (the JPEG's frame header): the test service
+      // draws at density 2, so 1800 page pixels arrive as 3600 — over the 2560 cap, so 2560.
+      const f = frames.filter((x) => x.width === 1800).at(-1)!;
+      expect(jpegWidth(Buffer.from(f.data, 'base64'))).toBe(2560);
+      service.setViewSize('s-wide', 600, 500);
+      await vi.waitFor(async () => {
+        await page.evaluate(() => { document.body.style.background = `#${Math.floor(Math.random() * 900 + 100)}`; });
+        const g = frames.filter((x) => x.width === 600).at(-1);
+        expect(g && jpegWidth(Buffer.from(g.data, 'base64'))).toBe(1200);
+      }, { timeout: 15_000 });
+    } finally {
+      service.off('frame', onFrame);
+      service.unwatch('s-wide');
+    }
   }, 60_000);
 
   live()('the person can open an address, click and type in the page themselves', async () => {

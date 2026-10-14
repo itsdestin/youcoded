@@ -31,6 +31,8 @@ export interface BrowserHostOptions {
   forceHeadless?: boolean;
   discover?: () => Promise<FoundBrowser[]>;
   cliPath?: string;
+  /** The screens' pixel density, from the app (argv). */
+  pixelRatio?: number;
 }
 
 export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: BrowserHostOptions = {}) {
@@ -48,6 +50,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
     rootDir,
     chromium,
     forceHeadless: hostOpts.forceHeadless,
+    pixelRatio: hostOpts.pixelRatio,
     log,
     findMyChrome: () => findMyChrome(),
     // The page-load check (home network / metadata), for every page and iframe.
@@ -194,5 +197,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
 // argv; under vitest nothing runs at import.
 const parentPort = (process as unknown as { parentPort?: HostPort }).parentPort;
 if (parentPort && process.argv[2]) {
-  createBrowserHost(parentPort, process.argv[2]);
+  // argv[3]: the screens' pixel density (browser-electron.ts); unreadable → the default.
+  const ratio = Number(process.argv[3]);
+  createBrowserHost(parentPort, process.argv[2], { pixelRatio: ratio >= 1 && ratio <= 2 ? ratio : undefined });
 }

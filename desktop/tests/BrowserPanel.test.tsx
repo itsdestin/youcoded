@@ -126,6 +126,8 @@ describe('Browser panel', () => {
     const tab = (index: number, title: string, active = false) => ({ index, title, url: `https://example.org/${index}`, active, loading: false, canGoBack: false, canGoForward: false });
     setBrowserState(browserState({ tabs: [tab(0, 'First', true), tab(1, 'Second'), tab(2, 'Third')] }));
     render(<BrowserPanel sessionId="s1" />);
+    // The tab is the title: no second row repeats it above the tabs.
+    expect(screen.getAllByText('First')).toHaveLength(1);
     fireEvent.click(screen.getByRole('tab', { name: 'Second' }));
     expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'select', index: 1 });
     fireEvent.click(screen.getByRole('button', { name: 'Close Third' }));

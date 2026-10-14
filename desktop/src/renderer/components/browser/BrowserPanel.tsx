@@ -362,7 +362,7 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       onKeyDown={onKeyDown}
       // WHY no focus ring (Destin, 2026-10-14): it framed the page in the accent
       // colour whenever it was clicked; the page's own caret shows where typing goes.
-      className="relative flex-1 min-h-0 flex items-start justify-center overflow-hidden rounded-md focus:outline-none"
+      className="relative flex-1 min-h-0 flex items-start justify-center overflow-hidden focus:outline-none"
     >
       <img
         ref={img}
@@ -509,8 +509,10 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   } else {
     showingPicture = true;
     body = (
-      <div className="flex-1 min-h-0 flex flex-col gap-2 p-2">
-        {myChrome && <p className="text-2xs text-fg-muted px-1">Working in your Chrome. You can watch it there too.</p>}
+      // WHY no padding: the page runs to the panel's edges, like a browser's
+      // page under its toolbar — and an expanded panel is all page.
+      <div className="flex-1 min-h-0 flex flex-col">
+        {myChrome && <p className="text-2xs text-fg-muted px-3 py-1.5">Working in your Chrome. You can watch it there too.</p>}
         {/* A new tab is a white page: say what to do instead (the picture is
             still drawn underneath it, so the stream stays warm). */}
         <div className="relative flex-1 min-h-0 flex flex-col">
@@ -528,10 +530,35 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   return (
     <div className="relative h-full flex flex-col overflow-hidden bg-inset select-none">
       {!showingPicture && <ScreenMark name="chat/browser" />}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
-        <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0 mx-1" />
-        <div className="min-w-0 flex-1 text-sm-tight font-semibold text-fg truncate">{active ? tabLabel(active) : 'Browser'}</div>
-        <span className="text-2xs text-fg-muted shrink-0 mr-1" aria-live="polite">{status}</span>
+      {/* WHY one top row (Destin, 2026-10-14, "styling and fit"): the tabs sit
+          beside the panel's buttons, as in Chrome. A separate title row only
+          repeated the current tab's title and cost the page a row. */}
+      <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 shrink-0">
+        {hasTabs ? (
+          <>
+            <DocumentTabs
+              label="Tabs"
+              className="flex-1"
+              shrink
+              activeId={String(active?.index ?? -1)}
+              tabs={state!.tabs.map((t) => ({
+                id: String(t.index),
+                label: tabLabel(t),
+                icon: t.loading ? <BrailleSpinner /> : <GlobeIcon className="w-3.5 h-3.5 text-fg-muted" />,
+              }))}
+              onSelect={(id) => void go({ tab: 'select', index: Number(id) })}
+              onClose={(id) => void go({ tab: 'close', index: Number(id) })}
+            />
+            <PanelIconButton name="plus" title="New tab" onClick={() => void newTab()} />
+            <div className="w-px h-4 bg-edge shrink-0 mx-1" aria-hidden="true" />
+          </>
+        ) : (
+          <>
+            <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0 mx-1" />
+            <div className="min-w-0 flex-1 text-sm-tight font-semibold text-fg truncate">Browser</div>
+          </>
+        )}
+        <span className="text-2xs text-fg-muted shrink-0 mx-1" aria-live="polite">{status}</span>
         {webPage && <PanelIconButton name="external" title="Open in your own browser" onClick={openInMyBrowser} />}
         {active && <PanelIconButton name={copied ? 'check' : 'link'} title={copied ? 'Copied' : 'Copy link'} onClick={copyLink} />}
         {/* Expand is a no-op at phone width — the panel is already the whole screen. */}
@@ -540,26 +567,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         )}
         <PanelIconButton name="close" title="Close" onClick={() => closeBrowserPane(sessionId)} />
       </div>
-      {/* The tabs, like Chrome's (Destin, 2026-10-14): the same strip as
-          Office's open documents. Shown once the browser is running. */}
-      {hasTabs && (
-        <div className="flex items-center gap-1 px-2 pt-1.5 shrink-0">
-          <DocumentTabs
-            label="Tabs"
-            className="flex-1"
-            activeId={String(active?.index ?? -1)}
-            tabs={state!.tabs.map((t) => ({
-              id: String(t.index),
-              label: tabLabel(t),
-              icon: t.loading ? <BrailleSpinner /> : <GlobeIcon className="w-3.5 h-3.5 text-fg-muted" />,
-            }))}
-            onSelect={(id) => void go({ tab: 'select', index: Number(id) })}
-            onClose={(id) => void go({ tab: 'close', index: Number(id) })}
-          />
-          <PanelIconButton name="plus" title="New tab" onClick={() => void newTab()} />
-        </div>
-      )}
-      <div className="flex items-center gap-1 px-3 py-2">
+      <div className="flex items-center gap-1 px-2 pb-2 border-b border-edge shrink-0">
         {/* Greyed out with nowhere to go, like any browser. */}
         <Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!hasTabs || !active?.canGoBack} onClick={() => void go({ nav: 'back' })}><BackIcon /></Button>
         <Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!hasTabs || !active?.canGoForward} onClick={() => void go({ nav: 'forward' })}><ForwardIcon /></Button>
@@ -580,9 +588,9 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           onKeyDown={onAddressKey}
         />
       </div>
-      {openError && <p role="alert" className="text-2xs text-fg-muted px-3 pb-2">{openError}</p>}
+      {openError && <p role="alert" className="text-2xs text-fg-muted px-3 py-1.5">{openError}</p>}
       {info && !info.settings.explainerSeen && (
-        <Callout className="mx-3 mb-2" title="The assistant's own browser">
+        <Callout className="mx-3 my-2" title="The assistant's own browser">
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
           <div className="flex justify-end mt-2">
             <Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>
