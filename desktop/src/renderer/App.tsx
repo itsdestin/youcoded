@@ -4361,9 +4361,8 @@ function AppInner() {
           <>
             {/* WHY titled, with the ✕ (final-fixes#Q-TO, Destin approved "Take over this conversation?"
                 / "That device can't be reached": it was the one popup with no title and no ✕) and the
-                shared one-job layout (popup-cards-2/-3): the longer phases are one card holding the
-                words and the stacked buttons, main on top; the one-sentence asks stay plain words
-                above the same buttons (the guide's short-confirmation exception). Wording unchanged. */}
+                shared one-job layout (popup-cards-2/-3): one card holding the words and the stacked
+                buttons, main on top, in every phase. Wording unchanged. */}
             <Dialog
               screen={`chat/takeover/${takeoverPrompt.phase}`}
               open
@@ -4376,16 +4375,11 @@ function AppInner() {
                   <Button onClick={() => resolveTakeover(true)}>{takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
                   <Button variant="secondary" onClick={() => resolveTakeover(false)}>{takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
                 </>;
-                return copy.consequence ? (
-                  <OneJobCard actions={actions}>
-                    <OneJobText><p>{boldDevice(copy.lead)}{infoTip}</p><p>{copy.consequence}</p></OneJobText>
-                  </OneJobCard>
-                ) : (
-                  <div className="space-y-3">
-                    <OneJobText><p>{copy.lead}{infoTip}</p></OneJobText>
-                    <div className="flex flex-col gap-2 [&>*]:w-full" data-parts-agree="one-job buttons">{actions}</div>
-                  </div>
-                );
+                // Every phase boxed alike (popup-cards-6#T-1, Destin: ask/taken back "should have the
+                // box/card styling of no answer/cant reach") — no short-question exception here.
+                return <OneJobCard actions={actions}>
+                  <OneJobText><p>{boldDevice(copy.lead)}{infoTip}</p>{copy.consequence && <p>{copy.consequence}</p>}</OneJobText>
+                </OneJobCard>;
               })()}
             </Dialog>
           </>
