@@ -8,7 +8,7 @@ interface Props {
   /** When true, the star is absolutely positioned to sit in the corner of a
    *  card. Default false for header/inline use. */
   corner?: boolean;
-  /** Opaque bg-panel backdrop WITHOUT the corner positioning — for a caller
+  /** Its own hover square WITHOUT the corner positioning — for a caller
    *  that already places this inside its own absolutely-positioned wrapper
    *  alongside sibling icons (e.g. SkillCard's marketplace icon + star pair),
    *  where each icon needs its own distinct backdrop rather than one shared
@@ -34,7 +34,10 @@ export default function FavoriteStar({
     // `bg` is scoped to callers that opted in (SkillCard's icon pair) — it
     // also gets the hover backdrop; `corner`'s existing callers (marketplace
     // tiles, ThemeScreen) keep their prior look untouched.
-    : (bg ? 'bg-panel hover:bg-inset' : '');
+    // WHY no resting fill and an `edge` hover (final-review#GM-1): SkillCard is now the
+    // first-level card (inset while hovered), so the star's own hover square steps one
+    // rung past it, matching the marketplace icon beside it.
+    : (bg ? 'hover:bg-edge' : '');
   return (
     <button
       type="button"

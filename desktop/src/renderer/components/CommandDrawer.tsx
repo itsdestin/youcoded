@@ -8,7 +8,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useDrawerResize } from '../hooks/useDrawerResize';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
-import { EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
+import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
 
@@ -154,8 +154,9 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         title={!clickable ? entry.disabledReason : undefined}
         // Change 22: command cards share the drawer grid with SkillCard, so they
         // move to the same surface — migrating one and not the other splits the
-        // grid into two card species. Same !rounded-lg + raised card shadow (card-raised).
-        className={`layer-surface card-raised !rounded-lg p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
+        // first-level card as SkillCard and Settings, so it separates from the panel drawer.
+        className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           clickable
             ? 'card-interactive cursor-pointer'
             : 'opacity-50 cursor-not-allowed'
@@ -448,11 +449,11 @@ function AddSkillsCard({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      // Change 22: same surface as the skill/command cards it sits beside, but
-      // it KEEPS the dashed border — that's the action affordance ("add
-      // something here"), not card chrome. .layer-surface's solid border is
-      // overridden rather than inherited for exactly that reason.
-      className="layer-surface card-raised !rounded-lg !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      // Same surface as the skill/command cards it sits beside (CARD_LEVEL_1 since
+      // final-review#GM-1), but it KEEPS the dashed border — that's the action
+      // affordance ("add something here"), not card chrome, so the first-level
+      // card's solid outline is overridden rather than inherited.
+      className={`${CARD_LEVEL_1} !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
     >
       <span className="text-lg font-medium leading-none">+</span>
       <span className="text-sm font-medium mt-1">Add skills</span>

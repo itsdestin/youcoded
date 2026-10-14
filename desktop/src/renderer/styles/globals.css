@@ -1411,6 +1411,13 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-wallpaper] .layer-surface {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
+/* The Games pane wears the popups' panel surface (final-review#GM-1, GamePanel.tsx), so on a
+   wallpaper theme it takes the same see-through panel tier as a popup rather than going
+   solid. No blur here: the pane's one backdrop-filter stays on .drawer-pane (theme-engine).
+   The float chrome's `transparent !important` (float-chrome.css) still wins there. */
+[data-wallpaper] .game-panel.bg-panel {
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
 
 /* Marketplace rail cards — tighter shadow scoped to the rail scroll
    container. The default 0 8px 32px shadow needs ~40px of bottom
