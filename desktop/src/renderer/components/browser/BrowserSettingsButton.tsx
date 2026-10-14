@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import type { BrowserInfo, MyChromeCheck } from '../../../shared/browser-types';
 import { browserSupported } from '../../state/browser-store';
 import { useScreenOpen } from '../../shoot-mode';
-import { Button, Dialog, ErrorState, LoadingState, ProgressBar, RadioGroup, Select, SettingRow, Toggle } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, LoadingState, OneJobCard, OneJobText, ProgressBar, RadioGroup, SectionLabel, Select, SettingRow, Toggle } from '../ui';
 import { GlobeIcon } from '../Icons';
 
 function bridge() { return (window as any).claude.browser; }
@@ -78,10 +78,17 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
     <Dialog open onClose={onClose} title="Browser" subtitle="The assistant's own web browser, for sites that need clicking, typing or a sign-in." size="panel" screen="settings/browser">
       {loadError && <ErrorState className="mb-3" message={loadError} onRetry={load} />}
       {!info && !loadError && <LoadingState what="browser settings" />}
+      {/* WHY rebuilt on the shared pieces (2026-10-14, the new-surface check after merging master;
+          design guide "Popups", "Card levels", "Headings"): this page arrived with all-caps
+          spaced headings, plain grey boxes with no card outline, loose lines on the popup and a
+          lone right-aligned button. Now every group is a small sentence-case label over one
+          first-level card holding its rows, words and buttons — Settings → Backup & sync's shape.
+          Same words, same controls, same behaviour. */}
       {info && s && (
-        <div className="space-y-5">
-          <section className="space-y-2">
-            <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Which browser?</h3>
+        <div className="space-y-4">
+          <section>
+            <SectionLabel className="mb-2">Which browser</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
             <RadioGroup options={WHICH} value={which} onChange={(v) => confirmThen({ kind: 'mychrome', value: v === 'my-chrome' })} aria-label="Which browser">
               <div className="space-y-1">
               <SettingRow
@@ -103,32 +110,35 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
               </div>
             </RadioGroup>
             {s.useMyChrome && (
-              <div className="rounded-lg bg-inset p-3 text-xs text-fg-2 space-y-2">
+              <div className={`${CARD_LEVEL_2} p-3 text-xs text-fg-2 leading-relaxed space-y-2`}>
                 <p>1. In Chrome, open <span className="font-mono select-text">chrome://inspect/#remote-debugging</span> and turn remote debugging on.</p>
                 <p>2. The first time the assistant uses it, Chrome asks you to Allow the connection — choose Allow.</p>
-                <div className="flex items-center justify-end gap-2">
-                  {check && <span className={`flex-1 text-2xs ${check.ok ? 'text-fg-2' : 'text-fg-muted'}`} role="status">{check.message}</span>}
-                  <Button variant="secondary" size="sm" onClick={doCheck} disabled={checking}>{checking ? 'Checking…' : 'Check connection'}</Button>
-                </div>
+                {/* A follow-up action under a group: full-width outlined (guide "Buttons"). */}
+                <Button variant="secondary" size="sm" className="w-full" onClick={doCheck} disabled={checking}>{checking ? 'Checking…' : 'Check connection'}</Button>
+                {check && <p className="text-xs text-fg-muted" role="status">{check.message}</p>}
               </div>
             )}
+            </div>
           </section>
 
           {!s.useMyChrome && (
-            <section className="space-y-2">
+            <section>
+              <SectionLabel className="mb-2">On this computer</SectionLabel>
+              <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
               <SettingRow
                 // item: the description is real guidance and must wrap, not cut (nav rows truncate).
                 variant="item"
+                header
                 title="Show a browser window"
                 // One sentence for both states, so the row keeps its height when switched (UX review 2, U15).
                 description="On: a real window you can watch. Off: hidden — follow along in the chat's Browser panel."
                 control={<Toggle checked={s.showWindow} disabled={busy} aria-label="Show a browser window" onChange={(v) => confirmThen({ kind: 'window', value: v })} />}
               />
               {info.browsers.length >= 2 ? (
-                // A labelled field rather than a row control: a dropdown beside the title
-                // squeezed the title onto three lines at dialog width.
-                <div className="rounded-lg bg-inset p-3 space-y-1.5">
-                  <div className="text-sm text-fg font-medium">Browser to use</div>
+                // A wide control goes below its title and hint (guide "Settings"): a dropdown beside
+                // the title squeezed the title onto three lines at dialog width.
+                <div className="space-y-1.5">
+                  <div className="text-xs text-fg font-medium">Browser to use</div>
                   <div className="text-2xs text-fg-muted">Which browser on this computer the assistant uses.</div>
                   <Select
                     size="sm"
@@ -138,37 +148,39 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
                   />
                 </div>
               ) : info.chosen ? (
-                <p className="text-2xs text-fg-muted px-1">Using {info.chosen.label}.</p>
+                <p className="text-xs text-fg-muted">Using {info.chosen.label}.</p>
               ) : null}
               {!info.chosen && info.install.phase !== 'downloading' && (
-                <div className="rounded-lg bg-inset p-3 text-xs text-fg-2">
-                  <p>No Chrome, Edge, Chromium or Brave was found on this computer. YouCoded can download a browser just for the assistant (about 150 MB, kept inside YouCoded).</p>
-                  {info.install.phase === 'failed' && (
-                    <ErrorState className="mt-2" message={`The download didn't finish: ${info.install.error}`} onRetry={() => void run(() => bridge().download())} />
-                  )}
-                  {info.install.phase !== 'failed' && (
-                    <div className="flex justify-end mt-2">
-                      <Button variant="primary" size="sm" onClick={() => void run(() => bridge().download())}>Download</Button>
-                    </div>
-                  )}
+                <div className="space-y-2">
+                  <p className="text-xs text-fg-2 leading-relaxed">No Chrome, Edge, Chromium or Brave was found on this computer. YouCoded can download a browser just for the assistant (about 150 MB, kept inside YouCoded).</p>
+                  {/* A failed action replaces its button: one plain sentence, the installer's own
+                      words under Details inside the box (guide "Status and notices"). */}
+                  {info.install.phase === 'failed'
+                    ? <ErrorState message="The download didn't finish." details={info.install.error ?? undefined} onRetry={() => void run(() => bridge().download())} />
+                    : <Button variant="primary" className="w-full" onClick={() => void run(() => bridge().download())}>Download</Button>}
                 </div>
               )}
               {info.install.phase === 'downloading' && (
-                <div className="rounded-lg bg-inset p-3 text-xs text-fg-2" role="status">
+                <div className="space-y-2 text-xs text-fg-2" role="status">
                   <p>Downloading a browser for the assistant… {info.install.percent}%</p>
-                  <ProgressBar className="mt-2" percent={info.install.percent} />
-                  <div className="flex justify-end mt-2">
-                    <Button variant="secondary" size="sm" onClick={() => void bridge().cancelDownload()}>Cancel</Button>
-                  </div>
+                  <ProgressBar percent={info.install.percent} />
+                  <Button variant="secondary" className="w-full" onClick={() => void bridge().cancelDownload()}>Cancel</Button>
                 </div>
               )}
+              {/* A follow-up action under a group: full-width outlined (guide "Buttons"). */}
+              {info.running && (
+                <Button variant="secondary" className="w-full" onClick={() => void run(() => bridge().stop())}>Close the browser</Button>
+              )}
+              </div>
             </section>
           )}
 
-          <section className="space-y-2">
-            <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Sites you've allowed {s.alwaysAllowedSites.length ? <span className="text-fg-muted font-normal">{s.alwaysAllowedSites.length}</span> : null}</h3>
+          <section>
+            {/* A count is the word then a smaller, fainter number (guide "Text and numbers"). */}
+            <SectionLabel className="mb-2">Sites you've allowed{s.alwaysAllowedSites.length ? <span className="ml-1 text-3xs text-fg-faint">{s.alwaysAllowedSites.length}</span> : null}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3`}>
             {s.alwaysAllowedSites.length === 0 ? (
-              <p className="text-2xs text-fg-muted px-1">None yet. When the browser asks, "Always allow" adds a site here. Buying, sending and deleting still ask every time.</p>
+              <p className="text-xs text-fg-muted leading-relaxed">None yet. When the browser asks, "Always allow" adds a site here. Buying, sending and deleting still ask every time.</p>
             ) : (
               <ul className="space-y-1">
                 {s.alwaysAllowedSites.map((h) => (
@@ -178,24 +190,22 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
                 ))}
               </ul>
             )}
+            </div>
           </section>
 
           {!s.useMyChrome && (
-            <section className="space-y-2">
-              <h3 className="text-2xs font-medium uppercase tracking-wide text-fg-muted">Saved sign-ins</h3>
+            <section>
+              <SectionLabel className="mb-2">Saved sign-ins</SectionLabel>
+              <div className={`${CARD_LEVEL_1} p-3`}>
               <SettingRow
                 variant="item"
+                header
                 title="Clear saved sign-ins"
                 description="Signs the assistant's browser out of every site. Saved on this computer only."
                 control={<Button variant="danger-outline" size="sm" disabled={busy} onClick={() => setConfirmClear(true)}>Clear</Button>}
               />
+              </div>
             </section>
-          )}
-
-          {info.running && (
-            <div className="flex justify-end">
-              <Button variant="secondary" size="sm" onClick={() => void run(() => bridge().stop())}>Close the browser</Button>
-            </div>
           )}
         </div>
       )}
@@ -203,34 +213,37 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
         open={pending !== null}
         onClose={() => setPending(null)}
         title={pending?.kind === 'window' ? (pending.value ? 'Show the browser window?' : 'Hide the browser window?') : 'Switch browsers?'}
-        size="prompt"
+        size="panel"
         layer={3}
         noScreen="a two-button confirm inside Settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
       >
-        <p className="text-sm text-fg-2">
-          {pending?.kind === 'window'
-            ? `This restarts the browser for ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'} using it. Pages reopen where they were, but anything typed and not yet sent is lost.`
-            : `This closes the pages the assistant has open in ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'}.`}
-        </p>
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button>
+        {/* WHY the shared one-job card (guide "Popups": every one-job popup, short questions too). */}
+        <OneJobCard actions={<>
           <Button variant="primary" onClick={() => pending && apply(pending)}>{pending?.kind === 'window' ? (pending.value ? 'Show window' : 'Hide window') : 'Switch'}</Button>
-        </div>
+          <Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button>
+        </>}>
+          <OneJobText><p>
+            {pending?.kind === 'window'
+              ? `This restarts the browser for ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'} using it. Pages reopen where they were, but anything typed and not yet sent is lost.`
+              : `This closes the pages the assistant has open in ${info?.sessionsWithTabs ?? 0} chat${info?.sessionsWithTabs === 1 ? '' : 's'}.`}
+          </p></OneJobText>
+        </OneJobCard>
       </Dialog>
       <Dialog
         open={confirmClear}
         onClose={() => setConfirmClear(false)}
         title="Sign out of every site?"
-        size="prompt"
+        size="panel"
         layer={3}
         destructive
         noScreen="a two-button confirm inside Settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
       >
-        <p className="text-sm text-fg-2">The assistant's browser closes and forgets every sign-in. You'll need to sign in again the next time a task needs it. Your own browser isn't affected.</p>
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="secondary" onClick={() => setConfirmClear(false)}>Cancel</Button>
+        <OneJobCard actions={<>
           <Button variant="danger" onClick={() => { setConfirmClear(false); void run(() => bridge().clearSignins()); }}>Sign out of everything</Button>
-        </div>
+          <Button variant="secondary" onClick={() => setConfirmClear(false)}>Cancel</Button>
+        </>}>
+          <OneJobText><p>The assistant's browser closes and forgets every sign-in. You'll need to sign in again the next time a task needs it. Your own browser isn't affected.</p></OneJobText>
+        </OneJobCard>
       </Dialog>
     </Dialog>
   );

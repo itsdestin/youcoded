@@ -69,7 +69,12 @@ describe('Settings → Browser', () => {
     const b = installBrowserBridge(browserInfo({ browsers: [], chosen: null, install: { phase: 'failed', error: 'ENOSPC: no space left on device' } }));
     render(<BrowserSettingsDialog onClose={() => {}} />);
     expect(await screen.findByText(/No Chrome, Edge, Chromium or Brave was found/)).toBeInTheDocument();
-    expect(screen.getByText("The download didn't finish: ENOSPC: no space left on device")).toBeInTheDocument();
+    // One plain sentence; the installer's own words wait under Details inside the box (guide "Status
+    // and notices": machine words never in the sentence).
+    expect(screen.getByText("The download didn't finish.")).toBeInTheDocument();
+    expect(screen.queryByText(/ENOSPC/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText(/ENOSPC: no space left on device/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' })); // every retry reads "Try again" (error-notices-1#EN-Q1)
     await waitFor(() => expect(b.bridge.download).toHaveBeenCalled());
   });

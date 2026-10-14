@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, DocumentTabs, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
+import { Button, Callout, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
@@ -590,13 +590,15 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           onKeyDown={onAddressKey}
         />
       </div>
-      {openError && <p role="alert" className="text-2xs text-fg-muted px-3 py-1.5">{openError}</p>}
+      {/* WHY the short error line (FieldError), not grey text (guide "Status and notices": a short
+          error on an item is the notice box in miniature; never an error that reads as a hint). */}
+      {openError && <div className="px-3 py-1.5"><FieldError as="p">{openError}</FieldError></div>}
       {info && !info.settings.explainerSeen && (
-        <Callout className="mx-3 my-2" title="The assistant's own browser">
+        // The notice's own button goes inside it through the shared box's actions (guide "Status
+        // and notices"), not a hand-placed row under its words.
+        <Callout className="mx-3 my-2" title="The assistant's own browser" actionsPlacement="below"
+          actions={<Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>}>
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
-          <div className="flex justify-end mt-2">
-            <Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>
-          </div>
         </Callout>
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
