@@ -509,16 +509,17 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   } else {
     showingPicture = true;
     body = (
-      // WHY no padding: the page runs to the panel's edges, like a browser's
-      // page under its toolbar — and an expanded panel is all page.
-      <div className="flex-1 min-h-0 flex flex-col">
-        {myChrome && <p className="text-2xs text-fg-muted px-3 py-1.5">Working in your Chrome. You can watch it there too.</p>}
+      // WHY a framed page (Destin, 2026-10-14: "frame the browser better with
+      // rounded edges"): an outlined, rounded window inset from the panel's
+      // edges reads as the page, apart from the panel's own controls.
+      <div className="flex-1 min-h-0 flex flex-col px-2 pb-2">
+        {myChrome && <p className="text-2xs text-fg-muted px-1 pb-1.5">Working in your Chrome. You can watch it there too.</p>}
         {/* A new tab is a white page: say what to do instead (the picture is
             still drawn underneath it, so the stream stays warm). */}
-        <div className="relative flex-1 min-h-0 flex flex-col">
+        <div className="relative flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden shadow-sm">
           <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} />
           {blank && !active?.loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-inset pointer-events-none">
+            <div className="absolute inset-0 flex items-center justify-center bg-panel pointer-events-none">
               <EmptyState message="Type an address or a search above." />
             </div>
           )}
@@ -540,6 +541,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
               label="Tabs"
               className="flex-1"
               shrink
+              boxed
               activeId={String(active?.index ?? -1)}
               tabs={state!.tabs.map((t) => ({
                 id: String(t.index),
@@ -567,7 +569,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         )}
         <PanelIconButton name="close" title="Close" onClick={() => closeBrowserPane(sessionId)} />
       </div>
-      <div className="flex items-center gap-1 px-2 pb-2 border-b border-edge shrink-0">
+      <div className="flex items-center gap-1 px-2 pb-2 shrink-0">
         {/* Greyed out with nowhere to go, like any browser. */}
         <Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!hasTabs || !active?.canGoBack} onClick={() => void go({ nav: 'back' })}><BackIcon /></Button>
         <Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!hasTabs || !active?.canGoForward} onClick={() => void go({ nav: 'forward' })}><ForwardIcon /></Button>

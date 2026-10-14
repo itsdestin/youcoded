@@ -36,9 +36,13 @@ export interface DocumentTabsProps {
   /** Tabs narrow to share a crowded strip, like Chrome's, instead of scrolling
    *  out of sight (the Browser panel puts them in its top row beside buttons). */
   shrink?: boolean;
+  /** Each tab drawn as its own outlined button (the Browser, Destin 2026-10-14:
+   *  "tabs should more clearly be buttons"). There the current tab's plain inset
+   *  fill matched the panel behind it, so no tab looked pressable. */
+  boxed?: boolean;
 }
 
-export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, className = '', shrink = false }: DocumentTabsProps) {
+export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, className = '', shrink = false, boxed = false }: DocumentTabsProps) {
   return (
     <div role="tablist" aria-label={label} className={`flex items-center gap-1 min-w-0 overflow-x-auto select-none ${className}`}>
       {tabs.map((t) => {
@@ -48,7 +52,9 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
           <div
             key={t.id}
             className={`group ${shrink ? 'shrink basis-56 min-w-20' : 'shrink-0'} flex items-center h-8 max-w-56 rounded-md transition-colors ${
-              current ? 'bg-inset text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg active:bg-edge'
+              boxed
+                ? `border ${current ? 'bg-well border-fg-muted text-fg font-medium shadow-sm' : 'border-edge-dim text-fg-2 hover:bg-panel hover:border-edge hover:text-fg active:bg-edge'}`
+                : current ? 'bg-inset text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg active:bg-edge'
             }`}
           >
             <button
