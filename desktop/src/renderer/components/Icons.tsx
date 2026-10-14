@@ -97,6 +97,15 @@ export function ForwardIcon({ className = 'w-4 h-4' }: IconProps) {
   );
 }
 
+/** Stop loading — the Browser's Reload button while a page loads. */
+export function StopIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6 6 18" /><path d="M6 6l12 12" />
+    </svg>
+  );
+}
+
 export function ReloadIcon({ className = 'w-4 h-4' }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

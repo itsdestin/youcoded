@@ -29,6 +29,8 @@ const PANEL_ICON_PATHS: Record<string, string> = {
   forward: 'M5 12h14M13 6l6 6-6 6',
   // Chain link — "Copy link" (the Browser panel: an address, not a file path).
   link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+  // "New tab" (the Browser panel's tab strip).
+  plus: 'M12 5v14M5 12h14',
 };
 export function PanelIcon({ name, size = 15 }: { name: keyof typeof PANEL_ICON_PATHS | string; size?: number }) {
   return (

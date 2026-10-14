@@ -15,9 +15,10 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
+import { Button, Callout, DocumentTabs, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
-import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon } from '../Icons';
+import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
+import BrailleSpinner from '../BrailleSpinner';
 import { ScreenMark } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
@@ -28,6 +29,15 @@ function bridge() { return (window as any).claude.browser; }
 function hostOf(url: string): string {
   try { return new URL(url).host; } catch { return ''; }
 }
+
+/** A tab's name in the strip and header: its title, else its site, else "New tab". */
+function tabLabel(t: { title: string; url: string }): string {
+  if (!t.url || t.url === 'about:blank') return 'New tab';
+  return (t.title && t.title !== t.url ? t.title : '') || hostOf(t.url) || t.url;
+}
+
+/** A browser shortcut on the picture that the panel does itself, as in Chrome. */
+export type PanelKey = 'new-tab' | 'close-tab' | 'next-tab' | 'prev-tab' | 'address' | 'back' | 'forward' | 'reload';
 
 /** One word for what the browser is doing for this chat (spec glossary). */
 export function browserStatusWord(s: BrowserSessionState | null): string {
@@ -45,7 +55,7 @@ const SPECIAL_KEY = /^(F\d{1,2}|Enter|Backspace|Tab|Escape|Delete|Arrow(Left|Rig
  *  plain character, a named key (with modifiers) otherwise, 'paste' for
  *  Ctrl/Cmd+V (the page gets the clipboard's text), 'copy'/'cut' for Ctrl/Cmd+C/X
  *  (the page's highlight goes to the clipboard), null to ignore. */
-export function keyEventFor(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): BrowserInputEvent | 'paste' | 'copy' | 'cut' | null {
+export function keyEventFor(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): BrowserInputEvent | 'paste' | 'copy' | 'cut' | { panel: PanelKey } | null {
   const cmd = e.ctrlKey || e.metaKey;
   // WHY the app does these three: a hidden browser's clipboard is its own, not
   // the computer's, so the page's own Ctrl+C would copy into nowhere.
@@ -54,7 +64,19 @@ export function keyEventFor(e: { key: string; ctrlKey: boolean; metaKey: boolean
     if (k === 'v') return 'paste';
     if (k === 'c') return 'copy';
     if (k === 'x') return 'cut';
+    // Chrome's tab and address shortcuts — a hidden browser has no tab strip
+    // or address bar of its own, so the panel's do the job.
+    if (k === 't' && !e.shiftKey) return { panel: 'new-tab' };
+    if (k === 'w') return { panel: 'close-tab' };
+    if (k === 'l') return { panel: 'address' };
+    if (k === 'r') return { panel: 'reload' };
+    if (e.key === 'Tab') return { panel: e.shiftKey ? 'prev-tab' : 'next-tab' };
+    if (e.key === 'PageDown') return { panel: 'next-tab' };
+    if (e.key === 'PageUp') return { panel: 'prev-tab' };
   }
+  if (e.altKey && !cmd && e.key === 'ArrowLeft') return { panel: 'back' };
+  if (e.altKey && !cmd && e.key === 'ArrowRight') return { panel: 'forward' };
+  if (e.key === 'F5') return { panel: 'reload' };
   const single = [...e.key].length === 1;
   if (single && !cmd && !e.altKey) return { type: 'text', text: e.key };
   if (!single && !SPECIAL_KEY.test(e.key)) return null; // Shift alone, Dead, Process…
@@ -86,7 +108,7 @@ function pagePointClamped(rect: { left: number; top: number; width: number; heig
 }
 
 /** The live picture of the chat's current tab — also the person's way to use it. */
-const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId: string; title: string }) {
+const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: { sessionId: string; title: string; onPanelKey: (k: PanelKey) => void }) {
   const img = useRef<HTMLImageElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [hasFrame, setHasFrame] = useState(false);
@@ -184,6 +206,23 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
     endDrag.current = finish;
   };
 
+  // Hovering: the pointer's place goes to the page too (no button held), so
+  // menus that open on hover open, and links and buttons light up. At most
+  // once a frame; the browser keeps only the newest point while busy.
+  const hover = useRef<{ x: number; y: number; raf: number | null }>({ x: 0, y: 0, raf: null });
+  useEffect(() => () => { if (hover.current.raf !== null) cancelAnimationFrame(hover.current.raf); }, []);
+  const onHover = (e: React.MouseEvent) => {
+    if (endDrag.current) return; // a drag sends its own moves
+    const h = hover.current;
+    h.x = e.clientX; h.y = e.clientY;
+    if (h.raf !== null) return;
+    h.raf = requestAnimationFrame(() => {
+      h.raf = null;
+      const p = point({ clientX: h.x, clientY: h.y });
+      if (p) send({ type: 'mouse', action: 'move', x: p.x, y: p.y, clickCount: 1 });
+    });
+  };
+
   // Copy, cut and paste between the page and the computer's clipboard.
   const copy = useCallback(async (): Promise<string> => {
     const text = await bridge().selection(sessionId).catch(() => '');
@@ -252,6 +291,7 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
     touch.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, dragging: false, samples: [{ t: e.timeStamp, x: e.clientX, y: e.clientY }] };
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse') { onHover(e); return; }
     const t = touch.current;
     if (!t || t.id !== e.pointerId) return;
     // A finger wobbles: under 8 px of travel it is still a tap.
@@ -300,6 +340,7 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
     // reach the app's shortcuts (Escape would stop the assistant).
     e.preventDefault();
     e.stopPropagation();
+    if (typeof ev === 'object' && 'panel' in ev) { onPanelKey(ev.panel); return; }
     if (ev === 'paste') { paste(); return; }
     if (ev === 'copy') { void copy(); return; }
     if (ev === 'cut') {
@@ -407,7 +448,8 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // lives here, in the panel — not in any shared store (performance rule 5).
   const [draft, setDraft] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' }) => {
+  const addressBox = useRef<HTMLInputElement>(null);
+  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' | 'stop' } | { tab: 'new' | 'select' | 'close'; index?: number }) => {
     setOpenError(null);
     try {
       const r = await bridge().open({ sessionId, ...req });
@@ -416,6 +458,29 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       setOpenError(err instanceof Error ? err.message : "That page couldn't be opened.");
     }
   }, [sessionId]);
+  // A new tab is empty: the address box takes the typing straight away, as in Chrome.
+  const newTab = useCallback(async () => {
+    await go({ tab: 'new' });
+    addressBox.current?.focus();
+  }, [go]);
+
+  // Chrome's shortcuts pressed on the page. Through a ref, so the picture's
+  // handler stays one stable function (it is a memo'd component).
+  const tabsNow = useRef({ tabs: state?.tabs ?? [], active });
+  tabsNow.current = { tabs: state?.tabs ?? [], active };
+  const onPanelKey = useCallback((k: PanelKey) => {
+    const { tabs, active: cur } = tabsNow.current;
+    switch (k) {
+      case 'new-tab': void newTab(); return;
+      case 'close-tab': if (cur) void go({ tab: 'close', index: cur.index }); return;
+      case 'next-tab':
+      case 'prev-tab':
+        if (cur && tabs.length > 1) void go({ tab: 'select', index: (cur.index + (k === 'next-tab' ? 1 : -1) + tabs.length) % tabs.length });
+        return;
+      case 'address': addressBox.current?.focus(); return;
+      default: void go({ nav: k });
+    }
+  }, [go, newTab]);
   const onAddressKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && draft?.trim()) {
       e.preventDefault();
@@ -431,6 +496,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
     }
   };
   const hasTabs = state?.run === 'running' && (state?.tabs.length ?? 0) > 0;
+  const blank = !active || active.url === 'about:blank';
 
   let body: React.ReactNode;
   let showingPicture = false;
@@ -445,15 +511,16 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
     body = (
       <div className="flex-1 min-h-0 flex flex-col gap-2 p-2">
         {myChrome && <p className="text-2xs text-fg-muted px-1">Working in your Chrome. You can watch it there too.</p>}
-        <LivePicture sessionId={sessionId} title={active?.title ?? ''} />
-        {state.tabs.length > 1 && (
-          <ul className="text-2xs text-fg-muted px-1 space-y-0.5" aria-label="This conversation's tabs">
-            <li className="font-medium uppercase tracking-wide">Tabs {state.tabs.length}</li>
-            {state.tabs.map((t) => (
-              <li key={t.index} className={`truncate ${t.active ? 'text-fg-2 font-medium' : ''}`}>{t.title || hostOf(t.url)}</li>
-            ))}
-          </ul>
-        )}
+        {/* A new tab is a white page: say what to do instead (the picture is
+            still drawn underneath it, so the stream stays warm). */}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+          <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} />
+          {blank && !active?.loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-inset pointer-events-none">
+              <EmptyState message="Type an address or a search above." />
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -463,7 +530,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       {!showingPicture && <ScreenMark name="chat/browser" />}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
         <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0 mx-1" />
-        <div className="min-w-0 flex-1 text-sm-tight font-semibold text-fg truncate">{active?.title || 'Browser'}</div>
+        <div className="min-w-0 flex-1 text-sm-tight font-semibold text-fg truncate">{active ? tabLabel(active) : 'Browser'}</div>
         <span className="text-2xs text-fg-muted shrink-0 mr-1" aria-live="polite">{status}</span>
         {webPage && <PanelIconButton name="external" title="Open in your own browser" onClick={openInMyBrowser} />}
         {active && <PanelIconButton name={copied ? 'check' : 'link'} title={copied ? 'Copied' : 'Copy link'} onClick={copyLink} />}
@@ -473,17 +540,40 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         )}
         <PanelIconButton name="close" title="Close" onClick={() => closeBrowserPane(sessionId)} />
       </div>
+      {/* The tabs, like Chrome's (Destin, 2026-10-14): the same strip as
+          Office's open documents. Shown once the browser is running. */}
+      {hasTabs && (
+        <div className="flex items-center gap-1 px-2 pt-1.5 shrink-0">
+          <DocumentTabs
+            label="Tabs"
+            className="flex-1"
+            activeId={String(active?.index ?? -1)}
+            tabs={state!.tabs.map((t) => ({
+              id: String(t.index),
+              label: tabLabel(t),
+              icon: t.loading ? <BrailleSpinner /> : <GlobeIcon className="w-3.5 h-3.5 text-fg-muted" />,
+            }))}
+            onSelect={(id) => void go({ tab: 'select', index: Number(id) })}
+            onClose={(id) => void go({ tab: 'close', index: Number(id) })}
+          />
+          <PanelIconButton name="plus" title="New tab" onClick={() => void newTab()} />
+        </div>
+      )}
       <div className="flex items-center gap-1 px-3 py-2">
-        <Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!hasTabs} onClick={() => void go({ nav: 'back' })}><BackIcon /></Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!hasTabs} onClick={() => void go({ nav: 'forward' })}><ForwardIcon /></Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Reload" disabled={!hasTabs} onClick={() => void go({ nav: 'reload' })}><ReloadIcon /></Button>
+        {/* Greyed out with nowhere to go, like any browser. */}
+        <Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!hasTabs || !active?.canGoBack} onClick={() => void go({ nav: 'back' })}><BackIcon /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!hasTabs || !active?.canGoForward} onClick={() => void go({ nav: 'forward' })}><ForwardIcon /></Button>
+        {active?.loading
+          ? <Button variant="ghost" size="icon-sm" aria-label="Stop loading" onClick={() => void go({ nav: 'stop' })}><StopIcon /></Button>
+          : <Button variant="ghost" size="icon-sm" aria-label="Reload" disabled={!hasTabs || blank} onClick={() => void go({ nav: 'reload' })}><ReloadIcon /></Button>}
         <TextInput
+          ref={addressBox}
           size="sm"
           className="min-w-0 flex-1"
           aria-label="Address or search"
           placeholder="Type an address or search"
           spellCheck={false}
-          value={draft ?? active?.url ?? ''}
+          value={draft ?? (blank ? '' : active?.url ?? '')}
           onFocus={(e) => { setDraft(e.currentTarget.value); e.currentTarget.select(); }}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => setDraft(null)}

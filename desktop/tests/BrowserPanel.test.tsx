@@ -21,7 +21,7 @@ describe('Browser panel', () => {
     const b = installBrowserBridge();
     setBrowserState(browserState());
     const { unmount } = render(<BrowserPanel sessionId="s1" />);
-    expect(screen.getByText('Catalog')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Catalog' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('textbox', { name: 'Address or search' })).toHaveValue('https://library.example.org/catalog');
     await waitFor(() => expect(b.bridge.watch).toHaveBeenCalledWith('s1'));
     act(() => b.pushFrame('s1'));
@@ -121,6 +121,50 @@ describe('Browser panel', () => {
     expect(page).toHaveAttribute('data-keyboard-owner');
   });
 
+  it('tabs: switch, close, open a new one, and Chrome\'s tab shortcuts on the page', async () => {
+    const b = installBrowserBridge();
+    const tab = (index: number, title: string, active = false) => ({ index, title, url: `https://example.org/${index}`, active, loading: false, canGoBack: false, canGoForward: false });
+    setBrowserState(browserState({ tabs: [tab(0, 'First', true), tab(1, 'Second'), tab(2, 'Third')] }));
+    render(<BrowserPanel sessionId="s1" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Second' }));
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'select', index: 1 });
+    fireEvent.click(screen.getByRole('button', { name: 'Close Third' }));
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'close', index: 2 });
+    // A new tab: opened, then the address box takes the typing.
+    fireEvent.click(screen.getByRole('button', { name: 'New tab' }));
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'new' });
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Address or search' })).toHaveFocus());
+    // On the page: Ctrl+Tab goes to the next tab (wrapping), Ctrl+W closes this one.
+    act(() => b.pushFrame('s1'));
+    const page = screen.getByRole('application');
+    b.bridge.open.mockClear();
+    fireEvent.keyDown(page, { key: 'Tab', ctrlKey: true, shiftKey: true });
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'select', index: 2 });
+    fireEvent.keyDown(page, { key: 'w', ctrlKey: true });
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', tab: 'close', index: 0 });
+    // None of them reached the page as keys.
+    expect(b.bridge.input.mock.calls.filter(([, ev]: any) => ev.type === 'key')).toEqual([]);
+  });
+
+  it('back and forward grey out with nowhere to go, and reload becomes Stop while a page loads', () => {
+    installBrowserBridge();
+    setBrowserState(browserState({ tabs: [{ index: 0, title: 'Slow', url: 'https://example.org/', active: true, loading: true, canGoBack: true, canGoForward: false }] }));
+    render(<BrowserPanel sessionId="s1" />);
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Forward' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop loading' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+  });
+
+  it('a new tab is named "New tab", its address box is empty and it says what to do', async () => {
+    installBrowserBridge();
+    setBrowserState(browserState({ tabs: [{ index: 0, title: 'about:blank', url: 'about:blank', active: true, loading: false, canGoBack: false, canGoForward: false }] }));
+    render(<BrowserPanel sessionId="s1" />);
+    expect(screen.getByRole('tab', { name: 'New tab' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Address or search' })).toHaveValue('');
+    expect(screen.getByText('Type an address or a search above.')).toBeInTheDocument();
+  });
+
   it('a mouse drag highlights on the page, and copy puts the highlight on the clipboard', async () => {
     const b = installBrowserBridge();
     b.bridge.selection.mockResolvedValue('alpha beta');
@@ -131,6 +175,9 @@ describe('Browser panel', () => {
     act(() => b.pushFrame('s1')); // a 1280×800 page
     const img = screen.getByRole('img');
     img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400, right: 640, bottom: 400, x: 0, y: 0, toJSON() {} });
+    // Hovering (no button held) moves the page's pointer too: hover menus open.
+    fireEvent.pointerMove(img, { pointerType: 'mouse', clientX: 50, clientY: 25 });
+    await waitFor(() => expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'mouse', action: 'move', x: 100, y: 50, clickCount: 1 }));
     fireEvent.mouseDown(img, { button: 0, clientX: 10, clientY: 10, detail: 1 });
     // Dragged past the picture's right edge: the highlight follows to the page's edge.
     fireEvent.mouseMove(window, { clientX: 900, clientY: 10 });
@@ -175,6 +222,10 @@ describe('Browser panel', () => {
     expect(k('v', { metaKey: true })).toBe('paste');
     expect(k('c', { ctrlKey: true })).toBe('copy');
     expect(k('x', { metaKey: true })).toBe('cut');
+    expect(k('t', { ctrlKey: true })).toEqual({ panel: 'new-tab' });
+    expect(k('l', { metaKey: true })).toEqual({ panel: 'address' });
+    expect(k('ArrowLeft', { altKey: true })).toEqual({ panel: 'back' });
+    expect(k('F5')).toEqual({ panel: 'reload' });
     expect(k('Shift', { shiftKey: true })).toBeNull();
     // Contained and centred: a picture area wider than the page has margins left and right.
     expect(pagePoint({ left: 0, top: 0, width: 800, height: 400 }, { w: 400, h: 400 }, 200, 10)).toEqual({ x: 0, y: 10 });

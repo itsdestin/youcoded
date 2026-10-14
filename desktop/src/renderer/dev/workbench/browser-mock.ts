@@ -22,8 +22,8 @@ export function createBrowserMock(sessionIds: () => string[]) {
   const infoListeners = new Set<() => void>();
 
   const tabs = [
-    { index: 0, title: 'Riverside Public Library — Catalog', url: 'https://library.example.org/catalog?q=the+night+circus', active: true },
-    { index: 1, title: 'Hours and locations', url: 'https://library.example.org/hours', active: false },
+    { index: 0, title: 'Riverside Public Library — Catalog', url: 'https://library.example.org/catalog?q=the+night+circus', active: true, loading: false, canGoBack: true, canGoForward: false },
+    { index: 1, title: 'Hours and locations', url: 'https://library.example.org/hours', active: false, loading: true, canGoBack: false, canGoForward: false },
   ];
 
   function stateFor(sessionId: string): BrowserSessionState {

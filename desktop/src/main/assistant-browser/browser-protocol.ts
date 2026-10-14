@@ -21,7 +21,7 @@ export type BrowserCommand =
   | { cmd: 'download' }
   | { cmd: 'cancel-download' }
   | { cmd: 'check-my-chrome' }
-  | { cmd: 'open'; sessionId: string; address?: string; nav?: 'back' | 'forward' | 'reload' }
+  | { cmd: 'open'; sessionId: string; address?: string; nav?: 'back' | 'forward' | 'reload' | 'stop'; tab?: 'new' | 'select' | 'close'; index?: number }
   | { cmd: 'input'; sessionId: string; event: BrowserInputEvent }
   | { cmd: 'view-size'; sessionId: string; width: number; height: number }
   | { cmd: 'selection'; sessionId: string };

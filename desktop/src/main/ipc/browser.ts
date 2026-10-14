@@ -65,7 +65,8 @@ function str(v: unknown, field: string): string {
 }
 
 const ANSWERS: readonly PromptAnswer[] = ['allow_chat', 'allow_always', 'once', 'no', 'done', 'cant', 'download'];
-const NAVS = ['back', 'forward', 'reload'] as const;
+const NAVS = ['back', 'forward', 'reload', 'stop'] as const;
+const TAB_ACTIONS = ['new', 'select', 'close'] as const;
 const KEY_NAME = /^[\w+\-=[\];',./`\\]{1,40}$/;
 
 function num(v: unknown, field: string): number {
@@ -216,8 +217,14 @@ export const browserChannels: MainChannelDef[] = [
     // The person browsing from the panel: this one MAY start the browser — they asked.
     handler: (raw) => {
       wire();
-      const payload = raw as { sessionId?: unknown; nav?: unknown; address?: unknown } | undefined;
+      const payload = raw as { sessionId?: unknown; nav?: unknown; address?: unknown; tab?: unknown; index?: unknown } | undefined;
       const sessionId = str(payload?.sessionId, 'sessionId');
+      if (payload && 'tab' in payload) {
+        const tab = TAB_ACTIONS.find((t) => t === payload.tab);
+        if (!tab) throw new TypeError('Unknown tab action');
+        const index = tab === 'new' ? undefined : Math.round(num(payload.index, 'index'));
+        return getBrowserClient().command<{ ok: boolean; error?: string }>({ cmd: 'open', sessionId, tab, index });
+      }
       if (payload && 'nav' in payload) {
         const nav = NAVS.find((n) => n === payload.nav);
         if (!nav) throw new TypeError('Unknown nav');

@@ -150,6 +150,9 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
         // The person browsing from the panel. Their own choice of address, so a
         // home-network address needs no card (it is granted for this chat);
         // a never-openable one is still refused.
+        if (c.tab) {
+          try { await service.personTab(c.sessionId, c.tab, c.index); return { ok: true }; } catch (err) { return { ok: false, error: `That didn't work: ${firstLine(err)}` }; }
+        }
         if (c.nav) {
           try { await service.personNav(c.sessionId, c.nav); return { ok: true }; } catch (err) { return { ok: false, error: `That didn't work: ${firstLine(err)}` }; }
         }

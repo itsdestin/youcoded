@@ -155,6 +155,9 @@ export class BrowserService extends EventEmitter {
   /** Tabs the app itself is closing (a tool, a chat ending) — not lost ones. */
   private readonly closingPages = new WeakSet<Page>();
   private shotSeq = 0;
+  /** Who last clicked, typed or ran a tool — the likely owner of a tab that
+   *  is opening right now (see installRequestGuard). */
+  private lastActor: { sessionId: string; at: number } | null = null;
   downloadPercent: number | null = null;
   /** While a hand-off asked for a window, the browser runs shown regardless of settings. */
   private windowOverride: boolean | null = null;
@@ -177,7 +180,10 @@ export class BrowserService extends EventEmitter {
 
   state(sessionId: string): BrowserSessionState {
     const e = this.sessions.get(sessionId);
-    const tabs = e ? e.pages.map((p, index) => ({ index, title: tabTitle(p), url: p.url(), active: p === e.active })) : [];
+    const tabs = e ? e.pages.map((p, index) => {
+      const n = navInfo.get(p);
+      return { index, title: tabTitle(p), url: p.url(), active: p === e.active, loading: n?.loading ?? false, canGoBack: n?.back ?? false, canGoForward: n?.forward ?? false };
+    }) : [];
     return {
       sessionId,
       run: this.run,
@@ -230,6 +236,7 @@ export class BrowserService extends EventEmitter {
       await prev.catch(() => undefined);
       e.busy++;
       e.used = true;
+      this.lastActor = { sessionId, at: Date.now() };
       this.clearSessionIdle(e);
       if (e.busy === 1) this.emitState(sessionId);
       return await fn();
@@ -390,12 +397,28 @@ export class BrowserService extends EventEmitter {
     await ctx.route('**/*', async (route) => {
       const req = route.request();
       if (req.resourceType() !== 'document') return route.continue().catch(() => undefined);
-      let sid: string | null = null;
-      try { sid = this.owner.get(req.frame().page()) ?? null; } catch { /* a worker's request has no frame */ }
+      let sid: string | null;
+      let page: Page | null = null;
+      // (A new tab's first page request has no frame yet: Playwright throws.)
+      try { page = req.frame().page(); } catch { /* a tab not set up yet */ }
+      // WHY a likely owner: a tab opened by a link asks for its page before the
+      // app has claimed it (the browser holds the claim until this request is
+      // answered), so it had no conversation and a home-network address in it
+      // was refused even in a chat that allowed it. It is the tab of whoever
+      // just acted (its opener's conversation claims it moments later).
+      sid = (page && this.owner.get(page)) ?? this.recentActor();
       const verdict = await guard(sid, req.url()).catch(() => 'block' as const);
       if (verdict === 'allow') return route.continue().catch(() => undefined);
       return route.abort('blockedbyclient').catch(() => undefined);
     });
+  }
+
+  /** The conversation that clicked, typed or ran a tool in the last few
+   *  seconds — never in My Chrome, where unclaimed tabs are the person's own. */
+  private recentActor(): string | null {
+    const a = this.lastActor;
+    if (this.connected || !a || Date.now() - a.at > 10_000 || !this.sessions.has(a.sessionId)) return null;
+    return a.sessionId;
   }
 
   private onContextClosed(ctx: BrowserContext): void {
@@ -580,8 +603,23 @@ export class BrowserService extends EventEmitter {
     page.on('crash', () => { e.notes.push('A tab crashed. Reopen the page to continue.'); });
     // The panel's address and title follow the page as it moves, whoever moved
     // it (the person browses there too now).
-    page.on('framenavigated', (f) => { if (f === page.mainFrame()) this.emitState(sessionId); });
-    page.on('domcontentloaded', () => { void refreshTitles([page]).then(() => this.emitState(sessionId)); });
+    // Loading and Back/Forward follow the page too, so the panel's buttons can
+    // say Stop while it loads and grey out Back with nowhere to go.
+    page.on('framenavigated', (f) => {
+      if (f !== page.mainFrame()) return;
+      setNav(page, { loading: true });
+      this.emitState(sessionId);
+      // An in-page move (a site changing its address without loading) fires
+      // this with no load after it: an already-complete page isn't loading.
+      void page.evaluate(() => document.readyState).then(async (rs) => {
+        if (rs !== 'complete') return;
+        setNav(page, { loading: false });
+        await refreshHistory(page);
+        this.emitState(sessionId);
+      }).catch(() => undefined);
+    });
+    page.on('domcontentloaded', () => { void Promise.all([refreshTitles([page]), refreshHistory(page)]).then(() => this.emitState(sessionId)); });
+    page.on('load', () => { setNav(page, { loading: false }); void refreshHistory(page).then(() => this.emitState(sessionId)); });
     this.fitToPanel(e, page);
     this.emitState(sessionId);
     this.retargetWatcher(sessionId);
@@ -617,16 +655,46 @@ export class BrowserService extends EventEmitter {
     if (!page) return;
     this.markUsed(sessionId);
     this.addNote(sessionId, `The person opened ${url} themselves in this conversation's browser.`);
+    this.lastActor = { sessionId, at: Date.now() };
+    setNav(page, { loading: true });
+    this.emitState(sessionId);
     await page.goto(url, { waitUntil: 'commit', timeout: 20_000 });
   }
 
-  async personNav(sessionId: string, nav: 'back' | 'forward' | 'reload'): Promise<void> {
+  async personNav(sessionId: string, nav: 'back' | 'forward' | 'reload' | 'stop'): Promise<void> {
     const page = await this.activePage(sessionId, false);
     if (!page) return;
+    this.lastActor = { sessionId, at: Date.now() };
+    if (nav === 'stop') {
+      await page.evaluate(() => window.stop()).catch(() => undefined);
+      setNav(page, { loading: false });
+      this.emitState(sessionId);
+      return;
+    }
     const opts = { waitUntil: 'commit' as const, timeout: 20_000 };
     if (nav === 'back') await page.goBack(opts);
     else if (nav === 'forward') await page.goForward(opts);
     else await page.reload(opts);
+  }
+
+  /** The panel's tab strip: a new empty tab, switching tabs, or closing one.
+   *  The assistant hears about it with its next result, as with addresses. */
+  async personTab(sessionId: string, action: 'new' | 'select' | 'close', index?: number): Promise<void> {
+    this.markUsed(sessionId);
+    if (action === 'new') {
+      await this.newPage(sessionId);
+      this.addNote(sessionId, 'The person opened a new tab (now the active tab).');
+      return;
+    }
+    if (index === undefined) throw new BrowserUnavailableError('Which tab?');
+    if (action === 'select') {
+      this.selectTab(sessionId, index);
+      this.addNote(sessionId, `The person switched to tab ${index}.`);
+      return;
+    }
+    const url = this.entry(sessionId).pages[index]?.url() ?? '';
+    await this.closeTab(sessionId, index);
+    this.addNote(sessionId, `The person closed tab ${index}${url ? ` (${url})` : ''}. Tab numbers after it moved down by one.`);
   }
 
   /** A click, scroll or key from the panel's picture, in the order sent. */
@@ -634,6 +702,7 @@ export class BrowserService extends EventEmitter {
     const e = this.sessions.get(sessionId);
     const page = e?.active;
     if (!e || !page || page.isClosed()) return;
+    if (ev.type !== 'wheel' && !(ev.type === 'mouse' && ev.action === 'move')) this.lastActor = { sessionId, at: Date.now() };
     this.watchers.get(sessionId)?.goFast(PERSON_FAST_MS);
     // WHY merge scroll steps (measured 2026-10-13, dev app): a touchpad sends
     // a step every screen refresh, the browser takes ~35 ms per step, so steps
@@ -1112,6 +1181,21 @@ export function firstLine(err: unknown): string {
 }
 
 const titleCache = new WeakMap<Page, string>();
+
+/** Per tab: loading, and whether Back / Forward can go anywhere. */
+const navInfo = new WeakMap<Page, { loading: boolean; back: boolean; forward: boolean }>();
+function setNav(p: Page, patch: Partial<{ loading: boolean; back: boolean; forward: boolean }>): void {
+  navInfo.set(p, { loading: false, back: false, forward: false, ...navInfo.get(p), ...patch });
+}
+/** Ask the page whether its history goes back/forward (the Navigation API;
+ *  older pages fall back to "anything in history" for Back). */
+async function refreshHistory(p: Page): Promise<void> {
+  const h = await p.evaluate(() => {
+    const n = (window as unknown as { navigation?: { canGoBack: boolean; canGoForward: boolean } }).navigation;
+    return n ? { back: n.canGoBack, forward: n.canGoForward } : { back: history.length > 1, forward: false };
+  }).catch(() => null);
+  if (h) setNav(p, h);
+}
 
 function tabTitle(p: Page): string { return titleCache.get(p) ?? hostOf(p.url()); }
 

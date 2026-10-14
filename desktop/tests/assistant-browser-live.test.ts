@@ -35,6 +35,8 @@ const PAGES: Record<string, string> = {
   '/person': `<!doctype html><title>Person</title><button id="b" style="position:absolute;left:20px;top:20px;width:120px;height:40px" onclick="this.textContent='clicked'">Press me</button>
     <input id="t" style="position:absolute;left:20px;top:100px;width:200px" aria-label="Note">
     <p id="p" style="position:absolute;left:20px;top:200px;margin:0;font:20px monospace;white-space:nowrap">alpha beta gamma</p>`,
+  '/tabs': `<!doctype html><title>Tabs</title><a id="n" href="/results" target="_blank" rel="noopener" style="position:absolute;left:20px;top:20px">Open results in a new tab</a>
+    <a id="s" href="/person" style="position:absolute;left:20px;top:80px">Go to person</a>`,
   '/slow': `<!doctype html><title>Slow</title><p id="x">waiting</p><script>setTimeout(()=>{document.getElementById('x').textContent='READY NOW'},800)</script>`,
 };
 
@@ -336,6 +338,30 @@ describe('Browser, live', () => {
     expect(service.takeNotes('s-person').join(' ')).toContain('The person opened');
     // A never-openable address is refused, even for the person.
     expect((await openForPerson(env, 's-person', '169.254.169.254')).ok).toBe(false);
+  }, 60_000);
+
+  live()('the person\'s tabs: new, switch, close; Back knows when it can go; a "noopener" link\'s tab joins the chat', async () => {
+    expect((await openForPerson(env, 's-tabs', `${base}/tabs`)).ok).toBe(true);
+    const tabs = () => service.state('s-tabs').tabs;
+    await vi.waitFor(() => expect(tabs()[0]).toMatchObject({ loading: false, canGoBack: false }));
+    // A link that opens a new tab (rel="noopener", as most sites use) becomes
+    // this chat's tab and loads — a home-network one too, once the chat allowed it.
+    service.personInput('s-tabs', { type: 'click', x: 30, y: 25, clickCount: 1, button: 'left' });
+    await vi.waitFor(() => expect(tabs().map((t) => t.url)).toEqual([`${base}/tabs`, `${base}/results`]));
+    expect(tabs()[1].active).toBe(true);
+    // Switch back, follow a link: now Back has somewhere to go.
+    await service.personTab('s-tabs', 'select', 0);
+    service.personInput('s-tabs', { type: 'click', x: 30, y: 85, clickCount: 1, button: 'left' });
+    await vi.waitFor(() => expect(tabs()[0]).toMatchObject({ url: `${base}/person`, loading: false, canGoBack: true, canGoForward: false }));
+    await service.personNav('s-tabs', 'back');
+    await vi.waitFor(() => expect(tabs()[0]).toMatchObject({ url: `${base}/tabs`, canGoForward: true }));
+    // A new empty tab, then closing it.
+    await service.personTab('s-tabs', 'new');
+    expect(tabs()).toHaveLength(3);
+    expect(tabs()[2]).toMatchObject({ url: 'about:blank', active: true });
+    await service.personTab('s-tabs', 'close', 2);
+    await vi.waitFor(() => expect(tabs()).toHaveLength(2));
+    expect(service.takeNotes('s-tabs').join(' ')).toContain('The person closed tab 2');
   }, 60_000);
 
   live()('closing the shown window hides the browser and reopens its pages', async () => {

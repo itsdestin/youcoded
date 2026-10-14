@@ -7,7 +7,7 @@ import { resetBrowserStoreForTests } from '../../src/renderer/state/browser-stor
 export function browserState(over: Partial<BrowserSessionState> = {}): BrowserSessionState {
   return {
     sessionId: 's1', run: 'running', windowShown: false, myChrome: false, browserLabel: 'Google Chrome',
-    tabs: [{ index: 0, title: 'Catalog', url: 'https://library.example.org/catalog', active: true }],
+    tabs: [{ index: 0, title: 'Catalog', url: 'https://library.example.org/catalog', active: true, loading: false, canGoBack: true, canGoForward: true }],
     prompt: null, error: null, used: true, busy: false, downloadPercent: null, ...over,
   };
 }

@@ -18,7 +18,13 @@ export interface BrowserPrompt {
   allowAlways?: boolean;
 }
 
-interface BrowserTabInfo { index: number; title: string; url: string; active: boolean }
+interface BrowserTabInfo {
+  index: number; title: string; url: string; active: boolean;
+  /** The page is still loading (the panel's Reload becomes Stop). */
+  loading: boolean;
+  /** Whether Back / Forward have anywhere to go in this tab. */
+  canGoBack: boolean; canGoForward: boolean;
+}
 
 /** Everything a screen needs to draw one conversation's Browser panel and card. */
 export interface BrowserSessionState {
@@ -88,10 +94,12 @@ export interface BrowserInfo {
 
 export interface MyChromeCheck { ok: boolean; message: string }
 
-/** What the person typed in the panel's address box, or a back/forward/reload button. */
+/** What the person typed in the panel's address box, a back/forward/reload/stop
+ *  button, or a tab action from the panel's tab strip. */
 type BrowserOpenRequest =
   | { sessionId: string; address: string }
-  | { sessionId: string; nav: 'back' | 'forward' | 'reload' };
+  | { sessionId: string; nav: 'back' | 'forward' | 'reload' | 'stop' }
+  | { sessionId: string; tab: 'new' | 'select' | 'close'; index?: number };
 
 /** The person using the page through the panel's picture. Coordinates are page
  *  (CSS) pixels of the live picture's frame. */
