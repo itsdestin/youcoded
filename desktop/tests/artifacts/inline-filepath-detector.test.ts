@@ -144,4 +144,53 @@ describe('detectFilepaths', () => {
   it('prefers the extension match for a known name with an extension', () => {
     expect(detectFilepaths('see /repo/Dockerfile.dev now').map((m) => m.path)).toEqual(['/repo/Dockerfile.dev']);
   });
+
+  describe('paths with spaces', () => {
+    const paths = (text: string) => detectFilepaths(text).map((m) => m.path);
+
+    it('makes one chip of a path with spaces that is the whole line', () => {
+      const p = '/home/destin/Documents/White House Posts - Oct 13 2026.docx';
+      expect(paths(p)).toEqual([p]);
+      // On its own line under a lead-in, with the sentence's full stop after it.
+      const text = `I made the Word file:\n\n${p}.`;
+      const [m] = detectFilepaths(text);
+      expect(m.path).toBe(p);
+      expect(text.slice(m.start, m.end)).toBe(p);
+    });
+
+    it('covers home, Windows and relative starts', () => {
+      expect(paths('~/My Documents/budget 2026.xlsx')).toEqual(['~/My Documents/budget 2026.xlsx']);
+      expect(paths('C:\\Users\\Destin Moss\\Desktop\\Notes v2.md')).toEqual(['C:\\Users\\Destin Moss\\Desktop\\Notes v2.md']);
+      expect(paths('./out/Final Report.pdf')).toEqual(['./out/Final Report.pdf']);
+      // Filenames with parentheses and commas, as a download or a copy makes them.
+      expect(paths('/home/d/Downloads/Smith, John (2).docx')).toEqual(['/home/d/Downloads/Smith, John (2).docx']);
+    });
+
+    it('never chips a meaningless tail of a spaced path', () => {
+      // The old rule pilled "Posts/plan.md" here: the right file, or nothing.
+      expect(paths('/home/d/White House Posts/plan.md')).toEqual(['/home/d/White House Posts/plan.md']);
+    });
+
+    it('leaves a spaced path inside a sentence alone', () => {
+      // Where such a path starts is ambiguous mid-sentence, so nothing longer
+      // is invented.
+      expect(paths('see /home/d/White House Posts.docx today')).toEqual([]);
+    });
+
+    it('does not chip prose lines that merely start with a slash or a word/word', () => {
+      expect(paths('/review the parser in src/a b.ts')).toEqual([]);
+      expect(paths('Input/output is handled by main.ts')).toEqual([]);
+      expect(paths('/compact keep the notes about config.json')).toEqual([]);
+    });
+
+    it('still needs an extension shape', () => {
+      expect(paths('/home/d/My Folder/Some Words.It')).toEqual([]);
+      expect(paths('/home/d/My Folder/no extension here')).toEqual([]);
+    });
+
+    it('handles each line of a multi-line run on its own', () => {
+      const text = 'Files:\n/a/One File.md\n  /b/Two File.pdf\nand src/x.ts';
+      expect(paths(text)).toEqual(['/a/One File.md', '/b/Two File.pdf', 'src/x.ts']);
+    });
+  });
 });

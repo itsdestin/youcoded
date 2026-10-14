@@ -58,11 +58,13 @@ describe('pty-worker output batching', () => {
   });
 });
 
+// WHY 'linux' on every worker below: the nudge is never made on Windows (the last test says so), and
+// these tests defaulted to the machine's own platform — so on Windows CI all of them failed.
 describe('pty-worker repaint nudge (after output was cut from a backlog)', () => {
   afterEach(() => { vi.useRealTimers(); });
   it('shrinks the PTY by one column and puts the real size back', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     expect(w.fakePty.resize).toHaveBeenLastCalledWith(79, 24);
     vi.advanceTimersByTime(130);
@@ -72,7 +74,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     // WHY: main's headless copy of the terminal (session-screens.ts) lays text out at the size it is told; the nudge must not leave it at the
     // wrong width while the program redraws (the send gate reads that copy).
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.emitData('x'); vi.advanceTimersByTime(10);
     w.emitData('old-size-text');                              // held in the 4 ms batch when the request lands
     w.deliver({ type: 'bounce' });
@@ -83,7 +85,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('a real resize is reported too, and a superseded restore reports nothing', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 100, rows: 30 });
     vi.advanceTimersByTime(200);
@@ -92,7 +94,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('does not fight a real resize that lands in between', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 100, rows: 30 });
     vi.advanceTimersByTime(130);
@@ -101,7 +103,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('overlapping requests narrow only once and the restore goes back to the ORIGINAL size (never stuck one column narrow)', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     vi.advanceTimersByTime(50);
     w.deliver({ type: 'bounce' });                           // a second request inside the window: ignored
@@ -114,7 +116,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('a viewer on another device resizing between the two halves keeps its size (the nudge never overrides it)', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 50, rows: 20 });        // what a phone's session:resize becomes in the worker
     vi.advanceTimersByTime(200);
@@ -123,7 +125,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('even a real resize to the nudged width itself wins (flagged, not guessed from the size)', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.deliver({ type: 'resize', cols: 79, rows: 24 });
     vi.advanceTimersByTime(200);
@@ -131,7 +133,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('the child exiting inside the nudge window: no restore is attempted, nothing throws', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.fakePty.resize.mockImplementation(() => { throw new Error('ioctl(2) failed, EBADF'); });   // the fd is closed now
     w.exitPty();
@@ -140,7 +142,7 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('a first half that throws leaves the nudge usable afterwards (state is set only after it succeeds)', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.fakePty.resize.mockImplementationOnce(() => { throw new Error('EBADF'); });
     expect(() => w.deliver({ type: 'bounce' })).not.toThrow();
     w.deliver({ type: 'bounce' });                             // not blocked by a stale in-progress flag
@@ -149,18 +151,18 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
   });
   it('a failing restore is swallowed (no worker crash)', () => {
     vi.useFakeTimers();
-    const w = loadWorker();
+    const w = loadWorker(undefined, {}, 'linux');
     w.deliver({ type: 'bounce' });
     w.fakePty.resize.mockImplementation(() => { throw new Error('EBADF'); });
     expect(() => vi.advanceTimersByTime(200)).not.toThrow();
   });
   it('no nudge during a hand-off stop or after the PTY exited; and a plain resize after exit does not throw', () => {
     vi.useFakeTimers();
-    const h = loadWorker();
+    const h = loadWorker(undefined, {}, 'linux');
     h.deliver({ type: 'stop-for-handoff' });
     h.deliver({ type: 'bounce' });
     expect(h.fakePty.resize).not.toHaveBeenCalled();
-    const e = loadWorker();
+    const e = loadWorker(undefined, {}, 'linux');
     e.exitPty();
     e.deliver({ type: 'bounce' });
     e.fakePty.resize.mockImplementation(() => { throw new Error('EBADF'); });
@@ -290,13 +292,40 @@ while (i < lines) {
 }
 fs.writeSync(1, 'DONE-MARKER\\n');
 `;
+// The same lines in small pieces a few milliseconds apart, as a real program prints: the worker
+// reads the first pieces, the brake goes on, and the rest waits UNREAD in the kernel when it exits.
+const PRODUCER_IN_PIECES = `
+const fs = require('fs');
+const lines = Number(process.argv[1]);
+const nap = new Int32Array(new SharedArrayBuffer(4));
+for (let i = 0; i < lines; i += 10) {
+  let buf = '';
+  for (let k = i; k < Math.min(lines, i + 10); k++) buf += 'L' + k + ' ' + 'x'.repeat(40) + '\\n';
+  if (i + 10 >= lines) buf += 'DONE-MARKER\\n';   // the end goes out with the last piece, in one write
+  const b = Buffer.from(buf); let off = 0;
+  while (off < b.length) { try { off += fs.writeSync(1, b, off, b.length - off); } catch (e) { if (e.code !== 'EAGAIN') throw e; } }
+  Atomics.wait(nap, 0, 0, 10);   // longer than the worker's 4 ms batching, so each piece is its own read
+}
+`;
+// The two "program exits while the brake is on" cases: 150 lines (~6.8 KB) in 450-character pieces.
+// The brake goes on after the 14th piece (HIGH 6000), so ONE piece (~475 characters with the end
+// marker) is left unread when the program exits. WHY so small (measured on CI 2026-10-14): what the
+// operating system keeps of an exited program's unread output differs — Linux 6.17 (GitHub's) kept
+// only ~5 KB, discarding the rest inside the kernel before the worker could read it; the app cannot
+// recover that (macOS: below). A remainder the system
+// keeps tests what is the app's: that the worker reads it out before node-pty closes up.
+const EXIT_LINES = 150;
+// macOS discards a program's FINAL write when nobody is reading as it exits — any size (CI 2026-10-14:
+// first the last 13 characters, then a whole 475-character piece). Nothing the app does can bring that
+// back, so the two exit-while-braked cases run where the system keeps the remainder (Linux).
+const EXIT_DROPS_FINAL_WRITE = process.platform === 'darwin';
 const expected = (lines: number) => {
   let s = '';
   for (let i = 0; i < lines; i++) s += 'L' + i + ' ' + 'x'.repeat(40) + '\r\n';   // the tty turns \n into \r\n
   return s + 'DONE-MARKER\r\n';
 };
 
-function startReal(lines: number, env: Record<string, string>) {
+function startReal(lines: number, env: Record<string, string>, producer = PRODUCER) {
   const child: ChildProcess = fork(WORKER, [], { env: { ...process.env, ...env }, silent: true, execArgv: [] });
   const state = { out: '', sent: 0, acked: 0, maxOwed: 0, messages: 0, exited: false, exitAfterLastData: false, auto: true };
   child.on('message', (m: any) => {
@@ -306,7 +335,7 @@ function startReal(lines: number, env: Record<string, string>) {
       if (state.auto) setTimeout(() => { state.acked += m.data.length; child.connected && child.send({ type: 'ack', n: m.data.length }); }, 2);
     } else if (m.type === 'exit') { state.exited = true; }
   });
-  child.send({ type: 'spawn', command: process.execPath, args: ['-e', PRODUCER, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
+  child.send({ type: 'spawn', command: process.execPath, args: ['-e', producer, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
   const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve) => {
     const t0 = Date.now();
     const check = () => { if (pred()) return resolve(true); if (Date.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
@@ -314,6 +343,12 @@ function startReal(lines: number, env: Record<string, string>) {
   });
   return { child, state, until, ack: (n: number) => { state.acked += n; child.send({ type: 'ack', n }); } };
 }
+
+// What the program printed, as the terminal delivered it. WHY the macOS step: under a flood, macOS's
+// terminal driver now and then emits a line ending's return twice ("\r\r\n" — 113 extra characters
+// in 12 MB, at a few block edges, on macOS CI daily since 2026-10-08). That is the kernel's doing,
+// passed through untouched; a lost or duplicated LINE still fails every comparison below.
+const received = (r: { state: { out: string } }) => (process.platform === 'darwin' ? r.state.out.replace(/\r+\n/g, '\r\n') : r.state.out);
 
 describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   const kids: ChildProcess[] = [];
@@ -324,8 +359,8 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000' });
     kids.push(r.child);
     expect(await r.until(() => r.state.exited, 60000)).toBe(true);
-    expect(r.state.out.length).toBe(expected(lines).length);
-    expect(r.state.out).toBe(expected(lines));
+    expect(received(r).length).toBe(expected(lines).length);
+    expect(received(r)).toBe(expected(lines));
     // Never more than the high mark plus the reads already in flight when the brake went on.
     expect(r.state.maxOwed).toBeLessThan(200_000 + 700_000);
   }, 90000);
@@ -350,19 +385,26 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     r.state.auto = true;
     r.ack(frozenAt);
     expect(await r.until(() => r.state.exited, 60000)).toBe(true);
-    expect(r.state.out).toBe(expected(lines));
+    expect(received(r)).toBe(expected(lines));
   }, 90000);
 
-  it('a program that exits while the brake is on still delivers its last lines (no acknowledgements at all)', async () => {
-    // ~23 KB in all: more than HIGH (so the brake goes on) but small enough that whatever the worker has
-    // not read yet fits in the kernel's pty buffer, so the program can finish writing and EXIT while the
-    // worker is still paused. (A larger flood could not exit: it would be blocked in write(), which is the
-    // brake working. The first version used ~94 KB and hung under machine load: the unread part no longer fit.)
-    const lines = 500;
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
+  it.skipIf(EXIT_DROPS_FINAL_WRITE)('a program that exits while the brake is on still delivers its last lines (no acknowledgements at all)', async () => {
+    const lines = EXIT_LINES;
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' }, PRODUCER_IN_PIECES);
     kids.push(r.child);
     r.state.auto = false;
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
-    expect(r.state.out).toBe(expected(lines));
+    expect(received(r)).toBe(expected(lines));
+  }, 60000);
+
+  // The same, with the worker held up past node-pty's 200 ms socket-destroy timer just as the program
+  // exits — what a loaded CI machine did (the last 27 of 500 lines lost, 2026-10-14).
+  it.skipIf(EXIT_DROPS_FINAL_WRITE)('the last lines survive the worker being held up as the program exits', async () => {
+    const lines = EXIT_LINES;
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000', YOUCODED_PTY_TEST_EXIT_FREEZE_MS: '300' }, PRODUCER_IN_PIECES);
+    kids.push(r.child);
+    r.state.auto = false;
+    expect(await r.until(() => r.state.exited, 30000)).toBe(true);
+    expect(received(r)).toBe(expected(lines));
   }, 60000);
 });

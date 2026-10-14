@@ -378,6 +378,22 @@ describe('MarkdownContent file paths', () => {
     }
   });
 
+  it('makes a path with spaces clickable as Claude hands it over', () => {
+    // A Word file named with spaces, on its own line, in backticks, in bold and
+    // as a list item — every way a reply presents a finished file.
+    const p = '/home/destin/Documents/White House Posts - Oct 13 2026.docx';
+    for (const md of [
+      `I made the Word file:\n\n${p}`,
+      `I made the Word file: \`${p}\``,
+      `Saved as **${p}**`,
+      `Files:\n\n- ${p}`,
+    ]) {
+      const { container, unmount } = render(<MarkdownContent content={md} sessionId="s1" />);
+      expect(paths(container), md).toEqual(['White House Posts - Oct 13 2026.docx']);
+      unmount();
+    }
+  });
+
   it('leaves paths alone when there is no session to resolve them against', () => {
     const { container } = render(<MarkdownContent content={'open /home/destin/plan.md'} />);
     expect(paths(container)).toEqual([]);
@@ -878,11 +894,19 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
 
     // Review item 4: shapes that must stay correct (some fall back to the whole block).
     describe('other fence shapes', () => {
-      const code = lines(70, (i) => `  call(${i}); // line ${i}`);
+      // WHY 50 lines, not 70: past 40 lines (two frozen 20-line chunks plus a live tail) is
+      // all these shapes need to cross, but every word is drawn by the real highlighter and
+      // the cost grows with the square of the fence. Measured CPU (this file, alone, ~4 s of
+      // it start-up): 70 lines took 5.5-6 s for most shapes and ~14 s for the 4-backtick one
+      // (which falls back to redrawing the whole block each word AND carried the code twice),
+      // and a loaded full run pushed that one past the 30 s limit. `after` is the short
+      // text following the inner ``` line, then the real ```` closer and a closing word.
+      const code = lines(50, (i) => `  call(${i}); // line ${i}`);
+      const after = lines(8, (i) => `  after(${i}); // line ${i}`);
       for (const [name, md] of [
         ['an info string with attributes', `\`\`\`ts title="x.ts"\n${code}\n`],
         ['a ~~~ fence', `~~~ts\n${code}\n`],
-        ['a 4-backtick fence containing a ``` line', `\`\`\`\`ts\n${code}\n\`\`\`\n${code}\n`],
+        ['a 4-backtick fence containing a ``` line', `\`\`\`\`ts\n${code}\n\`\`\`\n${after}\n\`\`\`\`\n\nDone.\n`],
         ['no language', `\`\`\`\n${code}\n`],
         ['CRLF line endings', `\`\`\`ts\r\n${code.replace(/\n/g, '\r\n')}\r\n`],
       ] as [string, string][]) {

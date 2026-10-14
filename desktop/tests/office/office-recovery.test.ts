@@ -269,8 +269,16 @@ describe('the recovery journal', () => {
   it('skips a last line cut short by a crash, and refuses another document\'s id', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
-    await journalWritten(); // WHY: see journalWritten
-    const [name] = await fsp.readdir(journals());
+    // WHY wait for the c1 line itself, not settle() (flaked under heavy CPU load): the journal
+    // makes its folder first and appends c1 to changes.log a moment later. A fixed 30 ms pause can
+    // end in between, and then the cut-short line below lands BEFORE c1 — c1 is glued onto it, the
+    // whole line is unreadable, and no candidate is offered. Wait until c1 is really on disk.
+    const [name] = await vi.waitFor(async () => {
+      const names = await fsp.readdir(journals());
+      const log = await fsp.readFile(path.join(journals(), names[0], 'changes.log'), 'utf8');
+      if (!log.includes('"c1"')) throw new Error('c1 not journaled yet');
+      return names;
+    });
     await fsp.appendFile(path.join(journals(), name, 'changes.log'), '[null,["c2"');
     await sessions.close(a.s.token);
     const b = await editor0();

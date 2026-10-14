@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { log } from './logger';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
+import { browserRelayAttachment } from './assistant-browser/claude-code-browser-mcp';
 import { deployClaudeCodePagesMcp, personalPagesRoot } from './claude-code-pages-mcp';
 
 // Optional — which may not be installed; fall back to bare command name
@@ -342,6 +343,12 @@ export class SessionManager extends EventEmitter {
       } catch (err) {
         log('WARN', 'SessionManager', 'pages MCP deploy failed — this session starts without page-data tools', { error: String(err) });
       }
+      // The Browser (2026-10-13): the relay was deployed once at startup
+      // (claude-code-browser-mcp.ts, async — no file write here). All seven
+      // tools are pre-approved: the Browser asks the person with its own card,
+      // the same rules native sessions get. Null until startup finished.
+      const browserRelay = browserRelayAttachment();
+      if (browserRelay) { mcpConfigPaths.push(browserRelay.configPath); allowedToolNames.push(...browserRelay.allowedTools); }
       if (mcpConfigPaths.length) args.push('--mcp-config', ...mcpConfigPaths);
       if (allowedToolNames.length) args.push('--allowedTools', ...allowedToolNames);
       // The docx/xlsx pending-mutation queue's main-process half (T9b) is

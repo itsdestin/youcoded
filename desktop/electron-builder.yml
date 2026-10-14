@@ -135,6 +135,12 @@ asarUnpack:
   - node_modules/pdfjs-dist/legacy/**
   - node_modules/pdfjs-dist/standard_fonts/**
   - node_modules/pdfjs-dist/cmaps/**
+  # The Browser (2026-10-13): playwright-core's installer (cli.js, run as a
+  # child process to download a Chromium when none is installed) needs real
+  # files, and the Browser's worker (dist/main/assistant-browser/browser-host.js,
+  # an Electron utilityProcess) loads the library from here too. Unpacked
+  # whole: it reads its own lib files and browsers.json by path at runtime.
+  - node_modules/playwright-core/**
   - scripts/**/*
   # WHY: askpass.cjs (scripts/askpass/, unpacked by the entry above) calls
   # koffi (prctl/ptrace, admin-password design §2.1, review 2 E1) via a

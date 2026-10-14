@@ -4,6 +4,7 @@
 // WHY a separate file: App.tsx is the app's largest file and has a line budget.
 // One call there hands over the setters it already owns; every name lives here.
 // Like every useScreenOpen, each call is a no-op outside the photo-only build.
+import { openBrowserPane } from './state/browser-store';
 import type { Dispatch, SetStateAction } from 'react';
 import { useScreenOpen } from './shoot-mode';
 import { GUIDE_STOPS } from './components/guide/guide-stops';
@@ -86,6 +87,8 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('chat/files', () => { if (id) s.openSessionFiles(id); });
   // The panel is a toggle: only press it when it is closed.
   useScreenOpen('chat/games', () => { if (!s.gamePanelOpen) s.toggleGamePanel(); });
+  // The Browser panel's open flag lives in its own store (state/browser-store.ts).
+  useScreenOpen('chat/browser', () => { if (id) openBrowserPane(id); });
   useScreenOpen('projects', s.openProjects);
   useScreenOpen('pages', s.openPagesView);
   useScreenOpen('pages/library', s.openPagesLibrary);

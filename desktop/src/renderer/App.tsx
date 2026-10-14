@@ -30,6 +30,8 @@ import { runLeaseTakeoverGate } from './state/resume-lease-gate';
 import { createDrawerFilterStore } from './state/drawer-filter-store';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
+import BrowserPanel from './components/browser/BrowserPanel';
+import { useBrowserRightPane } from './hooks/use-browser-right-pane';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
@@ -927,6 +929,9 @@ function AppInner() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDrawerOpen]);
+  // The Browser panel (2026-10-13): the right slot's third occupant, same exclusivity.
+  const browserPaneOpen = useBrowserRightPane(sessionId, activeDrawerOpen, gameState.panelOpen,
+    () => sessionId && dispatchArtifact({ type: 'DRAWER_CLOSED', sessionId }), () => gameDispatch({ type: 'TOGGLE_PANEL' }));
   // Gate on isLeader so only the first-launched window opens the lobby
   // socket — avoids duplicate presence for the same GitHub identity when
   // multiple peer windows are open. When detach isn't available (remote
@@ -3440,6 +3445,13 @@ function AppInner() {
       <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
   ) : null;
+  // Browser panel when open, else the games pane — one element, placed by ChatView or TerminalRightSlot.
+  const sidePaneOpen = browserPaneOpen || gameState.panelOpen;
+  const activeSidePane = browserPaneOpen && sessionId ? (
+    <ErrorBoundary name="Browser">
+      <BrowserPanel sessionId={sessionId} />
+    </ErrorBoundary>
+  ) : activeGamePane;
 
   return (
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
@@ -3481,7 +3493,7 @@ function AppInner() {
         // never moves the document drawer. Referencing the vars here (instead of
         // a px literal) means mid-drag App re-renders rewrite the SAME string and
         // can't snap the width back while the user is dragging.
-        style={{ ['--right-pane-width' as any]: gameState.panelOpen ? 'var(--game-pane-width, 420px)' : 'var(--drawer-width, 480px)' }}
+        style={{ ['--right-pane-width' as any]: gameState.panelOpen && !browserPaneOpen ? 'var(--game-pane-width, 420px)' : 'var(--drawer-width, 480px)' }}
       >
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
@@ -3503,8 +3515,8 @@ function AppInner() {
                 clip-path: polygon() has only ONE backdrop-filter sampling the
                 wallpaper directly, so the whole chrome reads as one
                 continuous tone. */}
-            <div className={`chrome-glass${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-glass--drawer-open' : ''}`} />
-            <div aria-hidden className={`chrome-outline${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-outline--drawer-open' : ''}`} />
+            <div className={`chrome-glass${(activeDrawerOpen || sidePaneOpen) ? ' chrome-glass--drawer-open' : ''}`} />
+            <div aria-hidden className={`chrome-outline${(activeDrawerOpen || sidePaneOpen) ? ' chrome-outline--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
                 sessions={stripSessions}
@@ -3557,7 +3569,7 @@ function AppInner() {
                   {pendingTab && pendingTab.tabId === s.id ? (
                     <ErrorBoundary name="Chat"><PendingHandoffView tab={pendingTab} visible={s.id === sessionId}
                       drawerOpen={s.id === sessionId && activeDrawerOpen} expanded={artifactState.drawerExpanded}
-                      gamePane={s.id === sessionId ? activeGamePane : null}
+                      gamePane={s.id === sessionId ? activeSidePane : null}
                       onRetry={() => { void pendingRef.current?.retry(s.id); }}
                       onContinue={() => { void pendingRef.current?.continueWithSavedCopy(s.id,
                         (device) => askTakeover(device, 'force'),
@@ -3581,7 +3593,7 @@ function AppInner() {
                       // get null) so there's a single GamePanel instance.
                       // ChatView only actually mounts it in chat view; in
                       // terminal view TerminalRightSlot (below) places it.
-                      gamePane={s.id === sessionId ? activeGamePane : null}
+                      gamePane={s.id === sessionId ? activeSidePane : null}
                       onOpenProviderSettings={chatViewHandlers.openProviderSettings}
                       onSwitchProviders={chatViewHandlers.switchProviders}
                       onUpgradePlan={chatViewHandlers.upgradePlan}
@@ -3613,11 +3625,11 @@ function AppInner() {
                  exactly one instance mounts. Electron-only for now (Android's
                  terminal overlay sizing is native — separate follow-up). */}
               {getPlatform() === 'electron' && currentViewMode === 'terminal' && sessionId
-                && (activeDrawerOpen || gameState.panelOpen) && (
+                && (activeDrawerOpen || sidePaneOpen) && (
                 <TerminalRightSlot
                   sessionId={sessionId}
                   cwd={currentSession?.cwd}
-                  gamePane={gameState.panelOpen ? activeGamePane : null}
+                  gamePane={sidePaneOpen ? activeSidePane : null}
                   drawerOpen={activeDrawerOpen}
                   expanded={artifactState.drawerExpanded}
                 />

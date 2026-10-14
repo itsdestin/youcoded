@@ -17,9 +17,12 @@ export type MenuIconName =
   | 'open'
   | 'link'
   | 'folder'
-  | 'path';
+  | 'path'
+  // The Browser panel's "Stop for this chat" (2026-10-13).
+  | 'stop';
 
 const PATHS: Record<MenuIconName, React.ReactNode> = {
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   // WHY: renaming needs its own pencil, not the unrelated move-window icon.
   rename: <path d="m16 3 5 5-12 12-6 1 1-6L16 3Zm-2 2 5 5M4 15l5 5" />,
   copy: (

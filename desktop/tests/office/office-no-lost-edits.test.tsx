@@ -12,7 +12,7 @@ import { PageHost } from '../../src/renderer/components/pages/PageHost';
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
 import { EditorFrame, type EditorFrameHandle } from '../../src/renderer/components/office/EditorFrame';
 import { useUnsavedGuard } from '../../src/renderer/components/artifact-views/UnsavedChangesDialog';
-import { markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor } from '../../src/renderer/components/office/office-store';
+import { markCopied, markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor } from '../../src/renderer/components/office/office-store';
 import { resetOfficeAvailabilityForTests } from '../../src/renderer/components/office/office-availability';
 import { OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
 import type { OfficeBridge, OfficeFile, OfficeStatus } from '../../src/shared/office-types';
@@ -802,5 +802,19 @@ describe('two editors on one document when a restore lands', () => {
     // Still the old document until it goes away: anything it sends is answered here.
     for (const cmd of ['set_document_modified', 'write_editor_bin', 'save_file', 'js_log']) from({ yc: 'rpc', id: cmd, cmd, args: { modified: true, data: 'T0xE' } });
     expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('the "Saved a copy" note', () => {
+  it('stays its full time after a second copy to the same folder', () => {
+    vi.useFakeTimers();
+    markCopied(FILE.path, 'Documents');
+    vi.advanceTimersByTime(5_000);
+    markCopied(FILE.path, 'Documents');
+    // The first copy's time is up; the second note still has three seconds to go.
+    vi.advanceTimersByTime(4_000);
+    expect(saveStateFor(FILE.path).copiedTo).toBe('Documents');
+    vi.advanceTimersByTime(5_000);
+    expect(saveStateFor(FILE.path).copiedTo).toBeUndefined();
   });
 });

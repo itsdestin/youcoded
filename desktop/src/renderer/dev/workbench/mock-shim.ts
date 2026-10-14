@@ -102,6 +102,11 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
  *  (tests/mock-shim-window.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
+  // The Browser (2026-10-13): every member is hand-written (browser-mock.ts).
+  'browser.state', 'browser.info', 'browser.watch', 'browser.unwatch', 'browser.ackFrame', 'browser.answer',
+  'browser.openWindowForHandoff', 'browser.setShowWindow', 'browser.updateSettings', 'browser.removeSite',
+  'browser.clearSignins', 'browser.stop', 'browser.closeSession', 'browser.download', 'browser.cancelDownload',
+  'browser.checkMyChrome', 'browser.onState', 'browser.onFrame', 'browser.onInfoChanged',
   'devLabel', 'capabilities', 'protocolVersion', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
   'getIncognito', 'setIncognito', 'fireRemoteAttentionChanged',
   'off', 'removeAllListeners',
@@ -511,9 +516,13 @@ const NAMESPACES = [
   // here so the workbench shows every seeded comment state (open/replied/
   // resolved/Word/Excel) without a main process.
   'docComments',
+  // The Browser (2026-10-13) — real on desktop (browser:* in main); fixture
+  // scenes behind ?browser= (browser-mock.ts).
+  'browser',
 ];
 
 import { createNamingPreview } from './naming-preview';
+import { createBrowserMock } from './browser-mock';
 import { seedPages } from './fixtures/pages';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
@@ -3888,6 +3897,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     pages: createPagesMock(activeScenario === 'empty'),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
+    browser: createBrowserMock(() => store.getState().sessions.map((x: any) => x.id)),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

@@ -70,7 +70,8 @@ describe('RotatingJsonlWriter', () => {
     expect(Math.max(...sizes)).toBeLessThanOrEqual(5 * 1024 * 1024);
   });
 
-  it('writes a private file in a private folder', async () => {
+  // POSIX permission bits only: Windows reports its own bits for every file (it failed there daily).
+  it.skipIf(process.platform === 'win32')('writes a private file in a private folder', async () => {
     const w = new RotatingJsonlWriter({ dir: join(dir, 'perf') });
     w.append({ a: 1 }); await w.flush();
     expect(statSync(join(dir, 'perf')).mode & 0o077).toBe(0);

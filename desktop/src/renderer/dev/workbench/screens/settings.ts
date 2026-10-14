@@ -94,6 +94,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // Folds opened (the shared fold opens inside its box — submit-ticket-2#ST2-Q1).
   { ...settings('settings/performance#fold-open', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU'] },
   { ...settings('settings/performance#fold-open-hover', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU', { do: 'hover', target: { role: 'button', label: 'Why YouCoded uses the discrete GPU' } }], sameAs: { name: 'settings/performance#fold-open', why: 'only the pointer highlight differs, a faint tint the look-alike check may not count' } },
+  // The Browser (2026-10-13): the row shows on the computer's own window; scenes from ?browser=.
+  { ...settings('settings/browser', 'dialog', 'browser'), params: { browser: 'working' } },
+  { ...settings('settings/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
+  { ...settings('settings/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },

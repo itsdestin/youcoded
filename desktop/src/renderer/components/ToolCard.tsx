@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { browserToolOf } from '../../shared/browser-types';
+import { browserToolDisplay } from './browser/browser-tool-display';
 import { ToolCallState, type FloorStop } from '../../shared/types';
 import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { answerPermission } from '../state/phone-actions';
@@ -168,6 +170,11 @@ export function friendlyToolDisplay(
   // "Running a command" while it works, "Ran a command" only once it ends.
   const active = tool.status === 'running' || tool.status === 'awaiting-approval'
     || tool.ccBackground?.status === 'running';
+
+  // The Browser (2026-10-13): one wording for both session kinds — a native
+  // call is "BrowserAct", a Claude Code one "mcp__youcoded-browser-<id>__BrowserAct".
+  const browserTool = browserToolOf(toolName);
+  if (browserTool) return browserToolDisplay(browserTool, input, active);
 
   switch (toolName) {
     case 'Bash': {

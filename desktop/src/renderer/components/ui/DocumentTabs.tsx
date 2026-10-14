@@ -33,9 +33,16 @@ export interface DocumentTabsProps {
   /** Accessible name of the strip. */
   label: string;
   className?: string;
+  /** Tabs narrow to share a crowded strip, like Chrome's, instead of scrolling
+   *  out of sight (the Browser panel puts them in its top row beside buttons). */
+  shrink?: boolean;
+  /** Each tab drawn as its own outlined button (the Browser, Destin 2026-10-14:
+   *  "tabs should more clearly be buttons"). There the current tab's plain inset
+   *  fill matched the panel behind it, so no tab looked pressable. */
+  boxed?: boolean;
 }
 
-export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, className = '' }: DocumentTabsProps) {
+export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, className = '', shrink = false, boxed = false }: DocumentTabsProps) {
   return (
     <div role="tablist" aria-label={label} className={`flex items-center gap-1 min-w-0 overflow-x-auto select-none ${className}`}>
       {tabs.map((t) => {
@@ -44,8 +51,10 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
         const tab = (
           <div
             key={t.id}
-            className={`group shrink-0 flex items-center h-8 max-w-56 rounded-md transition-colors ${
-              current ? 'bg-inset text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg active:bg-edge'
+            className={`group ${shrink ? 'shrink basis-56 min-w-20' : 'shrink-0'} flex items-center h-8 max-w-56 rounded-md transition-colors ${
+              boxed
+                ? `border ${current ? 'bg-well border-fg-muted text-fg font-medium shadow-sm' : 'border-edge-dim text-fg-2 hover:bg-panel hover:border-edge hover:text-fg active:bg-edge'}`
+                : current ? 'bg-inset text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg active:bg-edge'
             }`}
           >
             <button
@@ -54,7 +63,7 @@ export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, classNa
               aria-selected={current}
               data-document-tab={t.id}
               onClick={() => onSelect(t.id)}
-              className={`flex items-center gap-2 min-w-0 h-full text-sm ${closable ? 'pl-2.5 pr-1' : 'px-2.5'} rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+              className={`flex items-center gap-2 min-w-0 ${shrink ? 'flex-1' : ''} h-full text-sm ${closable ? 'pl-2.5 pr-1' : 'px-2.5'} rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
             >
               {t.icon && <span className={`shrink-0 ${t.asleep ? 'text-fg-muted' : ''}`}>{t.icon}</span>}
               <span className={`truncate ${t.asleep ? 'text-fg-muted' : ''}`}>{t.label}</span>

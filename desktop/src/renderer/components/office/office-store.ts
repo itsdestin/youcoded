@@ -396,10 +396,17 @@ export function markChanged(path: string): void {
   setSave(path, { phase: 'unsaved', savedAt: saves[path]?.savedAt });
 }
 /** "Save a copy…" landed: the changes are in the copy, and the file itself is left as it was. */
+let copiedSeqNext = 0;
+const copiedSeq: Record<string, number> = {};
 export function markCopied(path: string, folder: string): void {
+  // WHY a number per note (like markNote): a second copy to the same folder within the
+  // few seconds had the same text, so the FIRST copy's timer cleared the second note at
+  // once. (Found as a test that failed only in full runs: an earlier test's timer landed
+  // in the next one.) The counter is never reset, so no old timer can match a new note.
+  const seq = (copiedSeq[path] = ++copiedSeqNext);
   setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt, copiedTo: folder });
   // "Briefly" (fix round 2): the note goes after a few seconds, or with the next save state.
-  setTimeout(() => { if (saves[path]?.copiedTo === folder && saves[path]?.phase === 'saved') setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt }); }, COPIED_NOTE_MS);
+  setTimeout(() => { if (copiedSeq[path] === seq && saves[path]?.copiedTo === folder && saves[path]?.phase === 'saved') setSave(path, { phase: 'saved', savedAt: saves[path]?.savedAt }); }, COPIED_NOTE_MS);
 }
 const COPIED_NOTE_MS = 8_000;
 /** Save As wrote (or could not write) a separate file: say so briefly, keeping the document's own
