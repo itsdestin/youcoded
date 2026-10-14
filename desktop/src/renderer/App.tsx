@@ -23,7 +23,7 @@ import { ScreenMark } from './shoot-mode';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, CARD_LEVEL_1, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, CARD_LEVEL_1, Dialog, ErrorState, OneJobCard, OneJobText, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy, HANDOFF_EXPLANATION } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
@@ -4359,48 +4359,34 @@ function AppInner() {
         );
         return (
           <>
+            {/* WHY titled, with the ✕ (final-fixes#Q-TO, Destin approved "Take over this conversation?"
+                / "That device can't be reached": it was the one popup with no title and no ✕) and the
+                shared one-job layout (popup-cards-2/-3): the longer phases are one card holding the
+                words and the stacked buttons, main on top; the one-sentence asks stay plain words
+                above the same buttons (the guide's short-confirmation exception). Wording unchanged. */}
             <Dialog
               screen={`chat/takeover/${takeoverPrompt.phase}`}
               open
               onClose={() => resolveTakeover(false)}
               size="panel"
-              aria-label="Take over conversation"
-              scrollBody={false}
-              className="p-5"
+              title={takeoverPrompt.phase === 'undeliverable' ? 'That device can’t be reached' : 'Take over this conversation?'}
             >
-              {takeoverPrompt.phase === 'confirm' || takeoverPrompt.phase === 'claim-denied' ? (
-                <p className="text-sm text-fg mb-4">
-                  {copy.lead}
-                  {infoTip}
-                </p>
-              ) : (
-                // WHY a card when the question comes with its consequence (final-review#PR-7, the
-                // one popup rule): only a one- or two-sentence question stays plain text.
-                <div className={`${CARD_LEVEL_1} p-3 mb-4 space-y-2`}>
-                  <p className="text-sm text-fg">
-                    {boldDevice(copy.lead)}
-                    {infoTip}
-                  </p>
-                  <p className="text-xs text-fg-2">{copy.consequence}</p>
-                </div>
-              )}
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  onClick={() => resolveTakeover(false)}
-                >
-                  {takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="lg"
-                  className="px-3 py-1.5"
-                  onClick={() => resolveTakeover(true)}
-                >
-                  {takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}
-                </Button>
-              </div>
+              {(() => {
+                const actions = <>
+                  <Button onClick={() => resolveTakeover(true)}>{takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+                  <Button variant="secondary" onClick={() => resolveTakeover(false)}>{takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
+                </>;
+                return copy.consequence ? (
+                  <OneJobCard actions={actions}>
+                    <OneJobText><p>{boldDevice(copy.lead)}{infoTip}</p><p>{copy.consequence}</p></OneJobText>
+                  </OneJobCard>
+                ) : (
+                  <div className="space-y-3">
+                    <OneJobText><p>{copy.lead}{infoTip}</p></OneJobText>
+                    <div className="flex flex-col gap-2 [&>*]:w-full" data-parts-agree="one-job buttons">{actions}</div>
+                  </div>
+                );
+              })()}
             </Dialog>
           </>
         );
