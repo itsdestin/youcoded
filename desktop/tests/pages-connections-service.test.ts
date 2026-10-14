@@ -257,4 +257,21 @@ describe('a page that may open a new conversation', () => {
     expect(page.codeChanged).toBe(true);
     expect(page.refresh).toEqual({ at: null, failed: false });
   });
+
+  // Review F7: dismissing "code changed" on a mixed page restamps the address
+  // line only; a session line that gained a hash would show the note again
+  // after the next weekly rebuild once the address line is gone.
+  it('leaves the session line without a code hash when the note is dismissed', async () => {
+    await writePage('mixed', [SESSION, PUBLIC]);
+    await service.approve('personal:mixed', {}, { remote: false });
+    await rewrite('mixed', 'rewritten');
+    expect((await service.listAndWatch())[0].codeChanged).toBe(true);
+    expect((await service.approve('personal:mixed', {}, { remote: false })).ok).toBe(true);
+    const saved = JSON.parse(readFileSync(path.join(userData, CONNECTIONS_FILE), 'utf8'));
+    const records = Object.values(saved.pages as Record<string, Record<string, { htmlHash?: string }>>)[0];
+    expect(records.feed.htmlHash).toEqual(expect.any(String));
+    // '' is how a session line records "no code hash" (pages-service approve).
+    expect(records['start-session'].htmlHash).toBe('');
+  });
 });
+

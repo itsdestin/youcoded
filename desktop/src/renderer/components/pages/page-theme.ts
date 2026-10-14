@@ -15,7 +15,7 @@
 // plus the radius and font scale, i.e. what the style kit is written against.
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
-import { MAX_PAGE_SESSION_PROMPT } from '../../../shared/pages-types';
+import { MAX_PAGE_SESSION_PROMPT, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
@@ -158,6 +158,8 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   var SESSION = ${JSON.stringify(PAGE_SESSION_START_MESSAGE)};
   var SESSION_RESULT = ${JSON.stringify(PAGE_SESSION_START_RESULT_MESSAGE)};
   var MAX_PROMPT = ${MAX_PAGE_SESSION_PROMPT};
+  var HIDDEN = new RegExp(${JSON.stringify(PAGE_SESSION_HIDDEN_CHARS.source)}, 'u');
+  var REFUSED = ${JSON.stringify(PAGE_SESSION_REFUSED)};
   var videos = {};
   var videoSeq = 0;
   var sockets = {};
@@ -265,18 +267,28 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   // Frontier Lab's copy box — on an app or a manifest without it. Always
   // resolves { ok }; an empty or runaway message never reaches the host. The
   // host checks all of this again, because page code can post on its own.
+  // A refusal carries a plain reason for the page's author (review F1/F2).
   if (${canStartSession ? 'true' : 'false'}) {
     window.youcoded.startSession = function (opts) {
       return new Promise(function (resolve) {
         var o = opts || {};
         var prompt = o.prompt;
-        if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PROMPT) { resolve({ ok: false }); return; }
+        var no = function (reason) { resolve({ ok: false, reason: reason }); };
+        // WHY a real click (review F2, Destin chose no rate limits): only a
+        // press inside the page may open the window, so a page cannot open it
+        // on a timer or reopen it straight after Cancel — the same "you press
+        // it yourself" the Start button already asks for. The browser sets
+        // this; page code cannot fake it. An engine without it counts as no click.
+        var ua = window.navigator && window.navigator.userActivation;
+        if (!ua || !ua.isActive) { no(REFUSED.noClick); return; }
+        if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PROMPT) { no(REFUSED.badMessage); return; }
+        if (HIDDEN.test(prompt)) { no(REFUSED.hidden); return; }
         var id = 'n' + (++seq);
         waiting[id] = { resolve: resolve, reject: resolve, session: true };
         var msg = { type: SESSION, id: id, prompt: prompt };
         if (typeof o.project === 'string' && o.project) msg.project = o.project;
         try { parent.postMessage(msg, '*'); }
-        catch (e) { delete waiting[id]; resolve({ ok: false }); }
+        catch (e) { delete waiting[id]; no(REFUSED.closed); }
       });
     };
   }
@@ -329,7 +341,8 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       var sp = waiting[d.id];
       if (!sp || !sp.session) return;
       delete waiting[d.id];
-      sp.resolve({ ok: !!(d.result && d.result.ok === true) });
+      var ok = !!(d.result && d.result.ok === true);
+      sp.resolve(ok ? { ok: true } : { ok: false, reason: d.result && typeof d.result.reason === 'string' ? d.result.reason : REFUSED.closed });
       return;
     }
     if (d.type === PLAID_RESULT) {

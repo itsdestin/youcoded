@@ -8,7 +8,7 @@
 // The form creates the session itself and hands the SessionInfo back; App
 // adopts it (adoptCreatedSession) and leaves the page view, so the new
 // conversation is what the person sees next.
-import React from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Dialog } from '../ui/Dialog';
 import { BuddyNewSessionForm } from '../buddy/BuddyNewSessionForm';
 
@@ -38,8 +38,26 @@ export interface PageStartSessionRequest {
 /** The window for a page's start-session request: the same form as Create a
  *  page, titled for a conversation and naming the page that asked (Q-1). The
  *  person still picks project, model and the permission toggle (Q-4). */
-export function startSessionRequest({ prompt, cwd, pageName }: PageStartSessionRequest): PageCreateRequest {
+function startSessionRequest({ prompt, cwd, pageName }: PageStartSessionRequest): PageCreateRequest {
   return { title: 'Start a conversation', subtitle: `From ${pageName}`, initialInput: prompt, cwd };
+}
+
+/** App's state for this window, plus the one way a page may open it.
+ *  WHY (review F2): a page's request while the window is open is turned down
+ *  (`false`), never swapped in — swapping changed the message while the person
+ *  was choosing, and the form's remount put back the folder, model and
+ *  permission toggle they had just changed. The ref, not the state, is read so
+ *  two requests in one tick (before React renders) still see the window open. */
+export function usePageCreate() {
+  const [request, setRequest] = useState<PageCreateRequest | null>(null);
+  const openRef = useRef(false);
+  const set = useCallback((r: PageCreateRequest | null) => { openRef.current = r !== null; setRequest(r); }, []);
+  const offerFromPage = useCallback((r: PageStartSessionRequest): boolean => {
+    if (openRef.current) return false;
+    set(startSessionRequest(r));
+    return true;
+  }, [set]);
+  return [request, set, offerFromPage] as const;
 }
 
 export function PageCreateDialog({ request, onCreated, onCancel, onManageProjects }: {

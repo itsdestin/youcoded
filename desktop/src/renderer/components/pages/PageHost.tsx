@@ -46,7 +46,7 @@ import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode'
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
-import { MAX_PAGE_DATA_BYTES, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
@@ -93,7 +93,10 @@ function isStringMap(v: unknown): v is Record<string, string> {
 async function startFolderFor(home: PageHome, project: unknown): Promise<string | undefined> {
   if (home.kind === 'project') return home.path;
   if (typeof project !== 'string' || !project.trim()) return undefined;
-  const trimSlash = (p: string) => p.replace(/[\\/]+$/, '');
+  // WHY loose (review F6): Windows writes C:\Users\… and a page may write
+  // c:/users/…. Matching loosely is safe — the answer is always the person's
+  // OWN saved entry, exactly as they saved it, never the page's spelling.
+  const trimSlash = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   try {
     const list = await (window as unknown as { claude?: { folders?: { list?: () => Promise<unknown> } } }).claude?.folders?.list?.();
     if (!Array.isArray(list)) return undefined;
@@ -118,8 +121,9 @@ interface PageHostProps {
   /** The focused conversation's folder, for Office's "In <project>" list and new files. */
   projectRoot?: string | null;
   /** A page's `youcoded.startSession` (spec 2026-10-14): App opens the
-   *  new-session window with the message waiting. Absent = refused. */
-  onStartSession?: (req: PageStartSessionRequest) => void;
+   *  new-session window with the message waiting, and returns false when that
+   *  window is already open (review F2). Absent = refused. */
+  onStartSession?: (req: PageStartSessionRequest) => boolean;
 }
 
 type Load =
@@ -304,19 +308,36 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         if (typeof d.id !== 'string') return;
         const id = d.id;
         const source = e.source as Window;
-        const answer = (ok: boolean) => {
-          try { source.postMessage({ type: PAGE_SESSION_START_RESULT_MESSAGE, id, result: { ok } }, '*'); } catch { /* the frame went away */ }
+        const answer = (ok: boolean, reason?: string) => {
+          try { source.postMessage({ type: PAGE_SESSION_START_RESULT_MESSAGE, id, result: ok ? { ok } : { ok, reason } }, '*'); } catch { /* the frame went away */ }
         };
+        const approvedOn = (p: PageDocument | null) => !!p?.connections?.some((c) => c.kind === 'session' && c.approved);
         const page = loadedPageRef.current;
         const start = onStartSessionRef.current;
         const prompt = (d as { prompt?: unknown }).prompt;
-        const allowed = !!page?.connections?.some((c) => c.kind === 'session' && c.approved);
-        if (!page || !start || !allowed || typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PAGE_SESSION_PROMPT) { answer(false); return; }
+        if (!page || !start || !approvedOn(page)) { answer(false, PAGE_SESSION_REFUSED.notAllowed); return; }
+        // WHY a fresh click inside THIS page (review F2; Destin chose no rate
+        // limits): page code can post this itself, past the bootstrap's own
+        // check. The frame's origin is opaque, so its activation cannot be read
+        // here — but a click in a frame also activates this window, and leaves
+        // the frame focused. Both together mean "the person just pressed
+        // something in the page": a timer has no activation, and a reopen right
+        // after Cancel has the activation of the Cancel click but the focus is
+        // no longer in the page (the dialog does not hand it back). Checked now,
+        // before the folder read, because activation lasts only seconds.
+        const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+        if (!ua?.isActive || document.activeElement !== frameRef.current) { answer(false, PAGE_SESSION_REFUSED.noClick); return; }
+        if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PAGE_SESSION_PROMPT) { answer(false, PAGE_SESSION_REFUSED.badMessage); return; }
+        // Review F1: hidden characters would reach the model unseen.
+        if (PAGE_SESSION_HIDDEN_CHARS.test(prompt)) { answer(false, PAGE_SESSION_REFUSED.hidden); return; }
         void startFolderFor(page.home, (d as { project?: unknown }).project).then((cwd) => {
-          // The page may have been closed or swapped while the folder list was read.
-          if (loadedPageRef.current?.id !== page.id) { answer(false); return; }
-          onStartSessionRef.current?.({ prompt, cwd, pageName: page.name });
-          answer(true);
+          // The page may have been closed or swapped while the folder list was
+          // read, or its session line removed then (review F3) — ask again.
+          const now = loadedPageRef.current;
+          if (now?.id !== page.id || !approvedOn(now)) { answer(false, PAGE_SESSION_REFUSED.closed); return; }
+          // App turns it down while the window is already open (review F2).
+          const opened = onStartSessionRef.current?.({ prompt, cwd, pageName: page.name }) === true;
+          answer(opened, opened ? undefined : PAGE_SESSION_REFUSED.alreadyOpen);
         });
         return;
       }
