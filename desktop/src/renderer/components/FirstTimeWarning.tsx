@@ -14,7 +14,7 @@
 // site routes the ACTION through the gate rather than the state change.
 
 import React, { useCallback, useRef, useState, type ReactNode } from 'react';
-import { Button, CARD_LEVEL_1, ConsentRow, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, ConsentRow, Dialog, Tooltip } from './ui';
 import { memoWhileClosed } from './memo-while-closed';
 import {
   hasAcknowledged,
@@ -50,7 +50,7 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
     // truncated title a bug. 420px fits every title and keeps the three
     // paragraphs at a comfortable measure.
     <Dialog open={open} onClose={() => close(onCancel)} title={copy.title} size="panel" screen={`chat/first-time-warning/${kind}`}>
-      {/* WHY one card holding the explanation, the tick box and the hint (final-review#PR-7,
+      {/* WHY one card holding the explanation, the tick box and the buttons (final-review#PR-7,
           #ST-12, #ST-21 — one popup rule): a popup's body sits in a card, as About's does, and its
           tick box is the shared "I understand" box (ConsentRow), the same one Skip permissions
           and Remove project use. It was a bare 12px square beside a sentence on the popup.
@@ -74,21 +74,22 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
             {copy.checkbox}
           </ConsentRow>
         )}
-        {/* Continue is disabled, not hidden, until the box is ticked so the person can see what
-            the checkbox unlocks — and one muted line at the card's foot says so (UX tester run 1,
-            U26: a greyed button with no hint; guide: the reason the main button is grey). */}
-        {needsConsent && !checked && (
-          <p className="text-2xs text-fg-muted">Tick the box to continue</p>
-        )}
-      </div>
-      {/* Footer: a decision to confirm, so Cancel + one primary (design guide G-4, §4.3). */}
-      <div className="flex gap-2 justify-end">
-        <Button variant="secondary" onClick={() => close(onCancel)}>
-          Cancel
-        </Button>
-        <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
-          {copy.continueLabel}
-        </Button>
+        {/* WHY a hover hint on the grey Continue instead of a line at the card's foot
+            (final-fixes#ST-12, Destin: "remove "tick the box to continue" and replace with a hover
+            tooltip over the action button that would be disabled"). Continue stays disabled, not
+            hidden, so the person sees what the tick unlocks; the shared Tooltip reaches a disabled
+            button and opens on press-and-hold on a touchscreen. Empty text = no hint once ticked.
+            The buttons sit inside the one card (popup-cards-1#PC-1). */}
+        <div className="flex gap-2 justify-end pt-1">
+          <Button variant="secondary" onClick={() => close(onCancel)}>
+            Cancel
+          </Button>
+          <Tooltip text={canContinue ? '' : 'Tick the box to continue'}>
+            <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
+              {copy.continueLabel}
+            </Button>
+          </Tooltip>
+        </div>
       </div>
     </Dialog>
   );

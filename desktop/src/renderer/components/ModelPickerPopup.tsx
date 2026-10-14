@@ -595,9 +595,10 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
               <div className="text-xs text-fg-muted">
                 You get the same model with faster streaming output. Turn off anytime from the status bar or this menu.
               </div>
-            </div>
 
-              <div className="flex justify-end gap-2">
+              {/* WHY inside the card (popup-cards-1#PC-1): a one-job popup is one card holding
+                  everything, its buttons included. */}
+              <div className="flex justify-end gap-2 pt-1">
                 {/* Spec change 60: the filled-grey family (bg-inset/hover:bg-well)
                     collapses into the outline `secondary` — it's a genuine peer of
                     the confirm beside it, which ghost would under-weight. */}
@@ -622,6 +623,7 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
                   Enable & accept charges
                 </button>
               </div>
+            </div>
           </Dialog>
         </>
       )}

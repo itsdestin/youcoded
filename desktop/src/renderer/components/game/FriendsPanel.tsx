@@ -299,7 +299,7 @@ const BLOCK_WARNING = 'Blocking removes this friend, cancels pending requests, a
 
 /** The `details` variant: a small popup about one friend — the shared popup titled by kind, the
  *  friend's own card first with no label above it (Session details; the Marketplace detail
- *  pages' "top card"), then Unfriend / Block as outlined and red buttons. */
+ *  pages' "top card") holding Unfriend / Block as outlined and red buttons. */
 function FriendDetails({ row, pending, known, onClose, onUnfriend, onBlock }: {
   row: FriendRowData | null; pending: boolean; known: boolean;
   onClose: () => void; onUnfriend: () => void; onBlock: () => void;
@@ -309,8 +309,11 @@ function FriendDetails({ row, pending, known, onClose, onUnfriend, onBlock }: {
   return (
     <Dialog open={!!row} onClose={onClose} title="Friend details" size="prompt" screen="chat/games/friend">
       {row && (
-        <div className="flex flex-col gap-4">
-          <div className={`${CARD_LEVEL_1} p-3`}>
+        // WHY one card holding the friend AND the actions (popup-cards-1#PC-1: a one-job popup is
+        // one card holding everything, its buttons included — as a Marketplace detail page's top
+        // card holds Install).
+        <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
+          <div>
             <NameWithPill name={row.name} pill={known ? <PresencePill row={row} /> : undefined} />
             <p className="text-2xs text-fg-muted truncate">
               {row.handle ? `@${row.handle}` : 'No handle'}
@@ -327,8 +330,7 @@ function FriendDetails({ row, pending, known, onClose, onUnfriend, onBlock }: {
               </div>
             </Callout>
           ) : (
-            // Two follow-up actions under the card: full-width outlined, stacked (guide
-            // "Buttons": a follow-up action under a group; narrow popups stack).
+            // Two follow-up actions: full-width outlined, stacked (guide "Buttons"; narrow popups stack).
             <div className="flex flex-col gap-2">
               <Button variant="secondary" className="w-full" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
               <Button variant="secondary" className="w-full" onClick={() => setConfirming(true)}>Block…</Button>

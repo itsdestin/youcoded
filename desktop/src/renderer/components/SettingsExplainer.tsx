@@ -50,11 +50,13 @@ export default function SettingsExplainer({ intro, sections }: Props) {
   // well"): every (i) explainer — Appearance, Backup & sync, Remote access, Context, Permissions,
   // Specialists, Performance and the rest that render this — now groups like About: each section
   // is a small label over one first-level card holding its paragraphs and bullets. The opening
-  // summary is the card about the popup's own subject, so it opens the page unlabelled (guide
-  // "Spacing" → A label comes first, its exceptions). Labels over a card are plain, as About's are,
-  // so the reading underline (final#F-1) is gone with the bare text it marked.
+  // summary is labelled "Overview" too (popup-cards-1#PC-3, Destin: the first box should have a
+  // header above it when there are multiple and headers are being used), so no card reads as
+  // filed under nothing. Labels over a card are plain, as About's are, so the reading underline
+  // (final#F-1) is gone with the bare text it marked.
   return (
     <>
+      <SectionLabel className="mb-2">Overview</SectionLabel>
       <div className={`${CARD_LEVEL_1} p-3`}>
         <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
       </div>

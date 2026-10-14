@@ -35,6 +35,22 @@ export function RemoveProjectDialog({ name, kind, githubUrl, error, onConfirm, o
   const [alsoDeleteHistory, setAlsoDeleteHistory] = useState(false);
   // One screen name per kind so each wording can be photographed (dev/workbench/screens).
   const screen = kind === 'folder' ? 'projects/remove' : `projects/remove/${kind}`;
+  // WHY one block placed in two spots (popup-cards-1#PC-1): a one-job popup is one card holding
+  // everything, its buttons included — so with a card they go inside it; the missing folder's
+  // plain two-sentence question has no card, so they sit under its text.
+  const actions = (
+    <>
+      {error && <FieldError>{error}</FieldError>}
+      <div className={`flex flex-col gap-2 ${kind === 'missing' ? '' : 'pt-1'}`} data-parts-agree="remove-project-buttons">
+        <Button variant="danger" size="md" className="w-full" onClick={() => onConfirm(kind !== 'missing' && alsoDeleteHistory)}>
+          {kind === 'synced' ? 'Remove from all devices' : 'Remove'}
+        </Button>
+        <Button variant="secondary" size="md" className="w-full" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </>
+  );
   return (
     // WHY `panel` for a synced project: its confirm also carries the GitHub note, and at
     // `prompt` height its buttons scrolled out of view (round 2 pictures).
@@ -83,17 +99,10 @@ export function RemoveProjectDialog({ name, kind, githubUrl, error, onConfirm, o
           Also delete YouCoded's file history for this project
           <span className="block text-3xs text-fg-muted">Which files the assistant made or changed here. Your files stay.</span>
         </ConsentRow>
+        {actions}
       </div>
       )}
-      {error && <FieldError>{error}</FieldError>}
-      <div className="flex flex-col gap-2" data-parts-agree="remove-project-buttons">
-        <Button variant="danger" size="md" className="w-full" onClick={() => onConfirm(kind !== 'missing' && alsoDeleteHistory)}>
-          {kind === 'synced' ? 'Remove from all devices' : 'Remove'}
-        </Button>
-        <Button variant="secondary" size="md" className="w-full" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
+      {kind === 'missing' && actions}
     </Dialog>
   );
 }

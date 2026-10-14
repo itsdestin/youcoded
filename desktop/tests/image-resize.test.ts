@@ -9,13 +9,16 @@ import { ImagePreparer } from '../src/main/harness/image-prepare';
 import { imageDimensions } from '../src/main/harness/image-support';
 import { IMAGE_LIMITS_DEFAULT } from '../src/main/harness/capability-profile';
 import { writeRealPng, webpVp8Header, pngHeader } from './helpers/image-fixtures';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
 
-/** Writing, decoding, box-filtering and re-encoding an 18-MP PNG in pure JS.
- *  WHY 15 s: 3× measured wall time, floored at 15 s. The built worker resized the
- *  larger 51-MP incident size (2904×17528 → 1221×7372) in 1.87 s flat / 3.11 s
- *  noise (2026-10-07, Linux); 3 × 3.11 s = 9.3 s, so the floor wins and still
- *  covers this smaller fixture on a slower Windows CI runner. */
-const REAL_PNG_BUDGET_MS = 15_000;
+/** Writing, decoding, box-filtering and re-encoding an 18-MP PNG in pure JS — CPU work, so it is
+ *  budgeted in CPU time, not wall time (test-suite-hygiene.md "Never assert on wall-clock time").
+ *  WHY 15 s of CPU: 3× measured, floored at 15 s. The built worker resized the larger 51-MP
+ *  incident size (2904×17528 → 1221×7372) in 1.87 s flat / 3.11 s noise (2026-10-07, Linux).
+ *  WHY not wall time any more (2026-10-14): alone this test took 2.7 s at load 56, but in the full
+ *  suite at load 25-67 on 32 threads it passed its 15 s WALL limit with nothing regressed — the
+ *  wall clock measured the machine. The wide wall limit below only catches a hang. */
+const REAL_PNG_CPU_BUDGET_MS = 15_000;
 
 describe('boxDownscale averages the source block of every destination pixel, channel by channel', () => {
   it('a 2×2 → 1×1 averages the four pixels', () => {
@@ -28,7 +31,8 @@ describe('boxDownscale averages the source block of every destination pixel, cha
   });
 });
 
-describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictures', () => {
+describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictures', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
+  budgetCpuPerTest(REAL_PNG_CPU_BUDGET_MS);
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imgresize-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
@@ -48,7 +52,7 @@ describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictu
     expect(imageDimensions(fs.readFileSync(r.path))).toEqual({ width: 1843, height: 3686 });
     expect(PNG.sync.read(fs.readFileSync(r.path)).width).toBe(1843);
     expect(fs.readFileSync(p)).toEqual(before);
-  }, REAL_PNG_BUDGET_MS);
+  });
 
   it('JPEG in, JPEG out at the requested size', () => {
     const png = new PNG({ width: 64, height: 32 }); png.data.fill(90);

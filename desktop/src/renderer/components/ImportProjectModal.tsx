@@ -102,9 +102,9 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
   // (guide "Buttons": outlined, never bare text); its words and its field sitting bare on the
   // popup (the popup rule, final-review#ST-21/#PR-7: body content sits in a card); a hand-made
   // sync-off note box (Callout); and its own Escape handler beside the Dialog's. Now: the title is
-  // the Dialog's, the body is one card (explanation, the name field, its error, the note), and
-  // the two buttons sit under it — filled "Move and sync" on the right, outlined Cancel left of
-  // it. The words are unchanged.
+  // the Dialog's, the body is one card (explanation, the name field, its error, the note) with
+  // the two buttons inside it at its foot (popup-cards-1#PC-1) — filled "Move and sync" on the
+  // right, outlined Cancel left of it. The words are unchanged.
   return (
     <Dialog
       open
@@ -121,9 +121,9 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
             <ul className="space-y-1 text-xs text-fg-dim list-disc pl-4">
               {doneWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
-          </div>
-          <div className="flex justify-end">
-            <Button onClick={() => onDone(donePath!)}>Done</Button>
+            <div className="flex justify-end pt-1">
+              <Button onClick={() => onDone(donePath!)}>Done</Button>
+            </div>
           </div>
         </>
       ) : (
@@ -140,7 +140,7 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
             <div className="pt-1">
               <label htmlFor="import-project-name" className="text-xs font-medium text-fg-muted block mb-1">Project name</label>
               {/* Shared TextInput (change 20). A plain field, NOT an InputGroup: "Move and
-                  sync" sits under the card with Cancel, not inside the field. */}
+                  sync" sits at the card's foot with Cancel, not inside the field. */}
               <TextInput
                 id="import-project-name"
                 value={name}
@@ -154,12 +154,12 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
                 it already carries role="alert" itself. */}
             {error && <FieldError as="div">{error}</FieldError>}
             {syncOffNote}
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button onClick={() => void confirm()} disabled={busy || !name.trim()}>
-              {busy ? 'Moving…' : 'Move and sync'}
-            </Button>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+              <Button onClick={() => void confirm()} disabled={busy || !name.trim()}>
+                {busy ? 'Moving…' : 'Move and sync'}
+              </Button>
+            </div>
           </div>
         </>
       )}

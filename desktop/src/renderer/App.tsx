@@ -4420,16 +4420,15 @@ function AppInner() {
             screen="chat/resume/pick-model" open
             // Dismissal stays suppressed while the resume is in flight.
             onClose={() => { if (pendingNativeResuming) return; setPendingNativeResume(null); setPendingNativeBinding(null); }}
-            // WHY the shared title and a card round the picker (final-review#ST-21/#PR-7 sweep):
-            // a hand-made 14px heading with no ✕, and the picker bare on the popup.
+            // WHY the shared title and one card holding picker AND buttons (popup-cards-1#PC-1, #PR-7c).
             size="panel" title="Choose a model to resume with" busy={pendingNativeResuming}
           >
-            <div className={`${CARD_LEVEL_1} p-3`}><ModelPicker
+            <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}><ModelPicker
               value={pendingNativeBinding ? { runtime: 'native', providerId: pendingNativeBinding.providerId, modelId: pendingNativeBinding.modelId } : null}
               onSelect={(c) => { if (c.runtime === 'native') setPendingNativeBinding({ providerId: c.providerId, modelId: c.modelId }); }}
               includeClaude={false}
               onManageModels={() => { setProvidersAutoOpen(true); setSettingsOpen(true); }}
-            /></div>
+            />
             <div className="flex justify-end gap-2">
               <Button
                 variant="secondary"
@@ -4459,6 +4458,7 @@ function AppInner() {
               >
                 {pendingNativeResuming ? 'Resuming…' : 'Resume'}
               </Button>
+            </div>
             </div>
           </Dialog>
         </>

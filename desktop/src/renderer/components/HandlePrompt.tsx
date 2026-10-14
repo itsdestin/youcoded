@@ -131,11 +131,12 @@ function HandlePromptPopup({
           </InputGroup>
           {/* Plain words for status, never glyphs. */}
           {error && <FieldError as="p">{error}</FieldError>}
+          {/* WHY inside the card (popup-cards-1#PC-1): a one-job popup is one card holding
+              everything, its buttons included. */}
+          <Button variant="secondary" onClick={skip} className="w-full">
+            Skip for now
+          </Button>
         </div>
-
-        <Button variant="secondary" onClick={skip} className="w-full">
-          Skip for now
-        </Button>
       </Dialog>
     </>,
     document.body,

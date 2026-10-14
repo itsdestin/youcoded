@@ -813,8 +813,8 @@ function ConnectOpenRouterModal({
         screen="settings/assistant/cloud/openrouter/key"
       >
         <div className="p-4 space-y-3">
-          {/* WHY one card for the steps, the key field and its line (final-review#ST-21/#PR-7,
-              the one popup rule): they sat bare on the popup. Buttons stay under the card. */}
+          {/* WHY one card for the steps, the key field, its line AND the buttons (popup-cards-1#PC-1:
+              a one-job popup is one card holding everything). */}
           <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
           <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">
             <li>
@@ -852,7 +852,6 @@ function ConnectOpenRouterModal({
               ? <p className="text-3xs text-fg-muted">{note.text}</p>
               : <FieldError as="p">{note.text}</FieldError>
           )}
-          </div>
 
           {/* WHY stacked, filled on top (fix batch 1, 2026-09-24): this is a
               `size="prompt"` (340px) dialog — a NARROW popup by the design
@@ -869,6 +868,7 @@ function ConnectOpenRouterModal({
             <Button variant="secondary" onClick={onClose} className="w-full py-2">
               Cancel
             </Button>
+          </div>
           </div>
         </div>
       </Dialog>

@@ -144,10 +144,11 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
         <p className="text-3xs text-fg-muted">
           Requires the <span className="font-mono">gh</span> CLI to be installed and authenticated.
         </p>
-        </div>
 
-        {/* Publish section — state-driven */}
-        <div>
+        {/* Publish section — state-driven. WHY inside the card (popup-cards-1#PC-1): a one-job
+            popup is one card holding everything, its button included; the preview above stays
+            outside it, a picture of the item. */}
+        <div className="pt-1">
           {renderPublishButton({
             state: publishState,
             publishing,
@@ -158,6 +159,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
           {publishError && (
             <FieldError as="p" className="text-center mt-2">{publishError}</FieldError>
           )}
+        </div>
         </div>
       </Dialog>
     </>
