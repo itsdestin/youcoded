@@ -191,8 +191,15 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   // Fallback for a preview that would not load: the theme's own colours. Not a
   // screenshot, but it identifies the theme and the card stops looking broken.
   const themeTokens = item.kind === "theme" ? item.entry.previewTokens : undefined;
+  // WHY corners that follow the card's (final-fixes#MK-2 follow-up, Destin: "the previews should
+  // be better fitted to the card. this looks janky"): the picture sat 4px inside a card whose
+  // corners are the theme's large radius (--radius-xl) while its own were the small rounded-md, so
+  // the rim between them was thin at the sides and thick at the corners. Its top corners are now
+  // the card's radius less the 4px gap — one even rim all round — and its bottom corners stay
+  // small where the picture meets the words. A theme that enlarges its radii scales both together.
+  const previewFrame = { borderRadius: 'calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) var(--radius-sm) var(--radius-sm)' };
   const themeSwatches = item.kind === "theme" && themePreviewFailed && themeTokens && Object.keys(themeTokens).length > 0 ? (
-    <div data-theme-swatches className={`m-1 mb-0 h-36 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
+    <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 h-36 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
       {Object.entries(themeTokens).map(([name, color]) => (
         <span key={name} className="flex-1" style={{ background: color as string }} />
       ))}
@@ -335,7 +342,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
           used to run edge to edge with a line under it. Same frame (THEME_PREVIEW_FRAME),
           same height as before so the grids and rails keep their size. */}
       {themePreviewUrl && (
-        <div className={`m-1 mb-0 h-36 shrink-0 ${THEME_PREVIEW_FRAME}`}>
+        <div style={previewFrame} className={`m-1 mb-0 h-36 shrink-0 ${THEME_PREVIEW_FRAME}`}>
           <img
             src={themePreviewUrl}
             alt=""
