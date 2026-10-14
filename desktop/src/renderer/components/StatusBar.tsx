@@ -532,6 +532,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         locked: true,
         description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
       },
+      {
+        // WHY always on (popup-cards-8#W-1, Destin: "we should also make the version chip
+        // always-on"): it is where an available update shows, so it must not be switched off.
+        id: 'version',
+        label: 'Version',
+        defaultVisible: true,
+        locked: true,
+        description: 'Current YouCoded version. Glows when an update is available.',
+      },
     ],
   },
   {
@@ -663,12 +672,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Theme',
         defaultVisible: true,
         description: 'Shows the active theme. Click to cycle through your configured themes.',
-      },
-      {
-        id: 'version',
-        label: 'Version',
-        defaultVisible: true,
-        description: 'Current YouCoded version. Glows when an update is available.',
       },
     ],
   },

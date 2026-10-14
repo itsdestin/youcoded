@@ -112,12 +112,12 @@ describe('Always On section and announcement popup', () => {
   // WHY: these four are the controls the bar always draws. final-fixes#PR-7d (Destin: "add a new
   // "always on" section … with on but greyed toggles that can't be disabled") replaced the one line
   // under the title (pick-menus#PM-2) with a first section of rows whose switches are on and greyed.
-  it('opens on an "Always on" section: Model, Permissions, Tags & note and Announcements, switched on and locked', async () => {
+  it('opens on an "Always on" section: Model, Permissions, Tags & note, Announcements and Version, switched on and locked', async () => {
     await openMenu('claude');
     expect(screen.queryByText(/are always shown\./)).toBeNull();
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
     expect(headings[0]).toBe('Always on');
-    for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements']) {
+    for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements', 'Version']) {
       const sw = switchFor(`${label} (always on)`)!;
       expect(sw).toBeTruthy();
       expect(sw.getAttribute('aria-checked')).toBe('true');
