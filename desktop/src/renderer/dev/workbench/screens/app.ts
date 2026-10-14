@@ -13,8 +13,7 @@ export const APP: readonly ScreenEntry[] = [
   app('app/unsaved-before-quit/after-restart', 'dialog'),
   // "Discard and quit" asks in place first.
   app('app/unsaved-before-quit/discard', 'dialog'),
-  // Everything got saved while the prompt was open: "All saved." with Quit / Cancel.
-  app('app/unsaved-before-quit/all-saved', 'dialog'),
+  // No "all saved" state (final-review#CH-21): once nothing is unsaved the quit just goes on.
   // Not a screen of the app: every shared hand-drawn icon at 48px (dev/workbench/IconSheet.tsx),
   // so a malformed drawing is visible at a glance. Photo-only build only.
   { name: 'dev/icons', tags: ['dev'], viewport: { width: 1440, height: 1300 } },

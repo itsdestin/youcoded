@@ -7,9 +7,16 @@
 // screen, so "save it" alone left the person with nothing to save — and closing the window then
 // lost it. Each parked draft gets Save (fix round 13) right here; a file that could no longer take
 // it says so. "Discard and quit/close" (confirmed in place) throws the listed edits away and goes
-// on. Once nothing is left unsaved the prompt says "All saved." and offers to go on (fix round 14)
-// — never automatically.
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+// on. Once nothing is left unsaved the quit (or close) simply goes on and the prompt closes.
+//
+// WHY no "Everything is saved" state any more (Destin, final-review#CH-21: "why is there even a
+// popup if everything is saved? inherently removes the need for an unsaved changes popup"): fix
+// round 14 kept the prompt open saying "All saved." with Quit / Cancel. The person had already
+// asked to quit, and the only thing holding it was the unsaved list — so an empty list now lets
+// the held quit through. That covers saving or discarding the last file here, an Office document
+// whose autosave lands a moment after the prompt opens (office-store.ts flushes them), and a
+// prompt that arrives after the last save already landed (it never shows at all).
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, SettingRow } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
@@ -28,7 +35,6 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
   // Each state places its files itself, so a capture opened straight onto it is never empty.
   useScreenOpen('app/unsaved-before-quit/after-restart', () => { previewFiles(); previewQuitRefused({ afterTeardown: true, restartDropped: true }); });
   useScreenOpen('app/unsaved-before-quit/discard', () => { previewFiles(); previewQuitRefused({ confirming: true }); });
-  useScreenOpen('app/unsaved-before-quit/all-saved', () => { clearPreviewFiles(); previewQuitRefused(); });
   // What the person saw listed when they chose to discard: only those go (fix round 12).
   const [listed, setListed] = useState<readonly UnsavedEdit[]>([]);
   // Whether each parked draft's file could still take it (asked when the prompt shows).
@@ -52,10 +58,17 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
   const goOn = r?.mode === 'close' ? 'close' : 'quit';
   // Main held the quit (or close) for this prompt: go on now (main/unsaved-quit.ts).
   const proceed = () => { clearQuitRefused(); window.claude?.office?.proceedClose?.(); };
-  const discard = () => { void discardUnsaved(listed).then(proceed); };
+  // WHY the ref: discarding empties the list at once, but an Office document's journal is only
+  // gone when discardUnsaved resolves (fix round 1) — the empty-list effect below must not let
+  // the quit through before that; this path proceeds itself once the discards land.
+  const discarding = useRef(false);
+  const discard = () => { discarding.current = true; void discardUnsaved(listed).then(() => { discarding.current = false; proceed(); }); };
   // Dismissed (Cancel, OK, Esc, ✕): main forgets the held quit/close (fix round 12).
   const dismiss = () => { clearQuitRefused(); window.claude?.office?.dismissPrompt?.(); };
+  // Nothing left unsaved while main holds the quit/close: go on (see the header). `proceed` clears
+  // `r`, so this runs once. A save still running keeps its file in the list, so n is not 0 then.
   const allSaved = r !== null && n === 0;
+  useEffect(() => { if (allSaved && !discarding.current) proceed(); }, [allSaved]); // eslint-disable-line react-hooks/exhaustive-deps
   // WHY the count moved here from the title (Destin, close-session-5#CS5-2: "the header is too
   // long"; guide: a one-line title naming the popup, detail in the body — Session details, Close
   // session): the title is "Unsaved changes", and this line says how many and what to do.
@@ -63,11 +76,11 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
   const intro = r?.afterTeardown
     ? `${count} Your chats have stopped. Save ${n > 1 ? 'the files' : 'the file'}, then quit again.`
     : `${count} Save ${n > 1 ? 'them' : 'it'}, then ${goOn === 'close' ? 'close the window' : 'quit'} again.`;
-  // Still true once everything is saved: a restart already became a quit.
+  // A restart already became a quit.
   const restartNote = r?.restartDropped ? ' YouCoded will quit instead of restarting.' : '';
   return (
     <Dialog
-      open={r !== null}
+      open={r !== null && !allSaved}
       onClose={dismiss}
       title="Unsaved changes"
       // `panel` (420, still narrow): Close session's and Close window's width, so a file row
@@ -75,7 +88,7 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
       size="panel"
       layer={3}
       // Each state its own photo mark (shoot).
-      screen={allSaved ? 'app/unsaved-before-quit/all-saved' : r?.confirming ? 'app/unsaved-before-quit/discard' : r?.afterTeardown ? 'app/unsaved-before-quit/after-restart' : 'app/unsaved-before-quit'}
+      screen={r?.confirming ? 'app/unsaved-before-quit/discard' : r?.afterTeardown ? 'app/unsaved-before-quit/after-restart' : 'app/unsaved-before-quit'}
       // WHY the shared body + footer (close-session-friction proposal 1): fix round 15 gave it its
       // own layout so the choices stay pinned under a list that scrolls in whatever height is
       // left. The footer slot does exactly that: the body (intro + list) scrolls under the shared
@@ -84,12 +97,7 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
       // restyling"; guide: two buttons in a narrow popup stack full width, filled on top; a
       // destructive confirm's red button takes the main action's place): this is a 340-point
       // popup, and its pairs sat side by side at the right.
-      footer={allSaved ? (
-        <div className="flex flex-col gap-2">
-          <Button variant="primary" className="w-full" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
-          <Button variant="secondary" className="w-full" onClick={dismiss}>Cancel</Button>
-        </div>
-      ) : r?.confirming ? (
+      footer={r?.confirming ? (
         <div className="flex flex-col gap-2">
           <p className="text-sm text-fg-2 pb-1">Discard unsaved changes to {files}?</p>
           <Button variant="danger" className="w-full" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
@@ -111,12 +119,10 @@ export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
           single-card popup, so no label above it. The body scrolls under the shared popup fade
           into the shared footer; nothing here draws its own. */}
       <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
-        <p className="text-sm text-fg-2">{allSaved ? `Everything is saved.${restartNote}` : `${intro}${restartNote}`}</p>
-        {!allSaved && (
-          <ul className="flex flex-col gap-2">
-            {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
-          </ul>
-        )}
+        <p className="text-sm text-fg-2">{`${intro}${restartNote}`}</p>
+        <ul className="flex flex-col gap-2">
+          {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
+        </ul>
       </div>
     </Dialog>
   );
@@ -244,9 +250,4 @@ function previewFiles(): void {
     if (conflict) setRow(conflict, { kind: 'conflict' });
     if (failed) setRow(failed, { kind: 'error', message: "Save failed: this folder can't be written to." });
   });
-}
-/** Photo-only: everything saved (the list emptied while the prompt was open). */
-function clearPreviewFiles(): void {
-  previewReleases.forEach((release) => release());
-  previewReleases = [];
 }

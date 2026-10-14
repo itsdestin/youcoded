@@ -106,19 +106,19 @@ describe('the refused-quit prompt', () => {
     quiet.mockRestore();
   });
 
-  it('when nothing is left unsaved it says so, and Quit goes on only when pressed', async () => {
+  // WHY no "Everything is saved" popup (Destin, final-review#CH-21: "why is there even a popup if
+  // everything is saved?"): once the last file is saved the held quit simply goes on.
+  it('saving the last file here lets the quit go on, with no "all saved" popup', async () => {
     const { office, prompt } = bridge();
     let release!: () => void;
     release = holdUnsavedEditor({ name: 'plan.txt', parked: parked(async () => { release(); return { ok: true as const }; }), discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
+    expect(office.proceedClose).not.toHaveBeenCalled(); // a file is unsaved: the quit waits
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    expect(await screen.findByText(/^Everything is saved\./)).toBeInTheDocument();
-    expect(office.proceedClose).not.toHaveBeenCalled(); // nothing automatic
-    expect(screen.queryByRole('button', { name: /Discard/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Quit' }));
-    expect(office.proceedClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(office.proceedClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    expect(screen.queryByText(/Everything is saved/)).toBeNull();
   });
 
   it('Discard-all waits while a save is running', async () => {
@@ -151,7 +151,7 @@ describe('the refused-quit prompt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
     fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ force: true, confirmed: true }));
-    expect(await screen.findByText(/^Everything is saved\./)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull()); // saved: the quit goes on
   });
 
   it('a file in a protected location offers Discard only', async () => {
@@ -167,12 +167,12 @@ describe('the refused-quit prompt', () => {
     expect(screen.getAllByRole('button', { name: 'Discard' })).toHaveLength(2);
   });
 
-  it('keeps the restart note once everything is saved', async () => {
-    const { prompt } = bridge();
+  it('a prompt that arrives with nothing unsaved never shows: the quit goes on', () => {
+    const { office, prompt } = bridge();
     render(<OfficeAlerts onReview={() => {}} />);
     prompt({ afterTeardown: true, restartDropped: true });
-    expect(screen.getByText(/^Everything is saved\./)).toBeInTheDocument();
-    expect(screen.getByText(/YouCoded will quit instead of restarting\.$/)).toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    expect(office.proceedClose).toHaveBeenCalledTimes(1);
   });
 
   it('a settings file asks inline before it is saved', async () => {
@@ -252,6 +252,20 @@ describe('the refused-quit prompt', () => {
     // Main goes on once every discard has finished (an Office document's drops its journal first).
     await waitFor(() => expect(office.proceedClose).toHaveBeenCalled());
     expect(office.proceedClose.mock.invocationCallOrder[0]).toBeGreaterThan(order);
+  });
+
+  it('Discard and quit waits for a slow discard before going on, though the list is already empty', async () => {
+    const { office, prompt } = bridge();
+    let finish!: () => void;
+    holdUnsavedEditor({ name: 'report.docx', discard: () => new Promise<void>((r) => { finish = r; }) });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and quit' })); // the confirm
+    expect(office.setOtherUnsaved).toHaveBeenLastCalledWith([]);
+    expect(office.proceedClose).not.toHaveBeenCalled(); // the Office journal is not gone yet
+    await act(async () => { finish(); });
+    expect(office.proceedClose).toHaveBeenCalledTimes(1);
   });
 
   it('after teardown it says the chats stopped, and that a restart became a quit', () => {
