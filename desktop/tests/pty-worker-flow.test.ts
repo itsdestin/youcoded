@@ -388,10 +388,25 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   // exits — what a loaded CI machine did (the last 27 of 500 lines lost, 2026-10-14).
   it('the last lines survive the worker being held up as the program exits', async () => {
     const lines = 500;
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000', YOUCODED_PTY_TEST_EXIT_FREEZE_MS: '300' }, PRODUCER_IN_PIECES);
+    // TEMP DIAG (CI only differs): trace the worker into a private HOME and show it on failure.
+    const fsx = await import('node:fs'); const osx = await import('node:os');
+    const home = fsx.mkdtempSync(path.join(osx.tmpdir(), 'pty-diag-'));
+    const r = startReal(lines, { HOME: home, USERPROFILE: home, YOUCODED_PTY_TRACE: '1', YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000', YOUCODED_PTY_TEST_EXIT_FREEZE_MS: '300' }, PRODUCER_IN_PIECES);
     kids.push(r.child);
     r.state.auto = false;
-    expect(await r.until(() => r.state.exited, 30000)).toBe(true);
+    const ok = await r.until(() => r.state.exited, 30000);
+    let diag = '';
+    try {
+      const dir = path.join(home, '.claude');
+      for (const f of fsx.readdirSync(dir)) {
+        const t = fsx.readFileSync(path.join(dir, f), 'utf8').split('\n');
+        const outs = t.filter((l) => l.includes(' OUT '));
+        diag += t.filter((l) => !l.includes(' OUT ')).join('\n') + `\nOUT events: ${outs.length}; last: ${outs.slice(-3).join(' | ')}\n`;
+      }
+    } catch (e) { diag += 'no trace: ' + String(e); }
+    diag += `\nreceived chars: ${r.state.out.length} of ${expected(lines).length}; exited: ${r.state.exited}; platform ${process.platform} ${osx.release()}`;
+    expect(ok, diag).toBe(true);
+    expect(received(r).length, diag).toBe(expected(lines).length);
     expect(received(r)).toBe(expected(lines));
   }, 60000);
 });

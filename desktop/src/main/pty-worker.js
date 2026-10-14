@@ -200,7 +200,11 @@ function guardExitDrain(p) {
     if (!sock || typeof sock.destroy !== 'function' || !('_boundClose' in p)) return;
     const destroy = sock.destroy.bind(sock);
     let held = false;
+    // TEMP DIAG
+    sock.on('end', () => trace('DIAG', 'socket end')); sock.on('error', (e) => trace('DIAG', 'socket error ' + (e && e.code)));
+    sock.on('close', () => trace('DIAG', 'socket close'));
     sock.destroy = function (...args) {
+      trace('DIAG', `destroy called held=${held} ever=${flowEverPaused} bound=${p._boundClose} emitted=${p._emittedClose} destroyed=${sock.destroyed} paused=${flowPaused}`);
       if (held || !flowEverPaused || !p._boundClose || p._emittedClose || sock.destroyed) return destroy(...args);
       held = true;
       trace('EXIT_DRAIN', 'holding the socket open to read the tail');
