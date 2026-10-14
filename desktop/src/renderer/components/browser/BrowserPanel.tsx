@@ -128,12 +128,10 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
   // Scrolling is gathered per frame: a trackpad sends dozens of tiny steps.
   const wheel = useRef<{ x: number; y: number; dx: number; dy: number; raf: number | null }>({ x: 0, y: 0, dx: 0, dy: 0, raf: null });
   useEffect(() => () => { if (wheel.current.raf !== null) cancelAnimationFrame(wheel.current.raf); }, []);
-  const onWheel = (e: React.WheelEvent) => {
-    const p = point(e);
-    if (!p) return;
-    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+  /** Add a scroll (page px) to this frame's batch. */
+  const queueWheel = (p: { x: number; y: number }, dx: number, dy: number) => {
     const w = wheel.current;
-    w.x = p.x; w.y = p.y; w.dx += e.deltaX * k; w.dy += e.deltaY * k;
+    w.x = p.x; w.y = p.y; w.dx += dx; w.dy += dy;
     if (w.raf === null) {
       w.raf = requestAnimationFrame(() => {
         w.raf = null;
@@ -141,6 +139,80 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
         w.dx = 0; w.dy = 0;
       });
     }
+  };
+  const onWheel = (e: React.WheelEvent) => {
+    const p = point(e);
+    if (!p) return;
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    queueWheel(p, e.deltaX * k, e.deltaY * k);
+  };
+
+  // Touch (and pen): a drag scrolls the page, a tap clicks, a flick glides on
+  // and slows down, like a phone. The page itself gets plain scrolls and
+  // clicks, so this works on every site. (A mouse keeps onClick below.)
+  const touch = useRef<{
+    id: number; startX: number; startY: number; lastX: number; lastY: number;
+    dragging: boolean; samples: Array<{ t: number; x: number; y: number }>;
+  } | null>(null);
+  const glide = useRef<number | null>(null);
+  const lastPointerWasTouch = useRef(false);
+  const stopGlide = () => { if (glide.current !== null) { cancelAnimationFrame(glide.current); glide.current = null; } };
+  useEffect(() => stopGlide, []);
+  /** Screen px → page px for the drawn picture. */
+  const pageScale = () => {
+    const r = img.current?.getBoundingClientRect();
+    if (!r) return 1;
+    const scale = Math.min(r.width / frame.current.w, r.height / frame.current.h);
+    return scale > 0 ? 1 / scale : 1;
+  };
+  const onPointerDown = (e: React.PointerEvent) => {
+    lastPointerWasTouch.current = e.pointerType !== 'mouse';
+    if (e.pointerType === 'mouse') return;
+    stopGlide();
+    box.current?.focus({ preventScroll: true });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    touch.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, dragging: false, samples: [{ t: e.timeStamp, x: e.clientX, y: e.clientY }] };
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const t = touch.current;
+    if (!t || t.id !== e.pointerId) return;
+    // A finger wobbles: under 8 px of travel it is still a tap.
+    if (!t.dragging && Math.hypot(e.clientX - t.startX, e.clientY - t.startY) < 8) return;
+    t.dragging = true;
+    const k = pageScale();
+    const p = point({ clientX: t.startX, clientY: t.startY }) ?? { x: 0, y: 0 };
+    // Finger moves up → page scrolls down.
+    queueWheel(p, (t.lastX - e.clientX) * k, (t.lastY - e.clientY) * k);
+    t.lastX = e.clientX; t.lastY = e.clientY;
+    t.samples = [...t.samples.filter((s) => e.timeStamp - s.t < 100), { t: e.timeStamp, x: e.clientX, y: e.clientY }];
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    const t = touch.current;
+    if (!t || t.id !== e.pointerId) return;
+    touch.current = null;
+    if (!t.dragging) {
+      const p = point(e);
+      if (p) send({ type: 'click', x: p.x, y: p.y, clickCount: 1, button: 'left' });
+      return;
+    }
+    // Flick: keep going at the finger's last speed, slowing each frame.
+    const first = t.samples[0];
+    const dt = e.timeStamp - first.t;
+    if (dt <= 0) return;
+    const k = pageScale();
+    let vx = ((first.x - e.clientX) / dt) * k; // page px per ms
+    let vy = ((first.y - e.clientY) / dt) * k;
+    const p = point({ clientX: t.startX, clientY: t.startY }) ?? { x: 0, y: 0 };
+    let last = performance.now();
+    const step = (now: number) => {
+      const ms = Math.min(50, now - last);
+      last = now;
+      queueWheel(p, vx * ms, vy * ms);
+      const decay = Math.pow(0.995, ms); // ~half speed every 140 ms
+      vx *= decay; vy *= decay;
+      glide.current = Math.hypot(vx, vy) > 0.05 ? requestAnimationFrame(step) : null;
+    };
+    if (Math.hypot(vx, vy) > 0.3) glide.current = requestAnimationFrame(step);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -173,11 +245,16 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
         onError={onLoad}
         // Focus the picture on press so typing goes to the page; no image drag.
         onMouseDown={(e) => { e.preventDefault(); box.current?.focus({ preventScroll: true }); }}
-        onClick={(e) => onClick(e, 'left')}
+        // A tap was already sent by onPointerUp; its follow-on click is not a second one.
+        onClick={(e) => { if (!lastPointerWasTouch.current) onClick(e, 'left'); }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => { touch.current = null; }}
         onContextMenu={(e) => { e.preventDefault(); onClick(e, 'right'); }}
         onWheel={onWheel}
         alt={title ? `What the assistant's browser shows: ${title}` : "What the assistant's browser shows"}
-        className={`w-full h-auto max-h-full object-contain object-top cursor-default ${hasFrame ? '' : 'hidden'}`}
+        className={`w-full h-auto max-h-full object-contain object-top cursor-default touch-none ${hasFrame ? '' : 'hidden'}`}
         draggable={false}
       />
       {!hasFrame && <div className="my-6"><LoadingState what="the picture" verb="Waiting for" variant="inline" /></div>}

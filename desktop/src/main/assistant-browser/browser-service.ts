@@ -122,6 +122,8 @@ interface SessionEntry {
   viewSize: { width: number; height: number } | null;
   /** The person's clicks and keys, run in order. */
   inputChain: Promise<unknown>;
+  /** The scroll waiting its turn in `inputChain`; later scroll steps merge into it. */
+  wheelPending: { type: 'wheel'; x: number; y: number; dx: number; dy: number } | null;
   /** Tabs that went away without the app closing them, newest last. WHY: when a
    *  window closes, its tabs close one by one BEFORE the browser reports it
    *  closed — this is how the browser-closed path still knows what was open. */
@@ -165,7 +167,7 @@ export class BrowserService extends EventEmitter {
   private entry(sessionId: string): SessionEntry {
     let e = this.sessions.get(sessionId);
     if (!e) {
-      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), justClosed: [] };
+      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), wheelPending: null, justClosed: [] };
       this.sessions.set(sessionId, e);
     }
     return e;
@@ -630,8 +632,25 @@ export class BrowserService extends EventEmitter {
     const e = this.sessions.get(sessionId);
     const page = e?.active;
     if (!e || !page || page.isClosed()) return;
-    e.inputChain = e.inputChain.then(() => runPersonInput(page, ev)).catch(() => undefined);
     this.watchers.get(sessionId)?.goFast(PERSON_FAST_MS);
+    // WHY merge scroll steps (measured 2026-10-13, dev app): a touchpad sends
+    // a step every screen refresh, the browser takes ~35 ms per step, so steps
+    // queued and a 1 s scroll took 6 s to finish showing. A step that arrives
+    // while another is still waiting joins it — never more than one waits.
+    if (ev.type === 'wheel') {
+      const waiting = e.wheelPending;
+      if (waiting) { waiting.x = ev.x; waiting.y = ev.y; waiting.dx += ev.dx; waiting.dy += ev.dy; return; }
+      const w = { ...ev };
+      e.wheelPending = w;
+      e.inputChain = e.inputChain.then(() => {
+        if (e.wheelPending === w) e.wheelPending = null;
+        return runPersonInput(page, w);
+      }).catch(() => undefined);
+      return;
+    }
+    // A click or key keeps its place: later scroll steps queue after it.
+    e.wheelPending = null;
+    e.inputChain = e.inputChain.then(() => runPersonInput(page, ev)).catch(() => undefined);
   }
 
   /** A page the browser opened by itself (popup / target=_blank) joins its opener's conversation. */
@@ -918,7 +937,7 @@ class LiveView {
   private lastSent = 0;
   private gapTimer: NodeJS.Timeout | null = null;
   private generation = 0;
-  private latest: { data: string; w: number; h: number } | null = null;
+  private latest: { data: string; w: number; h: number; sx: number; sy: number } | null = null;
   /** Until this time, frames are acked with no gap (the person is using the page). */
   private fastUntil = 0;
 
@@ -937,10 +956,11 @@ class LiveView {
       if (gen !== this.generation) { void cdp.detach().catch(() => undefined); return; }
       this.cdp = cdp;
       this.page = page;
-      cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number; metadata: { deviceWidth: number; deviceHeight: number } }) => {
+      cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number; metadata: { deviceWidth: number; deviceHeight: number; scrollOffsetX?: number; scrollOffsetY?: number } }) => {
         this.pendingAck = f.sessionId;
-        if (this.screenReady) this.flush(f.data, f.metadata.deviceWidth, f.metadata.deviceHeight);
-        else this.latest = { data: f.data, w: f.metadata.deviceWidth, h: f.metadata.deviceHeight };
+        const l = { data: f.data, w: f.metadata.deviceWidth, h: f.metadata.deviceHeight, sx: f.metadata.scrollOffsetX ?? 0, sy: f.metadata.scrollOffsetY ?? 0 };
+        if (this.screenReady) this.flush(l);
+        else this.latest = l;
       });
       await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 1280, everyNthFrame: 1 });
     } catch (err) {
@@ -948,10 +968,10 @@ class LiveView {
     }
   }
 
-  private flush(data: string, w: number, h: number): void {
+  private flush(l: { data: string; w: number; h: number; sx: number; sy: number }): void {
     this.screenReady = false;
     this.lastSent = Date.now();
-    this.send({ sessionId: this.sessionId, data, width: w, height: h });
+    this.send({ sessionId: this.sessionId, data: l.data, width: l.w, height: l.h, scrollX: l.sx, scrollY: l.sy });
   }
 
   /** The person is using the page: drop the gap now, and for `ms` more. */
@@ -971,7 +991,7 @@ class LiveView {
     this.screenReady = true;
     if (this.latest) {
       const l = this.latest; this.latest = null;
-      this.flush(l.data, l.w, l.h);
+      this.flush(l);
       return;
     }
     if (this.gapTimer) return;

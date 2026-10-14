@@ -265,6 +265,31 @@ describe('the live picture\'s pace', () => {
   });
 });
 
+describe('the person\'s scrolling never queues up', () => {
+  it('scroll steps that arrive while one is running merge into one waiting step', async () => {
+    const done: Array<() => void> = [];
+    const wheels: number[] = [];
+    const page = {
+      isClosed: () => false,
+      mouse: {
+        move: async () => {},
+        // Each scroll takes as long as the test says (a slow browser).
+        wheel: (_dx: number, dy: number) => new Promise<void>((r) => { wheels.push(dy); done.push(r); }),
+        down: async () => {}, up: async () => {},
+      },
+    };
+    const service = new BrowserService({ rootDir: os.tmpdir(), chromium: {} as never, getLaunchConfig: async () => ({ showWindow: false, myChrome: false, browser: null }) });
+    (service as any).entry('s').active = page;
+    const wheel = (dy: number) => service.personInput('s', { type: 'wheel', x: 1, y: 1, dx: 0, dy });
+    wheel(10);
+    await vi.waitFor(() => expect(wheels).toEqual([10])); // running
+    for (let i = 0; i < 50; i++) wheel(4); // a touchpad keeps going meanwhile
+    done.shift()!();
+    await vi.waitFor(() => expect(wheels).toEqual([10, 200])); // ONE step carries all 50
+    done.shift()!();
+  });
+});
+
 describe('the main process\'s handle on the Browser worker', () => {
   it('forks only when first needed, and relays calls and state', async () => {
     const fork = vi.fn(() => fakeWorker((m, reply) => {

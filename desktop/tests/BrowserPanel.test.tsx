@@ -119,6 +119,25 @@ describe('Browser panel', () => {
     expect(page).toHaveAttribute('data-keyboard-owner');
   });
 
+  it('a finger drag scrolls the page and a tap clicks it (touchscreens)', async () => {
+    const b = installBrowserBridge();
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    act(() => b.pushFrame('s1')); // a 1280×800 page
+    const img = screen.getByRole('img');
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400, right: 640, bottom: 400, x: 0, y: 0, toJSON() {} });
+    // Tap: one click, not a second one from the browser's follow-on click event.
+    fireEvent.pointerDown(img, { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(img, { pointerId: 1, pointerType: 'touch', clientX: 102, clientY: 101 });
+    fireEvent.click(img, { clientX: 102, clientY: 101, detail: 1 });
+    const clicks = b.bridge.input.mock.calls.filter(([, ev]: any) => ev.type === 'click');
+    expect(clicks).toEqual([['s1', { type: 'click', x: 204, y: 202, clickCount: 1, button: 'left' }]]);
+    // Drag up 50 screen px = scroll down 100 page px (the picture is drawn at half size).
+    fireEvent.pointerDown(img, { pointerId: 2, pointerType: 'touch', clientX: 100, clientY: 300 });
+    fireEvent.pointerMove(img, { pointerId: 2, pointerType: 'touch', clientX: 100, clientY: 250 });
+    await waitFor(() => expect(b.bridge.input).toHaveBeenCalledWith('s1', expect.objectContaining({ type: 'wheel', dx: 0, dy: 100 })));
+  });
+
   it('maps keys and picture points the way the page needs them', () => {
     const k = (key: string, m: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => keyEventFor({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...m });
     expect(k('é')).toEqual({ type: 'text', text: 'é' });

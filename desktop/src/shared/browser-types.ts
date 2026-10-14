@@ -40,7 +40,12 @@ export interface BrowserSessionState {
 }
 
 /** One live picture of a conversation's current tab (base64 JPEG). */
-export interface BrowserFrame { sessionId: string; data: string; width: number; height: number }
+export interface BrowserFrame {
+  sessionId: string; data: string; width: number; height: number;
+  /** How far the page was scrolled when the picture was taken (CSS px). Lets
+   *  the panel move the picture at once while a scroll is on its way. */
+  scrollX: number; scrollY: number;
+}
 
 export type BrowserKind = 'chrome' | 'edge' | 'chromium' | 'brave' | 'downloaded';
 
