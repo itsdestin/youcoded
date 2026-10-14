@@ -377,6 +377,22 @@ describe('MarkdownContent file paths', () => {
     }
   });
 
+  it('makes a path with spaces clickable as Claude hands it over', () => {
+    // A Word file named with spaces, on its own line, in backticks, in bold and
+    // as a list item — every way a reply presents a finished file.
+    const p = '/home/destin/Documents/White House Posts - Oct 13 2026.docx';
+    for (const md of [
+      `I made the Word file:\n\n${p}`,
+      `I made the Word file: \`${p}\``,
+      `Saved as **${p}**`,
+      `Files:\n\n- ${p}`,
+    ]) {
+      const { container, unmount } = render(<MarkdownContent content={md} sessionId="s1" />);
+      expect(paths(container), md).toEqual(['White House Posts - Oct 13 2026.docx']);
+      unmount();
+    }
+  });
+
   it('leaves paths alone when there is no session to resolve them against', () => {
     const { container } = render(<MarkdownContent content={'open /home/destin/plan.md'} />);
     expect(paths(container)).toEqual([]);

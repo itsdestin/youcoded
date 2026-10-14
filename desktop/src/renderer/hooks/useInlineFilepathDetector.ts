@@ -67,6 +67,46 @@ const KNOWN_NAME_PATH_RE = new RegExp(
   'g',
 );
 
+// Paths WITH SPACES ("/home/destin/Documents/White House Posts.docx"). PATH_RE
+// stops at whitespace, because in running prose a space is where a path ends —
+// so a file whose name had spaces never got a pill, and worse, its tail
+// ("Posts/x.docx"-shaped pieces) could pill as the WRONG path. Destin,
+// 2026-10-13: Word/Excel files are routinely named with spaces.
+//
+// WHY only a line that is NOTHING BUT the path: inside a sentence there is no
+// way to tell where a spaced path starts ("I saved notes/today plan.md" — is
+// the file "today plan.md" or "notes/today plan.md"?). On its own line, in
+// backticks, in bold or as a list item (each of those is its own text run) the
+// path is the whole line, which is how Claude hands a file over. Further guards:
+//   • an explicit start only (/, ~/, ./, ../, C:\) — never bare-relative, or a
+//     prose line like "Input/output is handled by main.ts" would pill
+//   • for a leading "/", the first folder has no space — so a slash command
+//     ("/review the parser in src/a b.ts") stays text
+//   • the usual extension-shape test, and an optional sentence-final . ! ?
+// One greedy run (not two lazy ones) so a long non-matching line costs linear
+// time, not quadratic; "has a space" is checked after the match.
+const SPACED_LINE_RE = /^[ \t]*((?:[a-zA-Z]:[\\/]|~[\\/]|\.{1,2}[\\/]|\/)[^\t\r\n<>"|*?`:]*\.([a-zA-Z0-9]+))[.!?]?[ \t]*\r?$/gm;
+
+function spacedLinePaths(text: string): FilepathMatch[] {
+  // Cheap exit: the common text run has no line that could qualify.
+  if (!text.includes(' ')) return [];
+  const out: FilepathMatch[] = [];
+  SPACED_LINE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SPACED_LINE_RE.exec(text))) {
+    const p = m[1];
+    // No space: the ordinary rule below already handles it.
+    if (!p.includes(' ')) continue;
+    if (!looksLikeExtension(m[2])) continue;
+    if (p.startsWith('/') && p.slice(1).split(/[\\/]/, 1)[0].includes(' ')) continue;
+    // A pill spans only the path itself, never the line's indentation or the
+    // trailing sentence punctuation.
+    const start = m.index + m[0].indexOf(p);
+    out.push({ path: p, start, end: start + p.length });
+  }
+  return out;
+}
+
 export interface FilepathMatch {
   path: string;
   start: number;
@@ -74,14 +114,19 @@ export interface FilepathMatch {
 }
 
 export function detectFilepaths(text: string): FilepathMatch[] {
-  const out: FilepathMatch[] = [];
+  // Spaced whole-line paths go first and win any overlap: without that, the
+  // plain rule would pill a meaningless tail of the same line.
+  const out: FilepathMatch[] = spacedLinePaths(text);
   PATH_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PATH_RE.exec(text))) {
     if (!looksLikeExtension(m[2])) continue;
     const p = m[1];
     if (firstSegmentIsDomain(p)) continue;
-    out.push({ path: p, start: m.index, end: m.index + m[0].length });
+    const start = m.index;
+    const end = m.index + m[0].length;
+    if (out.some((o) => start < o.end && o.start < end)) continue;
+    out.push({ path: p, start, end });
   }
   // Paths ending in a known extensionless file (see KNOWN_EXTENSIONLESS_NAMES).
   // Their terminator lookahead refuses a following `.x`, so they can never
