@@ -574,7 +574,8 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
                 then the two stacked buttons, main on top. No bolt badge (fix-batch3#FB-4) and no
                 glyph in the box (final-review#ST-30). The words keep every fact the old ones had. */}
             <OneJobCard actions={<>
-              <Button onClick={() => { applyFast(true); setFastConfirmOpen(false); }}>
+              {/* The fixed orange "charge" button (popup-cards-5#F-1: "Keep the orange"). */}
+              <Button variant="charge" onClick={() => { applyFast(true); setFastConfirmOpen(false); }}>
                 Turn on and accept charges
               </Button>
               <Button variant="secondary" onClick={() => setFastConfirmOpen(false)}>Cancel</Button>

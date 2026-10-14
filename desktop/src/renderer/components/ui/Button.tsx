@@ -13,7 +13,7 @@ import React from 'react';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent' | 'raised' | 'toggle';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'raised' | 'toggle';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
@@ -80,6 +80,13 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   ghost: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge',
   danger: 'border border-transparent bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
   'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10 active:bg-destructive/20',
+  // The main button of an action that costs money (Fast mode's "Turn on and accept charges").
+  // WHY a variant (popup-cards-5#F-1, Destin picked "Keep the orange"): a fixed billing-warning
+  // orange, not the theme's accent, so it reads "you are agreeing to charges" on every theme — a
+  // status colour, theme-independent like the others. Before, Fast mode hand-rolled this button,
+  // and a colour passed in className cannot beat the primary fill (colours are not a conflict
+  // group), so it is a variant with the filled buttons' invisible border and the shared size.
+  charge: 'border border-transparent bg-amber-700 text-black hover:bg-amber-700/90 active:bg-amber-700/80',
   // ghost, but for a control sitting ON an accent-filled surface (ViewToggleHint's
   // ✕). Added 2026-09-04: ghost there was wrong twice over — its hover fill is
   // --inset, a panel colour that reads as a foreign patch on accent, and its
