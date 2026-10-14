@@ -298,23 +298,23 @@ const PRODUCER_IN_PIECES = `
 const fs = require('fs');
 const lines = Number(process.argv[1]);
 const nap = new Int32Array(new SharedArrayBuffer(4));
-for (let i = 0; i < lines; i += 20) {
+for (let i = 0; i < lines; i += 10) {
   let buf = '';
-  for (let k = i; k < Math.min(lines, i + 20); k++) buf += 'L' + k + ' ' + 'x'.repeat(40) + '\\n';
+  for (let k = i; k < Math.min(lines, i + 10); k++) buf += 'L' + k + ' ' + 'x'.repeat(40) + '\\n';
+  if (i + 10 >= lines) buf += 'DONE-MARKER\\n';   // the end goes out with the last piece, in one write
   const b = Buffer.from(buf); let off = 0;
   while (off < b.length) { try { off += fs.writeSync(1, b, off, b.length - off); } catch (e) { if (e.code !== 'EAGAIN') throw e; } }
-  Atomics.wait(nap, 0, 0, 3);
+  Atomics.wait(nap, 0, 0, 10);   // longer than the worker's 4 ms batching, so each piece is its own read
 }
-fs.writeSync(1, 'DONE-MARKER\\n');
 `;
-// The two "program exits while the brake is on" cases: 160 lines (~7.2 KB) in 900-character pieces.
-// The brake goes on after the 7th piece (HIGH 6000), so ONE piece (~920 characters) is left unread when
-// the program exits. WHY so small (measured on CI 2026-10-14): what the operating system keeps for an
-// exited program's unread output differs — macOS holds too little for a bigger remainder to be written at
-// all (the program blocks and never exits), and Linux 6.17 (GitHub's) kept only ~5 KB, discarding the
-// rest inside the kernel before the worker could read it (the app cannot recover that). A remainder
-// every system keeps tests what is the app's: that the worker reads it out before node-pty closes up.
-const EXIT_LINES = 160;
+// The two "program exits while the brake is on" cases: 150 lines (~6.8 KB) in 450-character pieces.
+// The brake goes on after the 14th piece (HIGH 6000), so ONE piece (~475 characters with the end
+// marker) is left unread when the program exits. WHY so small (measured on CI 2026-10-14): what the
+// operating system keeps of an exited program's unread output differs — Linux 6.17 (GitHub's) kept
+// only ~5 KB, and macOS less than ~930 characters (it dropped the last 13), discarding the rest inside
+// the kernel before the worker could read it; the app cannot recover that. A remainder every system
+// keeps tests what is the app's: that the worker reads it out before node-pty closes up.
+const EXIT_LINES = 150;
 const expected = (lines: number) => {
   let s = '';
   for (let i = 0; i < lines; i++) s += 'L' + i + ' ' + 'x'.repeat(40) + '\r\n';   // the tty turns \n into \r\n
