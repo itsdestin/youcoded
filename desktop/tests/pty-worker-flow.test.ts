@@ -307,6 +307,14 @@ for (let i = 0; i < lines; i += 20) {
 }
 fs.writeSync(1, 'DONE-MARKER\\n');
 `;
+// The two "program exits while the brake is on" cases: 160 lines (~7.2 KB) in 900-character pieces.
+// The brake goes on after the 7th piece (HIGH 6000), so ONE piece (~920 characters) is left unread when
+// the program exits. WHY so small (measured on CI 2026-10-14): what the operating system keeps for an
+// exited program's unread output differs — macOS holds too little for a bigger remainder to be written at
+// all (the program blocks and never exits), and Linux 6.17 (GitHub's) kept only ~5 KB, discarding the
+// rest inside the kernel before the worker could read it (the app cannot recover that). A remainder
+// every system keeps tests what is the app's: that the worker reads it out before node-pty closes up.
+const EXIT_LINES = 160;
 const expected = (lines: number) => {
   let s = '';
   for (let i = 0; i < lines; i++) s += 'L' + i + ' ' + 'x'.repeat(40) + '\r\n';   // the tty turns \n into \r\n
@@ -372,12 +380,8 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   }, 90000);
 
   it('a program that exits while the brake is on still delivers its last lines (no acknowledgements at all)', async () => {
-    // ~23 KB in all: more than HIGH (so the brake goes on) but small enough that whatever the worker has
-    // not read yet fits in the kernel's pty buffer, so the program can finish writing and EXIT while the
-    // worker is still paused. (A larger flood could not exit: it would be blocked in write(), which is the
-    // brake working. The first version used ~94 KB and hung under machine load: the unread part no longer fit.)
-    const lines = 500;
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
+    const lines = EXIT_LINES;
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' }, PRODUCER_IN_PIECES);
     kids.push(r.child);
     r.state.auto = false;
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
@@ -387,7 +391,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   // The same, with the worker held up past node-pty's 200 ms socket-destroy timer just as the program
   // exits — what a loaded CI machine did (the last 27 of 500 lines lost, 2026-10-14).
   it('the last lines survive the worker being held up as the program exits', async () => {
-    const lines = 500;
+    const lines = EXIT_LINES;
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000', YOUCODED_PTY_TEST_EXIT_FREEZE_MS: '300' }, PRODUCER_IN_PIECES);
     kids.push(r.child);
     r.state.auto = false;
