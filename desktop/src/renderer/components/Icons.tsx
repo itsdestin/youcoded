@@ -69,6 +69,51 @@ export function AttachIcon({ className = 'w-4 h-4' }: IconProps) {
   );
 }
 
+/** Globe icon — the Browser (the assistant's own web browser) */
+export function GlobeIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" />
+    </svg>
+  );
+}
+
+/** Back / forward arrows and reload — the Browser panel's page buttons */
+export function BackIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 12H5" /><path d="M11 6l-6 6 6 6" />
+    </svg>
+  );
+}
+
+export function ForwardIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+/** Stop loading — the Browser's Reload button while a page loads. */
+export function StopIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 6 6 18" /><path d="M6 6l12 12" />
+    </svg>
+  );
+}
+
+export function ReloadIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" />
+    </svg>
+  );
+}
+
 /** Game controller icon — handheld style */
 export function GamepadIcon({ className = 'w-4 h-4' }: IconProps) {
   return (

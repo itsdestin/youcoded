@@ -47,6 +47,7 @@ object MessageRouter {
             put("contentSearch", false)
             put("liveHandoff", false)
             put("sessionRecord", false)
+            put("assistantBrowser", false)
         }
     }
 

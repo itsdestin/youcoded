@@ -1,3 +1,4 @@
+import { browserToolOf } from '../../shared/browser-types';
 import { ToolCallState } from '../../shared/types';
 
 // Plain-language headline for a collapsed tool group (2+ tool calls sharing
@@ -89,6 +90,12 @@ const KIND_TABLE: Record<string, KindPhrasing> = {
     done: () => 'checked in with you',
     active: () => 'checking in with you',
   },
+  // The Browser (2026-10-13): every Browser step, native or Claude Code's
+  // random-id MCP name, is one plain kind — never "Youcoded Browser F990aa15".
+  browser: {
+    done: (n) => (n === 1 ? 'used the browser' : `used the browser ${n} times`),
+    active: (n) => (n === 1 ? 'using the browser' : `using the browser ${n} times`),
+  },
 };
 
 function mcpPhrasing(server: string): KindPhrasing {
@@ -106,11 +113,13 @@ function mcpPhrasing(server: string): KindPhrasing {
 function kindKey(toolName: string): string {
   if (toolName === 'TaskCreate' || toolName === 'TaskUpdate' || toolName === 'TodoWrite') return 'todo';
   if (toolName === 'max_steps' || toolName === 'doom_loop') return 'checkin';
+  if (browserToolOf(toolName)) return 'browser';
   if (toolName.startsWith('mcp__')) return `mcp:${toolName.slice(5).split('__')[0] || ''}`;
   return toolName;
 }
 
 function phrasingFor(toolName: string): KindPhrasing {
+  if (browserToolOf(toolName)) return KIND_TABLE.browser;
   if (toolName.startsWith('mcp__')) return mcpPhrasing(toolName.slice(5).split('__')[0] || '');
   const key = kindKey(toolName);
   return (

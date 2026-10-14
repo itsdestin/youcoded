@@ -16,11 +16,12 @@
 // dropdown — the header has a backdrop-filter stacking context and
 // overflow-hidden ancestors, so an in-tree absolute dropdown gets clipped.
 
+import { browserSupported, toggleBrowserPane, useBrowserButton } from '../state/browser-store';
 import { guardDirtyEditor } from './artifact-views/dirty-editor-guard';
 import { PagesIcon } from './pages/page-icons';
 import { createPortal } from 'react-dom';
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
-import { GamepadIcon } from './Icons';
+import { GamepadIcon, GlobeIcon } from './Icons';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { Tooltip } from './ui';
@@ -62,9 +63,13 @@ export default function OverflowMenu({
   // otherwise collapsing the header silently swallows the notification that
   // something needs attention. Danger (red) outranks challenge (orange)
   // outranks info (blue) — same precedence the cog uses on its own.
+  // The Browser (2026-10-13): its row is here on narrow (the header button is
+  // wide-only), so its "needs a look" dot surfaces on ||| too.
+  const browser = useBrowserButton(activeSessionId);
+  const showBrowser = browserSupported();
   const badgeColor = settingsDangerBadge ? 'bg-red-500'
     : challengePending ? 'bg-amber-700'
-    : settingsBadge ? 'bg-blue-500'
+    : settingsBadge || (showBrowser && browser.dot && !browser.open) ? 'bg-blue-500'
     : null;
 
 
@@ -124,6 +129,14 @@ export default function OverflowMenu({
         </svg>
       ),
     },
+    ...(showBrowser ? [{
+      key: 'browser',
+      label: 'Browser',
+      onClick: choose(() => { if (activeSessionId) toggleBrowserPane(activeSessionId); }),
+      active: browser.open,
+      dot: browser.dot && !browser.open ? 'bg-blue-500' : null,
+      icon: <GlobeIcon className="w-4 h-4" />,
+    }] : []),
     {
       key: 'games',
       // §4.1: names the pane, not one of its four games. Matches HeaderBar's

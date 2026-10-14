@@ -55,6 +55,10 @@ export interface Capabilities {
    *  draws them from the record and does NOT infer them itself (one-core R5-4a). False only on the Android app's own runtime,
    *  which has no such record: there the screen keeps drawing what it infers. */
   sessionRecord: boolean;
+  /** The Browser (the assistant's own web browser, 2026-10-13): its panel, ask cards and Settings section. Only the
+   *  computer's own window — the browser runs there, and its live picture and controls are not sent to phones in this
+   *  release (spec docs/active/specs/2026-10-13-assistant-browser-design.md §3). */
+  assistantBrowser: boolean;
 }
 
 /** What the computer's own window can do. The preload copies this and overrides `nativeSessions` from the
@@ -74,6 +78,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   contentSearch: true,
   liveHandoff: true,
   sessionRecord: true,
+  assistantBrowser: true,
 };
 
 /** What a screen watching a computer over the network can do (a phone's browser, or the Android app paired to a
@@ -99,6 +104,7 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   // FALSE on purpose: a host that sends no `sessionRecord` (a computer older than the record) has none, so the screen keeps inferring the
   // lines itself. A host WITH a record says true explicitly in its handshake (remote-server.ts), never by this default (review fix, R5-4a F3).
   sessionRecord: false,
+  assistantBrowser: false,
 };
 
 /** What the Android app can do on its OWN runtime (not paired to a computer). Mirrored in MessageRouter.kt. */
@@ -117,6 +123,7 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   contentSearch: false,
   liveHandoff: false,
   sessionRecord: false,
+  assistantBrowser: false,
 };
 
 const KEYS = Object.keys(REMOTE_SCREEN_CAPABILITIES) as Array<keyof Capabilities>;

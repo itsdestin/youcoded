@@ -49,6 +49,7 @@ import type { NativeChannelTypes } from './native-channel-types';
 import type { ModelsChannelTypes } from './models-channel-types';
 import type { FilesChannelTypes } from './files-channel-types';
 import type { AppChannelTypes } from './app-channel-types';
+import type { BrowserBridge, BrowserChannelTypes } from './browser-types';
 import type { OfficeChannelTypes } from './office-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
@@ -459,6 +460,33 @@ export const IPC = {
   PERFORMANCE_GET_CONFIG: 'performance:get-config',
   PERFORMANCE_SET_CONFIG: 'performance:set-config',
   APP_RESTART: 'app:restart',
+  // The Browser (2026-10-13; spec docs/active/specs/2026-10-13-assistant-browser-design.md). Desktop window only:
+  // every handle/on entry is desktopOnly and refused on a phone. Pushes: BROWSER_STATE_CHANGED (one conversation's
+  // state, to every window), BROWSER_FRAME (a live picture, ONLY to the window watching that conversation),
+  // BROWSER_INFO_CHANGED (settings/install changed).
+  BROWSER_STATE: 'browser:state',
+  BROWSER_INFO: 'browser:info',
+  BROWSER_WATCH: 'browser:watch',
+  BROWSER_UNWATCH: 'browser:unwatch',
+  BROWSER_FRAME_ACK: 'browser:frame-ack',
+  BROWSER_ANSWER: 'browser:answer',
+  BROWSER_OPEN_WINDOW_FOR_HANDOFF: 'browser:open-window-for-handoff',
+  BROWSER_SET_SHOW_WINDOW: 'browser:set-show-window',
+  BROWSER_UPDATE_SETTINGS: 'browser:update-settings',
+  BROWSER_REMOVE_SITE: 'browser:remove-site',
+  BROWSER_CLEAR_SIGNINS: 'browser:clear-signins',
+  BROWSER_STOP: 'browser:stop',
+  BROWSER_CLOSE_SESSION: 'browser:close-session',
+  BROWSER_DOWNLOAD: 'browser:download',
+  BROWSER_CANCEL_DOWNLOAD: 'browser:cancel-download',
+  BROWSER_CHECK_MY_CHROME: 'browser:check-my-chrome',
+  BROWSER_OPEN: 'browser:open',
+  BROWSER_INPUT: 'browser:input',
+  BROWSER_VIEW_SIZE: 'browser:view-size',
+  BROWSER_SELECTION: 'browser:selection',
+  BROWSER_STATE_CHANGED: 'browser:state-changed',
+  BROWSER_FRAME: 'browser:frame',
+  BROWSER_INFO_CHANGED: 'browser:info-changed',
   // System namespace — hardware back button bridge (Android only)
   SYSTEM_NOTIFY_STACK_STATE: 'system:notify-stack-state',
   SYSTEM_BACK: 'system:back',
@@ -915,7 +943,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
+export interface ChannelTypes extends BrowserChannelTypes, MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };
@@ -1339,6 +1367,8 @@ interface ClaudeApi {
   };
   // GPU / performance preference — multiGpuDetected: false means the
   // Performance section in Settings hides itself (no hardware to toggle).
+  /** The Browser (2026-10-13): shared/browser-types.ts. */
+  browser: BrowserBridge;
   performance: {
     get: () => Promise<import('./types').PerformanceConfigSnapshot>;
     set: (preferPowerSaving: boolean) => Promise<{ ok: true }>;

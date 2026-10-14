@@ -16,5 +16,7 @@ export function isTypingTarget(el: Element | null | undefined): boolean {
   if (h.isContentEditable) return true;
   // closest() also covers CM6 sub-elements that are not themselves marked
   // contenteditable (gutters, panels) — keys there belong to the editor.
-  return !!h.closest?.('.cm-editor');
+  // [data-keyboard-owner]: a surface that sends every key on (the Browser
+  // panel's page picture types into the page) — no shortcut may take them.
+  return !!h.closest?.('.cm-editor, [data-keyboard-owner]');
 }

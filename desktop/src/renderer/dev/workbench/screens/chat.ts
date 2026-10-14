@@ -41,6 +41,14 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/files', 'pane'),
   chat('chat/terminal', 'view'),
   chat('chat/games', 'pane'),
+  // The Browser (2026-10-13): the panel (opened by name) and the ask card in the chat, per
+  // scene of the workbench's fake browser (?browser=, dev/workbench/browser-mock.ts).
+  { ...chat('chat/browser', 'pane', 'browser'), params: { browser: 'working' } },
+  { ...chat('chat/browser#explainer', 'pane', 'browser'), params: { browser: 'explainer' } },
+  { ...chat('chat/browser#starting', 'pane', 'browser'), params: { browser: 'starting' } },
+  { ...chat('chat/browser#error', 'pane', 'browser', 'error-state'), params: { browser: 'error' } },
+  { ...chat('chat/browser#narrow', 'pane', 'browser', 'narrow'), params: { browser: 'working' }, viewport: { width: 390, height: 844 } },
+  ...['site', 'final', 'local', 'handoff', 'no-browser', 'downloading'].map((b) => ({ ...chat(`chat#browser-${b}`, 'view', 'browser'), params: { browser: b } })),
   // Right-click menus, opened on the first visible element of each kind.
   chat('chat/menu/assistant', 'menu'),
   chat('chat/menu/user', 'menu'),

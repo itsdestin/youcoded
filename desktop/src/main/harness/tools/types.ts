@@ -105,6 +105,12 @@ export interface ToolServices {
    *  promises an over-limit image. Absent in tests and one-off contexts — the
    *  reader's pixel gate still holds. */
   images?: ImagePreparerLike;
+  /** The Browser (assistant-browser/): runs a Browser tool in the worker for
+   *  this conversation. Present only on desktop; its presence is what attaches
+   *  the Browser tools (harness-session.ts syncBrowserTools). */
+  browser?: {
+    callTool(sessionId: string, tool: string, args: unknown, opts: { signal?: AbortSignal; vision: boolean }): Promise<{ text: string; isError?: boolean; imagePath?: string }>;
+  };
   /** Task 6 — the Task tool's host-side collaborators. Per-parent slot and
    *  single-writer state live on NativeSessionHost (spec §5 Global
    *  Constraints scope decision: PER-PARENT, never host-global), so the tool

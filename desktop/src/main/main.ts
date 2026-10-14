@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -1066,7 +1067,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   });
 
   // One-core R1: the runtime is built where registerIpcHandlers used to build it inline; both doors get this one.
-  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager });
+  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager, browser: browserToolService() });
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
@@ -1433,6 +1434,9 @@ void app.whenReady().then(async () => {
     log('ERROR', 'Main', 'Failed to start hook relay', { error: String(e) });
   }
   perfMark('main:chore:hook-relay:done');
+
+  // The Browser: pushes to windows + the Claude Code relay, in the background (browser-main.ts).
+  startBrowserSupport(sessionManager);
 
   // Legacy cleanup: youcoded-core was deprecated 2026-04. Users who
   // upgraded from a prior version still have the legacy clone at
@@ -1921,6 +1925,9 @@ void app.whenReady().then(async () => {
   perfMark('main:post-window:done');
 });
 
+// The Browser: a conversation that ends closes its tabs (assistant-browser/browser-main.ts).
+wireBrowserSessionCleanup(sessionManager);
+
 // Every teardown step the app owns, in one place, run at most once.
 //
 // WHY THIS EXISTS AS A FUNCTION (2026-08-05): this body used to live inline in
@@ -1980,6 +1987,7 @@ async function runShutdown(): Promise<void> {
   ]).catch(() => {});
   // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.
   const officeQuit = quitOfficeSessions();
+  const browserStopped = stopBrowserSupport(); // bounded: closes only the browser it launched
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
@@ -2031,6 +2039,7 @@ async function runShutdown(): Promise<void> {
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
   await officeQuit;
+  await browserStopped;
 }
 
 // Route 1: last window closed. Delegate to app.quit() rather than tearing down

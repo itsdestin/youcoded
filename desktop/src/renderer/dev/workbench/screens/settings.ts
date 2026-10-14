@@ -26,6 +26,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sound', 'dialog'),
   // Only a two-graphics-chip computer shows this row; `gpus=2` makes the practice app one.
   { ...settings('settings/performance', 'dialog'), params: { gpus: '2' } },
+  // The Browser (2026-10-13): the row shows on the computer's own window; scenes from ?browser=.
+  { ...settings('settings/browser', 'dialog', 'browser'), params: { browser: 'working' } },
+  { ...settings('settings/browser#no-browser', 'dialog', 'browser'), params: { browser: 'no-browser' } },
+  { ...settings('settings/browser#downloading', 'dialog', 'browser'), params: { browser: 'downloading' } },
   settings('settings/sync', 'dialog', 'error-state'),
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },

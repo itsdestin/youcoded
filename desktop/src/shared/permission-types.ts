@@ -188,6 +188,18 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     // shell.openExternal's own scheme allowlist AT CLICK TIME — the model
     // never triggers navigation itself. Nothing to ask about, in any mode.
     { tool: 'SendUserLink', action: 'allow' },
+    // The Browser (2026-10-13): never asked HERE in any mode — the Browser asks
+    // the person with its own card (site permission, final steps, home-network
+    // addresses), the SAME rules for native and Claude Code sessions. Gating it
+    // here too would double-ask and make the two session kinds behave differently
+    // (design review 1 #1; spec docs/active/specs/2026-10-13-assistant-browser-design.md).
+    { tool: 'BrowserNavigate', action: 'allow' },
+    { tool: 'BrowserSnapshot', action: 'allow' },
+    { tool: 'BrowserAct', action: 'allow' },
+    { tool: 'BrowserScreenshot', action: 'allow' },
+    { tool: 'BrowserTabs', action: 'allow' },
+    { tool: 'BrowserWait', action: 'allow' },
+    { tool: 'BrowserAskUser', action: 'allow' },
     // G-1 (2026-08-28): the Bash companions read a log the session already
     // owns, or stop a command the session itself started — nothing to ask
     // about; asking would train click-through (spec §4.2/4.3 "never asks").

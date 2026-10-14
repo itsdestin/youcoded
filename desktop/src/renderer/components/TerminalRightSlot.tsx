@@ -1,6 +1,7 @@
 import React from 'react';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
+import { useBrowserExpanded } from '../state/browser-store';
 
 interface Props {
   sessionId: string;
@@ -30,13 +31,15 @@ interface Props {
  * `visible`, so exactly one instance of the drawer/game mounts at a time.
  */
 export default function TerminalRightSlot({ sessionId, cwd, gamePane, drawerOpen, expanded }: Props) {
+  // The Browser panel's Expand (browser-store ends it when the panel closes).
+  const sidePaneExpanded = useBrowserExpanded(sessionId);
   const gameOpen = !!gamePane;
   // Resolve the project only when the artifact drawer (not the game pane) is open.
   const activeProject = useActiveProject(cwd, drawerOpen && !gameOpen);
 
   return (
     <div className="terminal-panel-shell">
-      <div className={`framed-shell drawer-open${expanded && !gameOpen ? ' drawer-expanded' : ''}`}>
+      <div className={`framed-shell drawer-open${(expanded && !gameOpen) || (gameOpen && sidePaneExpanded) ? ' drawer-expanded' : ''}`}>
         {/* Transparent spacer standing in for the chat pane — pushes the
             drawer to the right and lets the terminal show through + stay
             interactive (click-through via CSS). */}

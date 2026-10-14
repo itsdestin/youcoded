@@ -35,6 +35,7 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
+import { syncBrowserTools } from './tools/browser';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
@@ -1642,6 +1643,7 @@ export class HarnessSession extends EventEmitter {
     if (!this.profile.supportsTools) { this._droppedMcpServers = []; this.activeSizingTools = {}; return {}; }
     this.syncSkillTool();
     this.syncTaskTool();
+    syncBrowserTools(this.toolByName, !!this.opts.toolServices?.browser && !this.opts.isSpecialistChild && this.profile.maxToolPresentation !== 'simplified');
     this.syncMcpTools();
     // Simplified presentation (spec §4.2): small local models get each tool's
     // compact shortDescription (falling back to the full description when a tool

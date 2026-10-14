@@ -8,6 +8,8 @@ import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
 import { answerPrompt } from '../state/prompt-input';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import ThinkingIndicator from './ThinkingIndicator';
+import BrowserAskCard from './browser/BrowserAskCard';
+import { browserSupported } from '../state/browser-store';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
@@ -32,6 +34,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
+import { useBrowserExpanded } from '../state/browser-store';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -166,6 +169,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
   const gameOpen = !!gamePane;
+  // The Browser panel's Expand (only while it is the side pane: closing it,
+  // or opening Games over it, ends the expansion — browser-store).
+  const sidePaneExpanded = useBrowserExpanded(sessionId);
   // Either occupant means the right slot is in use → frame the chat accordingly.
   const rightPaneOpen = gameOpen || drawerOpen;
 
@@ -939,7 +945,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           are only needed by the drawer's artifacts.save IPC call and will be
           resolved in a later task when session metadata is threaded to ChatView. */}
       {/* drawer-open modifier collapses chat pane on narrow screens (Task 6.3) */}
-      <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${drawerExpanded && !gameOpen ? ' drawer-expanded' : ''}`}>
+      <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${(drawerExpanded && !gameOpen) || (gameOpen && sidePaneExpanded) ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
@@ -1218,6 +1224,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               }
               return null;
             })()}
+            {/* The Browser's ask card (2026-10-13): the assistant is waiting on
+                the person — a site permission, a final step, "needs you", or a
+                browser download. Reads only this conversation's slice. */}
+            {browserSupported() && <BrowserAskCard sessionId={sessionId} />}
           </>
         )}
            </div>
