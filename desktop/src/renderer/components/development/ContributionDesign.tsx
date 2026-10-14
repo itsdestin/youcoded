@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, LoadingState } from '../ui';
 import { networkOnlineNow } from '../../hooks/useNetworkOnline';
 import type { ReactNode } from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -180,26 +180,21 @@ export function ContributionDesign({ open, onClose, handover, screen = 'settings
           the computer reports none. The details stay one click away for whoever needs them. */}
       {phase === 'open-failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <p className="text-sm text-fg">YouCoded’s code is ready on this computer.</p>
-        <Callout tone="danger" actionsPlacement="below" actions={<>
+        {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+        <Callout tone="danger" actionsPlacement="below" details={error ?? undefined} actions={<>
           {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
           <Button size="sm" onClick={() => void openProject()}>Try again</Button>
         </>}>The new conversation didn’t open. The code is still on this computer, so trying again picks up where this left off.</Callout>
-        {error && <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{error}</p>
-        </FoldRow>}
       </div>}
 
       {phase === 'failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <p className="text-xs text-fg-2 leading-relaxed">{lead}</p>
-        <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below" actions={<>
+        <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below" details={error ?? undefined} actions={<>
           {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
           <Button size="sm" onClick={setup}>Try again</Button>
         </>}>{online
           ? 'The download didn’t finish. Nothing was left behind, so trying again starts cleanly.'
           : 'This computer isn’t connected to a network, so the download couldn’t start.'}</Callout>
-        {error && <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{error}</p>
-        </FoldRow>}
       </div>}
 
     </div>

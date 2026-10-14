@@ -20,7 +20,7 @@
 // columns (marketplace-detail-1#MD-1): the reading on the left, the short facts on the
 // right, one column at phone width. The one-column and folded drafts were removed.
 import React from 'react';
-import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { ChipRow } from './FactChips';
 
@@ -236,14 +236,10 @@ export function DetailActions({ children }: { children: React.ReactNode }) {
 export function InstallFailed({ name, message, onRetry }: { name: string; message: string; onRetry(): void }) {
   return (
     <div className="space-y-2">
-      <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Try again</Button>}>
+      {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+      <Callout tone="danger" details={message} actions={<Button size="sm" onClick={onRetry}>Try again</Button>}>
         {name} couldn&rsquo;t be installed.
       </Callout>
-      {message.trim() && (
-        <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{message}</p>
-        </FoldRow>
-      )}
     </div>
   );
 }

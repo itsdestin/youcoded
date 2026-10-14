@@ -3,7 +3,7 @@ import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
-import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, FoldRow, LoadingState, SectionLabel, SettingRow } from '../ui';
+import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, LoadingState, SectionLabel, SettingRow } from '../ui';
 import type { HeadToHead } from '../../state/marketplace-api-client';
 import { recordSentence, recordsByOpponent } from './head-to-head';
 import { useFriends, type ApiResult } from './useFriends';
@@ -102,13 +102,9 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
         moreActions={more}
         busy={retrying}
         onRetry={handleRetry}
+        // The machine detail under Details, inside the box (popup-cards-8#Q-1: Details sits inside the error box, everywhere).
+        details={detail ?? undefined}
       />
-      {/* The machine detail under Details — copied from DetailPage's InstallFailed fold. */}
-      {detail && (
-        <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{detail}</p>
-        </FoldRow>
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
-import { Badge, Button, CARD_LEVEL_1, Dialog, ErrorState, FoldRow, LoadingState, SectionLabel, TextInput } from '../ui';
+import { Badge, Button, CARD_LEVEL_1, Dialog, ErrorState, LoadingState, SectionLabel, TextInput } from '../ui';
 import { ChipAction } from '../tags/TagChip';
 import { plainMessage } from '../../utils/ipc-error';
 import type { VoiceVocabularyBridge } from '../../../shared/voice-types';
@@ -112,10 +112,8 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
           message={error.action === 'load'
             ? 'Your vocabulary couldn’t be loaded.'
             : 'Your changes couldn’t be saved. They’re still here, so you can try again.'}
-          onRetry={() => { if (error.action === 'load') setLoadAttempt((n) => n + 1); else void save(); }} />
-        {error.detail.trim() && <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{error.detail}</p>
-        </FoldRow>}
+          onRetry={() => { if (error.action === 'load') setLoadAttempt((n) => n + 1); else void save(); }}
+          details={error.detail} /* popup-cards-8#Q-1: Details sits inside the error box, everywhere */ />
       </div>}
       {saved !== null && !error && <div className="flex justify-end">
         <Button variant="primary" disabled={!dirty || saving} onClick={() => { void save(); }}>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ErrorState, FoldRow } from './ui';
+import { ErrorState } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 
@@ -43,12 +43,8 @@ export default class ErrorBoundary extends React.Component<Props, State> {
               onRetry={() => this.setState({ error: null })}
               onReportBug={() => this.setState({ report: { surface: this.props.name, error: raw } })}
               onDiagnose={() => this.setState({ report: { surface: this.props.name, error: raw, diagnose: true } })}
+              details={raw} // popup-cards-8#Q-1: Details sits inside the error box, everywhere
             />
-            {raw.trim() && (
-              <FoldRow title="Details">
-                <p className="text-2xs text-fg-2 font-mono break-all">{raw}</p>
-              </FoldRow>
-            )}
           </div>
           <BugReportPopup open={!!this.state.report} onClose={() => this.setState({ report: null })} context={this.state.report ?? undefined} />
         </div>

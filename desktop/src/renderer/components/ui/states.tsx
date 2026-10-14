@@ -100,6 +100,9 @@ type ErrorStateCommon = {
    *  at the right-hand end. They do not count toward "at least one action": the type still
    *  demands one of the three. */
   moreActions?: ReadonlyArray<{ label: string; onClick: () => void }>;
+  /** The failure's own words, folded under "Details" inside the box (Callout `details`;
+   *  popup-cards-8#Q-1, Destin: Details goes inside the error box, everywhere). */
+  details?: string;
   /** Every action is disabled while a choice already made is running (Office's "Save a copy…",
    *  fix round 5: pressing Retry or Close without saving mid-copy would race it). */
   busy?: boolean;
@@ -205,7 +208,7 @@ export function ErrorState(props: ErrorStateProps) {
     // stacked layout had, and the one the notice box uses for a long notice
     // (provider-notices#PN-1). Never bottom left, where a filled button reads as stray.
     return (
-      <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} actionsPlacement="below">
+      <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} actionsPlacement="below" details={props.details}>
         {body}
       </Callout>
     );
@@ -218,7 +221,7 @@ export function ErrorState(props: ErrorStateProps) {
   // Retry stays the FILLED button (review correction: an outline reads as dim on dark themes).
   const block = (props.variant ?? 'block') === 'block';
   return (
-    <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} compact={!block}>
+    <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} compact={!block} details={props.details}>
       {body}
     </Callout>
   );

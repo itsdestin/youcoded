@@ -262,8 +262,8 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
               message="The voice download didn't finish."
               moreActions={[{ label: 'Not now', onClick: () => { onClearError(); setOpen(false); } }]}
               onRetry={onDownload}
+              details={error} // popup-cards-8#Q-1: Details sits inside the error box, everywhere
             />
-            <ErrorDetails text={error} />
           </div>
         ) : (
           // WHY secondary, not ghost (decisions "Secondary buttons", ui-element-review-final#F-2):

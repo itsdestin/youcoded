@@ -150,6 +150,8 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
       <div role={role} className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
         <div className="flex-1 min-w-40">{text}</div>
         {actions && <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {/* The slim one-line box takes Details on its own full-width line at the foot. */}
+        {fold && <div className="basis-full">{fold}</div>}
       </div>
     );
   }

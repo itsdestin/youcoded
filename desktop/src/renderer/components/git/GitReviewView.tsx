@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { formatRelativeTime } from '../../utils/format-time';
-import { Button, CheckboxMark, Chip, ErrorState, FoldRow, Pill, Textarea, Tooltip } from '../ui';
+import { Button, CheckboxMark, Chip, ErrorState, Pill, Textarea, Tooltip } from '../ui';
 import { GitReviewCard } from './GitReviewCard';
 import type { GitFileReviewResult, GitLogEntry } from '../../../shared/git-types';
 import type { StructuredPatchHunk } from '../../../shared/types';
@@ -42,12 +42,8 @@ function gitApi(): any {
 function GitFailure({ sentence, detail, onRetry }: { sentence: string; detail: string; onRetry: () => void }) {
   return (
     <div className="space-y-2">
-      <ErrorState variant="inline" message={sentence} onRetry={onRetry} />
-      {detail.trim() && (
-        <FoldRow title="Details">
-          <p className="text-2xs text-fg-2 font-mono break-all">{detail}</p>
-        </FoldRow>
-      )}
+      {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+      <ErrorState variant="inline" message={sentence} onRetry={onRetry} details={detail} />
     </div>
   );
 }

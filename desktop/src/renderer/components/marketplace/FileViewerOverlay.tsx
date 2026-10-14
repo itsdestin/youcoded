@@ -11,7 +11,7 @@ import MarkdownContent from "../MarkdownContent";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { useScrollFade } from "../../hooks/useScrollFade";
 import './FileViewerOverlay.css';
-import { Callout, CloseButton, ErrorState, FoldRow, LoadingState } from "../ui";
+import { Callout, CloseButton, ErrorState, LoadingState } from "../ui";
 
 export type FileViewerTarget = {
   pluginId: string;
@@ -101,14 +101,10 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
             // platform" never changes on a second try, so it gets the box without the button.
             <div className="max-w-3xl mx-auto space-y-2">
               {state.retryable ? (
-                <ErrorState message="Couldn't load this file." onRetry={() => setAttempt((n) => n + 1)} />
+                // popup-cards-8#Q-1: Details sits inside the error box, everywhere.
+                <ErrorState message="Couldn't load this file." onRetry={() => setAttempt((n) => n + 1)} details={state.error} />
               ) : (
-                <Callout tone="danger">Couldn't load this file.</Callout>
-              )}
-              {state.error.trim() && (
-                <FoldRow title="Details">
-                  <p className="text-2xs text-fg-2 font-mono break-all">{state.error}</p>
-                </FoldRow>
+                <Callout tone="danger" details={state.error}>Couldn't load this file.</Callout>
               )}
             </div>
           )}
