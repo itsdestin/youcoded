@@ -109,16 +109,19 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
 }
 
 describe('Always On section and announcement popup', () => {
-  // WHY: these four are the controls the bar always draws; the menu names them
-  // once, at the top, instead of tagging a single row "always on".
-  // pick-menus#PM-2: one line at the top instead of four rows that can't change.
-  it('names Model, Permissions, Tags & note and Announcements in one line, with no rows for them', async () => {
+  // WHY: these four are the controls the bar always draws. final-fixes#PR-7d (Destin: "add a new
+  // "always on" section … with on but greyed toggles that can't be disabled") replaced the one line
+  // under the title (pick-menus#PM-2) with a first section of rows whose switches are on and greyed.
+  it('opens on an "Always on" section: Model, Permissions, Tags & note and Announcements, switched on and locked', async () => {
     await openMenu('claude');
-    expect(screen.getByText('Model, permissions, tags & note and announcements are always shown.')).toBeTruthy();
+    expect(screen.queryByText(/are always shown\./)).toBeNull();
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
-    expect(headings[0]).toBe('Rate limits');
+    expect(headings[0]).toBe('Always on');
     for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements']) {
-      expect(switchFor(label)).toBeNull();
+      const sw = switchFor(`${label} (always on)`)!;
+      expect(sw).toBeTruthy();
+      expect(sw.getAttribute('aria-checked')).toBe('true');
+      expect((sw as HTMLButtonElement).disabled).toBe(true);
     }
   });
 

@@ -774,20 +774,18 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           "No flex-1" workaround is gone too: that was needed because its body
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
-      {/* WHY the always-shown line is the title's second line (final-review#ST-21/#PR-7, the one
-          popup rule — nothing bare on the popup): it was the one loose sentence above the cards.
-          Still one line (pick-menus#PM-2), now where every popup's header note goes. */}
-      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel"
-        subtitle={`${ALL_WIDGET_DEFS.filter((w) => w.locked).map((w, i) => (i ? w.label.toLowerCase() : w.label)).join(', ').replace(/, ([^,]*)$/, ' and $1')} are always shown.`}>
+      {/* WHY no line under the title, and an "Always on" section instead (final-fixes#PR-7d,
+          Destin: "remove subheader under status bar widgets, add a new "always on" section with
+          model, permission, tag/not, etc lines with on but greyed toggles that can't be
+          disabled"; popup-cards-1#PC-2 kept other popups' lines but not this one). */}
+      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
         {/* WHY labelled cards with a hint under every name (pick-menus, 2026-10-01; Destin,
             LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
             right"): the rows sat bare on the popup (guide: a label first, nothing bare)
             and every explanation hid behind its own (i). The hint is the description's
             first sentence; the "Best for" advice behind the (i) is dropped. Switches on
             the right, like Settings (pick-menus#PM-1). */}
-        {/* WHY one line, not four locked rows (pick-menus#PM-2): the menu now opens on
-            things you can change. The names come from the locked rows themselves (subtitle). */}
-        {WIDGET_CATEGORIES.filter((cat) => cat.widgets.some((w) => !w.locked)).map((cat) => (
+        {WIDGET_CATEGORIES.map((cat) => (
           <section key={cat.name}>
             <SectionLabel className="mb-2">{cat.name}</SectionLabel>
             {/* WHY spaced rows, no divide-y (final review F17; decisions "Card levels": never a
@@ -798,6 +796,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                 const on = !!w.locked || visible.has(w.id);
                 const hint = reason ?? w.hint ?? firstSentence(w.description);
                 const canToggle = !w.locked && !reason;
+                // An always-on row shows its switch on and greyed, never a control (PR-7d).
                 return (
                   <div key={w.id} data-widget-row={w.id}>
                     {/* The shared settings row (switch vertically centred beside title and
@@ -810,7 +809,8 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                       title={w.label}
                       description={hint}
                       className={reason ? 'opacity-50' : ''}
-                      control={canToggle ? <Toggle checked={on} onChange={() => toggle(w.id)} aria-label={w.label} /> : undefined}
+                      control={w.locked || canToggle ? <Toggle checked={on} disabled={!!w.locked} onChange={() => { if (!w.locked) toggle(w.id); }}
+                        aria-label={w.locked ? `${w.label} (always on)` : w.label} /> : undefined}
                     />
                     {/* The Theme pill's cycle: which themes a tap rotates through. A fold
                         under its own row instead of a pencil beside it. */}
