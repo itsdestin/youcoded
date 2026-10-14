@@ -197,9 +197,13 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
   // the rim between them was thin at the sides and thick at the corners. Its top corners are now
   // the card's radius less the 4px gap — one even rim all round — and its bottom corners stay
   // small where the picture meets the words. A theme that enlarges its radii scales both together.
-  const previewFrame = { borderRadius: 'calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) var(--radius-sm) var(--radius-sm)' };
+  // WHY the picture's own 16:10 shape (popup-cards-8#M-1, Destin: "still cant see the bottom of the
+  // preview. i should be able to see the full window"): theme previews are 800x500 window
+  // pictures, and a fixed 144px-tall strip cut off their bottom third. The frame now has the
+  // picture's shape, so the whole window shows; the card is taller by that much.
+  const previewFrame = { aspectRatio: '16 / 10', borderRadius: 'calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) var(--radius-sm) var(--radius-sm)' };
   const themeSwatches = item.kind === "theme" && themePreviewFailed && themeTokens && Object.keys(themeTokens).length > 0 ? (
-    <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 h-36 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
+    <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
       {Object.entries(themeTokens).map(([name, color]) => (
         <span key={name} className="flex-1" style={{ background: color as string }} />
       ))}
@@ -342,12 +346,12 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, su
           used to run edge to edge with a line under it. Same frame (THEME_PREVIEW_FRAME),
           same height as before so the grids and rails keep their size. */}
       {themePreviewUrl && (
-        <div style={previewFrame} className={`m-1 mb-0 h-36 shrink-0 ${THEME_PREVIEW_FRAME}`}>
+        <div style={previewFrame} className={`m-1 mb-0 shrink-0 ${THEME_PREVIEW_FRAME}`}>
           <img
             src={themePreviewUrl}
             alt=""
             loading="lazy"
-            className="w-full h-full object-cover object-top"
+            className="w-full h-full object-cover"
             onError={() => setThemePreviewFailed(true)}
           />
         </div>
