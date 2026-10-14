@@ -4,13 +4,13 @@
 // is showing (performance rule 2: hidden means idle).
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import BrowserPanel, { browserStatusWord, keyEventFor, pagePoint } from '../src/renderer/components/browser/BrowserPanel';
 import BrowserHeaderButton from '../src/renderer/components/browser/BrowserHeaderButton';
 import { browserToolDisplay } from '../src/renderer/components/browser/browser-tool-display';
 import { buildToolGroupHeadline } from '../src/renderer/utils/tool-group-summary';
-import { getBrowserState, isBrowserPaneOpen, openBrowserPane, setBrowserState, forgetBrowserSession, ensureBrowserStore } from '../src/renderer/state/browser-store';
+import { getBrowserState, isBrowserExpanded, isBrowserPaneOpen, openBrowserPane, setBrowserState, forgetBrowserSession, ensureBrowserStore } from '../src/renderer/state/browser-store';
 import { useBrowserRightPane } from '../src/renderer/hooks/use-browser-right-pane';
 import { browserInfo, browserState, installBrowserBridge } from './helpers/browser-bridge';
 
@@ -165,16 +165,31 @@ describe('Browser panel', () => {
     }
   });
 
-  it('showing the window asks first when pages are open, naming other chats', async () => {
-    const b = installBrowserBridge(browserInfo({ sessionsWithTabs: 3 }));
+  it('has Session Files\' header buttons: open in your own browser, copy link, expand, close', async () => {
+    const b = installBrowserBridge();
+    const openExternal = vi.fn(async () => {});
+    (window as any).claude.shell = { openExternal };
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     setBrowserState(browserState());
+    openBrowserPane('s1');
     render(<BrowserPanel sessionId="s1" />);
-    await waitFor(() => expect(b.bridge.info).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: 'Show window' }));
-    expect(await screen.findByText(/Showing the window restarts the browser\. Pages reopen where they were, but anything typed and not yet sent is lost\. This also affects 2 other chats using the browser\./)).toBeInTheDocument();
+    // The old window toggle and ••• menu are gone from the panel.
+    expect(screen.queryByRole('button', { name: /window/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More browser actions' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in your own browser' }));
+    expect(openExternal).toHaveBeenCalledWith('https://library.example.org/catalog');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://library.example.org/catalog'));
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
+    expect(isBrowserExpanded('s1')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Shrink panel' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(isBrowserPaneOpen('s1')).toBe(false);
+    // Closing ends the expansion: the panel reopens at the side.
+    expect(isBrowserExpanded('s1')).toBe(false);
     expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Show window' }));
-    await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(true));
   });
 
   it('the first-time explainer goes away for good with Got it', async () => {
@@ -185,11 +200,10 @@ describe('Browser panel', () => {
     await waitFor(() => expect(b.bridge.updateSettings).toHaveBeenCalledWith({ explainerSeen: true }));
   });
 
-  it('My Chrome has no Show/Hide window button (its window is the person\'s own)', () => {
+  it('in My Chrome it says the work happens in the person\'s own Chrome', () => {
     installBrowserBridge();
     setBrowserState(browserState({ myChrome: true, windowShown: true }));
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.queryByRole('button', { name: /window/ })).toBeNull();
     expect(screen.getByText(/Working in your Chrome/)).toBeInTheDocument();
   });
 });

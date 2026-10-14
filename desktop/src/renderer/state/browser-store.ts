@@ -15,6 +15,8 @@ type Listener = () => void;
 
 const states = new Map<string, BrowserSessionState>();
 const paneOpen = new Set<string>();
+/** Conversations whose Browser panel fills the chat area (the Expand button). */
+const expanded = new Set<string>();
 /** Conversations whose browser did something while their panel was closed (header dot). */
 const attention = new Set<string>();
 const listeners = new Set<Listener>();
@@ -66,7 +68,20 @@ export function openBrowserPane(sessionId: string): void {
 
 export function closeBrowserPane(sessionId: string): void {
   if (!paneOpen.delete(sessionId)) return;
+  expanded.delete(sessionId); // reopening starts at the side again
   emit();
+}
+
+/** Expand: the Browser panel takes the whole chat area, like Session Files' Expand. */
+export function toggleBrowserExpanded(sessionId: string): void {
+  if (!expanded.delete(sessionId)) expanded.add(sessionId);
+  emit();
+}
+
+export function isBrowserExpanded(sessionId: string): boolean { return paneOpen.has(sessionId) && expanded.has(sessionId); }
+
+export function useBrowserExpanded(sessionId: string | null | undefined): boolean {
+  return useSyncExternalStore(subscribe, () => !!sessionId && isBrowserExpanded(sessionId), () => false);
 }
 
 export function toggleBrowserPane(sessionId: string): void {
@@ -76,7 +91,7 @@ export function toggleBrowserPane(sessionId: string): void {
 /** Forget a conversation that ended. */
 export function forgetBrowserSession(sessionId: string): void {
   const had = states.delete(sessionId) || paneOpen.delete(sessionId) || attention.delete(sessionId);
-  paneOpen.delete(sessionId); attention.delete(sessionId);
+  paneOpen.delete(sessionId); attention.delete(sessionId); expanded.delete(sessionId);
   if (had) emit();
 }
 
@@ -135,5 +150,5 @@ export function useBrowserButton(sessionId: string | null | undefined): { show: 
 
 /** Test seam. */
 export function resetBrowserStoreForTests(): void {
-  states.clear(); paneOpen.clear(); attention.clear(); listeners.clear(); primed.clear(); started = false;
+  states.clear(); paneOpen.clear(); attention.clear(); expanded.clear(); listeners.clear(); primed.clear(); started = false;
 }

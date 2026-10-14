@@ -14,11 +14,11 @@
 // React state per frame — then acknowledged so the next one may come.
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
-import { closeBrowserPane, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, CloseButton, Dialog, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
+import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
+import { Button, Callout, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
+import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon } from '../Icons';
 import { ScreenMark } from '../../shoot-mode';
-import { ContextMenu } from '../context-menu/ContextMenu';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
 
@@ -266,10 +266,9 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
 
 export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const state = useBrowserState(sessionId);
+  const expanded = useBrowserExpanded(sessionId);
   const [info, setInfo] = useState<BrowserInfo | null>(null);
-  const [confirmRestart, setConfirmRestart] = useState<null | boolean>(null);
-  const [switching, setSwitching] = useState(false);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [copied, setCopied] = useState(false);
   // On a narrow screen the panel covers the chat, so the browser's question is
   // repeated here or it could never be seen (UX review 2, U1).
   const narrow = useNarrowViewport();
@@ -286,26 +285,26 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const status = browserStatusWord(state);
   // A running browser says what it IS; a stopped one is whatever the settings say it will start as.
   const running = state?.run === 'running';
-  const windowShown = (running ? state?.windowShown : info?.settings.showWindow) ?? false;
   const myChrome = (running ? state?.myChrome : info?.settings.useMyChrome) ?? false;
-
-  const applyWindow = useCallback(async (show: boolean) => {
-    setConfirmRestart(null);
-    setSwitching(true);
-    try { setInfo(await bridge().setShowWindow(show)); } catch { /* the state push says what happened */ }
-    setSwitching(false);
-  }, []);
-
-  // A restart reopens pages but loses unsent typing; ask first when anything is open.
-  const onWindowButton = useCallback(() => {
-    const show = !windowShown;
-    if ((state?.tabs.length ?? 0) > 0 || (info?.sessionsWithTabs ?? 0) > 0) setConfirmRestart(show);
-    else void applyWindow(show);
-  }, [windowShown, state, info, applyWindow]);
+  const webPage = !!active && /^https?:/i.test(active.url);
 
   const dismissExplainer = useCallback(async () => {
     try { setInfo(await bridge().updateSettings({ explainerSeen: true })); } catch { /* stays visible; harmless */ }
   }, []);
+
+  // The header's buttons match Session Files' (Destin, 2026-10-13): open
+  // elsewhere, copy, expand, close. The window and per-chat controls moved
+  // out of the panel — Settings → Browser has Show a browser window.
+  const copyLink = useCallback(() => {
+    if (!active) return;
+    navigator.clipboard?.writeText(active.url).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  }, [active]);
+  const openInMyBrowser = useCallback(() => {
+    if (active && webPage) void (window.claude as any).shell?.openExternal?.(active.url);
+  }, [active, webPage]);
 
   // The address box: the page's address until the person edits it. Its text
   // lives here, in the panel — not in any shared store (performance rule 5).
@@ -336,13 +335,11 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   };
   const hasTabs = state?.run === 'running' && (state?.tabs.length ?? 0) > 0;
 
-  const otherChats = Math.max(0, (info?.sessionsWithTabs ?? 0) - ((state?.tabs.length ?? 0) > 0 ? 1 : 0));
-
   let body: React.ReactNode;
   let showingPicture = false;
   if (state?.run === 'error' && state.error) {
     body = <ErrorState className="m-3" message={state.error} onRetry={() => { void bridge().stop(); }} />;
-  } else if (state?.run === 'starting' || switching) {
+  } else if (state?.run === 'starting') {
     body = <LoadingState what="the browser" verb="Starting" />;
   } else if (!state || state.tabs.length === 0 || state.run !== 'running') {
     body = <EmptyState message="Nothing is open. Type an address or a search above to browse, or ask the assistant to use the browser." />;
@@ -367,21 +364,19 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   return (
     <div className="relative h-full flex flex-col overflow-hidden bg-inset select-none">
       {!showingPicture && <ScreenMark name="chat/browser" />}
-      <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
-        <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-fg truncate">{active?.title || 'Browser'}</div>
-        </div>
-        <span className="text-2xs text-fg-muted shrink-0" aria-live="polite">{status}</span>
-        {/* Only with a page open: there is no window to show before that. */}
-        {!myChrome && hasTabs && (
-          <Button variant="secondary" size="sm" onClick={onWindowButton} disabled={switching}>
-            {windowShown ? 'Hide window' : 'Show window'}
-          </Button>
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
+        <GlobeIcon className="w-4 h-4 text-fg-muted shrink-0 mx-1" />
+        <div className="min-w-0 flex-1 text-sm-tight font-semibold text-fg truncate">{active?.title || 'Browser'}</div>
+        <span className="text-2xs text-fg-muted shrink-0 mr-1" aria-live="polite">{status}</span>
+        {webPage && <PanelIconButton name="external" title="Open in your own browser" onClick={openInMyBrowser} />}
+        {active && <PanelIconButton name={copied ? 'check' : 'link'} title={copied ? 'Copied' : 'Copy link'} onClick={copyLink} />}
+        {/* Expand is a no-op at phone width — the panel is already the whole screen. */}
+        {!narrow && (
+          <PanelIconButton name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => toggleBrowserExpanded(sessionId)} />
         )}
-        <CloseButton label="Close the Browser panel" onClick={() => closeBrowserPane(sessionId)} />
+        <PanelIconButton name="close" title="Close" onClick={() => closeBrowserPane(sessionId)} />
       </div>
-      <div className="flex items-center gap-1 px-3 pb-2">
+      <div className="flex items-center gap-1 px-3 py-2">
         <Button variant="ghost" size="icon-sm" aria-label="Back" disabled={!hasTabs} onClick={() => void go({ nav: 'back' })}><BackIcon /></Button>
         <Button variant="ghost" size="icon-sm" aria-label="Forward" disabled={!hasTabs} onClick={() => void go({ nav: 'forward' })}><ForwardIcon /></Button>
         <Button variant="ghost" size="icon-sm" aria-label="Reload" disabled={!hasTabs} onClick={() => void go({ nav: 'reload' })}><ReloadIcon /></Button>
@@ -397,28 +392,11 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           onBlur={() => setDraft(null)}
           onKeyDown={onAddressKey}
         />
-        <Button
-          variant="ghost" size="icon-sm" aria-label="More browser actions" aria-haspopup="menu"
-          onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenuAt({ x: r.right - 180, y: r.bottom + 4 }); }}
-        >
-          <span aria-hidden className="text-fg-muted">•••</span>
-        </Button>
       </div>
       {openError && <p role="alert" className="text-2xs text-fg-muted px-3 pb-2">{openError}</p>}
-      {menuAt && (
-        <ContextMenu
-          x={menuAt.x}
-          y={menuAt.y}
-          onClose={() => setMenuAt(null)}
-          entries={[
-            { type: 'item', id: 'copy-address', label: 'Copy address', icon: 'link', disabled: !active, run: () => { if (active) void navigator.clipboard?.writeText(active.url).catch(() => {}); } },
-            { type: 'item', id: 'stop-chat', label: 'Stop browsing in this chat', icon: 'stop', disabled: !state?.tabs.length, run: () => { void bridge().closeSession(sessionId); } },
-          ]}
-        />
-      )}
       {info && !info.settings.explainerSeen && (
         <Callout className="mx-3 mb-2" title="The assistant's own browser">
-          <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself, or press Show window for a real window.</p>
+          <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
           <div className="flex justify-end mt-2">
             <Button variant="secondary" size="sm" onClick={dismissExplainer}>Got it</Button>
           </div>
@@ -426,22 +404,6 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}
-      <Dialog
-        open={confirmRestart !== null}
-        onClose={() => setConfirmRestart(null)}
-        title={confirmRestart ? 'Show the browser window?' : 'Hide the browser window?'}
-        size="prompt"
-        noScreen="a two-button confirm inside the Browser panel; its wording is pinned by BrowserPanel.test.tsx"
-      >
-        <p className="text-sm text-fg-2">
-          {confirmRestart ? 'Showing' : 'Hiding'} the window restarts the browser. Pages reopen where they were, but anything typed and not yet sent is lost.
-          {otherChats > 0 ? ` This also affects ${otherChats} other chat${otherChats === 1 ? '' : 's'} using the browser.` : ''}
-        </p>
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="secondary" onClick={() => setConfirmRestart(null)}>Cancel</Button>
-          <Button variant="primary" onClick={() => void applyWindow(!!confirmRestart)}>{confirmRestart ? 'Show window' : 'Hide window'}</Button>
-        </div>
-      </Dialog>
     </div>
   );
 }

@@ -34,6 +34,7 @@ import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
+import { useBrowserExpanded } from '../state/browser-store';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -168,6 +169,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
   const gameOpen = !!gamePane;
+  // The Browser panel's Expand (only while it is the side pane: closing it,
+  // or opening Games over it, ends the expansion — browser-store).
+  const sidePaneExpanded = useBrowserExpanded(sessionId);
   // Either occupant means the right slot is in use → frame the chat accordingly.
   const rightPaneOpen = gameOpen || drawerOpen;
 
@@ -941,7 +945,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           are only needed by the drawer's artifacts.save IPC call and will be
           resolved in a later task when session metadata is threaded to ChatView. */}
       {/* drawer-open modifier collapses chat pane on narrow screens (Task 6.3) */}
-      <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${drawerExpanded && !gameOpen ? ' drawer-expanded' : ''}`}>
+      <div className={`framed-shell${rightPaneOpen ? ' drawer-open' : ''}${(drawerExpanded && !gameOpen) || (gameOpen && sidePaneExpanded) ? ' drawer-expanded' : ''}`}>
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
