@@ -99,7 +99,10 @@ export const BROWSER_TOOL_SPECS = {
   BrowserAskUser: {
     description: [
       'Ask the user to do something in the browser themselves — sign in, solve a "are you human" check, choose something only they should choose — then continue.',
-      'The app shows them a card with your message and a button to open the browser in a window; this call returns when they press "I\'m done" or "Can\'t do this", or after about 90 seconds with "still waiting" — then call BrowserAskUser again with the same message to keep waiting (the card stays up). Keep the message short and specific, e.g. "Please sign in to your library account, then press I\'m done."',
+      'The app shows them a card with your message and a button to open the browser in a window; this call returns when they press "I\'m done" or "I can\'t do this", or after about 90 seconds with "still waiting" — then call BrowserAskUser again with the same message to keep waiting (the card stays up). Keep the message short and specific, e.g. "Please sign in to your library account, then press I\'m done."',
+      // WHY: sign-ins persist in the assistant's browser profile across chats;
+      // Destin wants the user told so a still-signed-in site is never a surprise.
+      'When you ask for a sign-in, also tell the user in chat that the sign-in stays saved in the assistant\'s browser for future chats until they sign out of that site or use Settings → Browser → Clear saved sign-ins. (Skip this in My Chrome mode, where the sign-ins are their own Chrome\'s.)',
     ].join(' '),
     shortDescription: 'Ask the user to sign in or do a step themselves in the browser, then wait.',
     schema: z.object({

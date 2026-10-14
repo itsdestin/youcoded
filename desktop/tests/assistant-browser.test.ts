@@ -259,6 +259,8 @@ describe('one set of tools for both session kinds', () => {
     }
     // Every description that returns page text carries the untrusted doctrine.
     for (const n of ['BrowserNavigate', 'BrowserSnapshot', 'BrowserAct', 'BrowserWait'] as const) expect(BROWSER_TOOL_SPECS[n].description).toContain('untrusted-content');
+    // The assistant is told to say that sign-ins stay saved until the user signs out.
+    expect(BROWSER_TOOL_SPECS.BrowserAskUser.description).toContain('stays saved in the assistant\'s browser');
   });
 
   it('schemas refuse unknown parameters (an error the model can fix)', () => {
