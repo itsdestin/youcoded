@@ -15,6 +15,7 @@
 // plus the radius and font scale, i.e. what the style kit is written against.
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+import { MAX_PAGE_SESSION_PROMPT } from '../../../shared/pages-types';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
@@ -67,6 +68,11 @@ export const PAGE_VIDEO_START_MESSAGE = 'youcoded:video:start';
 export const PAGE_VIDEO_STOP_MESSAGE = 'youcoded:video:stop';
 export const PAGE_VIDEO_ACK_MESSAGE = 'youcoded:video:ack';
 export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
+/** Page start session (spec 2026-10-14). Page → host: `{ id, prompt, project? }`;
+ *  host → page: `{ id, result: { ok } }` once the new-conversation window is
+ *  open (not "a conversation started" — the person still presses Start). */
+export const PAGE_SESSION_START_MESSAGE = 'youcoded:session:start';
+export const PAGE_SESSION_START_RESULT_MESSAGE = 'youcoded:session:start:result';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** True when the app's page pane is glass: the theme has a wallpaper/gradient
@@ -129,7 +135,7 @@ export function readThemeCss(root: HTMLElement = document.documentElement, seeTh
  *  it. `e.source !== parent` drops anything that did not come from the host,
  *  and every answer is matched against this bootstrap's own request map, so a
  *  forged `youcoded:fetch:result` resolves nothing (design review 1, finding 8). */
-function bootstrap(dataJson: string, devicesJson = '{}'): string {
+function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false): string {
   return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
@@ -149,6 +155,9 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
   var V_STOP = ${JSON.stringify(PAGE_VIDEO_STOP_MESSAGE)};
   var V_ACK = ${JSON.stringify(PAGE_VIDEO_ACK_MESSAGE)};
   var V_EVENT = ${JSON.stringify(PAGE_VIDEO_EVENT_MESSAGE)};
+  var SESSION = ${JSON.stringify(PAGE_SESSION_START_MESSAGE)};
+  var SESSION_RESULT = ${JSON.stringify(PAGE_SESSION_START_RESULT_MESSAGE)};
+  var MAX_PROMPT = ${MAX_PAGE_SESSION_PROMPT};
   var videos = {};
   var videoSeq = 0;
   var sockets = {};
@@ -251,6 +260,26 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
       });
     }
   };
+  // Page start session (spec 2026-10-14, §2). WHY only when declared: a page
+  // feature-detects it (typeof … === 'function') and keeps its own fallback —
+  // Frontier Lab's copy box — on an app or a manifest without it. Always
+  // resolves { ok }; an empty or runaway message never reaches the host. The
+  // host checks all of this again, because page code can post on its own.
+  if (${canStartSession ? 'true' : 'false'}) {
+    window.youcoded.startSession = function (opts) {
+      return new Promise(function (resolve) {
+        var o = opts || {};
+        var prompt = o.prompt;
+        if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PROMPT) { resolve({ ok: false }); return; }
+        var id = 'n' + (++seq);
+        waiting[id] = { resolve: resolve, reject: resolve, session: true };
+        var msg = { type: SESSION, id: id, prompt: prompt };
+        if (typeof o.project === 'string' && o.project) msg.project = o.project;
+        try { parent.postMessage(msg, '*'); }
+        catch (e) { delete waiting[id]; resolve({ ok: false }); }
+      });
+    };
+  }
   window.addEventListener('message', function (e) {
     if (e.source !== parent) return;
     var d = e && e.data;
@@ -295,6 +324,14 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
     }
     if (d.type === DATA) { window.youcoded.data = d.data; call(subs, d.data); return; }
     if (d.type === REFRESH) { call(refreshSubs); return; }
+    if (d.type === SESSION_RESULT) {
+      // Matched by this page's own id, like every other answer.
+      var sp = waiting[d.id];
+      if (!sp || !sp.session) return;
+      delete waiting[d.id];
+      sp.resolve({ ok: !!(d.result && d.result.ok === true) });
+      return;
+    }
     if (d.type === PLAID_RESULT) {
       var pp = waiting[d.id];
       if (!pp || !pp.plaid) return;
@@ -304,7 +341,8 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
     }
     if (d.type === RESULT) {
       var p = waiting[d.id];
-      if (!p) return;
+      // A fetch answer never settles a startSession call (it would resolve with a fetch's shape).
+      if (!p || p.session) return;
       delete waiting[d.id];
       var r = d.result;
       if (r && r.ok) p.resolve({ status: r.status, headers: r.headers, body: r.body });
@@ -505,7 +543,9 @@ export function prepareHostedDocument(
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
     `<style id="${PAGE_THEME_STYLE_ID}">${themeCss}</style>` +
     `<style id="youcoded-kit">${kitCss}</style>` +
-    `<script>${bootstrap(dataJson, devicesJson)}</script>`;
+    // Only an APPROVED session line gives the page startSession. A page waiting
+    // for a yes is never framed anyway; this keeps the bootstrap honest alone.
+    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved))}</script>`;
   const a = splitAuthorDocument(html);
   // WHY the attribute is baked in: set from first paint, the page never flashes
   // an opaque canvas before the host's first message arrives.

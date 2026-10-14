@@ -24,6 +24,24 @@ export interface PageCreateRequest {
   subtitle?: string;
 }
 
+/** What a page's `youcoded.startSession` hands App (spec 2026-10-14), after
+ *  PageHost checked the frame, the approval and the message. */
+export interface PageStartSessionRequest {
+  /** Shown in full in the composer, never sent until the person presses Enter. */
+  prompt: string;
+  /** The folder the window starts in; undefined = the saved default. */
+  cwd?: string;
+  /** For the window's "From <page>" line. */
+  pageName: string;
+}
+
+/** The window for a page's start-session request: the same form as Create a
+ *  page, titled for a conversation and naming the page that asked (Q-1). The
+ *  person still picks project, model and the permission toggle (Q-4). */
+export function startSessionRequest({ prompt, cwd, pageName }: PageStartSessionRequest): PageCreateRequest {
+  return { title: 'Start a conversation', subtitle: `From ${pageName}`, initialInput: prompt, cwd };
+}
+
 export function PageCreateDialog({ request, onCreated, onCancel, onManageProjects }: {
   request: PageCreateRequest | null;
   onCreated: (info: unknown) => void;

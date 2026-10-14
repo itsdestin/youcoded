@@ -45,13 +45,14 @@ import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
-import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
-import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
+import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
+import type { PageStartSessionRequest } from './PageCreateDialog';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { usePageSockets } from './use-page-sockets';
 import { PAGE_KIT_CSS } from './page-kit';
@@ -62,7 +63,7 @@ import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE,
-  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
+  PAGE_REFRESH_MESSAGE, PAGE_SESSION_START_MESSAGE, PAGE_SESSION_START_RESULT_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -83,6 +84,28 @@ function isStringMap(v: unknown): v is Record<string, string> {
   return !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
 }
 
+/** Where a page's conversation starts (spec 2026-10-14, §2, Q-8). A project
+ *  page starts in its own project whatever it suggests. A personal page starts
+ *  on the saved default, unless it suggests one of the person's OWN project
+ *  folders. WHY that check: a page's script wrote the suggestion, and a folder
+ *  the person never added (`/etc`, a dotfile folder) must not be preselected
+ *  where a quick Start would miss it. The picker can still change any of it. */
+async function startFolderFor(home: PageHome, project: unknown): Promise<string | undefined> {
+  if (home.kind === 'project') return home.path;
+  if (typeof project !== 'string' || !project.trim()) return undefined;
+  const trimSlash = (p: string) => p.replace(/[\\/]+$/, '');
+  try {
+    const list = await (window as unknown as { claude?: { folders?: { list?: () => Promise<unknown> } } }).claude?.folders?.list?.();
+    if (!Array.isArray(list)) return undefined;
+    const want = trimSlash(project.trim());
+    const hit = list.find((f) => typeof (f as { path?: unknown })?.path === 'string' && trimSlash((f as { path: string }).path) === want) as { path: string } | undefined;
+    return hit?.path;
+  } catch {
+    // The list could not be read: the saved default is the safe start.
+    return undefined;
+  }
+}
+
 
 interface PageHostProps {
   /** The same three icons the app's band shows, wired to the same places. */
@@ -94,6 +117,9 @@ interface PageHostProps {
   onCreatePage: () => void;
   /** The focused conversation's folder, for Office's "In <project>" list and new files. */
   projectRoot?: string | null;
+  /** A page's `youcoded.startSession` (spec 2026-10-14): App opens the
+   *  new-session window with the message waiting. Absent = refused. */
+  onStartSession?: (req: PageStartSessionRequest) => void;
 }
 
 type Load =
@@ -102,7 +128,7 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -192,6 +218,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (round 4 testing). Disk is stale until the save lands, so nothing is
   // posted in until then.
   const savingRef = useRef(false);
+  // Read by the frame's message handler without re-registering it (which would
+  // flush a pending save): the page document the gate also reads, and App's
+  // latest start-session callback.
+  const loadedPageRef = useRef<PageDocument | null>(null);
+  loadedPageRef.current = load.state === 'ready' ? load.page : null;
+  const onStartSessionRef = useRef(onStartSession);
+  onStartSessionRef.current = onStartSession;
   // See-through: the pane is glass (a wallpaper theme in a floating style AND the global
   // Appearance switch "Show theme background behind pages" on, default on). The document build reads
   // paneIsGlass() at that moment instead of depending on this value — a dependency would reload
@@ -263,6 +296,30 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
+      if (d.type === PAGE_SESSION_START_MESSAGE) {
+        // Page start session (spec 2026-10-14, §4). Checked HERE, not trusted
+        // from the bootstrap: page code can post this itself. Needs an approved
+        // `session` line on the loaded page (the one the gate read) and a sane
+        // message; then App opens the window and the page hears only "opened".
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const answer = (ok: boolean) => {
+          try { source.postMessage({ type: PAGE_SESSION_START_RESULT_MESSAGE, id, result: { ok } }, '*'); } catch { /* the frame went away */ }
+        };
+        const page = loadedPageRef.current;
+        const start = onStartSessionRef.current;
+        const prompt = (d as { prompt?: unknown }).prompt;
+        const allowed = !!page?.connections?.some((c) => c.kind === 'session' && c.approved);
+        if (!page || !start || !allowed || typeof prompt !== 'string' || !prompt.trim() || prompt.length > MAX_PAGE_SESSION_PROMPT) { answer(false); return; }
+        void startFolderFor(page.home, (d as { project?: unknown }).project).then((cwd) => {
+          // The page may have been closed or swapped while the folder list was read.
+          if (loadedPageRef.current?.id !== page.id) { answer(false); return; }
+          onStartSessionRef.current?.({ prompt, cwd, pageName: page.name });
+          answer(true);
+        });
+        return;
+      }
       if (d.type === PAGE_PLAID_MESSAGE) {
         // Plaid on the page's behalf: the request is passed through as-is and
         // main keeps only the shapes it knows (plaid.ts cleanPlaidRequest).

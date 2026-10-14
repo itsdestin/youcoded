@@ -220,3 +220,41 @@ describe('a page whose code changed after it was allowed', () => {
     expect(page.connections).toMatchObject([{ id: 'feed', approved: true }, { id: 'more', approved: false }]);
   });
 });
+
+// Page start session (spec 2026-10-14, §3): the approval to open a new
+// conversation is keyed to the manifest line, never the page's code — Frontier
+// Lab bakes its data into page.html every week, and that must not re-ask or
+// show the "code changed" note. A page with another approval still gets it.
+describe('a page that may open a new conversation', () => {
+  const SESSION = { id: 'start-session', kind: 'session' };
+  const PUBLIC = { id: 'feed', kind: 'public', address: 'hnrss.org' };
+  async function rewrite(slug: string, body: string) {
+    const file = path.join(personal, 'Pages', slug, 'page.html');
+    await fs.writeFile(file, `<!doctype html><html><body>${body}</body></html>`);
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(file, later, later);
+  }
+
+  it('asks once, then never again and never notes a code change when only the page changes', async () => {
+    await writePage('lab', [SESSION]);
+    expect((await service.listAndWatch())[0].connections).toMatchObject([{ id: 'start-session', approved: false }]);
+    expect((await service.approve('personal:lab', {}, { remote: false })).ok).toBe(true);
+
+    await rewrite('lab', 'this week, rebuilt');
+    await fs.writeFile(path.join(personal, 'Pages', 'lab', 'data.json'), '{"week":2}');
+    const after = (await service.listAndWatch())[0];
+    expect(after.connections).toMatchObject([{ id: 'start-session', approved: true }]);
+    expect(after.codeChanged).toBeUndefined();
+    // Nothing is fetched by this kind, so the band's "last updated" has nothing to be about.
+    expect(after.refresh).toBeUndefined();
+  });
+
+  it('still notes a code change on a page that also reaches an address', async () => {
+    await writePage('mixed', [SESSION, PUBLIC]);
+    await service.approve('personal:mixed', {}, { remote: false });
+    await rewrite('mixed', 'rewritten');
+    const page = (await service.listAndWatch())[0];
+    expect(page.codeChanged).toBe(true);
+    expect(page.refresh).toEqual({ at: null, failed: false });
+  });
+});

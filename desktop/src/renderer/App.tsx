@@ -115,7 +115,7 @@ import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
 import { PagesView } from './components/pages/PagesView';
 import { PageHost } from './components/pages/PageHost';
-import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
+import { PageCreateDialog, startSessionRequest, type PageCreateRequest } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
@@ -4044,6 +4044,8 @@ function AppInner() {
         settingsBadge={settingsBadge}
         settingsDangerBadge={settingsDangerBadge} projectRoot={currentSession?.cwd ?? null}
         onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+        // WHY (page start session, spec 2026-10-14): a page's button opens this SAME window, its message waiting; nothing is sent until Start, then Enter.
+        onStartSession={(r) => setPageCreate(startSessionRequest(r))}
       />
       <PageCreateDialog
         request={pageCreate}

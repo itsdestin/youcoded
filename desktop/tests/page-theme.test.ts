@@ -124,8 +124,8 @@ describe('the policy the document carries', () => {
 
 /** Runs the bootstrap the way the frame does, with a fake host window, so what
  *  is tested is the code the page actually receives. */
-function runBootstrap(html = '<p>hi</p>') {
-  const src = /<script>([\s\S]*?)<\/script>/.exec(prepareHostedDocument(html, THEME, KIT, { seed: 1 }))?.[1] ?? '';
+function runBootstrap(html = '<p>hi</p>', connections: { kind: string; id?: string; approved?: boolean }[] = []) {
+  const src = /<script>([\s\S]*?)<\/script>/.exec(prepareHostedDocument(html, THEME, KIT, { seed: 1 }, connections))?.[1] ?? '';
   const listeners: Record<string, ((e: unknown) => void)[]> = {};
   const win = { addEventListener: (t: string, fn: (e: unknown) => void) => { (listeners[t] ??= []).push(fn); } } as Record<string, unknown>;
   const posted: Record<string, unknown>[] = [];
@@ -377,5 +377,46 @@ describe('Escape inside a page', () => {
     key({ key: 'a', defaultPrevented: false });
     vi.runAllTimers();
     expect(posted).toHaveLength(0);
+  });
+});
+
+// Page start session (spec 2026-10-14, §2): the page asks the app to open the
+// new-conversation window with a message waiting. Only a page whose manifest
+// declares it gets the call at all (feature detection keeps older pages'
+// fallbacks working), and a broken page's empty or runaway message never
+// reaches the host.
+describe('opening a new conversation from a page', () => {
+  const SESSION = [{ kind: 'session', id: 'start-session', approved: true }];
+  it('is only there when the page declares it', () => {
+    expect(runBootstrap().yc.startSession).toBeUndefined();
+    expect(typeof runBootstrap('<p>hi</p>', SESSION).yc.startSession).toBe('function');
+  });
+
+  it('refuses an empty or over-long message without asking the host', async () => {
+    const { yc, posted } = runBootstrap('<p>hi</p>', SESSION);
+    for (const prompt of ['', '   ', 'x'.repeat(20_001), 42, undefined]) {
+      await expect(yc.startSession({ prompt }) as Promise<unknown>).resolves.toEqual({ ok: false });
+    }
+    await expect(yc.startSession() as Promise<unknown>).resolves.toEqual({ ok: false });
+    expect(posted).toHaveLength(0);
+  });
+
+  it('asks the host with the message and suggested project, and believes only the host', async () => {
+    const { yc, posted, deliver } = runBootstrap('<p>hi</p>', SESSION);
+    const p = yc.startSession({ prompt: 'Run the weekly update', project: '/home/me/Lab' }) as Promise<unknown>;
+    expect(posted).toEqual([{ type: 'youcoded:session:start', id: expect.any(String), prompt: 'Run the weekly update', project: '/home/me/Lab' }]);
+    let settled = false;
+    void p.then(() => { settled = true; });
+    deliver({ type: 'youcoded:session:start:result', id: posted[0].id, result: { ok: true } }, { name: 'popup' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    deliver({ type: 'youcoded:session:start:result', id: posted[0].id, result: { ok: true } });
+    await expect(p).resolves.toEqual({ ok: true });
+  });
+
+  it('accepts a message of exactly the limit', () => {
+    const { yc, posted } = runBootstrap('<p>hi</p>', SESSION);
+    void yc.startSession({ prompt: 'x'.repeat(20_000) });
+    expect(posted).toHaveLength(1);
   });
 });
