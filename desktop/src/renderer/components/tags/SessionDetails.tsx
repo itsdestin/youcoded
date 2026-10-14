@@ -60,14 +60,18 @@ export function SessionDetails(p: Props) {
  *  WHY these two hints, word for word (Destin, close-session-3#CS3-3: "we can truncate to just
  *  "hides this session from your resumable sessions list" on both surfaces. pin to top can be
  *  "Keeps this session at the top of your active sessions list""), in sentence case with no
- *  closing full stop, like the other setting hints. */
+ *  closing full stop, like the other setting hints.
+ *  WHY Pin to top now says "resumable" (Destin, final-review#Q-3: "it should say at the top
+ *  of your resumable sessions list"): only Resume sorts pinned sessions first; the open-session
+ *  lists show the pin but never move it (final review F20), so "active" promised a move that
+ *  never happened. Its words now mirror Mark complete's "your resumable sessions list". */
 export function SessionListsCard({ pin, complete }: Pick<Props, 'pin' | 'complete'>) {
   return (
     <section>
       <SectionLabel className="mb-2">In your lists</SectionLabel>
       <div className={`${CARD_LEVEL_1} px-3 py-1`}>
         <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
-          description="Keeps this session at the top of your active sessions list"
+          description="Keeps this session at the top of your resumable sessions list"
           control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
         <SettingRow header variant="item" title="Mark complete"
           description="Hides this session from your resumable sessions list"
