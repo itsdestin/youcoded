@@ -11,6 +11,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Dialog } from '../ui/Dialog';
 import { BuddyNewSessionForm } from '../buddy/BuddyNewSessionForm';
+import { markCaretAtStart } from './page-prompt-caret';
 
 export interface PageCreateRequest {
   /** What the composer holds when the conversation opens. */
@@ -22,6 +23,9 @@ export interface PageCreateRequest {
   /** Line under the title; defaults to the page-building one. Document
    *  comments' Ask Your Assistant (Projects screen) reuses this dialog. */
   subtitle?: string;
+  /** Set only for a page's start-session request: the page's name. The window
+   *  then shows the message above the choices (review F4). */
+  fromPage?: string;
 }
 
 /** What a page's `youcoded.startSession` hands App (spec 2026-10-14), after
@@ -39,7 +43,7 @@ export interface PageStartSessionRequest {
  *  page, titled for a conversation and naming the page that asked (Q-1). The
  *  person still picks project, model and the permission toggle (Q-4). */
 function startSessionRequest({ prompt, cwd, pageName }: PageStartSessionRequest): PageCreateRequest {
-  return { title: 'Start a conversation', subtitle: `From ${pageName}`, initialInput: prompt, cwd };
+  return { title: 'Start a conversation', subtitle: `From ${pageName}`, initialInput: prompt, cwd, fromPage: pageName };
 }
 
 /** App's state for this window, plus the one way a page may open it.
@@ -54,6 +58,8 @@ export function usePageCreate() {
   const set = useCallback((r: PageCreateRequest | null) => { openRef.current = r !== null; setRequest(r); }, []);
   const offerFromPage = useCallback((r: PageStartSessionRequest): boolean => {
     if (openRef.current) return false;
+    // WHY (review F4): the chat's caret starts at the top of this message.
+    markCaretAtStart(r.prompt);
     set(startSessionRequest(r));
     return true;
   }, [set]);
@@ -72,6 +78,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
     // page lives there too — and a dialog must sit above what opened it.
     // `screen`: the photo-only name — the title is the one thing that tells Create from Edit.
     <Dialog screen={request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create'} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
+      {request.fromPage !== undefined && <PageMessagePreview text={request.initialInput} pageName={request.fromPage} />}
       <BuddyNewSessionForm
         key={request.initialInput + (request.cwd ?? '')}
         initialInput={request.initialInput}
@@ -82,5 +89,28 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
         onCancel={onCancel}
       />
     </Dialog>
+  );
+}
+
+/** WHY (review F4, Destin picked "preview" 2026-10-14): the person reads a
+ *  page's message HERE, before choosing the project, model and permission
+ *  toggle, not only in the chat box after Create Session. The whole message,
+ *  as plain text (never rendered markdown or links: a page wrote it), in a
+ *  `well` (the deepest surface, which reads as "not a field to type in"), with
+ *  its own scroll so a long message cannot push the choices off the window.
+ *  tabIndex makes that scroll reachable from the keyboard. */
+function PageMessagePreview({ text, pageName }: { text: string; pageName: string }) {
+  const label = `Message from ${pageName}`;
+  return (
+    <div className="mb-3">
+      <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">{label}</div>
+      <div
+        role="region"
+        aria-label={label}
+        tabIndex={0}
+        className="max-h-40 overflow-y-auto bg-well border border-edge-dim rounded-lg px-3 py-2 text-xs text-fg-2 whitespace-pre-wrap break-words select-text focus:outline-none focus:border-accent"
+      >{text}</div>
+      <p className="text-2xs text-fg-muted mt-1 mb-0">It waits in the message box until you press Enter.</p>
+    </div>
   );
 }

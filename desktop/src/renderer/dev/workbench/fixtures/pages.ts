@@ -478,7 +478,19 @@ const WEEKLY_BRIEFING_HTML = `<!doctype html><html><head><meta charset="utf-8"><
 </div>
 <script>
   document.getElementById('go').addEventListener('click', function () {
-    var prompt = 'Run the weekly update for this project: read what changed since last week and refresh the briefing.';
+    // Several lines on purpose (review F4): the window's message preview has to
+    // show a real page's long message scrolling inside its own box.
+    var prompt = [
+      'Run the weekly update for this project.',
+      '',
+      '1. Read what changed since last week: new commits, closed issues and any notes in the briefing folder.',
+      '2. For each change, write one plain sentence saying what a reader will notice.',
+      '3. Mark anything that still needs a decision, and say who has to make it.',
+      '4. Refresh the briefing page with the new list, newest first.',
+      '5. Keep last week\\'s list underneath, folded, so nothing is lost.',
+      '',
+      'Do not delete any older briefings. When you are done, tell me what changed in three lines or fewer.'
+    ].join('\\n');
     var note = document.getElementById('note');
     if (typeof window.youcoded.startSession !== 'function') { note.textContent = 'Copy this into a new conversation: ' + prompt; return; }
     window.youcoded.startSession({ prompt: prompt }).then(function (r) { note.textContent = r.ok ? '' : 'The conversation window could not open.'; });
