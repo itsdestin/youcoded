@@ -94,6 +94,7 @@ export type { CalloutProps, CalloutTone } from './Callout';
 // settings-pieces deck (fold-out P-1, consent P-6) and the guide's tinted pill.
 export { FoldRow } from './FoldRow';
 export { ConsentRow } from './ConsentRow';
+export { OneJobCard, OneJobText, OneJobLabel, OneJobHint } from './OneJobCard';
 export { Pill, PillButton } from './Pill';
 
 // The small anchored menu (games-social friction, proposal 8) — Menu.tsx says why.

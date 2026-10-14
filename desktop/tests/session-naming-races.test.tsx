@@ -4,13 +4,14 @@ import { act, cleanup, fireEvent, render, screen, renderHook } from '@testing-li
 import { afterEach, expect, it, vi } from 'vitest';
 import SessionRenameDialog from '../src/renderer/components/SessionRenameDialog';
 import { useRenamedSessions } from '../src/renderer/components/assistant-settings/use-renamed-sessions';
-vi.mock('../src/renderer/components/ui', () => ({
+vi.mock('../src/renderer/components/ui', async () => ({
+  // The one-job layout pieces are plain markup with no behaviour, so the real ones are used.
+  ...(await vi.importActual<typeof import('../src/renderer/components/ui/OneJobCard')>('../src/renderer/components/ui/OneJobCard')),
   Dialog: ({ children }: any) => <div>{children}</div>,
   Button: (props: any) => <button {...props} />,
   TextInput: (props: any) => <input {...props} />,
   LoadingState: () => <span>Loading</span>,
   ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Try again</button></div>,
-  CARD_LEVEL_1: 'surface-1', // the popup's body card (final-review#PR-7); a class string only
 }));
 afterEach(cleanup);
 it('keeps a manual name protected with no automatic-name reset action', async () => {
@@ -19,7 +20,7 @@ it('keeps a manual name protected with no automatic-name reset action', async ()
   await screen.findByDisplayValue('My name');
   expect(screen.queryByRole('button', { name: 'Use automatic name' })).toBeNull();
   expect(screen.getByText('You named this session. Automatic naming won’t replace it.')).toBeTruthy();
-  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Save name']);
+  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Save name', 'Cancel']) // stacked, main one on top (popup-cards-2#A-1);
 });
 it('a saved rename tells the already-fetched lists, or the row keeps the old name', async () => {
   // Renaming a SAVED conversation touches no live session, so there is no

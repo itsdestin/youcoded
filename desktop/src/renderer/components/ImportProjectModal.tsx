@@ -3,7 +3,7 @@
 // and folder-picker). The move is consequence-gated: the copy spells out that
 // the folder itself MOVES (old path stops existing) before anything happens.
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Button, CARD_LEVEL_1, Callout, Dialog, FieldError, TextInput } from './ui';
+import { Button, Callout, Dialog, FieldError, OneJobCard, OneJobLabel, OneJobText, TextInput } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 
 interface Props {
@@ -103,8 +103,8 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
   // popup (the popup rule, final-review#ST-21/#PR-7: body content sits in a card); a hand-made
   // sync-off note box (Callout); and its own Escape handler beside the Dialog's. Now: the title is
   // the Dialog's, the body is one card (explanation, the name field, its error, the note) with
-  // the two buttons inside it at its foot (popup-cards-1#PC-1) — filled "Move and sync" on the
-  // right, outlined Cancel left of it. The words are unchanged.
+  // the two buttons inside it at its foot (popup-cards-1#PC-1), stacked with "Move and sync" on
+  // top (popup-cards-2#A-3, below). The words are unchanged.
   return (
     <Dialog
       open
@@ -114,54 +114,52 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
       size="panel"
       screen="projects/turn-on-sync"
     >
+      {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-3): the same 12px grey
+          words, named field and stacked buttons (main on top) as Remove project and the other
+          one-job popups. Its two paragraphs were two different greys and its buttons sat side by
+          side at the right. The words are unchanged. */}
       {doneWarnings ? (
-        <>
-          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-            <p className="text-xs text-fg-2">The folder now lives at <span className="text-fg break-all">{donePath}</span> and will sync across your devices. A couple of things need your attention:</p>
-            <ul className="space-y-1 text-xs text-fg-dim list-disc pl-4">
+        <OneJobCard actions={<Button onClick={() => onDone(donePath!)}>Done</Button>}>
+          <OneJobText>
+            <p>The folder now lives at <span className="text-fg break-all">{donePath}</span> and will sync across your devices. A couple of things need your attention:</p>
+            <ul className="space-y-1 list-disc pl-4">
               {doneWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
-            <div className="flex justify-end pt-1">
-              <Button onClick={() => onDone(donePath!)}>Done</Button>
-            </div>
-          </div>
-        </>
+          </OneJobText>
+        </OneJobCard>
       ) : (
-        <>
-          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-            <p className="text-xs text-fg-2">
+        <OneJobCard actions={<>
+          <Button onClick={() => void confirm()} disabled={busy || !name.trim()}>
+            {busy ? 'Moving…' : 'Move and sync'}
+          </Button>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+        </>}>
+          <OneJobText>
+            <p>
               YouCoded will <span className="text-fg">move</span> <span className="break-all">{sourcePath}</span> to{' '}
               <span className="text-fg break-all">~/YouCoded/Projects/{name.trim() || '…'}/</span> so it can sync across your devices.
             </p>
-            <p className="text-xs text-fg-dim">
+            <p>
               The folder itself moves — anything pointing at the old location (shortcuts, open terminals, editors) will need the new path.
             </p>
+          </OneJobText>
+          <div>
             {/* htmlFor/id pair: screen readers announce the field by its caption. */}
-            <div className="pt-1">
-              <label htmlFor="import-project-name" className="text-xs font-medium text-fg-muted block mb-1">Project name</label>
-              {/* Shared TextInput (change 20). A plain field, NOT an InputGroup: "Move and
-                  sync" sits at the card's foot with Cancel, not inside the field. */}
-              <TextInput
-                id="import-project-name"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') void confirm(); }}
-                className="w-full"
-                autoFocus
-              />
-            </div>
+            <OneJobLabel htmlFor="import-project-name">Project name</OneJobLabel>
+            <TextInput
+              id="import-project-name"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void confirm(); }}
+              className="w-full"
+              autoFocus
+            />
             {/* WHY FieldError (guide: no red/coloured body text for messages);
                 it already carries role="alert" itself. */}
-            {error && <FieldError as="div">{error}</FieldError>}
-            {syncOffNote}
-            <div className="flex justify-end gap-2 pt-1">
-              <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
-              <Button onClick={() => void confirm()} disabled={busy || !name.trim()}>
-                {busy ? 'Moving…' : 'Move and sync'}
-              </Button>
-            </div>
+            {error && <FieldError as="div" className="mt-1.5">{error}</FieldError>}
           </div>
-        </>
+          {syncOffNote}
+        </OneJobCard>
       )}
     </Dialog>
   );

@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, TextInput } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel, OneJobText, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -807,69 +807,60 @@ function ConnectOpenRouterModal({
         open
         onClose={onClose}
         layer={3}
-        size="prompt"
+        size="panel"
         title={hasKey ? 'Replace OpenRouter key' : 'Connect OpenRouter'}
         scrollBody={false}
         screen="settings/assistant/cloud/openrouter/key"
       >
         <div className="p-4 space-y-3">
-          {/* WHY one card for the steps, the key field, its line AND the buttons (popup-cards-1#PC-1:
-              a one-job popup is one card holding everything). */}
-          <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-          <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">
-            <li>
-              Create a free account at{' '}
-              <button
-                onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
-                className="text-accent hover:underline"
-              >
-                openrouter.ai
-              </button>
-              .
-            </li>
-            <li>Add a little credit and create an API key.</li>
-            <li>Paste the key below and press Connect.</li>
-          </ol>
-
-          {/* Change 20 only. NOT an InputGroup: Connect/Cancel sit in the modal
-              footer BELOW the field, which is explicitly the shape change 77 does
-              not convert. */}
-          <TextInput
-            type="password"
-            autoFocus
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
-            placeholder="Paste your OpenRouter API key"
-            aria-label="OpenRouter API key"
-            className="w-full"
-          />
-
-          {/* WHY plain/FieldError, not green/red text (guide: no coloured
-              body text for messages) */}
-          {note && (
-            note.tone === 'ok'
-              ? <p className="text-3xs text-fg-muted">{note.text}</p>
-              : <FieldError as="p">{note.text}</FieldError>
-          )}
-
-          {/* WHY stacked, filled on top (fix batch 1, 2026-09-24): this is a
-              `size="prompt"` (340px) dialog — a NARROW popup by the design
-              guide's own line (≤420px stacks; decisions.md button-placement
-              rule). Was a side-by-side flex-1 pair, the wide-popup shape. */}
-          <div className="flex flex-col gap-2 pt-1">
-            <Button
-              onClick={() => void save()}
-              disabled={busy || keyDraft.trim().length === 0}
-              className="w-full py-2"
-            >
+          {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-1): the same width,
+              12px words, named field and stacked buttons (Connect on top) as Rename session and
+              Pick a handle — Destin: the three "basically have the same job/size" and should look
+              it. Was 11px steps and a nameless box at 340px. Connect/Cancel stack because the
+              popup is narrow (guide "Buttons"), which is also why this is not an InputGroup. */}
+          <OneJobCard actions={<>
+            <Button onClick={() => void save()} disabled={busy || keyDraft.trim().length === 0}>
               {busy ? 'Connecting…' : 'Connect'}
             </Button>
-            <Button variant="secondary" onClick={onClose} className="w-full py-2">
-              Cancel
-            </Button>
-          </div>
-          </div>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          </>}>
+            <OneJobText>
+              <ol className="space-y-1 list-decimal pl-4">
+                <li>
+                  Create a free account at{' '}
+                  <button
+                    onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
+                    className="text-accent hover:underline"
+                  >
+                    openrouter.ai
+                  </button>
+                  .
+                </li>
+                <li>Add a little credit and create an API key.</li>
+                <li>Paste the key below and press Connect.</li>
+              </ol>
+            </OneJobText>
+            <div>
+              <OneJobLabel htmlFor="openrouter-key">API key</OneJobLabel>
+              <TextInput
+                id="openrouter-key"
+                type="password"
+                autoFocus
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
+                placeholder="Paste your OpenRouter API key"
+                className="w-full"
+              />
+              {/* WHY plain/FieldError, not green/red text (guide: no coloured
+                  body text for messages) */}
+              {note && (
+                note.tone === 'ok'
+                  ? <OneJobHint>{note.text}</OneJobHint>
+                  : <FieldError as="p" className="mt-1.5">{note.text}</FieldError>
+              )}
+            </div>
+          </OneJobCard>
         </div>
       </Dialog>
     </>,

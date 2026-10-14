@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, CARD_LEVEL_1, Dialog, TextInput, LoadingState, ErrorState } from './ui';
+import { Button, Dialog, TextInput, LoadingState, ErrorState, OneJobCard, OneJobLabel, OneJobHint } from './ui';
 import { namingApi } from './assistant-settings/naming-api';
 
 type Props = { id: string; name: string; onClose: () => void };
@@ -71,18 +71,20 @@ function RenameForm({ id, name, onClose }: Props) {
     {!loaded ? <LoadingState what="the session name" /> : <form className="space-y-3" onSubmit={(e) => {
       e.preventDefault(); if (draft.trim()) void save();
     }}>
-      {/* WHY one card holding the field, its hint AND the buttons (popup-cards-1#PC-1: a popup
-          that does one job is one card with everything in it, Create a page's shape), and an
-          outlined Cancel (guide "Buttons": the less important button is outlined, never bare text). */}
-      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-        <label className="block text-xs text-fg font-medium" htmlFor="session-name">Session name</label>
-        <TextInput id="session-name" value={draft} disabled={saving} onChange={(e) => setDraft(e.target.value)} autoFocus maxLength={160} className="w-full" />
-        <p className="text-xs text-fg-muted">{manual ? 'You named this session. Automatic naming won’t replace it.' : 'Automatic naming won’t change this name.'}</p>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="secondary" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save name'}</Button>
+      {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-1): the same shape as
+          Pick a handle and Connect OpenRouter — named field, line under it, buttons stacked full
+          width with Save on top. Its buttons were side by side at the right, the only one of the
+          three that was. */}
+      <OneJobCard actions={<>
+        <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save name'}</Button>
+        <Button variant="secondary" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
+      </>}>
+        <div>
+          <OneJobLabel htmlFor="session-name">Session name</OneJobLabel>
+          <TextInput id="session-name" value={draft} disabled={saving} onChange={(e) => setDraft(e.target.value)} autoFocus maxLength={160} className="w-full" />
+          <OneJobHint>{manual ? 'You named this session. Automatic naming won’t replace it.' : 'Automatic naming won’t change this name.'}</OneJobHint>
         </div>
-      </div>
+      </OneJobCard>
     </form>}
   </Dialog>;
 }

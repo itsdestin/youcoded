@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, CARD_LEVEL_1, ConsentRow, Dialog, SettingRow, Toggle, Tooltip } from '../ui';
+import { Button, ConsentRow, Dialog, OneJobCard, OneJobText, SettingRow, Toggle, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
 
 // Claude Code's one permission setting: the Skip permissions switch. It lived
@@ -63,48 +63,36 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
 
       {/* layer 3 + destructive: this is the app's shape for a confirmation
           that must not be lost behind the thing it is confirming. */}
-      <Dialog open={confirming} onClose={close} title="Skip permissions mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
-        <div className="space-y-3 text-xs text-fg leading-relaxed">
-          {/* WHY one card around the words, the tick box AND the buttons (popup-cards-1#PC-1: a
-              popup that does one job is one card holding everything; one card, no label). */}
-          <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-          {/* Destin's copy (round 4, R4-3) — the three measured paragraphs it
-              replaced read as a wall of grey. */}
-          <p>
-            When you begin a session in skip permissions mode, Claude Code will not ask before taking
-            actions or running commands. You should be cautious when attempting to use this mode with
-            Haiku- or Sonnet-class models.
-          </p>
-          {/* WHY ConsentRow (fix batch 2, 2026-09-26 — decisions.md "Consent
-              tick box", settings-pieces#P-6): the whole line is one tappable
-              box with the tick on the left, lighting up when ticked. It was a
-              bare 14px square beside the sentence — Destin: "the vibe is off"
-              (fix batch 1, B1-2). "Turn it on" below still waits for the tick. */}
+      <Dialog open={confirming} onClose={close} title="Skip permissions mode" size="panel" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
+        {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-2): the same width,
+            words, tick box and stacked buttons as the chat's first-time warnings — it was 340px
+            with 12px main-colour words while they were 420px with grey ones. Destin's copy (round
+            4, R4-3). The tick box is the shared ConsentRow (decisions.md "Consent tick box"); the
+            red "Turn it on" is the main action, so it goes on top (guide "Destructive confirm"),
+            with the "tick the box" hover hint while it is grey (final-fixes#ST-12). */}
+        <OneJobCard actions={<>
+          <Tooltip text={accepted ? '' : 'Tick the box to continue'}>
+            <Button
+              variant="danger"
+              disabled={!accepted}
+              onClick={() => { onDefaultsChange({ skipPermissions: true }); close(); }}
+            >
+              Turn it on
+            </Button>
+          </Tooltip>
+          <Button variant="secondary" onClick={close}>Cancel</Button>
+        </>}>
+          <OneJobText>
+            <p>
+              When you begin a session in skip permissions mode, Claude Code will not ask before taking
+              actions or running commands. You should be cautious when attempting to use this mode with
+              Haiku- or Sonnet-class models.
+            </p>
+          </OneJobText>
           <ConsentRow checked={accepted} onChange={setAccepted}>
             I understand, and I use Skip permissions at my own risk.
           </ConsentRow>
-          {/* WHY stacked, danger on top (fix batch 1, 2026-09-24): this is a
-              `size="prompt"` (340px) dialog — a NARROW popup, so two buttons
-              stack full width with the main action (here the destructive
-              confirm) on top, per the design guide's button-placement rule.
-              Was side by side, hugging the right edge — the wide-popup shape. */}
-          <div className="flex flex-col gap-2 pt-1">
-            {/* WHY a hover hint while it is grey (final-fixes#ST-12): the same "tick the box"
-                tooltip as the first-time warnings, so a disabled action says why. */}
-            <Tooltip text={accepted ? '' : 'Tick the box to continue'}>
-              <Button
-                variant="danger"
-                disabled={!accepted}
-                onClick={() => { onDefaultsChange({ skipPermissions: true }); close(); }}
-                className="w-full"
-              >
-                Turn it on
-              </Button>
-            </Tooltip>
-            <Button variant="secondary" onClick={close} className="w-full">Cancel</Button>
-          </div>
-          </div>
-        </div>
+        </OneJobCard>
       </Dialog>
     </section>
   );

@@ -14,7 +14,7 @@
 // site routes the ACTION through the gate rather than the state change.
 
 import React, { useCallback, useRef, useState, type ReactNode } from 'react';
-import { Button, CARD_LEVEL_1, ConsentRow, Dialog, Tooltip } from './ui';
+import { Button, ConsentRow, Dialog, OneJobCard, OneJobText, Tooltip } from './ui';
 import { memoWhileClosed } from './memo-while-closed';
 import {
   hasAcknowledged,
@@ -56,41 +56,41 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
           and Remove project use. It was a bare 12px square beside a sentence on the popup.
           One card, so no label (the guide's single-card exception). Paragraph style matches the
           Permissions page's mode definitions, so the Full auto warning reads in that voice. */}
-      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-        {copy.body.map((paragraph, i) => (
-          <React.Fragment key={i}>
-            <p className="text-2xs text-fg-2 leading-relaxed">{paragraph}</p>
-            {i === 0 && copy.bullets && (
-              <ul className="text-2xs text-fg-2 leading-relaxed list-disc pl-4 space-y-1">
-                {copy.bullets.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            )}
-          </React.Fragment>
-        ))}
+      {/* WHY the shared one-job card (popup-cards-2#A-2, Destin: "think these could be more
+          consistent too"): the same 12px words and stacked buttons (main on top) as Skip
+          permissions' own confirm and the other one-job popups. Was 11px words and two buttons
+          side by side at the right. The hover hint on the grey Continue (final-fixes#ST-12)
+          stays: the shared Tooltip passes the card's full width through to the button. */}
+      <OneJobCard actions={<>
+        <Tooltip text={canContinue ? '' : 'Tick the box to continue'}>
+          <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
+            {copy.continueLabel}
+          </Button>
+        </Tooltip>
+        <Button variant="secondary" onClick={() => close(onCancel)}>
+          Cancel
+        </Button>
+      </>}>
+        <OneJobText>
+          {copy.body.map((paragraph, i) => (
+            <React.Fragment key={i}>
+              <p>{paragraph}</p>
+              {i === 0 && copy.bullets && (
+                <ul className="list-disc pl-4 space-y-1">
+                  {copy.bullets.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </React.Fragment>
+          ))}
+        </OneJobText>
         {copy.checkbox && (
           <ConsentRow checked={checked} onChange={setChecked}>
             {copy.checkbox}
           </ConsentRow>
         )}
-        {/* WHY a hover hint on the grey Continue instead of a line at the card's foot
-            (final-fixes#ST-12, Destin: "remove "tick the box to continue" and replace with a hover
-            tooltip over the action button that would be disabled"). Continue stays disabled, not
-            hidden, so the person sees what the tick unlocks; the shared Tooltip reaches a disabled
-            button and opens on press-and-hold on a touchscreen. Empty text = no hint once ticked.
-            The buttons sit inside the one card (popup-cards-1#PC-1). */}
-        <div className="flex gap-2 justify-end pt-1">
-          <Button variant="secondary" onClick={() => close(onCancel)}>
-            Cancel
-          </Button>
-          <Tooltip text={canContinue ? '' : 'Tick the box to continue'}>
-            <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
-              {copy.continueLabel}
-            </Button>
-          </Tooltip>
-        </div>
-      </div>
+      </OneJobCard>
     </Dialog>
   );
 }

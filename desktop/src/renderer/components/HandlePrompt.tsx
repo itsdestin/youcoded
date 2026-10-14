@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAccount } from '../state/account-context';
-import { Button, CARD_LEVEL_1, Dialog, FieldError, InputGroup } from './ui';
+import { Button, Dialog, FieldError, InputGroup, OneJobCard, OneJobLabel, OneJobText } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 
 // Persisted "don't nag me again" flag. Set on skip (and on ESC, which is the
@@ -101,42 +101,40 @@ function HandlePromptPopup({
           (final-review#ST-21/#PR-7, the one popup rule; guide "Popups": every popup has the
           16px title, the ✕ and the tapered line): this had a hand-made 14px heading with no ✕,
           and its words and field sat bare on the popup. Same words and controls. */}
-      <Dialog open onClose={skip} size="prompt" title="Pick a handle" screen="handle-prompt">
-        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-          <p className="text-2xs text-fg-dim leading-relaxed">
-            Friends will find you by your handle — like a username. You can change it later in Settings → Account.
-          </p>
-
-          {/* Change 77: same migration as Settings → Account's handle field, which
-              this duplicates. Save moves inside the field. "Skip for now" is a cancel,
-              not a submit, so it stays outside, as its own full-width button below. */}
-          <InputGroup size="md">
-            <span className="pl-3 text-xs text-fg-muted select-none">@</span>
-            <InputGroup.Field
-              id="handle-prompt-input"
-              aria-label="Handle"
-              className="pl-0"
-              autoFocus
-              value={draft}
-              onChange={(e) => { setDraft(e.target.value); setError(null); }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim().length > 0 && !saving) void save(); }}
-            />
-            <Button
-              size="sm"
-              onClick={() => void save()}
-              disabled={saving || draft.trim().length === 0}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </InputGroup>
-          {/* Plain words for status, never glyphs. */}
-          {error && <FieldError as="p">{error}</FieldError>}
-          {/* WHY inside the card (popup-cards-1#PC-1): a one-job popup is one card holding
-              everything, its buttons included. */}
-          <Button variant="secondary" onClick={skip} className="w-full">
-            Skip for now
+      {/* WHY `panel` and the shared one-job card (popup-cards-2#A-1, Destin: these three popups
+          "basically have the same job/size" yet differed in text, box and button positions): the
+          same width, words, named field and stacked buttons as Rename session and Connect
+          OpenRouter. Save left the text box (it was a small button inside it — the one popup of
+          the three that did that) to be the filled button on top; Skip for now stays the outlined
+          one under it. Enter in the box still saves. */}
+      <Dialog open onClose={skip} size="panel" title="Pick a handle" screen="handle-prompt">
+        <OneJobCard actions={<>
+          <Button onClick={() => void save()} disabled={saving || draft.trim().length === 0}>
+            {saving ? 'Saving…' : 'Save'}
           </Button>
-        </div>
+          <Button variant="secondary" onClick={skip}>Skip for now</Button>
+        </>}>
+          <OneJobText>
+            <p>Friends will find you by your handle — like a username. You can change it later in Settings → Account.</p>
+          </OneJobText>
+          <div>
+            <OneJobLabel htmlFor="handle-prompt-input">Handle</OneJobLabel>
+            {/* Change 77's InputGroup kept for the "@" in front, now without a button inside. */}
+            <InputGroup size="md">
+              <span className="pl-3 text-xs text-fg-muted select-none">@</span>
+              <InputGroup.Field
+                id="handle-prompt-input"
+                className="pl-0"
+                autoFocus
+                value={draft}
+                onChange={(e) => { setDraft(e.target.value); setError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim().length > 0 && !saving) void save(); }}
+              />
+            </InputGroup>
+            {/* Plain words for status, never glyphs. */}
+            {error && <FieldError as="p" className="mt-1.5">{error}</FieldError>}
+          </div>
+        </OneJobCard>
       </Dialog>
     </>,
     document.body,
