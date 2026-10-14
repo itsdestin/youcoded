@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, CARD_LEVEL_1, Dialog, SectionLabel, Textarea } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, SectionLabel, SegmentedTabs, Textarea } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
@@ -165,23 +165,22 @@ export default function ContextPopup({
                   Status bar shows
                 </SectionLabel>
                 <div className={`${CARD_LEVEL_1} p-3`}>
-                <div role="radiogroup" aria-label="Context pill display" className="flex w-full rounded-lg overflow-hidden border border-edge-dim">
-                  {(['percent', 'tokens'] as const).map((mode, i) => (
-                    <button
-                      key={mode}
-                      role="radio"
-                      aria-checked={contextDisplay === mode}
-                      onClick={() => setContextDisplay(mode)}
-                      className={`flex-1 py-1.5 px-2 text-xs transition-colors ${i === 1 ? 'border-l border-edge-dim' : ''} ${
-                        contextDisplay === mode
-                          ? 'bg-accent text-on-accent font-medium'
-                          : 'bg-panel text-fg-2 hover:bg-inset'
-                      }`}
-                    >
-                      {mode === 'percent' ? 'Percentage' : 'Token counts'}
-                    </button>
-                  ))}
-                </div>
+                {/* WHY the shared tab strip (guide: "2–4 short choices / a view switch →
+                    SegmentedTabs"): this was a hand-built two-button switch with its own
+                    border, divider line and fixed corner — the only view switch in the app not
+                    on the shared piece. `nested` because it sits inside a first-level card,
+                    the same look Context and Session naming use in Assistant settings. Same
+                    two choices, same stored value. */}
+                <SegmentedTabs
+                  variant="nested"
+                  aria-label="Context pill display"
+                  value={contextDisplay}
+                  onChange={(id) => setContextDisplay(id as 'percent' | 'tokens')}
+                  tabs={[
+                    { id: 'percent', label: 'Percentage' },
+                    { id: 'tokens', label: 'Token counts' },
+                  ]}
+                />
                 <p className="text-2xs text-fg-muted mt-1 leading-snug">
                   {contextDisplay === 'percent'
                     ? 'Pill reads “Context: 45% Remaining”.'

@@ -91,6 +91,19 @@ describe('ContextPopup — main view', () => {
   });
 });
 
+describe('ContextPopup — status bar display switch', () => {
+  // WHY: the Percentage / Token counts choice is the shared tab strip (guide: a 2–4
+  // choice view switch is SegmentedTabs), not a hand-built radio pair.
+  it('offers Percentage and Token counts as one shared tab strip, Percentage chosen by default', () => {
+    renderPopup();
+    const strip = screen.getByRole('tablist', { name: 'Context pill display' });
+    const tabs = Array.from(strip.querySelectorAll('[role="tab"]'));
+    expect(tabs.map((t) => t.textContent)).toEqual(['Percentage', 'Token counts']);
+    expect(screen.getByRole('tab', { name: 'Percentage' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+  });
+});
+
 describe('ContextPopup — info view', () => {
   it('shows the (i) button in the header of the main view', () => {
     renderPopup();
