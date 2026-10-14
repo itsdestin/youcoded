@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, CARD_LEVEL_1, Dialog, FieldError, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FieldError, InputGroup, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
@@ -106,11 +106,10 @@ export default function QuickChips({ onChipTap }: Props) {
 //    error line under the empty box;
 //  - Remove threw the chip (and the message you wrote) away at once; like Delete tag it now
 //    asks first in place, the red button taking the main action's place;
-//  - "+ Add a chip" was a full-width outlined button under the shelves, and the how-to line sat
-//    loose between cards; the add button is now chip-shaped and dashed at the end of the
-//    shown shelf, like "+ New tag" among the tags (guide: "an edit button for a list is
-//    shaped like the things it edits"), and the how-to line lives inside that card (guide:
-//    "text that describes a card lives inside it").
+//  - "+ Add a chip" was a full-width outlined button under the shelves; it became a dashed chip
+//    at the end of the shown shelf, and then (vocab-chips-2#D-3) an "Add a chip" box inside that
+//    card, the same shape as "Add a tag" and Voice vocabulary's "Add a word". The how-to line
+//    sits under that box as grey words, as Voice vocabulary's does (popup-cards-3#B-1).
 
 interface ChipEditorProps {
   open: boolean;
@@ -131,6 +130,9 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
   const [label, setLabel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [shown, setShown] = useState(true);
+  // The list's "Add a chip" box (vocab-chips-2#D-3) — declared with the other state, above the
+  // edit/add pages' early return, so the hook order never changes between views.
+  const [newName, setNewName] = useState('');
   // `tried`: Save/Add was pressed with a box empty — show why (the tag box's Create, PM13-3).
   const [tried, setTried] = useState(false);
   // Remove asks first, in place (the tag box's Delete tag, PM13-4).
@@ -144,8 +146,9 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
     setTried(false); setConfirmRemove(false);
     setView({ kind: 'edit', idx });
   }, [chips]);
-  const beginAdd = useCallback(() => {
-    setLabel(''); setPrompt(''); setShown(true);
+  // `name`: what was typed in the list's "Add a chip" box, carried onto the add page.
+  const beginAdd = useCallback((name = '') => {
+    setLabel(name); setPrompt(''); setShown(true);
     setTried(false); setConfirmRemove(false);
     setView({ kind: 'add' });
   }, []);
@@ -254,13 +257,21 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
   const shelf = (hidden: boolean) => chips.map((c, i) => ({ c, i })).filter(({ c }) => !!c.hidden === hidden);
   const renderShelf = (hidden: boolean, title: string, empty: string, foot?: React.ReactNode) => {
     const items = shelf(hidden);
-    // The shown shelf ends with the dashed "+ Add a chip" (see the header comment), so it is
-    // never empty of things to press; its empty line shows only when it holds no chip.
-    const add = !hidden && chips.length < MAX_CHIPS ? (
-      <button type="button" onClick={beginAdd}
-        className="shrink-0 h-7 px-2.5 rounded-md border border-dashed border-edge text-2xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
-        + Add a chip
-      </button>
+    // WHY "Add a chip" over a box inside the shown shelf's card (vocab-chips-2#D-3, Destin: "the
+    // add surface is still odd compared to tags/voice"): the same shape as Tags' "Add a tag" and
+    // Voice vocabulary's "Add a word" — a small title, one box, Enter. A chip also needs its
+    // message, so Enter opens the add page with the name already filled in. Replaces the dashed
+    // "+ Add a chip" chip at the end of the shelf.
+    const add = !hidden ? (
+      <div className="space-y-2">
+        <label className="block text-xs font-medium text-fg-2" htmlFor="quick-chip-new">Add a chip</label>
+        <InputGroup size="sm">
+          <InputGroup.Field id="quick-chip-new" value={newName} maxLength={20} disabled={chips.length >= MAX_CHIPS}
+            placeholder={chips.length >= MAX_CHIPS ? `You have the most chips (${MAX_CHIPS})` : 'Type a name, then press Enter'}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); e.stopPropagation(); beginAdd(newName.trim()); setNewName(''); } }} />
+        </InputGroup>
+      </div>
     ) : null;
     return (
       <section>
@@ -273,19 +284,26 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
             {items.map(({ c, i }) => (
               <span key={i} data-chip-idx={i}
                 onPointerDown={(e) => drag.down(e, i)} onPointerMove={drag.move} onPointerUp={drag.up} onPointerCancel={drag.up}
-                className={`group/chip h-7 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs select-none touch-none cursor-grab transition-opacity ${
+                // WHY a tag-shaped pill with its pencil always showing (vocab-chips-2#D-3, Destin picked
+                // tag-shaped chips; "the spacing on the right side of these looks odd"): the pencil
+                // was invisible until hover but still took its room, leaving a gap at the right. A
+                // tag's × is always there; so is this pencil now, so both sides read even.
+                className={`group/chip h-6.5 pl-2.5 pr-1 rounded-full bg-inset border inline-flex items-center gap-1 text-xs select-none touch-none cursor-grab transition-opacity ${
                   hidden ? 'border-dashed border-edge-dim text-fg-muted' : 'border-edge-dim text-fg-2'} ${drag.dragIdx === i ? 'opacity-30' : ''}`}>
                 {c.label}
                 <button type="button" aria-label={`Edit ${c.label}`}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); if (!drag.suppressClick.current) beginEdit(i); }}
-                  className="touch-reveal w-5 h-5 rounded-sm flex items-center justify-center text-fg-faint opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg hover:bg-inset transition-opacity">
+                  className="w-5 h-5 rounded-full flex items-center justify-center text-fg-muted hover:text-fg hover:bg-edge transition-colors">
                   <PencilIcon size={9} />
                 </button>
               </span>
             ))}
-            {add}
           </div>
+          {add}
+          {/* WHY the how-to line inside the card under the "Add a chip" box, 12px grey
+              (vocab-chips-2#D-3): the same place as Voice vocabulary's explanation under its
+              "Add a word" box (popup-cards-3#B-1: grey words under the text box). It was 11px. */}
           {foot}
         </div>
       </section>
@@ -296,7 +314,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
     <>
       <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit quick chips" size="panel">
         {renderShelf(false, 'Shown above the message box', 'Drag a chip here to show it', (
-          <p className="text-3xs text-fg-muted">
+          <p className="text-xs text-fg-muted leading-relaxed">
             Drag a chip between the two shelves to show or hide it, or along a shelf to reorder. The pencil on a chip edits it.
             {chips.length >= MAX_CHIPS && ` You have the most chips (${MAX_CHIPS}); remove one to add another.`}
           </p>

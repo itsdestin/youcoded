@@ -200,18 +200,21 @@ describe('quick chips — the row shows the store, not a hardcoded fallback', ()
     // The editor and the row now agree — both show nothing.
     openEditor();
     expect(document.querySelector('[data-chip-idx]')).toBeNull();
-    expect(screen.getByText('+ Add a chip')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Add a chip' })).toBeTruthy();
   });
 
-  // The add button is chip-shaped, at the end of the shown shelf (like "+ New tag" among tags).
-  it('"+ Add a chip" sits inside the shown shelf and opens the add page', async () => {
+  // vocab-chips-2#D-3: "Add a chip" is a titled box inside the shown shelf, like "Add a tag";
+  // Enter opens the add page with the typed name filled in.
+  it('the "Add a chip" box sits inside the shown shelf and Enter opens the add page with its name', async () => {
     setupWindowClaude(CHIPS);
     await mount();
     openEditor();
     const shown = document.querySelector('[data-shelf="shown"]')!;
-    expect(shown).toContainElement(screen.getByRole('button', { name: '+ Add a chip' }));
-    fireEvent.click(screen.getByRole('button', { name: '+ Add a chip' }));
-    expect(screen.getByLabelText('Chip name')).toHaveValue('');
+    const box = screen.getByRole('textbox', { name: 'Add a chip' });
+    expect(shown).toContainElement(box);
+    fireEvent.change(box, { target: { value: 'Standup' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByLabelText('Chip name')).toHaveValue('Standup');
   });
 });
 
