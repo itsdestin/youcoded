@@ -76,7 +76,8 @@ function RenameForm({ id, name, onClose }: Props) {
           width with Save on top. Its buttons were side by side at the right, the only one of the
           three that was. */}
       <OneJobCard actions={<>
-        <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save name'}</Button>
+        {/* "Save", not "Save name" (popup-cards-4#C-1, Destin: "change save name to just save."), as Pick a handle's. */}
+        <Button type="submit" disabled={saving || !draft.trim()}>{saving ? 'Saving…' : 'Save'}</Button>
         <Button variant="secondary" type="button" disabled={saving} onClick={onClose}>Cancel</Button>
       </>}>
         <div>

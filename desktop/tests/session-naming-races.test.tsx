@@ -20,7 +20,7 @@ it('keeps a manual name protected with no automatic-name reset action', async ()
   await screen.findByDisplayValue('My name');
   expect(screen.queryByRole('button', { name: 'Use automatic name' })).toBeNull();
   expect(screen.getByText('You named this session. Automatic naming won’t replace it.')).toBeTruthy();
-  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Save name', 'Cancel']) // stacked, main one on top (popup-cards-2#A-1);
+  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Save', 'Cancel']); // stacked, main one on top (popup-cards-2#A-1)
 });
 it('a saved rename tells the already-fetched lists, or the row keeps the old name', async () => {
   // Renaming a SAVED conversation touches no live session, so there is no
@@ -37,7 +37,7 @@ it('a saved rename tells the already-fetched lists, or the row keeps the old nam
     render(<SessionRenameDialog id="saved-1" name="Old name" onClose={() => {}} />);
     const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '  Biology revision  ' } });
-    await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
     expect(rename).toHaveBeenCalledWith('saved-1', 'Biology revision');
     expect(seen).toEqual([{ id: 'saved-1', title: 'Biology revision' }]);
   } finally {
@@ -56,7 +56,7 @@ it('says nothing to the lists when the save was refused', async () => {
   try {
     render(<SessionRenameDialog id="saved-2" name="Old name" onClose={() => {}} />);
     await screen.findByDisplayValue('Old name');
-    await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
     expect(seen).toEqual([]);
     expect(screen.getByText('Storage is not available.')).toBeTruthy();
   } finally {
@@ -122,7 +122,7 @@ it('closes on save even though the rename changes the name the parent passes bac
   render(<Parent />);
   const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
   fireEvent.change(input, { target: { value: 'Biology revision' } });
-  await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+  await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
   expect(rename).toHaveBeenCalledWith('s1', 'Biology revision');
   expect(onClose).toHaveBeenCalledTimes(1);
 });
