@@ -43,15 +43,30 @@ const svgData = (raw: string) => `data:image/svg+xml;charset=utf-8,${encodeURICo
  *  URLs go in here. */
 function withWallpaper(json: unknown, value: string, terminal: string, buddy: [string, string, string, string, string]): LoadedTheme {
   const t = json as ThemeDefinition;
-  const [rig, idle, welcome, inquisitive, shocked] = buddy.map(svgData);
   return {
     ...t,
     background: { ...t.background!, value, 'terminal-value': terminal },
     // The glass buddy (theme questions deck T-4): drawn by scripts/brand/glass-buddy.py in
     // the workspace from the default rig's skeleton, so every pose still works.
-    mascot: { rig, idle, welcome, inquisitive, shocked },
+    mascot: lazyMascot(buddy),
     source: 'youcoded-core',
   };
+}
+
+/** The five poses as data: URLs, each built the first time something reads it.
+ *  WHY lazy (final review F47, Destin picked it on final-review#Q-6): encoding all ten
+ *  drawings (~250KB) ran at import in every window — the buddy window too — whether or not
+ *  a YouCoded theme was ever shown. A getter encodes a pose only when the active theme (or a
+ *  preview of it) reads it, then keeps the result, so each read after that is the same
+ *  string (no re-render churn) and every reader (`theme.mascot.rig`, a spread, JSON) still
+ *  sees a plain string property. */
+function lazyMascot(buddy: [string, string, string, string, string]): NonNullable<LoadedTheme['mascot']> {
+  const out = {} as Record<string, string>;
+  (['rig', 'idle', 'welcome', 'inquisitive', 'shocked'] as const).forEach((pose, i) => {
+    let url: string | undefined;
+    Object.defineProperty(out, pose, { enumerable: true, configurable: true, get: () => (url ??= svgData(buddy[i])) });
+  });
+  return out as NonNullable<LoadedTheme['mascot']>;
 }
 import { themeIconSet, type ThemeIconSet } from '../../shared/theme-icons';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';

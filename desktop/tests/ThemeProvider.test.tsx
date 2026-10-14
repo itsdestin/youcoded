@@ -236,3 +236,24 @@ it('a reconnect that finds the theme really gone shows the default here but stil
   await waitFor(() => expect(phone.result.current.theme).not.toBe(slug));
   expect(persist).not.toHaveBeenCalled();
 });
+
+// Final review F47 (Destin picked it on final-review#Q-6, "load lazily"): the YouCoded pair's
+// glass buddy drawings become data: URLs only when something reads them, not at import in
+// every window. Each pose still reads as a plain, stable string.
+it('builds each built-in mascot pose on first read, once, as a plain string property', () => {
+  const encode = vi.spyOn(globalThis, 'encodeURIComponent');
+  // No provider: the context's default value carries the built-in themes.
+  const { result } = renderHook(() => useTheme());
+  const yc = result.current.allThemes.find((t) => t.slug === 'youcoded');
+  expect(yc?.mascot).toBeDefined();
+  const before = encode.mock.calls.length;
+  const rig = yc!.mascot!.rig;
+  expect(rig).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
+  expect(encode.mock.calls.length).toBe(before + 1); // only the pose that was read
+  expect(yc!.mascot!.rig).toBe(rig); // kept: the same string every read
+  expect(encode.mock.calls.length).toBe(before + 1);
+  // Readers that copy or serialise the mascot still see every pose.
+  expect(Object.keys({ ...yc!.mascot })).toEqual(['rig', 'idle', 'welcome', 'inquisitive', 'shocked']);
+  expect(JSON.parse(JSON.stringify(yc!.mascot)).idle).toMatch(/^data:image\/svg\+xml/);
+  encode.mockRestore();
+});
