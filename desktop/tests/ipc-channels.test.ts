@@ -285,8 +285,8 @@ describe('browser:* channel parity', () => {
   const contract = readSource('src', 'shared', 'backend-contract.ts');
   const REQUESTS = [...contract.matchAll(/^\s*(BROWSER_[A-Z_]+):\s*'(browser:[^']+)'/gm)]
     .filter(([, k]) => !['BROWSER_STATE_CHANGED', 'BROWSER_FRAME', 'BROWSER_INFO_CHANGED'].includes(k));
-  it('names nineteen request channels (non-vacuity)', () => {
-    expect(REQUESTS.length).toBe(19);
+  it('names twenty request channels (non-vacuity)', () => {
+    expect(REQUESTS.length).toBe(20);
   });
   it('each is a desktopOnly table entry, in preload and remote-shim', () => {
     const table = readSource('src', 'main', 'ipc', 'browser.ts');

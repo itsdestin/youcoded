@@ -81,6 +81,7 @@ export function createBrowserMock(sessionIds: () => string[]) {
     open: async () => ({ ok: true }),
     input: () => {},
     viewSize: () => {},
+    selection: async () => '',
     onState: (cb: (s: BrowserSessionState) => void) => {
       stateListeners.add(cb);
       // Tell the screen about every conversation at once, as the real app does

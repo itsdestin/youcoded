@@ -23,7 +23,8 @@ export type BrowserCommand =
   | { cmd: 'check-my-chrome' }
   | { cmd: 'open'; sessionId: string; address?: string; nav?: 'back' | 'forward' | 'reload' }
   | { cmd: 'input'; sessionId: string; event: BrowserInputEvent }
-  | { cmd: 'view-size'; sessionId: string; width: number; height: number };
+  | { cmd: 'view-size'; sessionId: string; width: number; height: number }
+  | { cmd: 'selection'; sessionId: string };
 
 export type MainToWorker =
   | { t: 'call'; id: number; sessionId: string; tool: string; args: unknown; vision: boolean }

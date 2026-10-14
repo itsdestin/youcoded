@@ -3179,6 +3179,7 @@ export function installShim(): void {
       open: (req: Record<string, unknown>) => invoke('browser:open', req),
       input: (_sessionId: string, _event: unknown) => { /* no browser page reaches a phone */ },
       viewSize: (_sessionId: string, _width: number, _height: number) => { /* no browser page reaches a phone */ },
+      selection: (sessionId: string) => invoke('browser:selection', { sessionId }),
       onState: (_cb: (state: any) => void) => () => {},
       onFrame: (_cb: (frame: any) => void) => () => {},
       onInfoChanged: (_cb: () => void) => () => {},

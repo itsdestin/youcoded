@@ -124,6 +124,8 @@ interface SessionEntry {
   inputChain: Promise<unknown>;
   /** The scroll waiting its turn in `inputChain`; later scroll steps merge into it. */
   wheelPending: { type: 'wheel'; x: number; y: number; dx: number; dy: number } | null;
+  /** The drag step waiting its turn; a later step only moves it to the newer point. */
+  movePending: { x: number; y: number } | null;
   /** Tabs that went away without the app closing them, newest last. WHY: when a
    *  window closes, its tabs close one by one BEFORE the browser reports it
    *  closed — this is how the browser-closed path still knows what was open. */
@@ -167,7 +169,7 @@ export class BrowserService extends EventEmitter {
   private entry(sessionId: string): SessionEntry {
     let e = this.sessions.get(sessionId);
     if (!e) {
-      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), wheelPending: null, justClosed: [] };
+      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), wheelPending: null, movePending: null, justClosed: [] };
       this.sessions.set(sessionId, e);
     }
     return e;
@@ -648,9 +650,43 @@ export class BrowserService extends EventEmitter {
       }).catch(() => undefined);
       return;
     }
-    // A click or key keeps its place: later scroll steps queue after it.
+    // WHY merge drag steps too: a mouse reports a move every screen refresh;
+    // only where the pointer is NOW matters to a highlight, so one waits at most.
+    if (ev.type === 'mouse' && ev.action === 'move') {
+      const waiting = e.movePending;
+      if (waiting) { waiting.x = ev.x; waiting.y = ev.y; return; }
+      const m = { x: ev.x, y: ev.y };
+      e.movePending = m;
+      e.inputChain = e.inputChain.then(() => {
+        if (e.movePending === m) e.movePending = null;
+        return page.mouse.move(m.x, m.y);
+      }).catch(() => undefined);
+      return;
+    }
+    // A click or key keeps its place: later scroll or drag steps queue after it.
     e.wheelPending = null;
+    e.movePending = null;
     e.inputChain = e.inputChain.then(() => runPersonInput(page, ev)).catch(() => undefined);
+  }
+
+  /** The text the person highlighted on the current tab, for Copy. Waits for
+   *  their clicks and drags already sent, so it reads the finished highlight. */
+  async personSelection(sessionId: string): Promise<string> {
+    const e = this.sessions.get(sessionId);
+    const page = e?.active;
+    if (!e || !page || page.isClosed()) return '';
+    await e.inputChain;
+    // WHY read a text box's own selection: the page's selection is empty while
+    // the highlight is inside an input or textarea. Frames: the focused one.
+    const text = await page.evaluate(() => {
+      const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+      if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && /^(text|search|url|email|tel|number)?$/i.test(active.type)))) {
+        const { selectionStart: a, selectionEnd: b } = active;
+        if (a != null && b != null && b > a) return active.value.slice(a, b);
+      }
+      return String(window.getSelection() ?? '');
+    }).catch(() => '');
+    return text.slice(0, 200_000);
   }
 
   /** A page the browser opened by itself (popup / target=_blank) joins its opener's conversation. */
@@ -1033,6 +1069,11 @@ async function runPersonInput(page: Page, ev: BrowserInputEvent): Promise<void> 
     case 'wheel':
       await page.mouse.move(ev.x, ev.y);
       await page.mouse.wheel(ev.dx, ev.dy);
+      return;
+    case 'mouse':
+      await page.mouse.move(ev.x, ev.y);
+      if (ev.action === 'down') await page.mouse.down({ clickCount: ev.clickCount });
+      else if (ev.action === 'up') await page.mouse.up({ clickCount: ev.clickCount });
       return;
     case 'key': await page.keyboard.press(ev.key); return;
     case 'text': await page.keyboard.insertText(ev.text); return;

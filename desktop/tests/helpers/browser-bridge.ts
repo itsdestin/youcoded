@@ -51,6 +51,7 @@ export function installBrowserBridge(info: BrowserInfo = browserInfo()) {
     open: vi.fn(async (_req: object) => ({ ok: true } as { ok: boolean; error?: string })),
     input: vi.fn(),
     viewSize: vi.fn(),
+    selection: vi.fn(async (_sessionId: string) => ''),
     onState: vi.fn((cb: (s: BrowserSessionState) => void) => { stateCbs.add(cb); return () => stateCbs.delete(cb); }),
     onFrame: vi.fn((cb: (f: any) => void) => { frameCbs.add(cb); return () => frameCbs.delete(cb); }),
     onInfoChanged: vi.fn((cb: () => void) => { infoCbs.add(cb); return () => infoCbs.delete(cb); }),

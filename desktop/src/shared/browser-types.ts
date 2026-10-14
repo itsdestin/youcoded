@@ -97,6 +97,9 @@ type BrowserOpenRequest =
  *  (CSS) pixels of the live picture's frame. */
 export type BrowserInputEvent =
   | { type: 'click'; x: number; y: number; clickCount: number; button: 'left' | 'right' | 'middle' }
+  /** The left button pressed, dragged and let go as separate steps, so a drag
+   *  highlights text on the page (a click is a down then an up). */
+  | { type: 'mouse'; action: 'down' | 'move' | 'up'; x: number; y: number; clickCount: number }
   | { type: 'wheel'; x: number; y: number; dx: number; dy: number }
   | { type: 'key'; key: string }
   | { type: 'text'; text: string };
@@ -135,6 +138,7 @@ export interface BrowserChannelTypes {
   'browser:open': { request: BrowserOpenRequest; response: { ok: boolean; error?: string } };
   'browser:input': { request: { sessionId: string; event: BrowserInputEvent }; response: void };
   'browser:view-size': { request: { sessionId: string; width: number; height: number }; response: void };
+  'browser:selection': { request: { sessionId: string }; response: string };
 }
 
 /** window.claude.browser — the computer's own window only (capabilities.assistantBrowser); remote-shim's methods reject. */
@@ -161,6 +165,8 @@ export interface BrowserBridge {
   input: (sessionId: string, event: BrowserInputEvent) => void;
   /** The panel's picture area, so a hidden browser lays its pages out to fit. */
   viewSize: (sessionId: string, width: number, height: number) => void;
+  /** The text highlighted on the page right now ('' for none), for Copy. */
+  selection: (sessionId: string) => Promise<string>;
   onState: (cb: (state: BrowserSessionState) => void) => () => void;
   onFrame: (cb: (frame: BrowserFrame) => void) => () => void;
   onInfoChanged: (cb: () => void) => () => void;

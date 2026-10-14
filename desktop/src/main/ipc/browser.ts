@@ -82,6 +82,9 @@ function inputEvent(v: any): BrowserInputEvent {
       if (!['left', 'right', 'middle'].includes(button)) throw new TypeError('Unknown button');
       return { type: 'click', x: num(v.x, 'x'), y: num(v.y, 'y'), clickCount: Math.min(3, Math.max(1, Math.round(num(v.clickCount ?? 1, 'clickCount')))), button };
     }
+    case 'mouse':
+      if (!['down', 'move', 'up'].includes(v.action)) throw new TypeError('Unknown mouse action');
+      return { type: 'mouse', action: v.action, x: num(v.x, 'x'), y: num(v.y, 'y'), clickCount: Math.min(3, Math.max(1, Math.round(num(v.clickCount ?? 1, 'clickCount')))) };
     case 'wheel': return { type: 'wheel', x: num(v.x, 'x'), y: num(v.y, 'y'), dx: num(v.dx, 'dx'), dy: num(v.dy, 'dy') };
     case 'key':
       if (typeof v.key !== 'string' || !KEY_NAME.test(v.key)) throw new TypeError('Unknown key');
@@ -229,6 +232,16 @@ export const browserChannels: MainChannelDef[] = [
     name: IPC.BROWSER_INPUT, kind: 'on', desktopOnly: true,
     // Never starts the worker: input only means something to a page that's open.
     handler: (payload) => { getBrowserClient().commandIfAlive({ cmd: 'input', sessionId: str(payload?.sessionId, 'sessionId'), event: inputEvent(payload?.event) }); },
+  }),
+  defineChannel({
+    name: IPC.BROWSER_SELECTION, kind: 'handle', desktopOnly: true,
+    // Copy from the panel: the page's highlighted text. Never starts the worker.
+    handler: async (payload) => {
+      const sessionId = str(payload?.sessionId, 'sessionId');
+      const client = getBrowserClient();
+      if (!client.alive) return '';
+      return client.command<string>({ cmd: 'selection', sessionId });
+    },
   }),
   defineChannel({
     name: IPC.BROWSER_VIEW_SIZE, kind: 'on', desktopOnly: true,

@@ -157,6 +157,7 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
       }
       case 'input': service.personInput(c.sessionId, c.event); return true;
       case 'view-size': service.setViewSize(c.sessionId, c.width, c.height); return true;
+      case 'selection': return service.personSelection(c.sessionId);
       case 'check-my-chrome': {
         const r = await findMyChrome();
         return 'error' in r ? { ok: false, message: r.error } : { ok: true, message: 'Chrome is ready. It will ask you to Allow the connection the first time the assistant uses it.' };

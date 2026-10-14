@@ -103,8 +103,10 @@ describe('Browser panel', () => {
     const img = screen.getByRole('img');
     // Drawn at half size: 640×400 at (100, 50).
     img.getBoundingClientRect = () => ({ left: 100, top: 50, width: 640, height: 400, right: 740, bottom: 450, x: 100, y: 50, toJSON() {} });
-    fireEvent.click(img, { clientX: 150, clientY: 100, detail: 1 });
-    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'click', x: 100, y: 100, clickCount: 1, button: 'left' });
+    fireEvent.mouseDown(img, { button: 0, clientX: 150, clientY: 100, detail: 1 });
+    fireEvent.mouseUp(window, { button: 0, clientX: 150, clientY: 100 });
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'mouse', action: 'down', x: 100, y: 100, clickCount: 1 });
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'mouse', action: 'up', x: 100, y: 100, clickCount: 1 });
     const page = screen.getByRole('application');
     let reachedApp = 0;
     const appListener = () => { reachedApp++; };
@@ -119,6 +121,32 @@ describe('Browser panel', () => {
     expect(page).toHaveAttribute('data-keyboard-owner');
   });
 
+  it('a mouse drag highlights on the page, and copy puts the highlight on the clipboard', async () => {
+    const b = installBrowserBridge();
+    b.bridge.selection.mockResolvedValue('alpha beta');
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, readText: vi.fn(async () => '') } });
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    act(() => b.pushFrame('s1')); // a 1280×800 page
+    const img = screen.getByRole('img');
+    img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400, right: 640, bottom: 400, x: 0, y: 0, toJSON() {} });
+    fireEvent.mouseDown(img, { button: 0, clientX: 10, clientY: 10, detail: 1 });
+    // Dragged past the picture's right edge: the highlight follows to the page's edge.
+    fireEvent.mouseMove(window, { clientX: 900, clientY: 10 });
+    await waitFor(() => expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'mouse', action: 'move', x: 1280, y: 20, clickCount: 1 }));
+    fireEvent.mouseUp(window, { clientX: 900, clientY: 10 });
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'mouse', action: 'up', x: 1280, y: 20, clickCount: 1 });
+    // Ctrl+C copies the page's highlight to the computer's clipboard.
+    fireEvent.keyDown(screen.getByRole('application'), { key: 'c', ctrlKey: true });
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('alpha beta'));
+    // Right-click offers Copy for the same highlight.
+    writeText.mockClear();
+    fireEvent.contextMenu(img, { clientX: 20, clientY: 20 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Copy/ }));
+    expect(writeText).toHaveBeenCalledWith('alpha beta');
+  });
+
   it('a finger drag scrolls the page and a tap clicks it (touchscreens)', async () => {
     const b = installBrowserBridge();
     setBrowserState(browserState());
@@ -129,8 +157,9 @@ describe('Browser panel', () => {
     // Tap: one click, not a second one from the browser's follow-on click event.
     fireEvent.pointerDown(img, { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100 });
     fireEvent.pointerUp(img, { pointerId: 1, pointerType: 'touch', clientX: 102, clientY: 101 });
-    fireEvent.click(img, { clientX: 102, clientY: 101, detail: 1 });
-    const clicks = b.bridge.input.mock.calls.filter(([, ev]: any) => ev.type === 'click');
+    fireEvent.mouseDown(img, { button: 0, clientX: 102, clientY: 101, detail: 1 });
+    fireEvent.mouseUp(window, { button: 0, clientX: 102, clientY: 101 });
+    const clicks = b.bridge.input.mock.calls.filter(([, ev]: any) => ev.type === 'click' || ev.type === 'mouse');
     expect(clicks).toEqual([['s1', { type: 'click', x: 204, y: 202, clickCount: 1, button: 'left' }]]);
     // Drag up 50 screen px = scroll down 100 page px (the picture is drawn at half size).
     fireEvent.pointerDown(img, { pointerId: 2, pointerType: 'touch', clientX: 100, clientY: 300 });
@@ -144,6 +173,8 @@ describe('Browser panel', () => {
     expect(k('Tab', { shiftKey: true })).toEqual({ type: 'key', key: 'Shift+Tab' });
     expect(k('a', { ctrlKey: true })).toEqual({ type: 'key', key: 'Control+a' });
     expect(k('v', { metaKey: true })).toBe('paste');
+    expect(k('c', { ctrlKey: true })).toBe('copy');
+    expect(k('x', { metaKey: true })).toBe('cut');
     expect(k('Shift', { shiftKey: true })).toBeNull();
     // Contained and centred: a picture area wider than the page has margins left and right.
     expect(pagePoint({ left: 0, top: 0, width: 800, height: 400 }, { w: 400, h: 400 }, 200, 10)).toEqual({ x: 0, y: 10 });

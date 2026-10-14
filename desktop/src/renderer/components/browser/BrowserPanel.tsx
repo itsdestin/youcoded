@@ -21,6 +21,7 @@ import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon } from '../Icons';
 import { ScreenMark } from '../../shoot-mode';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import BrowserAskCard from './BrowserAskCard';
+import { ContextMenu } from '../context-menu/ContextMenu';
 
 function bridge() { return (window as any).claude.browser; }
 
@@ -42,10 +43,18 @@ const SPECIAL_KEY = /^(F\d{1,2}|Enter|Backspace|Tab|Escape|Delete|Arrow(Left|Rig
 
 /** A key pressed on the picture, as what the page should receive: text for a
  *  plain character, a named key (with modifiers) otherwise, 'paste' for
- *  Ctrl/Cmd+V (the page gets the clipboard's text), null to ignore. */
-export function keyEventFor(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): BrowserInputEvent | 'paste' | null {
+ *  Ctrl/Cmd+V (the page gets the clipboard's text), 'copy'/'cut' for Ctrl/Cmd+C/X
+ *  (the page's highlight goes to the clipboard), null to ignore. */
+export function keyEventFor(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): BrowserInputEvent | 'paste' | 'copy' | 'cut' | null {
   const cmd = e.ctrlKey || e.metaKey;
-  if (cmd && !e.altKey && e.key.toLowerCase() === 'v') return 'paste';
+  // WHY the app does these three: a hidden browser's clipboard is its own, not
+  // the computer's, so the page's own Ctrl+C would copy into nowhere.
+  if (cmd && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'v') return 'paste';
+    if (k === 'c') return 'copy';
+    if (k === 'x') return 'cut';
+  }
   const single = [...e.key].length === 1;
   if (single && !cmd && !e.altKey) return { type: 'text', text: e.key };
   if (!single && !SPECIAL_KEY.test(e.key)) return null; // Shift alone, Dead, Process…
@@ -62,6 +71,17 @@ export function pagePoint(rect: { left: number; top: number; width: number; heig
   const x = (clientX - left) / scale;
   const y = (clientY - rect.top) / scale;
   if (x < 0 || y < 0 || x > frame.w || y > frame.h) return null;
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+/** Like pagePoint, but a point off the picture is pulled to its nearest edge —
+ *  a highlight dragged past the picture keeps following the pointer. */
+function pagePointClamped(rect: { left: number; top: number; width: number; height: number }, frame: { w: number; h: number }, clientX: number, clientY: number): { x: number; y: number } | null {
+  const scale = Math.min(rect.width / frame.w, rect.height / frame.h);
+  if (!(scale > 0)) return null;
+  const left = rect.left + (rect.width - frame.w * scale) / 2;
+  const x = Math.min(frame.w, Math.max(0, (clientX - left) / scale));
+  const y = Math.min(frame.h, Math.max(0, (clientY - rect.top) / scale));
   return { x: Math.round(x), y: Math.round(y) };
 }
 
@@ -120,9 +140,67 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
   const point = (e: { clientX: number; clientY: number }) => (img.current ? pagePoint(img.current.getBoundingClientRect(), frame.current, e.clientX, e.clientY) : null);
   const send = useCallback((ev: BrowserInputEvent) => bridge().input(sessionId, ev), [sessionId]);
 
-  const onClick = (e: React.MouseEvent, button: 'left' | 'right') => {
+  // A mouse sends press, drag and release as separate steps, so a drag
+  // highlights text the way it does in any browser (a click is press + release).
+  // The drag is followed on the window only while the button is down, so it
+  // keeps going past the picture's edge; moves go at most once a frame.
+  const endDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => endDrag.current?.(), []);
+  const onMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault(); // no image drag, no app text selection
+    box.current?.focus({ preventScroll: true });
+    // A tap was already sent by onPointerUp; its follow-on mouse events are not a second one.
+    if (lastPointerWasTouch.current || e.button !== 0) return;
     const p = point(e);
-    if (p) send({ type: 'click', x: p.x, y: p.y, clickCount: Math.max(1, e.detail || 1), button });
+    if (!p) return;
+    endDrag.current?.();
+    const clickCount = Math.max(1, Math.min(3, e.detail || 1));
+    send({ type: 'mouse', action: 'down', x: p.x, y: p.y, clickCount });
+    let last = { x: e.clientX, y: e.clientY };
+    let raf: number | null = null;
+    const at = (cx: number, cy: number) => (img.current ? pagePointClamped(img.current.getBoundingClientRect(), frame.current, cx, cy) : null);
+    const move = (m: MouseEvent) => {
+      last = { x: m.clientX, y: m.clientY };
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        const q = at(last.x, last.y);
+        if (q) send({ type: 'mouse', action: 'move', x: q.x, y: q.y, clickCount });
+      });
+    };
+    const finish = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (raf !== null) cancelAnimationFrame(raf);
+      endDrag.current = null;
+    };
+    const up = (m: MouseEvent) => {
+      finish();
+      const q = at(m.clientX, m.clientY) ?? p;
+      send({ type: 'mouse', action: 'up', x: q.x, y: q.y, clickCount });
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    endDrag.current = finish;
+  };
+
+  // Copy, cut and paste between the page and the computer's clipboard.
+  const copy = useCallback(async (): Promise<string> => {
+    const text = await bridge().selection(sessionId).catch(() => '');
+    if (text) await navigator.clipboard?.writeText(text).catch(() => {});
+    return text;
+  }, [sessionId]);
+  const paste = useCallback(() => {
+    void navigator.clipboard?.readText().then((text) => { if (text) send({ type: 'text', text: text.slice(0, 10_000) }); }).catch(() => {});
+  }, [send]);
+
+  // Right-click opens the app's own small menu: a hidden browser shows no menu
+  // of its own, and Copy/Paste are what a right-click is for on a page.
+  const [menu, setMenu] = useState<{ x: number; y: number; text: string } | null>(null);
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const at = { x: e.clientX, y: e.clientY };
+    void bridge().selection(sessionId).catch(() => '').then((text: string) => setMenu({ ...at, text }));
   };
 
   // Scrolling is gathered per frame: a trackpad sends dozens of tiny steps.
@@ -222,14 +300,18 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
     // reach the app's shortcuts (Escape would stop the assistant).
     e.preventDefault();
     e.stopPropagation();
-    if (ev === 'paste') {
-      void navigator.clipboard?.readText().then((text) => { if (text) send({ type: 'text', text: text.slice(0, 10_000) }); }).catch(() => {});
+    if (ev === 'paste') { paste(); return; }
+    if (ev === 'copy') { void copy(); return; }
+    if (ev === 'cut') {
+      // The highlight is removed only once it is safely on the clipboard.
+      void copy().then((text) => { if (text) send({ type: 'key', key: 'Delete' }); });
       return;
     }
     send(ev);
   };
 
   return (
+    <>
     <div
       ref={box}
       tabIndex={0}
@@ -237,21 +319,21 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
       aria-label="The page. Click to use it; while it's selected, typing goes to the page."
       data-keyboard-owner
       onKeyDown={onKeyDown}
-      className="relative flex-1 min-h-0 flex items-start justify-center overflow-hidden rounded-md focus:outline-none focus:ring-2 focus:ring-accent"
+      // WHY no focus ring (Destin, 2026-10-14): it framed the page in the accent
+      // colour whenever it was clicked; the page's own caret shows where typing goes.
+      className="relative flex-1 min-h-0 flex items-start justify-center overflow-hidden rounded-md focus:outline-none"
     >
       <img
         ref={img}
         onLoad={onLoad}
         onError={onLoad}
-        // Focus the picture on press so typing goes to the page; no image drag.
-        onMouseDown={(e) => { e.preventDefault(); box.current?.focus({ preventScroll: true }); }}
-        // A tap was already sent by onPointerUp; its follow-on click is not a second one.
-        onClick={(e) => { if (!lastPointerWasTouch.current) onClick(e, 'left'); }}
+        // Focus the picture on press so typing goes to the page.
+        onMouseDown={onMouseDown}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => { touch.current = null; }}
-        onContextMenu={(e) => { e.preventDefault(); onClick(e, 'right'); }}
+        onContextMenu={onContextMenu}
         onWheel={onWheel}
         alt={title ? `What the assistant's browser shows: ${title}` : "What the assistant's browser shows"}
         className={`w-full h-auto max-h-full object-contain object-top cursor-default touch-none ${hasFrame ? '' : 'hidden'}`}
@@ -261,6 +343,21 @@ const LivePicture = memo(function LivePicture({ sessionId, title }: { sessionId:
       {/* Photo-only build: the panel counts as showing once a picture is drawn. */}
       {hasFrame && <ScreenMark name="chat/browser" />}
     </div>
+      {/* Outside the picture's box: React passes a portal's keys up its parents,
+          and the box would send the menu's arrow keys on to the page. */}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => { setMenu(null); box.current?.focus({ preventScroll: true }); }}
+          entries={[
+            { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', disabled: !menu.text, run: () => { void navigator.clipboard?.writeText(menu.text).catch(() => {}); } },
+            { type: 'item', id: 'paste', label: 'Paste', icon: 'paste', run: paste },
+            { type: 'item', id: 'select-all', label: 'Select all', icon: 'select-all', run: () => send({ type: 'key', key: 'ControlOrMeta+a' }) },
+          ]}
+        />
+      )}
+    </>
   );
 });
 

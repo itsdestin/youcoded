@@ -483,6 +483,7 @@ export const IPC = {
   BROWSER_OPEN: 'browser:open',
   BROWSER_INPUT: 'browser:input',
   BROWSER_VIEW_SIZE: 'browser:view-size',
+  BROWSER_SELECTION: 'browser:selection',
   BROWSER_STATE_CHANGED: 'browser:state-changed',
   BROWSER_FRAME: 'browser:frame',
   BROWSER_INFO_CHANGED: 'browser:info-changed',
