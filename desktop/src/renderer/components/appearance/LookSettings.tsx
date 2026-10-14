@@ -1,5 +1,5 @@
 // The "Look" parts of Settings → Appearance: the user's own choices laid over every
-// theme (themes/look-overrides.ts). Every control's first option is "Auto" — the
+// theme (themes/look-overrides.ts). Every control's first option is "Theme" — the
 // theme's own choice — which is also what everything starts on. Decisions:
 // appearance-panel-questions (2026-09-24) AP-1 one layout picker, AP-2 glass presets
 // with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
@@ -11,7 +11,7 @@
 // joined it when the per-theme editor was removed (appearance-questions AQ-2).
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
-// useTheme(), the rules in themes/look-overrides.ts, and "absent field = Auto".
+// useTheme(), the rules in themes/look-overrides.ts, and "absent field = Theme".
 
 import { useState, type ReactNode } from 'react';
 import { useTheme } from '../../state/theme-context';
@@ -23,10 +23,13 @@ import {
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
 import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, Slider, Toggle, FOCUS_RING } from '../ui';
 
-// "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
-// request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
+// "Theme" = the absent field = the theme's own choice (AP-S1). It was "Auto"
+// (appearance-panel-review-3, AR3-1: "Auto (Theme)" in place of "Theme's").
+// WHY "Theme" now (Destin, final-review#ST-22: "replace "auto" with "theme""): the choice
+// means "whatever this theme does", and "Auto" suggested the app picks something itself.
+// One word for every picker's first choice, the Particles hint and the reset button.
 const THEME = 'theme';
-const AUTO = 'Auto';
+const AUTO = 'Theme';
 
 const CHROME_LABEL: Record<ChromeStyle, string> = {
   default: 'Framed',
@@ -124,7 +127,7 @@ function MiniCorners({ r }: { r: number }) {
 // Static class names so Tailwind generates them.
 const GRID_COLS: Record<number, string> = { 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' };
 
-/** A row of picture tiles, one per choice; the first is always Auto (the theme's own).
+/** A row of picture tiles, one per choice; the first is always Theme (the theme's own).
  *  The picture IS the option; the border marks the pick, like the theme cards.
  *  `value` null = the saved value matches no tile (a roundness set by the old slider). */
 function TilePicker<T extends string>({ label, choices, value, onChange, picture, name, autoIs }: {
@@ -134,7 +137,7 @@ function TilePicker<T extends string>({ label, choices, value, onChange, picture
   onChange: (v: T | undefined) => void;
   picture: (id: T | typeof THEME) => ReactNode;
   name: (id: T) => string;
-  /** What Auto currently resolves to, shown under it. */
+  /** What Theme currently resolves to, shown under it. */
   autoIs: string;
 }) {
   const current = value === undefined ? THEME : value;
@@ -237,8 +240,8 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
   const framed = (active.layout?.['chrome-style'] ?? 'default') === 'default';
   const bakedTerminal = raw.background?.type === 'image' && !!raw.background?.['terminal-value'];
   const tabs = [
-    // "Auto", not Destin's "Auto (Theme)": in a four-way strip the longer label wrapped
-    // to two lines. Every picker's first choice reads "Auto" the same way.
+    // One short word ("Theme", final-review#ST-22): in a four-way strip "Auto (Theme)"
+    // wrapped to two lines. Every picker's first choice reads the same way.
     { id: THEME, label: AUTO },
     { id: 'clear', label: 'Clear' },
     { id: 'frosted', label: 'Frosted' },
@@ -374,7 +377,7 @@ function ParticleSettings() {
   // pick would silently do nothing, exactly like glass (seen in the dev copy, 2026-10-01).
   const hint = !hasSeeThroughBackground(raw) ? 'No effect on this theme — it has no wallpaper'
     : reducedEffects ? 'Off while Reduce visual effects is on'
-      : `Auto keeps this theme's own: ${PARTICLE_LABEL[own as LookParticles] ?? 'its own picture'}`;
+      : `${AUTO} keeps its own: ${PARTICLE_LABEL[own as LookParticles] ?? 'its own picture'}`;
   return (
     <StackedRow title="Particles" hint={hint}>
       <SegmentedTabs tabs={tabs} value={look.particles ?? THEME} onChange={pick} variant="contained" aria-label="Particles" />
@@ -435,13 +438,13 @@ function GlassLook() {
   return <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />;
 }
 
-/** "Reset all to Auto", shown only once something differs from the theme. */
+/** "Reset all to Theme", shown only once something differs from the theme. */
 function ResetLook() {
   const { lookOverrides: look, setLookOverrides: set } = useTheme();
   if (!hasAnyOverride(look)) return null;
   return (
     <Button variant="secondary" size="sm" onClick={() => set({})} className="w-full">
-      Reset all to Auto
+      Reset all to {AUTO}
     </Button>
   );
 }

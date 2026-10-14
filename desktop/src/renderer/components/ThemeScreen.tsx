@@ -25,10 +25,10 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'What the settings do',
       bullets: [
         { term: 'Your themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
-        { term: 'Layout and additional customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness, glass and particles, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
+        { term: 'Layout and additional customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness, glass and particles, applied to every theme. Each one starts on \"Theme\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
         { term: 'Glass', text: 'How see-through the panels and bubbles are over a wallpaper. Clear, Frosted and Solid are one-tap choices; Fine-tune sets each blur and see-through level yourself. Themes without a wallpaper are not affected.' },
         { term: 'The share icon', text: 'Appears on themes you built yourself. It publishes that theme to the marketplace so others can install it.' },
-        { term: 'Particles', text: 'Falling rain, dust, embers or snow over the app. Auto keeps whatever the theme comes with.' },
+        { term: 'Particles', text: 'Falling rain, dust, embers or snow over the app. Theme keeps whatever it comes with.' },
         { term: 'Theme cycle', text: 'Configured from the status bar widget editor (tap the gear in the status bar → the pencil next to "Theme"). Themes in the cycle rotate when you tap the theme pill at the bottom.' },
         { term: 'Reduce visual effects', text: 'Turns off particles, glass blur, and animations. Use this if the app feels slow or if movement bothers you. Glass blur sliders are automatically disabled while this is on.' },
         { term: 'Message timestamps', text: 'Shows the time each chat message was sent inside the bubble.' },
