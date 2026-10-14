@@ -67,6 +67,17 @@ describe('CloseSessionPrompt — an unreadable note is not "No note"', () => {
     expect(screen.queryByText('No note')).toBeNull();
   });
 
+  // final-review#CH-11 ("this details box is weird/unique"): the notice and its Details fold sit
+  // inside the session's own name card, like a failed install inside a detail page's top card.
+  it('the notice and its Details fold sit inside the session name card', async () => {
+    mockWindowClaude(vi.fn().mockResolvedValue({ tags: [], note: '', supported: true, unreadable: 'EACCES: permission denied' }));
+    mount();
+    const notice = await screen.findByText(/couldn.t load this conversation.s tags and note/i);
+    const card = screen.getByText('fix chat scroll').closest('div[class*="p-4"]') as HTMLElement;
+    expect(card).toContainElement(notice);
+    expect(card).toContainElement(screen.getByRole('button', { name: 'Details' }));
+  });
+
   it('Try again reads again, and a read that now works brings the cards back', async () => {
     const getMeta = vi.fn()
       .mockRejectedValueOnce(new Error('store unavailable'))

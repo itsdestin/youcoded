@@ -11,7 +11,7 @@
 // (layout A): this session's tags first, larger and filled; then "Add a tag" with the search,
 // the other tags as grey outlines and archived ones flat grey. Clicking a tag opens its edit
 // box in the card. A surface whose header already shows the name passes no `name`.
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
@@ -100,10 +100,13 @@ function CompleteGlyph({ done, className = '' }: { done: boolean; className?: st
  *  Exported for the close prompt (backlog row 17), whose top card is this same card.
  *  Without `onNote` the card shows the name alone — the close prompt's state where the
  *  note could not be read, so nothing may suggest it is empty or editable. */
-export function SessionHeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void }) {
+export function SessionHeaderCard({ name, onRename, note, onNote, children }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void; children?: ReactNode }) {
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
       <NoteBlock name={name} onRename={onRename} note={note} onNote={onNote} />
+      {/* A notice about this session sits inside its card, under the name (the close
+          prompt's failed read — the detail page's top card holding a failed install). */}
+      {children && <div className="mt-3 space-y-2">{children}</div>}
     </div>
   );
 }

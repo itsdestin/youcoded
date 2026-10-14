@@ -208,28 +208,33 @@ function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm 
         }>
             {!metaLoaded ? null : !metaSupported ? (
               <>
-                {/* Name only: the note could not be read (or cannot be stored here), so
-                    nothing may suggest it is empty or editable. */}
-                <SessionHeaderCard name={name} note="" />
-                {/* WHY the notice box in place of the cards (guide: a problem replaces the
-                    card it is about; was a bare grey line on the popup): one plain sentence
-                    saying what still works, Try again inside it when it was a failed read,
-                    the operation's own words folded under Details (submit-ticket-5#ST5-9).
-                    A host that simply cannot store them (Android) is information, not an
-                    error: its own sentence, no button. */}
-                {readError !== null ? (
-                  <div className="flex flex-col gap-2">
-                    <Callout tone="danger" actionsPlacement="below"
-                      actions={<Button size="sm" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>}>
-                      Couldn’t load this conversation’s tags and note, so they can’t be changed here. Closing it still works.
-                    </Callout>
-                    {readError && <FoldRow title="Details">
-                      <p className="text-2xs text-fg-2 font-mono break-all">{readError}</p>
-                    </FoldRow>}
-                  </div>
-                ) : (
-                  <Callout tone="info">{metaReason}</Callout>
-                )}
+                {/* WHY the notice and its Details fold sit INSIDE the name card (Destin,
+                    final-review#CH-11: "this details box is weird/unique i think?"): the
+                    Details fold stood alone on the popup as a first-level box holding one
+                    word — no other screen draws that. The reference is a detail page's
+                    failed install, whose notice box and Details fold sit inside the item's
+                    top card (DetailPage InstallFailed); the guide puts a notice about one
+                    thing inside that thing. One plain sentence saying what still works,
+                    Try again inside it when it was a failed read, the operation's own words
+                    folded under Details (submit-ticket-5#ST5-9). A host that simply cannot
+                    store them (Android) is information, not an error: its own sentence, no
+                    button. Name only above it: the note could not be read (or cannot be
+                    stored here), so nothing may suggest it is empty or editable. */}
+                <SessionHeaderCard name={name} note="">
+                  {readError !== null ? (
+                    <>
+                      <Callout tone="danger" actionsPlacement="below"
+                        actions={<Button size="sm" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>}>
+                        Couldn’t load this conversation’s tags and note, so they can’t be changed here. Closing it still works.
+                      </Callout>
+                      {readError && <FoldRow title="Details">
+                        <p className="text-2xs text-fg-2 font-mono break-all">{readError}</p>
+                      </FoldRow>}
+                    </>
+                  ) : (
+                    <Callout tone="info">{metaReason}</Callout>
+                  )}
+                </SessionHeaderCard>
               </>
             ) : (
               <>
