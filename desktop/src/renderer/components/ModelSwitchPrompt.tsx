@@ -1,4 +1,4 @@
-import { Button, Dialog, FieldError } from './ui';
+import { Button, Dialog, FieldError, OneJobCard, OneJobText } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 
 /**
@@ -31,26 +31,31 @@ export default function ModelSwitchPrompt({ open, currentLabel, targetLabel, sta
   useEscClose(open, onClose);
   const working = state.kind === 'working';
   return (
-    <Dialog open={open} onClose={onClose} layer={3} size="prompt" title="Switch model" scrollBody={false} screen="chat/model-picker/switch-model">
-      <div className="p-5 space-y-4">
-        <p className="text-sm text-fg">
-          This chat is too long for <span className="font-medium">{targetLabel}</span>.{' '}
-          <span className="font-medium">{currentLabel}</span> can summarize older messages first.
-        </p>
-        {working && (
-          <p className="text-xs text-fg-muted" role="status">
-            Summarizing… this can take a minute. Close to stop and stay on {currentLabel}.
+    // WHY `panel` and the shared one-job card (popup-cards-8#Q-2, Destin picked "Box them all": every small popup is the shared one-job card, the short ones too): one width, 12px words and a
+    // full-width button like the other small popups. The only action spans the card (Destin,
+    // 2026-09-23). Words unchanged.
+    <Dialog open={open} onClose={onClose} layer={3} size="panel" title="Switch model" screen="chat/model-picker/switch-model">
+      <OneJobCard actions={
+        <Button variant="primary" onClick={onConfirm} disabled={working}>
+          {working ? 'Summarizing…' : 'Summarize and switch'}
+        </Button>
+      }>
+        <OneJobText>
+          <p>
+            This chat is too long for <span className="font-medium text-fg">{targetLabel}</span>.{' '}
+            <span className="font-medium text-fg">{currentLabel}</span> can summarize older messages first.
           </p>
-        )}
+          {working && (
+            <p className="text-fg-muted" role="status">
+              Summarizing… this can take a minute. Close to stop and stay on {currentLabel}.
+            </p>
+          )}
+        </OneJobText>
         {/* WHY FieldError (guide: no red/coloured body text for messages) */}
         {state.kind === 'error' && (
           <FieldError as="p" size="2xs">{state.message}</FieldError>
         )}
-        {/* The only action, so it spans the popup (Destin, 2026-09-23). */}
-        <Button variant="primary" className="w-full justify-center" onClick={onConfirm} disabled={working}>
-          {working ? 'Summarizing…' : 'Summarize and switch'}
-        </Button>
-      </div>
+      </OneJobCard>
     </Dialog>
   );
 }

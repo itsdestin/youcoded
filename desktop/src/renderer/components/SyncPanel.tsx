@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
+import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -1829,9 +1829,8 @@ function ConfirmDialog({
         onClose={onCancel}
         layer={3}
         destructive
-        size="prompt"
+        size="panel"
         title={title}
-        scrollBody={false}
         // Only call site is SyncPanel's "Remove backup?" — a literal name is
         // correct here rather than a prop, since nothing else renders this.
         screen="settings/sync/remove-backend"
@@ -1842,20 +1841,14 @@ function ConfirmDialog({
             `title` prop and was only passing it as an aria-label while drawing
             the visible heading itself. Dialog's `destructive` already tints the
             panel, so the header tint was saying the same thing twice. */}
-        <div className="px-4 py-3 space-y-3">
-          <p className="text-2xs text-fg-dim leading-relaxed">{message}</p>
-          <div className="flex gap-2 pt-1">
-            {/* Was a filled-grey button (bg-inset/hover:bg-edge). Spec decision 60 folds
-                that whole family into `secondary` (outline) — it sits beside a real
-                confirm button as a peer, which the lighter `ghost` would under-weight. */}
-            <Button variant="secondary" onClick={onCancel} className="flex-1">
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={onConfirm} className="flex-1">
-              {confirmLabel}
-            </Button>
-          </div>
-        </div>
+        {/* WHY the shared one-job card (popup-cards-8#Q-2, Destin picked "Box them all": every small popup is the shared one-job card, the short ones too): the words and the stacked buttons, red
+            on top (guide "Destructive confirm"), in one card at the other popups' width. */}
+        <OneJobCard actions={<>
+          <Button variant="danger" onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+        </>}>
+          <OneJobText><p>{message}</p></OneJobText>
+        </OneJobCard>
       </Dialog>
     </>,
     document.body,

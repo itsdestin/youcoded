@@ -52,11 +52,10 @@ export function RemoveProjectDialog({ name, kind, githubUrl, error, onConfirm, o
     <Dialog open onClose={onCancel} layer={3} destructive size="panel" title="Remove project" screen={screen}>
       {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-3): words, the GitHub
           note, the tick box and the stacked buttons (red on top) in one card, the same as Turn on
-          sync and every other one-job popup. A missing folder's two sentences with nothing to tick
-          are the guide's short-confirmation exception, so they stay plain, with the same buttons
-          under them. */}
+          sync and every other one-job popup — a missing folder's two sentences included. */}
+      {/* A missing folder's two sentences are boxed too (popup-cards-8#Q-2, Destin picked "Box them all": every small popup is the shared one-job card, the short ones too). */}
       {kind === 'missing' ? (
-        <div className="space-y-3">
+        <OneJobCard actions={confirmButtons}>
           <OneJobText>
             <p>
               YouCoded can't find this folder any more — it was moved or deleted outside the app.
@@ -64,8 +63,7 @@ export function RemoveProjectDialog({ name, kind, githubUrl, error, onConfirm, o
             </p>
           </OneJobText>
           {error && <FieldError>{error}</FieldError>}
-          <div className="flex flex-col gap-2 [&>*]:w-full" data-parts-agree="one-job buttons">{confirmButtons}</div>
-        </div>
+        </OneJobCard>
       ) : (
         <OneJobCard actions={confirmButtons}>
           <OneJobText>
