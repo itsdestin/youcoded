@@ -1,7 +1,10 @@
 // Unified card for skill + theme + plugin discovery. Corner affordance
 // cycles through three states (install / installing / favorited) via
 // InstallFavoriteCorner; integrations render through the same component via
-// optional iconUrl + accentColor props (no separate IntegrationCard).
+// an optional iconUrl prop (no separate IntegrationCard). WHY no accentColor any more
+// (final-review#MK-1, Destin: "i don't think i like the colored outlines on integration
+// cards"): every card wears the shared card outline (guide "Card levels" → the outline is
+// what separates layers); the hero dropped its accent border the same way (P-21 #1).
 
 import { memo, useId, useState } from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
@@ -38,8 +41,6 @@ interface Props {
   updateAvailable?: boolean;
   /** Optional custom icon (integrations). Renders top-left inside the tile. */
   iconUrl?: string;
-  /** Optional accent border color (integrations). */
-  accentColor?: string;
   /** Integrations handle install/connect through their own flow (handleIntegration
    *  routed via onOpen) — hide the corner download/favorite affordance in that case. */
   suppressCorner?: boolean;
@@ -94,7 +95,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
+function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -243,7 +244,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
         className="layer-surface card-raised flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         data-marketplace-card={id}
         data-marketplace-card-compact="true"
-        style={accentColor ? { borderColor: accentColor } : undefined}
       >
         {/* 52x52 thumbnail rendered only when we have a real image source
             (integration iconUrl or theme preview). Skill plugins without an
@@ -323,7 +323,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
       // Android doesn't leave the card stuck at 1.02 (spec §9.E).
       className="relative layer-surface card-raised text-left flex flex-col overflow-hidden hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
-      style={accentColor ? { borderColor: accentColor } : undefined}
     >
       {/* Corner affordance — install → spinner → favorite star, all at the
           same absolute coordinates. Themes skip the install affordance so the

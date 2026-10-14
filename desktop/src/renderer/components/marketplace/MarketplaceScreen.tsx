@@ -557,7 +557,6 @@ export default function MarketplaceScreen({
                         item={{ kind: "skill", entry: skillLike }}
                         installed={!!item.state.installed}
                         iconUrl={resolvedIcon}
-                        accentColor={item.accentColor}
                         suppressCorner
                         statusBadge={integrationStatusBadge(item)}
                         onOpen={openIntegration}

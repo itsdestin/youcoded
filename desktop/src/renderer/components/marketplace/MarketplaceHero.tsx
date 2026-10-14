@@ -64,7 +64,7 @@ export default function MarketplaceHero({ slots, lookup, onOpen }: Props) {
 
   // P-21 #1: the hero used to paint its border in the slot's accentColor — a
   // hardcoded gold (or blue/green) in every theme. It now keeps the theme's own
-  // card edge from layer-surface. MarketplaceCard still honours accentColor.
+  // card edge from layer-surface. MarketplaceCard dropped it too (final-review#MK-1).
   return (
     <section
       role="region"
