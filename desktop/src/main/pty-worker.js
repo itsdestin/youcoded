@@ -94,6 +94,12 @@ const FLOW_LOW = envNum('YOUCODED_PTY_FLOW_LOW', 256 * 1024);
 // re-arm, so a lost ack degrades to a slow trickle instead of freezing the session for good.
 const FLOW_STALL_MS = envNum('YOUCODED_PTY_FLOW_STALL_MS', 15000);
 const FLOW_POLL_MS = 25;
+// Test seam only (never set by the app): the worker stands frozen this long just as the child exits
+// while paused, as a loaded machine can make it — tests/pty-worker-flow.test.ts.
+const TEST_EXIT_FREEZE_MS = envNum('YOUCODED_PTY_TEST_EXIT_FREEZE_MS', 0);
+// How long node-pty's "destroy the output socket" is held back, once, for a PTY whose read side
+// the brake has paused (see guardExitDrain).
+const EXIT_DRAIN_MS = 1000;
 
 let outBuf = '';
 let outTimer = null;
@@ -103,6 +109,7 @@ let flowPaused = false;
 let flowDisabled = false;   // set once the PTY is exiting/killed: never pause again
 let lastAckAt = 0;
 let flowPoll = null;
+let flowEverPaused = false; // this PTY's read side has been paused at least once
 
 // Date.now(), not hrtime: millisecond resolution is all the 4 ms window and the stall rule need, and it keeps
 // the logic drivable with fake timers in tests/pty-worker-flow.test.ts.
@@ -155,9 +162,20 @@ function ptyHasExited() {
 function pauseFlow() {
   if (!ptyProcess || flowPaused) return;
   flowPaused = true;
+  flowEverPaused = true;
   lastAckAt = nowMs();
   try { ptyProcess.pause(); } catch { flowPaused = false; return; }
   trace('FLOW_PAUSE', `unacked=${unacked}`);
+  // Test seam: freeze the moment the exit is known — before this poll can see it, as a held-up
+  // process would — so the poll's resume and node-pty's destroy come due together.
+  if (TEST_EXIT_FREEZE_MS) {
+    const spin = () => {
+      if (!flowPaused) return;
+      if (ptyProcess && ptyProcess._boundClose) { const t = nowMs(); while (nowMs() - t < TEST_EXIT_FREEZE_MS) { /* frozen */ } return; }
+      setImmediate(spin);
+    };
+    setImmediate(spin);
+  }
   flowPoll = setInterval(() => {
     if (ptyHasExited()) { disableFlow('exited'); return; }
     if (nowMs() - lastAckAt >= FLOW_STALL_MS) {
@@ -166,6 +184,32 @@ function pauseFlow() {
       resumeFlow();
     }
   }, FLOW_POLL_MS);
+}
+
+// WHY (CI 2026-10-14: the last 27 of 500 lines lost): the poll above only works while this
+// process keeps time. node-pty starts its 200 ms "destroy the socket" timer when the child exits;
+// if the worker is held up past that (a busy machine, a long GC), the poll's resume and that
+// destroy run back to back in the same turn, before a single read — and the unread tail is gone.
+// So the destroy is held back ONCE, for up to EXIT_DRAIN_MS, on a PTY the brake has ever paused:
+// the read side is resumed, reads to the end and closes the socket itself, which cancels the
+// held destroy. A PTY never braked keeps node-pty's behaviour exactly. Unix only (`_socket` with
+// node-pty's `_boundClose`); any surprise in those internals leaves the original destroy alone.
+function guardExitDrain(p) {
+  try {
+    const sock = p && p._socket;
+    if (!sock || typeof sock.destroy !== 'function' || !('_boundClose' in p)) return;
+    const destroy = sock.destroy.bind(sock);
+    let held = false;
+    sock.destroy = function (...args) {
+      if (held || !flowEverPaused || !p._boundClose || p._emittedClose || sock.destroyed) return destroy(...args);
+      held = true;
+      trace('EXIT_DRAIN', 'holding the socket open to read the tail');
+      disableFlow('exit-drain');
+      const timer = setTimeout(() => { if (!sock.destroyed) destroy(...args); }, EXIT_DRAIN_MS);
+      sock.once('close', () => clearTimeout(timer));
+      return sock;
+    };
+  } catch { /* internals changed — node-pty's own destroy stands */ }
 }
 
 function resumeFlow() {
@@ -450,6 +494,7 @@ process.on('message', (msg) => {
           CLAUDE_DESKTOP_PIPE: msg.pipeName || '',
         },
       });
+      guardExitDrain(ptyProcess);
 
       ptyProcess.onData((data) => {
         // OUT trace: the child echoing typed input back lands here. The smoking
