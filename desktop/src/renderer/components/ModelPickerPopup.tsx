@@ -3,7 +3,7 @@ import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, CARD_LEVEL_1, Callout, Dialog, FieldError, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { Button, Callout, Dialog, FieldError, TextInput, Toggle, LoadingState, OneJobCard, OneJobText, SegmentedTabs, SettingRow } from './ui';
 import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
@@ -559,71 +559,37 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
             onClose={() => setFastConfirmOpen(false)}
             layer={3}
             destructive
-            size="prompt"
+            size="panel"
             // WHY the shared title, and one card for everything it says (final-review#ST-21/#PR-7
             // sweep): a hand-made 14px heading with no ✕, and three blocks of words bare on the
             // popup. The warning box sits inside the card (a notice about the thing it is in).
-            title="Enable Fast mode?"
+            title="Turn on Fast mode?"
             screen="chat/model-picker/fast-mode"
           >
-            {/* WHY no lightning-bolt badge (fix-batch3#FB-4: "remove the lighting bolt icon
-                thing"): the title and the warning box below already say what this is. */}
-            <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-              <p className="text-xs text-fg-muted">This costs extra money on top of your plan.</p>
-
-              {/* WHY the shared Callout, not a hand-rolled amber box (guide:
-                  every warning/info notice is the one tinted box; a longer
-                  notice with more than one sentence is a Callout) — this was
-                  already built to the same recipe (tinted title, plain body)
-                  by hand. */}
-              {/* No ⚠ before the title: the box's tint says "warning" (as Tailscale's, ST-30). */}
+            {/* WHY the shared one-job layout (final-fixes#PR-7a, Destin: "fast mode is a bit wierd";
+                popup-cards-2/-3: every one-job popup is OneJobCard): it was the one popup with a
+                hand-made orange button, side-by-side buttons in a narrow popup, prices in a code
+                font with a rule inside the warning box, and three blocks that each said "it costs
+                extra". Now: what it does, the one warning box with the prices, how to turn it off,
+                then the two stacked buttons, main on top. No bolt badge (fix-batch3#FB-4) and no
+                glyph in the box (final-review#ST-30). The words keep every fact the old ones had. */}
+            <OneJobCard actions={<>
+              <Button onClick={() => { applyFast(true); setFastConfirmOpen(false); }}>
+                Turn on and accept charges
+              </Button>
+              <Button variant="secondary" onClick={() => setFastConfirmOpen(false)}>Cancel</Button>
+            </>}>
+              <OneJobText>
+                <p>The same model, with faster replies. It costs extra money on top of your plan.</p>
+              </OneJobText>
               <Callout tone="warning" title="Billed per token">
-                <div className="space-y-1.5">
-                  <div className="text-fg">
-                    Fast mode routes requests through a priority tier with per-token billing:
-                  </div>
-                  <div className="text-fg font-mono">
-                    <span className="text-fg-2">Input:</span> $30 / million tokens<br />
-                    <span className="text-fg-2">Output:</span> $150 / million tokens
-                  </div>
-                  <div className="text-fg-muted pt-1 border-t border-amber-500/25">
-                    Your Claude Pro/Max subscription does not cover these charges. They bill directly against API credits on your Anthropic account.
-                  </div>
-                </div>
+                Input costs $30 and output $150 per million tokens. Your Claude Pro or Max plan doesn’t
+                cover this: it’s charged to the API credits on your Anthropic account.
               </Callout>
-
-              <div className="text-xs text-fg-muted">
-                You get the same model with faster streaming output. Turn off anytime from the status bar or this menu.
-              </div>
-
-              {/* WHY inside the card (popup-cards-1#PC-1): a one-job popup is one card holding
-                  everything, its buttons included. */}
-              <div className="flex justify-end gap-2 pt-1">
-                {/* Spec change 60: the filled-grey family (bg-inset/hover:bg-well)
-                    collapses into the outline `secondary` — it's a genuine peer of
-                    the confirm beside it, which ghost would under-weight. */}
-                <Button variant="secondary" onClick={() => setFastConfirmOpen(false)}>
-                  Cancel
-                </Button>
-                {/* Spec change 66: KEEPS #FF9800 + text-black. This is a billing-
-                    consent warning colour (same family as the permission triad), not
-                    a theme surface, so it must NOT become `primary` — the accent
-                    would erase the "you are agreeing to charges" signal. Left
-                    hand-rolled because the primitive's variants would fight the
-                    custom fill; only radius (rounded → rounded-lg, the one control
-                    radius) and the shared focus ring are normalized. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    applyFast(true);
-                    setFastConfirmOpen(false);
-                  }}
-                  className={`px-3 py-1.5 text-xs rounded-lg bg-amber-700 text-black font-medium hover:bg-amber-700/90 transition-colors ${FOCUS_RING}`}
-                >
-                  Enable & accept charges
-                </button>
-              </div>
-            </div>
+              <OneJobText>
+                <p>Turn it off any time from the status bar or this menu.</p>
+              </OneJobText>
+            </OneJobCard>
           </Dialog>
         </>
       )}
