@@ -176,7 +176,6 @@ export function ProjectSwitcher({
             const space = findSpaceFor(p.path, syncStatus ?? null) as (ReturnType<typeof findSpaceFor> & { displayName?: string }) | null;
             const shown = space?.displayName || p.name;
             const desc = space?.description || p.description || null;
-            const avatar = shown.charAt(0).toUpperCase() || '?';
             // A missing folder outranks its sync state: nothing can sync a folder that isn't
             // there, and it is what explains why opening it shows nothing.
             const sync = p.missing ? null : syncPillFor(p.path, syncStatus ?? null);
@@ -205,16 +204,15 @@ export function ProjectSwitcher({
                   type="button"
                   aria-current={isActive ? 'true' : undefined}
                   // A short name for screen readers (and saved click paths): the project and its
-                  // status, not every line of the row — the avatar letter, path and description
+                  // status, not every line of the row — the path and description
                   // made it a 70-character sentence.
                   aria-label={[shown, p.missing ? 'Folder missing' : sync?.short].filter(Boolean).join(', ')}
                   data-project-row=""
                   className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-2 text-left"
                   onClick={() => onSelect(p)}
                 >
-                  <span aria-hidden className="shrink-0 w-7 h-7 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-xs font-semibold text-fg-2">
-                    {avatar}
-                  </span>
+                  {/* WHY no letter tile before the name (final-review#PR-5, Destin: "remove the
+                      letter icon in front of each project"): the name leads the row. */}
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="text-sm font-medium text-fg truncate">{shown}</span>
