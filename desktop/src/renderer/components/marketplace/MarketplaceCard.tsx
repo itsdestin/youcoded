@@ -18,6 +18,7 @@ import { ScanBadge, AuthorBadge } from "./TrustBadges";
 import { capabilityLine } from "./CapabilityList";
 import { ChipRow, CountChip, ThumbsChip } from "./FactChips";
 import { Chip } from "../ui";
+import { THEME_PREVIEW_FRAME } from "../appearance/ThemeCard";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 
 export type MarketplaceCardEntry =
@@ -190,7 +191,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
   // screenshot, but it identifies the theme and the card stops looking broken.
   const themeTokens = item.kind === "theme" ? item.entry.previewTokens : undefined;
   const themeSwatches = item.kind === "theme" && themePreviewFailed && themeTokens && Object.keys(themeTokens).length > 0 ? (
-    <div data-theme-swatches className="w-full h-36 flex border-b border-edge-dim" title={`${item.entry.name} colours — preview image unavailable`}>
+    <div data-theme-swatches className={`m-1 mb-0 h-36 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
       {Object.entries(themeTokens).map(([name, color]) => (
         <span key={name} className="flex-1" style={{ background: color as string }} />
       ))}
@@ -328,14 +329,22 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           same absolute coordinates. Themes skip the install affordance so the
           corner is only wired for skills. Integrations opt out entirely via
           suppressCorner since their install/connect flow goes through onOpen. */}
+      {/* WHY a framed picture (final-review#MK-2, Destin: "improve these marketplace theme
+          cards a bit to slightly better match the cards used in the appearance panel"):
+          Appearance's theme cards set the preview INSIDE the card, 4px in, with its own
+          rounded corner and outline, showing the window's top (object-top). The picture
+          used to run edge to edge with a line under it. Same frame (THEME_PREVIEW_FRAME),
+          same height as before so the grids and rails keep their size. */}
       {themePreviewUrl && (
-        <img
-          src={themePreviewUrl}
-          alt=""
-          loading="lazy"
-          className="w-full h-36 object-cover border-b border-edge-dim"
-          onError={() => setThemePreviewFailed(true)}
-        />
+        <div className={`m-1 mb-0 h-36 shrink-0 ${THEME_PREVIEW_FRAME}`}>
+          <img
+            src={themePreviewUrl}
+            alt=""
+            loading="lazy"
+            className="w-full h-full object-cover object-top"
+            onError={() => setThemePreviewFailed(true)}
+          />
+        </div>
       )}
       {themeSwatches}
       {/* p-3/gap-1.5 at narrow shrinks the rail tile so 2-3 fit on a phone screen

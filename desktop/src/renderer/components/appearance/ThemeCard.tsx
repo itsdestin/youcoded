@@ -86,6 +86,11 @@ function Preview({ theme, fallback, className }: { theme: LoadedTheme; fallback?
   return <img src={src} alt="" className={`${className} object-cover object-top`} onError={() => setAttempt((n) => n + 1)} />;
 }
 
+/** The framed picture: a theme's preview sits inset in its card with its own rounded
+ *  corner and outline (theme-cards-review TC-1). Shared with the Marketplace and Library
+ *  theme cards (final-review#MK-2) so the two read as the same kind of card. */
+export const THEME_PREVIEW_FRAME = 'rounded-md overflow-hidden border border-edge-dim';
+
 export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite, onShare, fallbackPreview }: Props) {
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.target !== e.currentTarget) return;
@@ -111,7 +116,7 @@ export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite,
     <div {...shell} className={`relative rounded-lg overflow-hidden cursor-pointer bg-panel border p-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${active ? 'border-accent' : 'border-edge-dim hover:border-edge'}`}>
       {/* The picture takes nearly all of the card: 16:9, the preview's own shape less a
           sliver, so almost the whole window shows rather than its top strip. */}
-      <div className="aspect-video rounded-md overflow-hidden border border-edge-dim">
+      <div className={`aspect-video ${THEME_PREVIEW_FRAME}`}>
         <Preview theme={theme} fallback={fallbackPreview} className="w-full h-full" />
       </div>
       {/* The slim strip: one small line — name, Active, then the icons. */}
