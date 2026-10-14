@@ -3,7 +3,7 @@ import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Callout, Dialog, FieldError, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Callout, Dialog, FieldError, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
 import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
@@ -560,25 +560,24 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
             layer={3}
             destructive
             size="prompt"
-            aria-label="Enable Fast mode?"
-            scrollBody={false}
+            // WHY the shared title, and one card for everything it says (final-review#ST-21/#PR-7
+            // sweep): a hand-made 14px heading with no ✕, and three blocks of words bare on the
+            // popup. The warning box sits inside the card (a notice about the thing it is in).
+            title="Enable Fast mode?"
             screen="chat/model-picker/fast-mode"
           >
-            <div className="p-5 space-y-4">
-              {/* WHY no lightning-bolt badge (fix-batch3#FB-4: "remove the
-                  lighting bolt icon thing"): the title and the warning box
-                  below already say what this is. */}
-              <div>
-                <h3 className="text-sm font-semibold text-fg">Enable Fast mode?</h3>
-                <p className="text-xs text-fg-muted mt-0.5">This costs extra money on top of your plan.</p>
-              </div>
+            {/* WHY no lightning-bolt badge (fix-batch3#FB-4: "remove the lighting bolt icon
+                thing"): the title and the warning box below already say what this is. */}
+            <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+              <p className="text-xs text-fg-muted">This costs extra money on top of your plan.</p>
 
               {/* WHY the shared Callout, not a hand-rolled amber box (guide:
                   every warning/info notice is the one tinted box; a longer
                   notice with more than one sentence is a Callout) — this was
                   already built to the same recipe (tinted title, plain body)
                   by hand. */}
-              <Callout tone="warning" title="⚠ Billed per token">
+              {/* No ⚠ before the title: the box's tint says "warning" (as Tailscale's, ST-30). */}
+              <Callout tone="warning" title="Billed per token">
                 <div className="space-y-1.5">
                   <div className="text-fg">
                     Fast mode routes requests through a priority tier with per-token billing:
@@ -596,8 +595,9 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
               <div className="text-xs text-fg-muted">
                 You get the same model with faster streaming output. Turn off anytime from the status bar or this menu.
               </div>
+            </div>
 
-              <div className="flex justify-end gap-2 pt-1">
+              <div className="flex justify-end gap-2">
                 {/* Spec change 60: the filled-grey family (bg-inset/hover:bg-well)
                     collapses into the outline `secondary` — it's a genuine peer of
                     the confirm beside it, which ghost would under-weight. */}
@@ -622,7 +622,6 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
                   Enable & accept charges
                 </button>
               </div>
-            </div>
           </Dialog>
         </>
       )}

@@ -10,6 +10,7 @@
 // conversation is what the person sees next.
 import React from 'react';
 import { Dialog } from '../ui/Dialog';
+import { CARD_LEVEL_1 } from '../ui/cardLevels';
 import { BuddyNewSessionForm } from '../buddy/BuddyNewSessionForm';
 
 export interface PageCreateRequest {
@@ -36,6 +37,10 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
     // page lives there too — and a dialog must sit above what opened it.
     // `screen`: the photo-only name — the title is the one thing that tells Create from Edit.
     <Dialog screen={request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create'} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
+      {/* WHY a card round the form (final-review#ST-21/#PR-7, the one popup rule): its fields
+          and switch sat bare on the popup. One card holding a whole form with its buttons, as the
+          quick-chip editor's card does. */}
+      <div className={`${CARD_LEVEL_1} p-3`}>
       <BuddyNewSessionForm
         key={request.initialInput + (request.cwd ?? '')}
         initialInput={request.initialInput}
@@ -45,6 +50,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
         onCreated={(_id, info) => onCreated(info)}
         onCancel={onCancel}
       />
+      </div>
     </Dialog>
   );
 }

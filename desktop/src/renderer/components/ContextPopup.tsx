@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Dialog, SectionLabel, Textarea } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, SectionLabel, Textarea } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
@@ -122,9 +122,14 @@ export default function ContextPopup({
           <SettingsExplainer intro={INFO_INTRO} sections={INFO_SECTIONS} />
         ) : (
           <>
-            {/* Current state */}
-            <div className="px-4 py-4 space-y-3">
-              <div className="text-center">
+            {/* WHY three labelled cards (final-review#ST-21/#PR-7, the one popup rule — group like
+                About): the reading, the status-bar choice and the two actions with their line sat
+                bare on the popup, split by a full-width line (guide: no line crosses a popup). The
+                reading is the card about the popup's subject, so it is unlabelled; the actions get
+                the label "This conversation", since both act on it. Same words and controls. */}
+            <div className="px-4 py-4 space-y-4">
+              {/* Current state */}
+              <div className={`${CARD_LEVEL_1} p-3 text-center`}>
                 <div className="text-3xl font-bold text-fg">
                   {contextPercent != null ? `${contextPercent}%` : '--'}
                 </div>
@@ -153,12 +158,13 @@ export default function ContextPopup({
                   Preferences popup because this is where the user is already
                   thinking about the number the pill shows. Presentation only —
                   the color band is driven by the percentage in BOTH modes. */}
-              <div className="pt-1">
+              <section>
                 {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
                     batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-                <SectionLabel className="mb-1.5">
+                <SectionLabel className="mb-2">
                   Status bar shows
                 </SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3`}>
                 <div role="radiogroup" aria-label="Context pill display" className="flex w-full rounded-lg overflow-hidden border border-edge-dim">
                   {(['percent', 'tokens'] as const).map((mode, i) => (
                     <button
@@ -181,11 +187,13 @@ export default function ContextPopup({
                     ? 'Pill reads “Context: 45% Remaining”.'
                     : 'Pill reads “Context: 35.2k / 64k” — tokens used out of the window.'}
                 </p>
-              </div>
-            </div>
+                </div>
+              </section>
 
             {/* Actions: default view shows split Compact + Clear; customizing shows the editor. */}
-            <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
+            <section>
+            <SectionLabel className="mb-2">This conversation</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
               {customizing ? (
                 <div className="space-y-2">
                   {/* WHY: field caption drops the spaced-caps eyebrow (labels
@@ -298,6 +306,8 @@ export default function ContextPopup({
                   </div>
                 </>
               )}
+            </div>
+            </section>
             </div>
           </>
         )}

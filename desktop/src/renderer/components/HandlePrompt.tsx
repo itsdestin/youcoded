@@ -4,9 +4,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
-import { Button, Dialog, FieldError, InputGroup } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FieldError, InputGroup } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 
 // Persisted "don't nag me again" flag. Set on skip (and on ESC, which is the
@@ -75,8 +74,8 @@ function HandlePromptPopup({
     setOpen(false);
   };
 
-  // ESC dismissal is the same as clicking "Skip for now".
-  useEscClose(true, skip);
+  // ESC dismissal is the same as clicking "Skip for now": the shared popup's own Escape
+  // calls its onClose, which is `skip` (a second useEscClose here made two closers).
 
   const save = async () => {
     setSaving(true);
@@ -98,20 +97,19 @@ function HandlePromptPopup({
   return createPortal(
     <>
       {/* Skip on scrim click so the prompt is genuinely skippable. */}
-      <Dialog open onClose={skip} size="prompt" aria-label="Choose a handle" scrollBody={false} screen="handle-prompt">
-        <div className="p-5 space-y-4">
-          <div className="space-y-1.5">
-            <h3 id="handle-prompt-title" className="text-sm font-semibold text-fg">Pick a handle</h3>
-            <p className="text-2xs text-fg-dim leading-relaxed">
-              Friends will find you by your handle — like a username. You can change it later in Settings → Account.
-            </p>
-          </div>
+      {/* WHY the shared popup's own title, and a card around the words and the field
+          (final-review#ST-21/#PR-7, the one popup rule; guide "Popups": every popup has the
+          16px title, the ✕ and the tapered line): this had a hand-made 14px heading with no ✕,
+          and its words and field sat bare on the popup. Same words and controls. */}
+      <Dialog open onClose={skip} size="prompt" title="Pick a handle" screen="handle-prompt">
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+          <p className="text-2xs text-fg-dim leading-relaxed">
+            Friends will find you by your handle — like a username. You can change it later in Settings → Account.
+          </p>
 
           {/* Change 77: same migration as Settings → Account's handle field, which
-              this duplicates. Save moves inside the field, so the `py-2` that
-              existed only to height-match the input beside it is gone. "Skip for
-              now" is a cancel, not a submit, so per the sub-rule it stays outside
-              (it already sits below as its own full-width button). */}
+              this duplicates. Save moves inside the field. "Skip for now" is a cancel,
+              not a submit, so it stays outside, as its own full-width button below. */}
           <InputGroup size="md">
             <span className="pl-3 text-xs text-fg-muted select-none">@</span>
             <InputGroup.Field
@@ -133,11 +131,11 @@ function HandlePromptPopup({
           </InputGroup>
           {/* Plain words for status, never glyphs. */}
           {error && <FieldError as="p">{error}</FieldError>}
-
-          <Button variant="secondary" onClick={skip} className="w-full py-2">
-            Skip for now
-          </Button>
         </div>
+
+        <Button variant="secondary" onClick={skip} className="w-full">
+          Skip for now
+        </Button>
       </Dialog>
     </>,
     document.body,

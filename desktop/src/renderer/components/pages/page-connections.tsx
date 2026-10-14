@@ -17,7 +17,7 @@ import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } f
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
+import { Button, CARD_LEVEL_1, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
@@ -555,11 +555,16 @@ export function PageConnectionsDialog({ page, onClose, onConnect }: { page: Page
   };
   const list = page?.connections ?? [];
   return (
-    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}>
+    // WHY the saved-keys line moved to the title's second line, and the cards are the shared
+    // first-level card (final-review#ST-21/#PR-7, the one popup rule): the line floated bare
+    // under the last card (guide: no loose lines between cards), and each card hand-typed a
+    // fainter look than every other popup's.
+    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}
+      subtitle={list.length > 0 ? 'Saved keys are kept under Settings › Account › Connected services.' : undefined}>
       <div className="flex flex-col gap-3">
         {list.length === 0 && <div className="text-sm text-fg-muted">This page reaches nothing outside itself.</div>}
         {list.map((c) => (
-          <div key={c.id} className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-2">
+          <div key={c.id} className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
             <ConnectionLine c={c} small />
             {confirming === c.id ? (
               <div className="flex flex-col gap-2">
@@ -584,7 +589,6 @@ export function PageConnectionsDialog({ page, onClose, onConnect }: { page: Page
             )}
           </div>
         ))}
-        {list.length > 0 && <div className="text-2xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected services.</div>}
       </div>
     </Dialog>
   );

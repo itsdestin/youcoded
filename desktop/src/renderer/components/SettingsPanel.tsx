@@ -2551,8 +2551,15 @@ export function ConnectToDesktopButton() {
                   {pairedDevices.length > 0 && (
                     <SectionLabel className="mb-2">Add device</SectionLabel>
                   )}
+                  {/* WHY the add-device buttons and their how-to line share one card (final-review
+                      #ST-21/#PR-7, the one popup rule): the buttons sat bare on the popup and the
+                      line floated loose at its foot (guide: text that describes a card lives in it).
+                      The line now shows only while there is something to add. */}
                   {!showConnectForm ? (
-                    <div className="space-y-2">
+                    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+                      <p className="text-2xs text-fg-muted">
+                        Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
+                      </p>
                       {/* Both only had an active: state, so on desktop nothing
                           happened on hover at all. */}
                       <Button onClick={handleScanQr} className="w-full">
@@ -2563,7 +2570,8 @@ export function ConnectToDesktopButton() {
                       </Button>
                     </div>
                   ) : (
-                    <div className="space-y-3 bg-inset/50 rounded-lg p-3">
+                    // The shared first-level card (it was the same look hand-typed, outline missing).
+                    <div className={`${CARD_LEVEL_1} space-y-3 p-3`}>
                       {/* All four fields were the same bg-well / rounded-sm /
                           focus:border-fg-muted recipe; they're the shared FIELD surface
                           now (change 20). The Cancel + Save row below stays outside as a
@@ -2634,9 +2642,6 @@ export function ConnectToDesktopButton() {
                 </section>
               )}
 
-              <p className="text-3xs text-fg-muted">
-                Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
-              </p>
       </Dialog>
     </>
   );

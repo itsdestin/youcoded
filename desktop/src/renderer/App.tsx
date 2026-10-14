@@ -23,7 +23,7 @@ import { ScreenMark } from './shoot-mode';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, CARD_LEVEL_1, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy, HANDOFF_EXPLANATION } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
@@ -4374,13 +4374,15 @@ function AppInner() {
                   {infoTip}
                 </p>
               ) : (
-                <>
-                  <p className="text-sm text-fg mb-2">
+                // WHY a card when the question comes with its consequence (final-review#PR-7, the
+                // one popup rule): only a one- or two-sentence question stays plain text.
+                <div className={`${CARD_LEVEL_1} p-3 mb-4 space-y-2`}>
+                  <p className="text-sm text-fg">
                     {boldDevice(copy.lead)}
                     {infoTip}
                   </p>
-                  <p className="text-xs text-fg-2 mb-4">{copy.consequence}</p>
-                </>
+                  <p className="text-xs text-fg-2">{copy.consequence}</p>
+                </div>
               )}
               <div className="flex justify-end gap-2">
                 <Button
@@ -4418,19 +4420,17 @@ function AppInner() {
             screen="chat/resume/pick-model" open
             // Dismissal stays suppressed while the resume is in flight.
             onClose={() => { if (pendingNativeResuming) return; setPendingNativeResume(null); setPendingNativeBinding(null); }}
-            size="panel"
-            aria-label="Choose a model to resume with"
-            scrollBody={false}
-            className="p-5"
+            // WHY the shared title and a card round the picker (final-review#ST-21/#PR-7 sweep):
+            // a hand-made 14px heading with no ✕, and the picker bare on the popup.
+            size="panel" title="Choose a model to resume with" busy={pendingNativeResuming}
           >
-            <h3 className="text-sm font-semibold text-fg mb-3">Choose a model to resume with</h3>
-            <ModelPicker
+            <div className={`${CARD_LEVEL_1} p-3`}><ModelPicker
               value={pendingNativeBinding ? { runtime: 'native', providerId: pendingNativeBinding.providerId, modelId: pendingNativeBinding.modelId } : null}
               onSelect={(c) => { if (c.runtime === 'native') setPendingNativeBinding({ providerId: c.providerId, modelId: c.modelId }); }}
               includeClaude={false}
               onManageModels={() => { setProvidersAutoOpen(true); setSettingsOpen(true); }}
-            />
-            <div className="flex justify-end gap-2 mt-4">
+            /></div>
+            <div className="flex justify-end gap-2">
               <Button
                 variant="secondary"
                 size="lg"

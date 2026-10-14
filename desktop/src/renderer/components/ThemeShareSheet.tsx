@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
-import { useEscClose } from '../hooks/use-esc-close';
 import type { PublishState } from '../../shared/theme-marketplace-types';
-import { Button, Dialog, FieldError, LoadingState } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FieldError, LoadingState } from './ui';
 
 interface ThemeShareSheetProps {
   themeSlug: string;
@@ -55,7 +54,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
     return () => { cancelled = true; };
   }, [themeSlug]);
 
-  useEscClose(true, onClose);
+  // Escape is the shared popup's own (it registers one closer; a second here made two).
 
   const handlePublish = useCallback(async () => {
     setPublishing(true);
@@ -85,24 +84,16 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
         open
         onClose={onClose}
         size="panel"
-        aria-label="Publish theme"
-        scrollBody={false}
-        className="p-5"
+        // WHY the shared popup's title (final-review#ST-21/#PR-7 sweep; guide "Popups": the 16px
+        // title, the drawn ✕ — never a × letter — and the tapered line): this drew its own 14px
+        // bold heading and a "×" character.
+        title={`Publish: ${theme.name}`}
         // Marked once the preview image settles — never mid-spinner (the
         // publish-status placeholder above it is deliberately spinner-free).
         screen={previewLoading ? undefined : 'marketplace/theme-share'}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-bold text-fg">
-            Publish: {theme.name}
-          </h3>
-          <button onClick={onClose} className="text-fg-muted hover:text-fg text-lg leading-none">
-            &times;
-          </button>
-        </div>
-
-        {/* Preview image */}
-        <div className="rounded-lg overflow-hidden border border-edge-dim mb-4">
+        {/* Preview image — a picture of the item, so it needs no label (guide "Spacing"). */}
+        <div className="rounded-lg overflow-hidden border border-edge-card">
           {previewLoading ? (
             <div className="w-full h-40 bg-well flex items-center justify-center">
               <LoadingState what="the preview" variant="inline" />
@@ -140,20 +131,23 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
           )}
         </div>
 
-        {/* Info */}
-        <p className="text-2xs text-fg-muted mb-4 leading-relaxed">
+        {/* WHY one card for what publishing does (the one popup rule): these two lines sat bare on
+            the popup, and a full-width line cut above the button (guide: no line crosses a popup). */}
+        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        <p className="text-2xs text-fg-2 leading-relaxed">
           This will create a pull request to the{' '}
           <span className="text-fg-2 font-medium">wecoded-themes</span>{' '}
           repository on GitHub. Your theme will be reviewed and, if approved, added to the marketplace for all users.
           {previewPath && ' A preview image will be included in the submission.'}
         </p>
 
-        <p className="text-3xs text-fg-muted mb-4">
+        <p className="text-3xs text-fg-muted">
           Requires the <span className="font-mono">gh</span> CLI to be installed and authenticated.
         </p>
+        </div>
 
         {/* Publish section — state-driven */}
-        <div className="border-t border-edge-dim pt-4">
+        <div>
           {renderPublishButton({
             state: publishState,
             publishing,

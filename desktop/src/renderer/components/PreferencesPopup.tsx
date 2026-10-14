@@ -3,7 +3,7 @@ import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -174,6 +174,9 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               {/* Shared FIELD surface (change 20) — was its own rounded/px-3 py-1.5
                   recipe. The label above has no htmlFor, so the field
                   carries its own accessible name. */}
+              {/* WHY a card round the field and its line (final-review#ST-21/#PR-7, the one popup
+                  rule): they sat bare under the label. Same for System prompt and Advanced. */}
+              <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <TextInput
                 value={prefs.outputStyle}
                 onChange={(e) => save('outputStyle', e.target.value)}
@@ -181,7 +184,8 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 aria-label="Output style"
                 className="w-full"
               />
-              <p className="text-2xs text-fg-muted mt-1.5">Preset name that tunes your assistant's response style. Leave blank for default.</p>
+              <p className="text-2xs text-fg-muted">Preset name that tunes your assistant's response style. Leave blank for default.</p>
+              </div>
             </section>
 
             {/* Toggles */}
@@ -211,6 +215,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               <SectionLabel className="mb-2">System prompt</SectionLabel>
               {/* Same FIELD surface as the input above (change 20). resize-none was
                   already the behavior here and is the Textarea default. */}
+              <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <Textarea
                 value={prefs.systemPrompt}
                 onChange={(e) => save('systemPrompt', e.target.value)}
@@ -219,7 +224,8 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 aria-label="System prompt"
                 className="w-full"
               />
-              <p className="text-2xs text-fg-muted mt-1.5">Applied globally. Leave blank to use Claude Code defaults.</p>
+              <p className="text-2xs text-fg-muted">Applied globally. Leave blank to use Claude Code defaults.</p>
+              </div>
             </section>
 
             {/* Advanced escape hatch — opens Claude Code's native TUI for any option not covered here */}
@@ -228,7 +234,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
             // Card-levels sweep (2026-09-27): dropped the `border-t` — no full-width
             // line inside a popup; the Dialog body's own `space-y-5` already
             // separates this from the section above.
-            <section>
+            <section className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <Button
                 variant="secondary"
                 size="lg"
@@ -240,7 +246,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               >
                 Advanced (terminal) →
               </Button>
-              <p className="text-2xs text-fg-muted mt-1.5 text-center">
+              <p className="text-2xs text-fg-muted text-center">
                 Switches to terminal view and runs Claude Code's full <code>/config</code>
               </p>
             </section>

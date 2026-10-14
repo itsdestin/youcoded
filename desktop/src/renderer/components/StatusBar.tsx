@@ -774,7 +774,11 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           "No flex-1" workaround is gone too: that was needed because its body
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
-      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
+      {/* WHY the always-shown line is the title's second line (final-review#ST-21/#PR-7, the one
+          popup rule — nothing bare on the popup): it was the one loose sentence above the cards.
+          Still one line (pick-menus#PM-2), now where every popup's header note goes. */}
+      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel"
+        subtitle={`${ALL_WIDGET_DEFS.filter((w) => w.locked).map((w, i) => (i ? w.label.toLowerCase() : w.label)).join(', ').replace(/, ([^,]*)$/, ' and $1')} are always shown.`}>
         {/* WHY labelled cards with a hint under every name (pick-menus, 2026-10-01; Destin,
             LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
             right"): the rows sat bare on the popup (guide: a label first, nothing bare)
@@ -782,10 +786,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
             first sentence; the "Best for" advice behind the (i) is dropped. Switches on
             the right, like Settings (pick-menus#PM-1). */}
         {/* WHY one line, not four locked rows (pick-menus#PM-2): the menu now opens on
-            things you can change. The names come from the locked rows themselves. */}
-        <p className="text-xs text-fg-muted">
-          {ALL_WIDGET_DEFS.filter((w) => w.locked).map((w, i) => (i ? w.label.toLowerCase() : w.label)).join(', ').replace(/, ([^,]*)$/, ' and $1')} are always shown.
-        </p>
+            things you can change. The names come from the locked rows themselves (subtitle). */}
         {WIDGET_CATEGORIES.filter((cat) => cat.widgets.some((w) => !w.locked)).map((cat) => (
           <section key={cat.name}>
             <SectionLabel className="mb-2">{cat.name}</SectionLabel>
