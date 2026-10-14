@@ -31,8 +31,6 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('review-logs-open', { open: [...FILL, TICK_LOGS, REVIEW, { do: 'click', target: { role: 'button', label: 'Recent logs 4 lines — open to read or remove anything private' } }] }),
   ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
   ticket('sent', { open: [...FILL, REVIEW, SEND] }),
-  // The proposed stronger tag tint on the "Submitted" tag (Pill, waiting for Destin).
-  ticket('sent-strong', { params: { pillTint: 'strong' }, open: [...FILL, REVIEW, SEND] }),
   ticket('browser', { open: [...FILL, TICK_FILES, REVIEW, 'Continue in GitHub'] }),
   ticket('failed', { scenario: 'refused', open: [...FILL, REVIEW, SEND] }),
   ticket('offline', { params: { network: 'offline' }, open: [...FILL, REVIEW, SEND] }),

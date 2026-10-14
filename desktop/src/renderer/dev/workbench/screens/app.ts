@@ -18,10 +18,9 @@ export const APP: readonly ScreenEntry[] = [
   // so a malformed drawing is visible at a glance. Photo-only build only.
   { name: 'dev/icons', tags: ['dev'], viewport: { width: 1440, height: 1300 } },
   // Not a screen either: every status tag on a popup and in a card, at fixed positions, so its
-  // tint can be measured per theme (dev/workbench/PillSheet.tsx). `pillTint=strong` is the
-  // proposed stronger tint (submit-ticket-5, waiting for Destin).
+  // tint can be measured per theme (dev/workbench/PillSheet.tsx). The stronger-tint variant
+  // (dev/pills#strong) is gone: not adopted (final-review#TL-0).
   { name: 'dev/pills', tags: ['dev'] },
-  { name: 'dev/pills#strong', tags: ['dev'], params: { pillTint: 'strong' } },
   // Open tasks with tasks in it — the real popup over practice tasks (dev/workbench/
   // OpenTasksPractice.tsx), since no practice conversation creates tasks. Both folded sections
   // start open (five or fewer in each), as in the app (submit-ticket-5#ST5-Q2).
