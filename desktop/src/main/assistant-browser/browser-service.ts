@@ -44,8 +44,15 @@ const VIEW_MAX_W = 1280;
 const VIEW_MAX_H = 2000;
 /** Files kept per conversation's download folder. */
 const MAX_DOWNLOADS = 20;
-/** Picture rate cap; each frame also waits for the screen's ack. */
+/** Picture rate cap while the person only watches; each frame also waits for
+ *  the screen's ack. */
 const MIN_FRAME_GAP_MS = 100;
+/** After the person clicks, scrolls or types on the picture, frames go out as
+ *  fast as the screen acks them (no gap) for this long. WHY (measured
+ *  2026-10-13, dev app): with the 100 ms gap the picture managed ~8 frames/s
+ *  and trailed the person's hands; with none, ~26/s from the browser alone.
+ *  Watching the assistant keeps the gap, so an idle panel stays cheap. */
+const PERSON_FAST_MS = 3000;
 
 import type { BrowserFrame, BrowserInputEvent, BrowserPrompt, BrowserRunState, BrowserSessionState, PromptAnswer } from '../../shared/browser-types';
 export type { BrowserPrompt, BrowserSessionState, PromptAnswer, BrowserRunState } from '../../shared/browser-types';
@@ -443,6 +450,9 @@ export class BrowserService extends EventEmitter {
     for (const [id, e] of this.sessions) { reopen.set(id, e.lastUrls); e.lastUrls = []; }
     for (const [id, urls] of reopen) {
       const e = this.entry(id);
+      // The note goes in before the pages load: a call made meanwhile must
+      // already know its refs went stale.
+      if (urls.length) e.notes.push(note);
       for (const u of urls) {
         try {
           const p = await this.newPage(id);
@@ -451,7 +461,6 @@ export class BrowserService extends EventEmitter {
           this.log('WARN', 'Browser: could not reopen a tab after a restart', { error: firstLine(err) });
         }
       }
-      if (urls.length) e.notes.push(note);
       this.emitState(id);
     }
   }
@@ -622,6 +631,7 @@ export class BrowserService extends EventEmitter {
     const page = e?.active;
     if (!e || !page || page.isClosed()) return;
     e.inputChain = e.inputChain.then(() => runPersonInput(page, ev)).catch(() => undefined);
+    this.watchers.get(sessionId)?.goFast(PERSON_FAST_MS);
   }
 
   /** A page the browser opened by itself (popup / target=_blank) joins its opener's conversation. */
@@ -909,6 +919,8 @@ class LiveView {
   private gapTimer: NodeJS.Timeout | null = null;
   private generation = 0;
   private latest: { data: string; w: number; h: number } | null = null;
+  /** Until this time, frames are acked with no gap (the person is using the page). */
+  private fastUntil = 0;
 
   constructor(
     private readonly sessionId: string,
@@ -942,6 +954,19 @@ class LiveView {
     this.send({ sessionId: this.sessionId, data, width: w, height: h });
   }
 
+  /** The person is using the page: drop the gap now, and for `ms` more. */
+  goFast(ms: number): void {
+    this.fastUntil = Date.now() + ms;
+    // A frame already waiting out the gap is released at once.
+    if (this.gapTimer) { clearTimeout(this.gapTimer); this.gapTimer = null; this.sendAck(); }
+  }
+
+  private sendAck(): void {
+    const id = this.pendingAck;
+    this.pendingAck = null;
+    if (id !== null && this.cdp) void this.cdp.send('Page.screencastFrameAck', { sessionId: id }).catch(() => undefined);
+  }
+
   ack(): void {
     this.screenReady = true;
     if (this.latest) {
@@ -950,12 +975,11 @@ class LiveView {
       return;
     }
     if (this.gapTimer) return;
+    if (Date.now() < this.fastUntil) { this.sendAck(); return; }
     const wait = Math.max(0, MIN_FRAME_GAP_MS - (Date.now() - this.lastSent));
     this.gapTimer = setTimeout(() => {
       this.gapTimer = null;
-      const id = this.pendingAck;
-      this.pendingAck = null;
-      if (id !== null && this.cdp) void this.cdp.send('Page.screencastFrameAck', { sessionId: id }).catch(() => undefined);
+      this.sendAck();
     }, wait);
     this.gapTimer.unref?.();
   }

@@ -12,7 +12,7 @@ import { BrowserSettings, sanitizeBrowserPreferences, validatePatch, DEFAULT_BRO
 import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress, personAddress } from '../src/main/assistant-browser/browser-net';
 import { isFinalStep, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
 import { neutraliseUntrustedTags, wrapUntrusted } from '../src/main/harness/tools/untrusted';
-import { sanitizeFileName, clearStaleProfileLock, firstLine } from '../src/main/assistant-browser/browser-service';
+import { BrowserService, sanitizeFileName, clearStaleProfileLock, firstLine } from '../src/main/assistant-browser/browser-service';
 import { BrowserClient, type WorkerHandle } from '../src/main/assistant-browser/browser-client';
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS, browserToolsAsMcp } from '../src/main/assistant-browser/browser-tool-specs';
 import { browserTools, syncBrowserTools } from '../src/main/harness/tools/browser';
@@ -212,6 +212,58 @@ function fakeWorker(onPost: (m: MainToWorker, reply: (r: WorkerToMain) => void) 
   };
   return w;
 }
+
+describe('the live picture\'s pace', () => {
+  // A fake browser tab whose picture stream records each "send the next frame".
+  function setup() {
+    const acks: number[] = [];
+    let onFrame: (f: unknown) => void = () => {};
+    const cdp = {
+      on: (ev: string, cb: (f: unknown) => void) => { if (ev === 'Page.screencastFrame') onFrame = cb; },
+      send: async (method: string) => { if (method === 'Page.screencastFrameAck') acks.push(Date.now()); },
+      detach: async () => {},
+    };
+    const page = { isClosed: () => false, mouse: { move: async () => {}, wheel: async () => {} } };
+    const service = new BrowserService({ rootDir: os.tmpdir(), chromium: {} as never, getLaunchConfig: async () => ({ showWindow: false, myChrome: false, browser: null }) });
+    const svc = service as any;
+    svc.context = { newCDPSession: async () => cdp };
+    svc.entry('s').active = page;
+    service.watch('s');
+    const frame = (n: number) => onFrame({ data: 'x', sessionId: n, metadata: { deviceWidth: 400, deviceHeight: 700 } });
+    return { service, acks, frame };
+  }
+
+  it('waits between pictures while the person only watches, and not while they use the page', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, acks, frame } = setup();
+      await vi.advanceTimersByTimeAsync(0);
+      frame(1);
+      service.ackFrame('s'); // the screen drew it
+      await vi.advanceTimersByTimeAsync(50);
+      expect(acks).toHaveLength(0); // still inside the gap
+      // The person scrolls: the waiting picture is released at once…
+      service.personInput('s', { type: 'wheel', x: 1, y: 1, dx: 0, dy: 40 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(acks).toHaveLength(1);
+      // …and the next one goes as soon as the screen has drawn it.
+      frame(2);
+      service.ackFrame('s');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(acks).toHaveLength(2);
+      // Once they stop, the gap comes back.
+      await vi.advanceTimersByTimeAsync(5000);
+      frame(3);
+      service.ackFrame('s');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(acks).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(acks).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('the main process\'s handle on the Browser worker', () => {
   it('forks only when first needed, and relays calls and state', async () => {
