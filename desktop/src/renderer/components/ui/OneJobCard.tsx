@@ -31,9 +31,13 @@ export function OneJobCard({ children, actions }: { children: React.ReactNode; a
   );
 }
 
-/** The words of a one-job popup: 12px, the secondary text colour (guide "Text and numbers"). */
-export function OneJobText({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={`text-xs text-fg-2 leading-relaxed space-y-2 ${className}`}>{children}</div>;
+/**
+ * The words of a one-job popup: 12px, the secondary text colour (guide "Text and numbers").
+ * `under` = words that sit under a text box (popup-cards-3#B-1/#B-3: name, box, then its grey
+ * words) — the same lighter grey as `OneJobHint`, so every popup's under-box words match.
+ */
+export function OneJobText({ children, under = false }: { children: React.ReactNode; under?: boolean }) {
+  return <div className={`text-xs ${under ? 'text-fg-muted' : 'text-fg-2'} leading-relaxed space-y-2`}>{children}</div>;
 }
 
 /**

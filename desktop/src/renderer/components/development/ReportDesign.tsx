@@ -334,22 +334,41 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
   </div>;
   const openTicket = () => void window.claude.shell.openExternal(url);
 
+  // WHY the buttons on the popup's pinned bottom line (popup-cards-3#Q-1, Destin: "if the buttons
+  // at the bottom apply to an entire popup with multiple sections, they should remain at the
+  // bottom"): this popup has several labelled cards and its buttons act on the whole ticket, so they
+  // sit in the shared footer — always in view while the cards scroll — as Close session's and
+  // Update's do. They used to come after the last card and scroll away with it.
+  const footer = phase === 'draft'
+    // A lone main action is full width (R20; guide "One button").
+    ? <Button className="w-full py-2.5" disabled={missing} onClick={() => setPhase('review')}>Review ticket</Button>
+    : review ? sendButtons
+    // WHY a button and not the raw address (UX review U16).
+    : phase === 'sent' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} onClick={openTicket}>Open my ticket</Button>)
+    // WHY the way back in (UX review U1). "Open in browser": Destin's words (submit-ticket-2#ST2-6
+    // "Open in Browser"), in the app's sentence case (decisions "Sentence case everywhere").
+    : phase === 'opened' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} onClick={openTicket}>Open in browser</Button>)
+    // WHY a pair, with Submit (submit-ticket-2): every other outcome ends in the same two buttons
+    // at the right; and the ticket is still unsent here, so sending it is the obvious next step.
+    : phase === 'handed-over' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} disabled={missing} onClick={send}>{sendLabel}</Button>)
+    : undefined;
+
   return <>
-  <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
+  <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket" footer={footer}>
     <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
 
       {phase === 'draft' && <>
         {ticketCard}
         {includeCard}
-        {/* A lone main action is full width (R20; guide "One button"). */}
-        <Button className="w-full py-2.5" disabled={missing} onClick={() => setPhase('review')}>Review ticket</Button>
       </>}
 
       {review && <>
         {summaryCard()}
         {sentWithIt}
         {aiHelp}
-        {sendButtons}
       </>}
 
       {/* WHY only a box under the label (Destin, submit-ticket-2#ST2-10: "bare sending your
@@ -363,9 +382,6 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       {phase === 'sent' && <>
         {summaryCard({ tone: 'ok', text: 'Submitted' },
           <p>Submitted to GitHub, where anyone can read it. Maintainers decide what happens next.</p>)}
-        {/* WHY a button and not the raw address (UX review U16). */}
-        {pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
-          <Button className={wide} onClick={openTicket}>Open my ticket</Button>)}
       </>}
 
       {phase === 'opened' && <>
@@ -375,21 +391,11 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
           {/* WHY (audit E-07): the prefilled link has a length limit; say when it cut. */}
           {truncated && <p>It was too long for a browser link, so part of the details was left out. Paste anything missing before you submit.</p>}
         </>)}
-        {/* WHY the way back in (UX review U1). */}
-        {pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
-          // "Open in browser": Destin's words (submit-ticket-2#ST2-6 "Open in Browser"), in
-          // the app's sentence case (decisions "Sentence case everywhere").
-          <Button className={wide} onClick={openTicket}>Open in browser</Button>)}
       </>}
 
       {phase === 'handed-over' && <>
         {summaryCard({ tone: 'neutral', text: 'Not sent' },
           <p>Your assistant is working on a fix in a new conversation. Nothing was sent to GitHub — you can still send this ticket.</p>)}
-        {/* WHY a pair, with Submit (submit-ticket-2): every other outcome ends in the same two
-            buttons at the right; and the ticket is still unsent here, so sending it is the
-            obvious next step — it used to mean closing, reopening and starting over. */}
-        {pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
-          <Button className={wide} disabled={missing} onClick={send}>{sendLabel}</Button>)}
       </>}
 
     </div>

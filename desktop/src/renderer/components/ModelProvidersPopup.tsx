@@ -824,22 +824,6 @@ function ConnectOpenRouterModal({
             </Button>
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
           </>}>
-            <OneJobText>
-              <ol className="space-y-1 list-decimal pl-4">
-                <li>
-                  Create a free account at{' '}
-                  <button
-                    onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
-                    className="text-accent hover:underline"
-                  >
-                    openrouter.ai
-                  </button>
-                  .
-                </li>
-                <li>Add a little credit and create an API key.</li>
-                <li>Paste the key below and press Connect.</li>
-              </ol>
-            </OneJobText>
             <div>
               <OneJobLabel htmlFor="openrouter-key">API key</OneJobLabel>
               <TextInput
@@ -860,6 +844,24 @@ function ConnectOpenRouterModal({
                   : <FieldError as="p" className="mt-1.5">{note.text}</FieldError>
               )}
             </div>
+            {/* WHY the steps under the box (popup-cards-3#B-1, Destin: "the grey subtext should be below
+                the text box in each for consistency"); step 3 says "above" to match. */}
+            <OneJobText under>
+              <ol className="space-y-1 list-decimal pl-4">
+                <li>
+                  Create a free account at{' '}
+                  <button
+                    onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
+                    className="text-accent hover:underline"
+                  >
+                    openrouter.ai
+                  </button>
+                  .
+                </li>
+                <li>Add a little credit and create an API key.</li>
+                <li>Paste the key above and press Connect.</li>
+              </ol>
+            </OneJobText>
           </OneJobCard>
         </div>
       </Dialog>

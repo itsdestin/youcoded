@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAccount } from '../state/account-context';
-import { Button, Dialog, FieldError, InputGroup, OneJobCard, OneJobLabel, OneJobText } from './ui';
+import { Button, Dialog, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 
 // Persisted "don't nag me again" flag. Set on skip (and on ESC, which is the
@@ -114,9 +114,6 @@ function HandlePromptPopup({
           </Button>
           <Button variant="secondary" onClick={skip}>Skip for now</Button>
         </>}>
-          <OneJobText>
-            <p>Friends will find you by your handle — like a username. You can change it later in Settings → Account.</p>
-          </OneJobText>
           <div>
             <OneJobLabel htmlFor="handle-prompt-input">Handle</OneJobLabel>
             {/* Change 77's InputGroup kept for the "@" in front, now without a button inside. */}
@@ -133,6 +130,9 @@ function HandlePromptPopup({
             </InputGroup>
             {/* Plain words for status, never glyphs. */}
             {error && <FieldError as="p" className="mt-1.5">{error}</FieldError>}
+            {/* WHY under the box (popup-cards-3#B-1, Destin: "the grey subtext should be below the
+                text box in each for consistency"): name, box, then its grey words — Rename's order. */}
+            <OneJobHint>Friends will find you by your handle — like a username. You can change it later in Settings → Account.</OneJobHint>
           </div>
         </OneJobCard>
       </Dialog>

@@ -134,15 +134,6 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
           </Button>
           <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
         </>}>
-          <OneJobText>
-            <p>
-              YouCoded will <span className="text-fg">move</span> <span className="break-all">{sourcePath}</span> to{' '}
-              <span className="text-fg break-all">~/YouCoded/Projects/{name.trim() || '…'}/</span> so it can sync across your devices.
-            </p>
-            <p>
-              The folder itself moves — anything pointing at the old location (shortcuts, open terminals, editors) will need the new path.
-            </p>
-          </OneJobText>
           <div>
             {/* htmlFor/id pair: screen readers announce the field by its caption. */}
             <OneJobLabel htmlFor="import-project-name">Project name</OneJobLabel>
@@ -158,6 +149,16 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
                 it already carries role="alert" itself. */}
             {error && <FieldError as="div" className="mt-1.5">{error}</FieldError>}
           </div>
+          {/* WHY under the box (popup-cards-3#B-3, Destin: "grey text below text input box"). */}
+          <OneJobText under>
+            <p>
+              YouCoded will <span className="text-fg">move</span> <span className="break-all">{sourcePath}</span> to{' '}
+              <span className="text-fg break-all">~/YouCoded/Projects/{name.trim() || '…'}/</span> so it can sync across your devices.
+            </p>
+            <p>
+              The folder itself moves — anything pointing at the old location (shortcuts, open terminals, editors) will need the new path.
+            </p>
+          </OneJobText>
           {syncOffNote}
         </OneJobCard>
       )}
