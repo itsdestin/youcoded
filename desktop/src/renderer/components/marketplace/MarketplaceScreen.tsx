@@ -455,7 +455,7 @@ export default function MarketplaceScreen({
       <div ref={scrollRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* WHY no title or exit here any more (decisions "Full-screen titles", H-1, and
           "Way back to chat", H-5): the screen names itself in the band above, centred
-          with its icon, and leaves by the band's filled "Esc · Back to chat" — the same
+          with its icon, and leaves by the band's light "Esc · Back to chat" (FV-6) — the same
           band Projects and Pages use. What stays is the screen's own tools: sign-in
           first (the "no obvious way to sign in" fix keeps it the first thing seen) and
           the jump to Your library at the right. */}

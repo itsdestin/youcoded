@@ -200,7 +200,7 @@ export default function LibraryScreen({
       <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* WHY no h1 or exit here (decisions "Full-screen titles", H-1; "Way back to
           chat", H-5): the band above names the screen, centred with its icon, and
-          leaves by its filled "Esc · Back to chat", like Projects and Pages. The
+          leaves by its light "Esc · Back to chat" (final-review#FV-6), like Projects and Pages. The
           jump to the Marketplace stays as this screen's own tool, at the right. */}
       {onOpenMarketplace && (
         <div className="flex items-center justify-end gap-2 px-3 sm:px-4 pt-3">

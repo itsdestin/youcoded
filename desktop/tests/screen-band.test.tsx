@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // WHY: pins the full-screen band as Destin approved it (decisions "Full-screen titles", H-1, and
-// "Way back to chat", H-5): the screen's icon beside its centred title, and the way out a FILLED
-// small button reading "Esc · Back to chat" with the key first. Before this the band read
-// "Back to chat · Esc" in an inset pill, and Marketplace/Library had their own ghost exits.
+// "Way back to chat", H-5): the screen's icon beside its centred title, and the way out reading
+// "Esc · Back to chat" with the key first. final-review#FV-6 (2026-10-14) took back H-5's FILL:
+// the way out is the light inset pill again, like the window buttons beside it, never accent.
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi } from 'vitest';
@@ -32,12 +32,13 @@ function mount(onBack = vi.fn()) {
 }
 
 describe('ScreenBand', () => {
-  it('reads "Esc · Back to chat", key first, as a filled button', () => {
+  it('reads "Esc · Back to chat", key first, as a light (unfilled) button', () => {
     const onBack = mount();
     const back = screen.getByRole('button', { name: 'Back to chat' });
-    // The key and its dot are one span, the words another (the button's gap spaces them).
+    // The key, its dot and the words are three spans (the button's gap spaces them).
     expect(back.textContent).toMatch(/^Esc\s*·\s*Back to chat$/);
-    expect(back.className).toContain('bg-accent');
+    expect(back.className).not.toContain('bg-accent');
+    expect(back.parentElement?.className).toContain('bg-inset');
     fireEvent.click(back);
     expect(onBack).toHaveBeenCalledTimes(1);
   });

@@ -14,7 +14,7 @@
 import React, { useRef } from 'react';
 import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from './HeaderBar';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
-import { Button } from './ui/Button';
+import { ON_INSET_CONTROL } from './header/control-states';
 import { useWallpaperHeaderInk } from '../hooks/use-wallpaper-header-ink';
 
 export interface ScreenBandProps {
@@ -65,24 +65,26 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
         {title}
       </div>
       <div className="header-controls-right flex items-center justify-end gap-1 sm:gap-2">
-        {/* WHY a filled small Button reading "Esc · Back to chat", key first
-            (decisions "Way back to chat", ui-element-review-headers#H-5:
-            "Filled button on every full screen … key on the left"): this was
-            an inset pill reading "Back to chat · Esc" (shell deck round 5–6,
-            superseded by H-5), so the four full screens showed three exit
-            looks. At phone width "Esc ·" is dropped (old guide §4.8). A filled
-            button keeps its own colours under the float chrome's wallpaper ink
-            (float-chrome.css skips `.bg-accent`). */}
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={onBack}
-          aria-label={backLabel}
-          className="whitespace-nowrap"
-        >
-          <span aria-hidden="true" className="hidden sm:inline">Esc ·</span>
-          <span>{backLabel}</span>
-        </Button>
+        {/* WHY the light inset pill again, key first (final-review#FV-6, Destin
+            2026-10-14: "i really don't want esc/back to chat to be filled. it should
+            be a light button like the old version was"). H-5 had made it a filled
+            accent Button; this restores master's quiet pill, which matches the
+            window buttons beside it (shell deck round 5: "should match styling of
+            max/min/exit"), and keeps H-5's one lasting part, the key on the left.
+            At phone width "Esc ·" is dropped (old guide §4.8). The float chrome's
+            wallpaper ink already styles this pill (master shipped it). */}
+        <div className="flex bg-inset rounded-md p-0.5">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={backLabel}
+            className={`px-2 py-1 rounded-sm flex items-center gap-1.5 text-xs leading-none whitespace-nowrap ${ON_INSET_CONTROL}`}
+          >
+            <span aria-hidden="true" className="hidden sm:inline text-fg-muted">Esc</span>
+            <span aria-hidden="true" className="hidden sm:inline text-fg-faint">·</span>
+            <span>{backLabel}</span>
+          </button>
+        </div>
         {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>
