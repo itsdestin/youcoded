@@ -265,7 +265,11 @@ describe('sizing an event without serialising it', () => {
     const full = process.cpuUsage(s0);
     expect(stringified).toBe(0);
     // CPU time, not wall clock. Serialising 5 MB is milliseconds; the estimate reads a length.
-    expect(c.user + c.system).toBeLessThan((full.user + full.system) / 4 + 1000);
+    // WHY the Windows slack: its CPU clock moves in ~15.6 ms steps, so even a few microseconds of
+    // work can read as one whole step (15000 µs failed here daily). The JSON.stringify spy above
+    // still catches a serialise there; elsewhere the strict bound stands.
+    const tick = process.platform === 'win32' ? 16_000 : 1000;
+    expect(c.user + c.system).toBeLessThan((full.user + full.system) / 4 + tick);
   });
 
   it('counts a multi-MB event as oversize (numbered, not held) and keeps the ring bound', () => {
