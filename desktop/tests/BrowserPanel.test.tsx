@@ -55,7 +55,7 @@ describe('Browser panel', () => {
     setBrowserState(browserState({ run: 'error', tabs: [], error: 'No browser was found on this computer for the assistant to use.' }));
     render(<BrowserPanel sessionId="s1" />);
     expect(screen.getByText('No browser was found on this computer for the assistant to use.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' })); // every retry reads "Try again" (error-notices-1#EN-Q1)
     expect(b.bridge.stop).toHaveBeenCalled();
   });
 

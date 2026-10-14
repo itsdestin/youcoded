@@ -70,7 +70,7 @@ describe('Settings → Browser', () => {
     render(<BrowserSettingsDialog onClose={() => {}} />);
     expect(await screen.findByText(/No Chrome, Edge, Chromium or Brave was found/)).toBeInTheDocument();
     expect(screen.getByText("The download didn't finish: ENOSPC: no space left on device")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' })); // every retry reads "Try again" (error-notices-1#EN-Q1)
     await waitFor(() => expect(b.bridge.download).toHaveBeenCalled());
   });
 
