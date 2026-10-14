@@ -83,15 +83,15 @@ describe('quick chips — editing an existing chip', () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Git Status'));
-    expect(screen.getByLabelText('Chip label')).toHaveValue('Git Status');
-    expect(screen.getByLabelText('Chip prompt')).toHaveValue('run git status');
+    expect(screen.getByLabelText('Chip name')).toHaveValue('Git Status');
+    expect(screen.getByLabelText('Chip message')).toHaveValue('run git status');
   });
 
   it('saving writes the new prompt back and keeps every other chip', async () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Git Status'));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), {
+    fireEvent.change(screen.getByLabelText('Chip message'), {
       target: { value: 'run git status --short and summarize' },
     });
     fireEvent.click(screen.getByText('Save'));
@@ -108,7 +108,7 @@ describe('quick chips — editing an existing chip', () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Journal'));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: 'journal with me' } });
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: 'journal with me' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
     expect(setChips.mock.calls[0][0][0]).toEqual({
@@ -120,9 +120,9 @@ describe('quick chips — editing an existing chip', () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Git Status'));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: 'clobbered' } });
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: 'clobbered' } });
     fireEvent.click(screen.getByText('Cancel'));
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
     expect(setChips).not.toHaveBeenCalled();
   });
 
@@ -137,25 +137,46 @@ describe('quick chips — editing an existing chip', () => {
     fireEvent.pointerMove(r, { clientX: 0, clientY: 40 });
     fireEvent.pointerUp(r, { clientX: 0, clientY: 40 });
     fireEvent.click(r);
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
   });
 
-  it('Remove on the edit page deletes that chip and returns to the shelves', async () => {
+  // Remove asks first, in place, as the Tags card's Delete tag does (final-review#CH-5/CH-6).
+  it('Remove on the edit page asks first, then deletes that chip and returns to the shelves', async () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Journal'));
-    fireEvent.click(screen.getByText('Remove'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByText('Remove “Journal” from your quick chips?')).toBeInTheDocument();
+    expect(setChips).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' })); // the confirm
     await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
     expect(setChips.mock.calls[0][0]).toEqual([CHIPS[1]]);
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
   });
 
-  it('an empty label or prompt cannot be saved', async () => {
+  it('Keep it backs out of removing and writes nothing', async () => {
+    await mount();
+    openEditor();
+    fireEvent.click(pencil('Journal'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(setChips).not.toHaveBeenCalled();
+  });
+
+  // Like the tag box's Create, Save never greys out: pressed with a box empty, it says why under
+  // that box and saves nothing (guide: "a disabled control says why").
+  it('an empty name or message is not saved, and says why', async () => {
     await mount();
     openEditor();
     fireEvent.click(pencil('Git Status'));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: '   ' } });
-    expect(screen.getByText('Save')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: '   ' } });
+    expect(screen.getByText('Save')).toBeEnabled();
+    fireEvent.click(screen.getByText('Save'));
+    expect(screen.getByText('Write what the chip sends first.')).toBeInTheDocument();
+    expect(screen.queryByText('Give the chip a name first.')).toBeNull();
+    expect(screen.getByLabelText('Chip message')).toBeInTheDocument(); // still on the page
+    expect(setChips).not.toHaveBeenCalled();
   });
 });
 
@@ -180,6 +201,17 @@ describe('quick chips — the row shows the store, not a hardcoded fallback', ()
     openEditor();
     expect(document.querySelector('[data-chip-idx]')).toBeNull();
     expect(screen.getByText('+ Add a chip')).toBeTruthy();
+  });
+
+  // The add button is chip-shaped, at the end of the shown shelf (like "+ New tag" among tags).
+  it('"+ Add a chip" sits inside the shown shelf and opens the add page', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    const shown = document.querySelector('[data-shelf="shown"]')!;
+    expect(shown).toContainElement(screen.getByRole('button', { name: '+ Add a chip' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add a chip' }));
+    expect(screen.getByLabelText('Chip name')).toHaveValue('');
   });
 });
 

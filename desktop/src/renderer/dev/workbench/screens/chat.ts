@@ -35,6 +35,10 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/tags#complete', 'dialog'), open: [{ do: 'click', target: { role: 'switch', label: 'Mark complete' } }] },
   // Session details with its note being written (the shared note box, close-session-2).
   { ...chat('chat/tags#note-typing', 'dialog'), open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
+  // A tag's edit box open in place, and the New tag box — the pair to set beside the quick chips
+  // editor's edit and add pages (final-review#CH-5/CH-6: "want to see next to tag edit menu").
+  { ...chat('chat/tags#tag-edit', 'dialog'), open: ['Edit work'] },
+  { ...chat('chat/tags#new-tag', 'dialog'), open: ['+ New tag'] },
   chat('chat/status-bar', 'dialog'),
   chat('chat/status-bar/themes', 'dialog'),
   chat('chat/context', 'dialog'),
@@ -43,6 +47,10 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/quick-chips', 'dialog'),
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
+  // Remove asks first, in place (as Delete tag does), and Add pressed with both boxes empty says
+  // why under each box (as New tag's Create does) — final-review#CH-5/CH-6.
+  { ...chat('chat/quick-chips/edit#remove', 'dialog'), open: ['Remove'] },
+  { ...chat('chat/quick-chips/add#empty', 'dialog'), open: ['Add'] },
   chat('chat/session-context', 'dialog'),
   // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5).
   { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },

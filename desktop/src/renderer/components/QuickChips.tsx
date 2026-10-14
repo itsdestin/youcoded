@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, CARD_LEVEL_1, Dialog, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FieldError, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
@@ -92,6 +92,25 @@ export default function QuickChips({ onChipTap }: Props) {
 // Pointing at a chip shows its pencil (always shown on touch, .touch-reveal); the
 // pencil opens an edit page in the same popup, with the Dialog's own back arrow.
 // Page buttons: Remove (red) far left, Cancel then Save on the right.
+//
+// WHY it now matches the Tags card's edit box (Destin, final-review#CH-5/CH-6: "compare this
+// against our tag menu side by side"): both edit one item of a list, and they had drifted —
+//  - the page was two cards (the fields, then the switch) with its buttons loose under them;
+//    the tag's box is ONE box holding everything about the tag, buttons last (guide: "Groups
+//    keep their card", a group that is one idea is one card with its rows and buttons inside);
+//  - the fields had no titles, only grey placeholders, so an edited chip's two boxes said
+//    nothing about what they were; they now carry "Name" / "Message" above them, the tag box's
+//    small titles;
+//  - Save greyed out with no reason when a box was empty (guide: "a disabled control says
+//    why"); like the tag box's Create it now never greys out and answers with the short
+//    error line under the empty box;
+//  - Remove threw the chip (and the message you wrote) away at once; like Delete tag it now
+//    asks first in place, the red button taking the main action's place;
+//  - "+ Add a chip" was a full-width outlined button under the shelves, and the how-to line sat
+//    loose between cards; the add button is now chip-shaped and dashed at the end of the
+//    shown shelf, like "+ New tag" among the tags (guide: "an edit button for a list is
+//    shaped like the things it edits"), and the how-to line lives inside that card (guide:
+//    "text that describes a card lives inside it").
 
 interface ChipEditorProps {
   open: boolean;
@@ -112,21 +131,28 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
   const [label, setLabel] = useState('');
   const [prompt, setPrompt] = useState('');
   const [shown, setShown] = useState(true);
+  // `tried`: Save/Add was pressed with a box empty — show why (the tag box's Create, PM13-3).
+  const [tried, setTried] = useState(false);
+  // Remove asks first, in place (the tag box's Delete tag, PM13-4).
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const toList = useCallback(() => setView({ kind: 'list' }), []);
 
   const beginEdit = useCallback((idx: number) => {
     const chip = chips[idx];
     if (!chip) return;
     setLabel(chip.label); setPrompt(chip.prompt); setShown(!chip.hidden);
+    setTried(false); setConfirmRemove(false);
     setView({ kind: 'edit', idx });
   }, [chips]);
   const beginAdd = useCallback(() => {
     setLabel(''); setPrompt(''); setShown(true);
+    setTried(false); setConfirmRemove(false);
     setView({ kind: 'add' });
   }, []);
 
   const canSave = !!label.trim() && !!prompt.trim();
   const save = useCallback(() => {
+    setTried(true);
     if (!canSave) return;
     const fields = { label: label.trim(), prompt: prompt.trim(), hidden: shown ? undefined : true };
     if (view.kind === 'edit') {
@@ -174,15 +200,38 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
     return createPortal(
       <Dialog screen={view.kind === 'edit' ? 'chat/quick-chips/edit' : 'chat/quick-chips/add'} open onClose={onClose}
         onBack={toList} title={editing ? `Edit “${editing.label}”` : 'Add a chip'} size="panel">
-        <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
-          <TextInput size="sm" value={label} onChange={(e) => setLabel(e.target.value.slice(0, 20))}
-            placeholder="Label (max 20 characters)" aria-label="Chip label" className="w-full" autoFocus />
-          <Textarea size="sm" value={prompt} onChange={(e) => setPrompt(e.target.value.slice(0, 500))}
-            placeholder="What the chip sends" rows={3} aria-label="Chip prompt" className="w-full" />
-        </div>
-        <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+        {/* One card for the chip, the tag edit box's order: titled fields, the switch, then
+            the buttons (see the header comment). */}
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-fg">Name</div>
+            <TextInput size="sm" value={label} onChange={(e) => setLabel(e.target.value.slice(0, 20))}
+              placeholder="Up to 20 characters" aria-label="Chip name" className="w-full" autoFocus />
+            {tried && !label.trim() && <FieldError>Give the chip a name first.</FieldError>}
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-fg">Message</div>
+            <Textarea size="sm" value={prompt} onChange={(e) => setPrompt(e.target.value.slice(0, 500))}
+              placeholder="What the chip sends" rows={3} aria-label="Chip message" className="w-full" />
+            {tried && !prompt.trim() && <FieldError>Write what the chip sends first.</FieldError>}
+          </div>
           <SettingRow header variant="item" title="Show above the message box" description="Off keeps it here, set aside"
             control={<Toggle checked={shown} onChange={setShown} aria-label="Show above the message box" />} />
+          {view.kind === 'edit' && confirmRemove ? (
+            // The guide's destructive confirm, as Delete tag's: the red button takes Save's place.
+            <div className="flex items-center gap-2">
+              <span className="flex-1 text-xs text-fg-2">Remove “{editing?.label}” from your quick chips?</span>
+              <Button variant="secondary" size="sm" onClick={() => setConfirmRemove(false)}>Keep it</Button>
+              <Button variant="danger" size="sm" onClick={() => remove(view.idx)}>Remove</Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              {view.kind === 'edit' && <Button variant="danger" size="sm" onClick={() => setConfirmRemove(true)}>Remove</Button>}
+              <span className="flex-1" />
+              <Button variant="secondary" size="sm" onClick={toList}>Cancel</Button>
+              <Button size="sm" onClick={save}>{view.kind === 'edit' ? 'Save' : 'Add'}</Button>
+            </div>
+          )}
         </div>
         {view.kind === 'add' && availableSkills.length > 0 && (
           <section>
@@ -197,40 +246,47 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
             </div>
           </section>
         )}
-        <div className="flex items-center gap-2">
-          {view.kind === 'edit' && <Button variant="danger" size="sm" onClick={() => remove(view.idx)}>Remove</Button>}
-          <span className="flex-1" />
-          <Button variant="secondary" size="sm" onClick={toList}>Cancel</Button>
-          <Button size="sm" onClick={save} disabled={!canSave}>{view.kind === 'edit' ? 'Save' : 'Add'}</Button>
-        </div>
       </Dialog>,
       document.body,
     );
   }
 
   const shelf = (hidden: boolean) => chips.map((c, i) => ({ c, i })).filter(({ c }) => !!c.hidden === hidden);
-  const renderShelf = (hidden: boolean, title: string, empty: string) => {
+  const renderShelf = (hidden: boolean, title: string, empty: string, foot?: React.ReactNode) => {
     const items = shelf(hidden);
+    // The shown shelf ends with the dashed "+ Add a chip" (see the header comment), so it is
+    // never empty of things to press; its empty line shows only when it holds no chip.
+    const add = !hidden && chips.length < MAX_CHIPS ? (
+      <button type="button" onClick={beginAdd}
+        className="shrink-0 h-7 px-2.5 rounded-md border border-dashed border-edge text-2xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
+        + Add a chip
+      </button>
+    ) : null;
     return (
       <section>
         <SectionLabel className="mb-2">{title}</SectionLabel>
         <div data-shelf={hidden ? 'aside' : 'shown'}
-          className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12 transition-colors ${drag.overShelf === (hidden ? 'aside' : 'shown') ? 'border-accent' : ''}`}>
-          {items.length === 0 && <span className="text-3xs text-fg-muted self-center">{empty}</span>}
-          {items.map(({ c, i }) => (
-            <span key={i} data-chip-idx={i}
-              onPointerDown={(e) => drag.down(e, i)} onPointerMove={drag.move} onPointerUp={drag.up} onPointerCancel={drag.up}
-              className={`group/chip h-7 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs select-none touch-none cursor-grab transition-opacity ${
-                hidden ? 'border-dashed border-edge-dim text-fg-muted' : 'border-edge-dim text-fg-2'} ${drag.dragIdx === i ? 'opacity-30' : ''}`}>
-              {c.label}
-              <button type="button" aria-label={`Edit ${c.label}`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); if (!drag.suppressClick.current) beginEdit(i); }}
-                className="touch-reveal w-5 h-5 rounded-sm flex items-center justify-center text-fg-faint opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg hover:bg-inset transition-opacity">
-                <PencilIcon size={9} />
-              </button>
-            </span>
-          ))}
+          className={`${CARD_LEVEL_1} p-3 space-y-2.5 min-h-12 transition-colors ${drag.overShelf === (hidden ? 'aside' : 'shown') ? 'border-accent' : ''}`}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* text-xs: the Tags card's empty line ("No tags on this session yet"). */}
+            {items.length === 0 && <span className="text-xs text-fg-muted">{empty}</span>}
+            {items.map(({ c, i }) => (
+              <span key={i} data-chip-idx={i}
+                onPointerDown={(e) => drag.down(e, i)} onPointerMove={drag.move} onPointerUp={drag.up} onPointerCancel={drag.up}
+                className={`group/chip h-7 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs select-none touch-none cursor-grab transition-opacity ${
+                  hidden ? 'border-dashed border-edge-dim text-fg-muted' : 'border-edge-dim text-fg-2'} ${drag.dragIdx === i ? 'opacity-30' : ''}`}>
+                {c.label}
+                <button type="button" aria-label={`Edit ${c.label}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); if (!drag.suppressClick.current) beginEdit(i); }}
+                  className="touch-reveal w-5 h-5 rounded-sm flex items-center justify-center text-fg-faint opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg hover:bg-inset transition-opacity">
+                  <PencilIcon size={9} />
+                </button>
+              </span>
+            ))}
+            {add}
+          </div>
+          {foot}
         </div>
       </section>
     );
@@ -239,12 +295,13 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
   return createPortal(
     <>
       <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit quick chips" size="panel">
-        {renderShelf(false, 'Shown above the message box', 'Drag a chip here to show it')}
+        {renderShelf(false, 'Shown above the message box', 'Drag a chip here to show it', (
+          <p className="text-3xs text-fg-muted">
+            Drag a chip between the two shelves to show or hide it, or along a shelf to reorder. The pencil on a chip edits it.
+            {chips.length >= MAX_CHIPS && ` You have the most chips (${MAX_CHIPS}); remove one to add another.`}
+          </p>
+        ))}
         {renderShelf(true, 'Set aside', 'Drag a chip here to keep it without showing it')}
-        <p className="text-3xs text-fg-muted">Drag a chip between the two to show or hide it, or along a shelf to reorder. The pencil on a chip edits it.</p>
-        {chips.length < MAX_CHIPS
-          ? <Button variant="secondary" size="sm" className="w-full" onClick={beginAdd}>+ Add a chip</Button>
-          : <p className="text-3xs text-fg-muted text-center">Maximum {MAX_CHIPS} chips reached</p>}
       </Dialog>
       {drag.ghost && (
         <div className="fixed z-[9999] pointer-events-none rounded-md px-2.5 h-7 inline-flex items-center bg-inset border border-edge shadow-lg shadow-black/40 text-2xs font-medium text-fg"
