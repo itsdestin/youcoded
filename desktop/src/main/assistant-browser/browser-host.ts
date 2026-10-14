@@ -14,7 +14,7 @@ import { BrowserService, firstLine } from './browser-service';
 import { BrowserSettings } from './browser-settings';
 import { BrowserInstaller, playwrightCliPath } from './browser-installer';
 import { discoverBrowsers, defaultDiscoveryEnv, pickBrowser, type FoundBrowser } from './browser-discovery';
-import { BrowserPolicy, installNavigationGuard, navigationVerdict, runBrowserTool, type RunnerEnv } from './browser-tool-runners';
+import { BrowserPolicy, installNavigationGuard, navigationVerdict, openForPerson, runBrowserTool, type RunnerEnv } from './browser-tool-runners';
 import { findMyChrome } from './browser-my-chrome';
 import type { BrowserCommand, MainToWorker, WorkerToMain } from './browser-protocol';
 import type { BrowserInfo } from '../../shared/browser-types';
@@ -53,6 +53,11 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
     // The page-load check (home network / metadata), for every page and iframe.
     requestGuard: (sid, url) => navigationVerdict(env, sid, url),
     guardPage: (sid, page) => installNavigationGuard(env, sid, page),
+    // Closing the shown window = choosing hidden (the window doesn't come back next start).
+    onWindowClosedByPerson: async () => {
+      await settings.update({ showWindow: false });
+      send({ t: 'info-changed' });
+    },
     getLaunchConfig: async () => {
       const prefs = await settings.read();
       return { showWindow: prefs.showWindow, myChrome: prefs.useMyChrome, browser: pickBrowser(await discover(), prefs.preferredBrowser) };
@@ -141,6 +146,17 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
         return true;
       case 'download': installer.start(); return info();
       case 'cancel-download': installer.cancel(); return true;
+      case 'open': {
+        // The person browsing from the panel. Their own choice of address, so a
+        // home-network address needs no card (it is granted for this chat);
+        // a never-openable one is still refused.
+        if (c.nav) {
+          try { await service.personNav(c.sessionId, c.nav); return { ok: true }; } catch (err) { return { ok: false, error: `That didn't work: ${firstLine(err)}` }; }
+        }
+        return openForPerson(env, c.sessionId, c.address ?? '');
+      }
+      case 'input': service.personInput(c.sessionId, c.event); return true;
+      case 'view-size': service.setViewSize(c.sessionId, c.width, c.height); return true;
       case 'check-my-chrome': {
         const r = await findMyChrome();
         return 'error' in r ? { ok: false, message: r.error } : { ok: true, message: 'Chrome is ready. It will ask you to Allow the connection the first time the assistant uses it.' };

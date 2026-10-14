@@ -9,7 +9,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import { candidatePaths, discoverBrowsers, pickBrowser } from '../src/main/assistant-browser/browser-discovery';
 import { BrowserSettings, sanitizeBrowserPreferences, validatePatch, DEFAULT_BROWSER_PREFERENCES } from '../src/main/assistant-browser/browser-settings';
-import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress } from '../src/main/assistant-browser/browser-net';
+import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress, personAddress } from '../src/main/assistant-browser/browser-net';
 import { isFinalStep, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
 import { neutraliseUntrustedTags, wrapUntrusted } from '../src/main/harness/tools/untrusted';
 import { sanitizeFileName, clearStaleProfileLock, firstLine } from '../src/main/assistant-browser/browser-service';
@@ -84,6 +84,16 @@ describe('the Browser\'s saved choices', () => {
 });
 
 describe('where the Browser may go', () => {
+  it('reads what the person types in the address box as an address or a search', () => {
+    expect(personAddress('github.com/itsdestin')).toBe('https://github.com/itsdestin');
+    expect(personAddress('https://example.org/a b')).toBe('https://example.org/a b');
+    expect(personAddress('localhost:5173')).toBe('http://localhost:5173');
+    expect(personAddress('192.168.1.1')).toBe('http://192.168.1.1');
+    expect(personAddress('night circus')).toBe('https://duckduckgo.com/?q=night%20circus');
+    expect(personAddress('weather')).toBe('https://duckduckgo.com/?q=weather');
+    for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'chrome://settings', '   ']) expect(personAddress(bad)).toBeNull();
+  });
+
   it('never opens cloud-metadata, link-local or unspecified addresses', () => {
     for (const ip of ['169.254.169.254', '::ffff:a9fe:a9fe', 'fe80::1', 'fd00:ec2::254', '0.0.0.0', '100.100.100.200', '::']) expect(isNeverAddress(ip)).toBe(true);
     for (const ip of ['192.168.1.1', '127.0.0.1', '8.8.8.8']) expect(isNeverAddress(ip)).toBe(false);

@@ -10,7 +10,7 @@
 // window hears them (any window may show that conversation's card).
 import { BrowserWindow } from 'electron';
 import { IPC } from '../../shared/backend-contract';
-import type { BrowserFrame, BrowserInfo, BrowserSessionState, MyChromeCheck, PromptAnswer } from '../../shared/browser-types';
+import type { BrowserFrame, BrowserInfo, BrowserInputEvent, BrowserSessionState, MyChromeCheck, PromptAnswer } from '../../shared/browser-types';
 import { getBrowserClient } from '../assistant-browser/browser-electron';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -65,6 +65,33 @@ function str(v: unknown, field: string): string {
 }
 
 const ANSWERS: readonly PromptAnswer[] = ['allow_chat', 'allow_always', 'once', 'no', 'done', 'cant', 'download'];
+const NAVS = ['back', 'forward', 'reload'] as const;
+const KEY_NAME = /^[\w+\-=[\];',./`\\]{1,40}$/;
+
+function num(v: unknown, field: string): number {
+  if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > 100_000) throw new TypeError(`${field} must be a number`);
+  return v;
+}
+
+/** The person's click/scroll/key on the panel's picture, checked field by field
+ *  (it is forwarded to a real page). */
+function inputEvent(v: any): BrowserInputEvent {
+  switch (v?.type) {
+    case 'click': {
+      const button = v.button ?? 'left';
+      if (!['left', 'right', 'middle'].includes(button)) throw new TypeError('Unknown button');
+      return { type: 'click', x: num(v.x, 'x'), y: num(v.y, 'y'), clickCount: Math.min(3, Math.max(1, Math.round(num(v.clickCount ?? 1, 'clickCount')))), button };
+    }
+    case 'wheel': return { type: 'wheel', x: num(v.x, 'x'), y: num(v.y, 'y'), dx: num(v.dx, 'dx'), dy: num(v.dy, 'dy') };
+    case 'key':
+      if (typeof v.key !== 'string' || !KEY_NAME.test(v.key)) throw new TypeError('Unknown key');
+      return { type: 'key', key: v.key };
+    case 'text':
+      if (typeof v.text !== 'string' || !v.text || v.text.length > 10_000) throw new TypeError('text must be a short string');
+      return { type: 'text', text: v.text };
+    default: throw new TypeError('Unknown input');
+  }
+}
 
 export const browserChannels: MainChannelDef[] = [
   defineChannel({
@@ -180,6 +207,34 @@ export const browserChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.BROWSER_CHECK_MY_CHROME, kind: 'handle', desktopOnly: true,
     handler: () => getBrowserClient().command<MyChromeCheck>({ cmd: 'check-my-chrome' }),
+  }),
+  defineChannel({
+    name: IPC.BROWSER_OPEN, kind: 'handle', desktopOnly: true,
+    // The person browsing from the panel: this one MAY start the browser — they asked.
+    handler: (raw) => {
+      wire();
+      const payload = raw as { sessionId?: unknown; nav?: unknown; address?: unknown } | undefined;
+      const sessionId = str(payload?.sessionId, 'sessionId');
+      if (payload && 'nav' in payload) {
+        const nav = NAVS.find((n) => n === payload.nav);
+        if (!nav) throw new TypeError('Unknown nav');
+        return getBrowserClient().command<{ ok: boolean; error?: string }>({ cmd: 'open', sessionId, nav });
+      }
+      const address = payload?.address;
+      if (typeof address !== 'string' || address.length > 4000) throw new TypeError('address must be a string');
+      return getBrowserClient().command<{ ok: boolean; error?: string }>({ cmd: 'open', sessionId, address });
+    },
+  }),
+  defineChannel({
+    name: IPC.BROWSER_INPUT, kind: 'on', desktopOnly: true,
+    // Never starts the worker: input only means something to a page that's open.
+    handler: (payload) => { getBrowserClient().commandIfAlive({ cmd: 'input', sessionId: str(payload?.sessionId, 'sessionId'), event: inputEvent(payload?.event) }); },
+  }),
+  defineChannel({
+    name: IPC.BROWSER_VIEW_SIZE, kind: 'on', desktopOnly: true,
+    handler: (payload) => {
+      getBrowserClient().commandIfAlive({ cmd: 'view-size', sessionId: str(payload?.sessionId, 'sessionId'), width: num(payload?.width, 'width'), height: num(payload?.height, 'height') });
+    },
   }),
 ];
 

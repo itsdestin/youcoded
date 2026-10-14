@@ -285,8 +285,8 @@ describe('browser:* channel parity', () => {
   const contract = readSource('src', 'shared', 'backend-contract.ts');
   const REQUESTS = [...contract.matchAll(/^\s*(BROWSER_[A-Z_]+):\s*'(browser:[^']+)'/gm)]
     .filter(([, k]) => !['BROWSER_STATE_CHANGED', 'BROWSER_FRAME', 'BROWSER_INFO_CHANGED'].includes(k));
-  it('names sixteen request channels (non-vacuity)', () => {
-    expect(REQUESTS.length).toBe(16);
+  it('names nineteen request channels (non-vacuity)', () => {
+    expect(REQUESTS.length).toBe(19);
   });
   it('each is a desktopOnly table entry, in preload and remote-shim', () => {
     const table = readSource('src', 'main', 'ipc', 'browser.ts');
@@ -295,7 +295,9 @@ describe('browser:* channel parity', () => {
     for (const [, konst, channel] of REQUESTS) {
       expect(table, `${channel}: no desktopOnly entry`).toMatch(new RegExp(`name: IPC\\.${konst}, kind: '(handle|on)', desktopOnly: true`));
       expect(preload, `${channel}: not in preload`).toContain(`IPC.${konst}`);
-      if (konst !== 'BROWSER_FRAME_ACK') expect(shim, `${channel}: not in remote-shim`).toContain(`'${channel}'`);
+      // Fire-and-forget sends (picture acks, the person's clicks, the panel's
+      // size) are no-ops on a phone: nothing of the browser's page reaches it.
+      if (!['BROWSER_FRAME_ACK', 'BROWSER_INPUT', 'BROWSER_VIEW_SIZE'].includes(konst)) expect(shim, `${channel}: not in remote-shim`).toContain(`'${channel}'`);
     }
   });
 });

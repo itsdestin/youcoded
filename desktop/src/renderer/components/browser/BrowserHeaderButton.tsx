@@ -1,7 +1,7 @@
 // The header's Browser button (2026-10-13): opens/closes the active
-// conversation's Browser panel. Shown only once that conversation has used the
-// browser (or the browser is asking the person something), so it adds no
-// clutter for people who never browse. Styling mirrors the Session Files and
+// conversation's Browser panel. Shown on every chat where the Browser exists:
+// the person can open the panel and browse there themselves (Destin,
+// 2026-10-13), not only watch the assistant. Styling mirrors the Session Files and
 // Games toggles (HeaderBar.tsx): bg-inset pill, accent fill while open. A dot
 // says the browser did something while its panel was closed.
 import { memo } from 'react';

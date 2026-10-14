@@ -31,14 +31,23 @@ const SESSION_IDLE_MS = 30 * 60_000;
 const BROWSER_IDLE_MS = 5 * 60_000;
 /** Bounded wait for in-flight calls before a restart proceeds anyway. */
 const RESTART_DRAIN_MS = 10_000;
-/** A hidden browser renders a common laptop-sized page so sites serve desktop layouts. */
+/** A hidden browser renders a common laptop-sized page so sites serve desktop
+ *  layouts — until a Browser panel reports its size (setViewSize). */
 const BACKGROUND_VIEWPORT = { width: 1280, height: 800 } as const;
+/** WHY 2: the panel's picture is small; at 1x its text is soft on a high-density
+ *  screen. Only pictures get bigger — the assistant's screenshots stay page-sized
+ *  (`scale: 'css'` in browser-tool-runners.ts). */
+const HIDDEN_PIXEL_RATIO = 2;
+/** Bounds for a panel-fitted page (CSS px). Below 320 wide no site is usable. */
+const VIEW_MIN = 320;
+const VIEW_MAX_W = 1280;
+const VIEW_MAX_H = 2000;
 /** Files kept per conversation's download folder. */
 const MAX_DOWNLOADS = 20;
 /** Picture rate cap; each frame also waits for the screen's ack. */
 const MIN_FRAME_GAP_MS = 100;
 
-import type { BrowserFrame, BrowserPrompt, BrowserRunState, BrowserSessionState, PromptAnswer } from '../../shared/browser-types';
+import type { BrowserFrame, BrowserInputEvent, BrowserPrompt, BrowserRunState, BrowserSessionState, PromptAnswer } from '../../shared/browser-types';
 export type { BrowserPrompt, BrowserSessionState, PromptAnswer, BrowserRunState } from '../../shared/browser-types';
 export type FrameEvent = BrowserFrame;
 
@@ -66,6 +75,9 @@ export interface BrowserServiceOptions {
    *  browser-wide route there would also touch the person's own tabs). Awaited
    *  before the tab loads anything. */
   guardPage?: (sessionId: string, page: Page) => Promise<void>;
+  /** The person closed the shown window: record "hidden" as their choice
+   *  (closing the window means hide it, never stop the browser). */
+  onWindowClosedByPerson?: () => Promise<void>;
   /** Test seams. */
   sessionIdleMs?: number;
   browserIdleMs?: number;
@@ -99,6 +111,14 @@ interface SessionEntry {
   lastUrls: string[];
   queue: Promise<unknown>;
   idleTimer: NodeJS.Timeout | null;
+  /** The Browser panel's picture area (CSS px), when a panel has reported one. */
+  viewSize: { width: number; height: number } | null;
+  /** The person's clicks and keys, run in order. */
+  inputChain: Promise<unknown>;
+  /** Tabs that went away without the app closing them, newest last. WHY: when a
+   *  window closes, its tabs close one by one BEFORE the browser reports it
+   *  closed — this is how the browser-closed path still knows what was open. */
+  justClosed: Array<{ url: string; at: number }>;
 }
 
 let promptSeq = 0;
@@ -121,6 +141,8 @@ export class BrowserService extends EventEmitter {
   private readonly cachedVersions = new Map<string, string | null>();
   private readonly watchers = new Map<string, LiveView>();
   private readonly blankToClose = new Set<Page>();
+  /** Tabs the app itself is closing (a tool, a chat ending) — not lost ones. */
+  private readonly closingPages = new WeakSet<Page>();
   private shotSeq = 0;
   downloadPercent: number | null = null;
   /** While a hand-off asked for a window, the browser runs shown regardless of settings. */
@@ -136,7 +158,7 @@ export class BrowserService extends EventEmitter {
   private entry(sessionId: string): SessionEntry {
     let e = this.sessions.get(sessionId);
     if (!e) {
-      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null };
+      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), justClosed: [] };
       this.sessions.set(sessionId, e);
     }
     return e;
@@ -306,6 +328,7 @@ export class BrowserService extends EventEmitter {
       headless,
       // A shown window follows its own size; a hidden one renders a laptop-sized page.
       viewport: headless ? BACKGROUND_VIEWPORT : null,
+      ...(headless ? { deviceScaleFactor: HIDDEN_PIXEL_RATIO } : {}),
       userAgent,
       acceptDownloads: true,
       timeout: 60_000,
@@ -368,14 +391,24 @@ export class BrowserService extends EventEmitter {
     if (this.context !== ctx && this.context !== null) return; // an older generation's late event
     const wasPurpose = this.closingOnPurpose;
     const wasMyChrome = this.myChrome;
+    // WHY (Destin, 2026-10-13): closing the shown window means "hide it", not
+    // "stop the browser" — the pages come back, hidden, in the panel.
+    const personClosedWindow = !wasPurpose && !wasMyChrome && this.windowShown;
     this.context = null;
     this.connected = null;
     this.stopAllWatchers();
+    const recent = Date.now() - 3000;
     for (const [id, e] of this.sessions) {
       if (e.pages.length) e.lastUrls = e.pages.map((p) => p.url()).filter(isReopenable);
+      else if (!wasPurpose) {
+        const lost = e.justClosed.filter((c) => c.at >= recent).map((c) => c.url);
+        if (lost.length) e.lastUrls = lost;
+      }
+      e.justClosed = [];
       e.pages = [];
       e.active = null;
       this.clearSessionIdle(e);
+      if (personClosedWindow) continue; // pages and cards carry on, hidden (reopenHidden)
       if (!wasPurpose && e.lastUrls.length) {
         e.notes.push(wasMyChrome
           ? 'Chrome was closed or disconnected, so the browser stopped.'
@@ -386,6 +419,41 @@ export class BrowserService extends EventEmitter {
     this.run = 'stopped';
     this.clearBrowserIdle();
     this.emitAll();
+    if (personClosedWindow) void this.reopenHidden();
+  }
+
+  /** After the person closed the window: record hidden as their choice, then
+   *  reopen every conversation's pages in the hidden browser. */
+  private async reopenHidden(): Promise<void> {
+    this.windowOverride = null;
+    try {
+      await this.opts.onWindowClosedByPerson?.();
+      const anyOpen = [...this.sessions.values()].some((e) => e.lastUrls.length);
+      if (!anyOpen) return;
+      await this.ensureContext();
+      await this.reopenAll('The person closed the browser window, so the browser went back to working hidden. Pages were reopened at the same addresses; take a new outline before acting — earlier element refs no longer work.');
+    } catch (err) {
+      this.log('WARN', 'Browser: could not reopen hidden after the window closed', { error: firstLine(err) });
+    }
+  }
+
+  /** Reopen each conversation's remembered addresses in the live browser. */
+  private async reopenAll(note: string): Promise<void> {
+    const reopen = new Map<string, string[]>();
+    for (const [id, e] of this.sessions) { reopen.set(id, e.lastUrls); e.lastUrls = []; }
+    for (const [id, urls] of reopen) {
+      const e = this.entry(id);
+      for (const u of urls) {
+        try {
+          const p = await this.newPage(id);
+          await p.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
+        } catch (err) {
+          this.log('WARN', 'Browser: could not reopen a tab after a restart', { error: firstLine(err) });
+        }
+      }
+      if (urls.length) e.notes.push(note);
+      this.emitState(id);
+    }
   }
 
   /** Close the browser for everyone. Each conversation's addresses are kept so a
@@ -423,23 +491,9 @@ export class BrowserService extends EventEmitter {
     if (!this.context && !this.starting) return;
     const deadline = Date.now() + RESTART_DRAIN_MS;
     while (this.anyBusyExceptPrompting() && Date.now() < deadline) await delay(100);
-    const reopen = new Map<string, string[]>();
     await this.stop();
-    for (const [id, e] of this.sessions) { reopen.set(id, e.lastUrls); e.lastUrls = []; }
     await this.ensureContext();
-    for (const [id, urls] of reopen) {
-      const e = this.entry(id);
-      for (const u of urls) {
-        try {
-          const p = await this.newPage(id);
-          await p.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
-        } catch (err) {
-          this.log('WARN', 'Browser: could not reopen a tab after a restart', { error: firstLine(err) });
-        }
-      }
-      if (urls.length) e.notes.push('The browser restarted (the window was shown or hidden). Pages were reopened at the same addresses; take a new outline before acting — earlier element refs no longer work.');
-      this.emitState(id);
-    }
+    await this.reopenAll('The browser restarted (the window was shown or hidden). Pages were reopened at the same addresses; take a new outline before acting — earlier element refs no longer work.');
   }
 
   /** A call waiting on the person (a prompt) doesn't block a restart — the
@@ -511,8 +565,63 @@ export class BrowserService extends EventEmitter {
     });
     page.on('download', (dl) => { void this.saveDownload(sessionId, dl); });
     page.on('crash', () => { e.notes.push('A tab crashed. Reopen the page to continue.'); });
+    // The panel's address and title follow the page as it moves, whoever moved
+    // it (the person browses there too now).
+    page.on('framenavigated', (f) => { if (f === page.mainFrame()) this.emitState(sessionId); });
+    page.on('domcontentloaded', () => { void refreshTitles([page]).then(() => this.emitState(sessionId)); });
+    this.fitToPanel(e, page);
     this.emitState(sessionId);
     this.retargetWatcher(sessionId);
+  }
+
+  // ── the panel: its size, and the person browsing ─────────────────────────
+
+  /** The Browser panel's picture area changed. A hidden browser lays the
+   *  conversation's pages out to that size, so the page fits the panel (a
+   *  narrow panel gets a site's narrow layout) instead of a shrunken laptop
+   *  page. A shown window or My Chrome keeps its own size. */
+  setViewSize(sessionId: string, width: number, height: number): void {
+    const e = this.entry(sessionId);
+    const w = Math.round(Math.min(VIEW_MAX_W, Math.max(VIEW_MIN, width)));
+    const h = Math.round(Math.min(VIEW_MAX_H, Math.max(VIEW_MIN, height)));
+    // Ignore jitter: a few pixels would relayout the page for nothing.
+    if (e.viewSize && Math.abs(e.viewSize.width - w) < 8 && Math.abs(e.viewSize.height - h) < 8) return;
+    e.viewSize = { width: w, height: h };
+    for (const p of e.pages) this.fitToPanel(e, p);
+  }
+
+  private fitToPanel(e: SessionEntry, page: Page): void {
+    if (!e.viewSize || this.windowShown || this.myChrome) return;
+    void page.setViewportSize(e.viewSize).catch(() => undefined);
+  }
+
+  /** The person typed an address (or words to search for) in the panel. Opens
+   *  it in the conversation's current tab, or a new one. Returns quickly: the
+   *  page keeps loading while the picture shows it. The assistant's permission
+   *  cards don't apply — this is the person, not the assistant. */
+  async personOpen(sessionId: string, url: string): Promise<void> {
+    const page = await this.activePage(sessionId, true);
+    if (!page) return;
+    this.markUsed(sessionId);
+    this.addNote(sessionId, `The person opened ${url} themselves in this conversation's browser.`);
+    await page.goto(url, { waitUntil: 'commit', timeout: 20_000 });
+  }
+
+  async personNav(sessionId: string, nav: 'back' | 'forward' | 'reload'): Promise<void> {
+    const page = await this.activePage(sessionId, false);
+    if (!page) return;
+    const opts = { waitUntil: 'commit' as const, timeout: 20_000 };
+    if (nav === 'back') await page.goBack(opts);
+    else if (nav === 'forward') await page.goForward(opts);
+    else await page.reload(opts);
+  }
+
+  /** A click, scroll or key from the panel's picture, in the order sent. */
+  personInput(sessionId: string, ev: BrowserInputEvent): void {
+    const e = this.sessions.get(sessionId);
+    const page = e?.active;
+    if (!e || !page || page.isClosed()) return;
+    e.inputChain = e.inputChain.then(() => runPersonInput(page, ev)).catch(() => undefined);
   }
 
   /** A page the browser opened by itself (popup / target=_blank) joins its opener's conversation. */
@@ -534,6 +643,9 @@ export class BrowserService extends EventEmitter {
   private onPageClosed(sessionId: string, page: Page): void {
     const e = this.sessions.get(sessionId);
     if (!e) return;
+    if (!this.closingOnPurpose && !this.closingPages.has(page) && isReopenable(page.url())) {
+      e.justClosed = [...e.justClosed.slice(-9), { url: page.url(), at: Date.now() }];
+    }
     e.pages = e.pages.filter((p) => p !== page);
     if (e.active === page) e.active = e.pages[e.pages.length - 1] ?? null;
     if (!e.pages.length) this.clearSessionIdle(e);
@@ -566,6 +678,7 @@ export class BrowserService extends EventEmitter {
   async closeTab(sessionId: string, index: number): Promise<void> {
     const p = this.entry(sessionId).pages[index];
     if (!p) throw new BrowserUnavailableError(`There is no tab ${index}.`);
+    this.closingPages.add(p);
     await p.close().catch(() => undefined);
   }
 
@@ -575,7 +688,7 @@ export class BrowserService extends EventEmitter {
     if (e) {
       this.settlePrompt(sessionId, 'cancelled');
       this.clearSessionIdle(e);
-      for (const p of [...e.pages]) await p.close().catch(() => undefined);
+      for (const p of [...e.pages]) { this.closingPages.add(p); await p.close().catch(() => undefined); }
       e.lastUrls = [];
       if (!keepNotes) e.notes = [];
     }
@@ -864,6 +977,23 @@ class LiveView {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+async function runPersonInput(page: Page, ev: BrowserInputEvent): Promise<void> {
+  switch (ev.type) {
+    case 'click':
+      await page.mouse.move(ev.x, ev.y);
+      // One down/up carrying the count, like a real double-click — not two clicks.
+      await page.mouse.down({ button: ev.button, clickCount: ev.clickCount });
+      await page.mouse.up({ button: ev.button, clickCount: ev.clickCount });
+      return;
+    case 'wheel':
+      await page.mouse.move(ev.x, ev.y);
+      await page.mouse.wheel(ev.dx, ev.dy);
+      return;
+    case 'key': await page.keyboard.press(ev.key); return;
+    case 'text': await page.keyboard.insertText(ev.text); return;
+  }
+}
 
 /** A crashed app can leave the profile locked ("SingletonLock" → "<host>-<pid>").
  *  If that pid is gone the lock is stale and Chrome would refuse to start, so

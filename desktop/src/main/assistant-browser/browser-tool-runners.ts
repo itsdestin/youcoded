@@ -21,7 +21,7 @@ import { BROWSER_TOOL_SPECS, type BrowserToolName, type BrowserToolArgs } from '
 import { BrowserService, BrowserUnavailableError, firstLine, hostOf, refreshTitles, type PromptAnswer } from './browser-service';
 import type { BrowserSettings } from './browser-settings';
 import type { BrowserInstaller } from './browser-installer';
-import { classifyUrl, hostPortKey, normaliseAddress, type LookupFn } from './browser-net';
+import { classifyUrl, hostPortKey, normaliseAddress, personAddress, type LookupFn } from './browser-net';
 import { wrapUntrusted } from '../harness/tools/untrusted';
 
 /** One call's whole budget, queue wait included — under Claude Code's 120 s
@@ -580,6 +580,26 @@ export async function installNavigationGuard(env: RunnerEnv, sessionId: string, 
     await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }] });
   } catch {
     // The tab closed before the guard attached — nothing to guard.
+  }
+}
+
+// ── the person browsing from the panel ───────────────────────────────────────
+
+/** Open what the person typed in the panel's address box. Their own choice of
+ *  address, so a home-network address needs no card (it is granted for this
+ *  chat, for the assistant too — the person put it there); a never-openable
+ *  one is still refused. */
+export async function openForPerson(env: RunnerEnv, sessionId: string, typed: string): Promise<{ ok: boolean; error?: string }> {
+  const url = personAddress(typed);
+  if (!url) return { ok: false, error: 'That address can\'t be opened here. Use a web address starting with http or https.' };
+  const cls = await classifyUrl(url, env.policy.lookup).catch(() => 'public' as const);
+  if (cls === 'never') return { ok: false, error: 'That address is a special network address the browser never opens.' };
+  if (cls === 'private') env.policy.grantLocal(sessionId, hostPortKey(url));
+  try {
+    await env.service.personOpen(sessionId, url);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof BrowserUnavailableError ? err.message : `Couldn't open that page: ${firstLine(err)}` };
   }
 }
 

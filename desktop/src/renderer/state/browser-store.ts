@@ -121,15 +121,13 @@ function primeBrowserState(sessionId: string | null | undefined): void {
   }).catch(() => { primed.delete(sessionId); });
 }
 
-/** The header button shows when the conversation has used the browser or the browser needs the person. */
+/** The header button shows on every chat of a screen that has the Browser
+ *  (Destin, 2026-10-13: the person can open it and browse themselves). */
 export function useBrowserButton(sessionId: string | null | undefined): { show: boolean; open: boolean; dot: boolean } {
   // The header and the ||| menu are mounted for the active conversation, so
   // priming here catches the panel and the card up too.
   useEffect(() => { primeBrowserState(sessionId); }, [sessionId]);
-  const show = useSyncExternalStore(subscribe, () => {
-    const s = getBrowserState(sessionId);
-    return !!s && (s.used || !!s.prompt || s.tabs.length > 0);
-  }, () => false);
+  const show = !!sessionId && browserSupported();
   const open = useBrowserPaneOpen(sessionId);
   const dot = useSyncExternalStore(subscribe, () => !!sessionId && attention.has(sessionId), () => false);
   return { show, open, dot };

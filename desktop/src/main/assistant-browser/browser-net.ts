@@ -101,3 +101,22 @@ export function normaliseAddress(input: string): string {
   }
   return u.toString();
 }
+
+/** What the person typed in the panel's address box, as an address to open:
+ *  an address as given (https:// added when there's no scheme), or anything
+ *  else as a web search. null for a scheme the browser must not open from
+ *  there (file:, javascript:, chrome:…). */
+export function personAddress(input: string): string | null {
+  const t = input.trim();
+  if (!t) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return /^https?:\/\//i.test(t) ? t : null;
+  if (/^(javascript|data|file|about|chrome|view-source):/i.test(t)) return null;
+  // One word with a dot, or localhost / an address with a port, reads as an address.
+  if (!/\s/.test(t) && (/^[^/?#]+\.[a-z0-9-]{2,}(?::\d+)?(?:[/?#].*)?$/i.test(t) || /^(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\])(?::\d+)?(?:[/?#].*)?$/i.test(t))) {
+    const local = /^(localhost|127\.|10\.|192\.168\.|\[)/i.test(t);
+    return `${local ? 'http' : 'https'}://${t}`;
+  }
+  // WHY DuckDuckGo: a hidden browser searching Google is often shown a "unusual
+  // traffic" check instead of results.
+  return `https://duckduckgo.com/?q=${encodeURIComponent(t)}`;
+}

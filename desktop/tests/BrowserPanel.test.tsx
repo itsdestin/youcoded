@@ -6,7 +6,7 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import BrowserPanel, { browserStatusWord } from '../src/renderer/components/browser/BrowserPanel';
+import BrowserPanel, { browserStatusWord, keyEventFor, pagePoint } from '../src/renderer/components/browser/BrowserPanel';
 import BrowserHeaderButton from '../src/renderer/components/browser/BrowserHeaderButton';
 import { browserToolDisplay } from '../src/renderer/components/browser/browser-tool-display';
 import { buildToolGroupHeadline } from '../src/renderer/utils/tool-group-summary';
@@ -22,7 +22,7 @@ describe('Browser panel', () => {
     setBrowserState(browserState());
     const { unmount } = render(<BrowserPanel sessionId="s1" />);
     expect(screen.getByText('Catalog')).toBeInTheDocument();
-    expect(screen.getByText('library.example.org')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Address or search' })).toHaveValue('https://library.example.org/catalog');
     await waitFor(() => expect(b.bridge.watch).toHaveBeenCalledWith('s1'));
     act(() => b.pushFrame('s1'));
     const img = screen.getByRole('img');
@@ -59,11 +59,91 @@ describe('Browser panel', () => {
     expect(b.bridge.stop).toHaveBeenCalled();
   });
 
-  it('with nothing open it says so, and never starts a browser', () => {
+  it('with nothing open it says so, never starts a browser by itself, and offers no window to show', () => {
     const b = installBrowserBridge();
     render(<BrowserPanel sessionId="s1" />);
-    expect(screen.getByText(/isn't using the browser in this conversation/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is open\. Type an address or a search above/)).toBeInTheDocument();
     expect(b.bridge.watch).not.toHaveBeenCalled();
+    expect(b.bridge.open).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Show window' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+  });
+
+  it('the person can type an address or a search and open it themselves', async () => {
+    const b = installBrowserBridge();
+    render(<BrowserPanel sessionId="s1" />);
+    const box = screen.getByRole('textbox', { name: 'Address or search' });
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: 'night circus' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', address: 'night circus' }));
+    // A refusal is said under the box, in the worker's words.
+    b.bridge.open.mockResolvedValueOnce({ ok: false, error: 'That address is a special network address the browser never opens.' });
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: '169.254.169.254' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('never opens');
+  });
+
+  it('back, forward and reload work the conversation\'s current tab', async () => {
+    const b = installBrowserBridge();
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    await waitFor(() => expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', nav: 'reload' }));
+    expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', nav: 'back' });
+  });
+
+  it('clicks, scrolls and typing on the picture go to the page, and no key reaches the app', async () => {
+    const b = installBrowserBridge();
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    act(() => b.pushFrame('s1')); // a 1280×800 page
+    const img = screen.getByRole('img');
+    // Drawn at half size: 640×400 at (100, 50).
+    img.getBoundingClientRect = () => ({ left: 100, top: 50, width: 640, height: 400, right: 740, bottom: 450, x: 100, y: 50, toJSON() {} });
+    fireEvent.click(img, { clientX: 150, clientY: 100, detail: 1 });
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'click', x: 100, y: 100, clickCount: 1, button: 'left' });
+    const page = screen.getByRole('application');
+    let reachedApp = 0;
+    const appListener = () => { reachedApp++; };
+    window.addEventListener('keydown', appListener);
+    fireEvent.keyDown(page, { key: 'a' });
+    fireEvent.keyDown(page, { key: 'Escape' });
+    window.removeEventListener('keydown', appListener);
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'text', text: 'a' });
+    expect(b.bridge.input).toHaveBeenCalledWith('s1', { type: 'key', key: 'Escape' });
+    expect(reachedApp).toBe(0);
+    // The app's global shortcuts treat the picture as a place being typed into.
+    expect(page).toHaveAttribute('data-keyboard-owner');
+  });
+
+  it('maps keys and picture points the way the page needs them', () => {
+    const k = (key: string, m: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) => keyEventFor({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...m });
+    expect(k('é')).toEqual({ type: 'text', text: 'é' });
+    expect(k('Tab', { shiftKey: true })).toEqual({ type: 'key', key: 'Shift+Tab' });
+    expect(k('a', { ctrlKey: true })).toEqual({ type: 'key', key: 'Control+a' });
+    expect(k('v', { metaKey: true })).toBe('paste');
+    expect(k('Shift', { shiftKey: true })).toBeNull();
+    // Contained and centred: a picture area wider than the page has margins left and right.
+    expect(pagePoint({ left: 0, top: 0, width: 800, height: 400 }, { w: 400, h: 400 }, 200, 10)).toEqual({ x: 0, y: 10 });
+    expect(pagePoint({ left: 0, top: 0, width: 800, height: 400 }, { w: 400, h: 400 }, 100, 10)).toBeNull();
+  });
+
+  it('tells the browser the picture area\'s size, so a hidden page is laid out to fit', async () => {
+    const observed: Array<(e: any[]) => void> = [];
+    const original = (globalThis as any).ResizeObserver;
+    (globalThis as any).ResizeObserver = class { constructor(cb: (e: any[]) => void) { observed.push(cb); } observe() {} disconnect() {} };
+    try {
+      const b = installBrowserBridge();
+      setBrowserState(browserState());
+      render(<BrowserPanel sessionId="s1" />);
+      act(() => { for (const cb of observed) cb([{ contentRect: { width: 452, height: 760 } }]); });
+      await waitFor(() => expect(b.bridge.viewSize).toHaveBeenCalledWith('s1', 452, 760));
+    } finally {
+      (globalThis as any).ResizeObserver = original;
+    }
   });
 
   it('showing the window asks first when pages are open, naming other chats', async () => {
@@ -96,10 +176,10 @@ describe('Browser panel', () => {
 });
 
 describe('Browser header button', () => {
-  it('appears only once the conversation has used the browser, with a dot for news while closed', () => {
+  it('is on every chat — the person can open the Browser before the assistant has used it', () => {
     installBrowserBridge();
     const { rerender } = render(<BrowserHeaderButton sessionId="s1" />);
-    expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Browser' })).toBeInTheDocument();
     act(() => setBrowserState(browserState({ busy: true })));
     rerender(<BrowserHeaderButton sessionId="s1" />);
     const btn = screen.getByRole('button', { name: 'Browser' });

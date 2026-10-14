@@ -83,6 +83,19 @@ export interface BrowserInfo {
 
 export interface MyChromeCheck { ok: boolean; message: string }
 
+/** What the person typed in the panel's address box, or a back/forward/reload button. */
+type BrowserOpenRequest =
+  | { sessionId: string; address: string }
+  | { sessionId: string; nav: 'back' | 'forward' | 'reload' };
+
+/** The person using the page through the panel's picture. Coordinates are page
+ *  (CSS) pixels of the live picture's frame. */
+export type BrowserInputEvent =
+  | { type: 'click'; x: number; y: number; clickCount: number; button: 'left' | 'right' | 'middle' }
+  | { type: 'wheel'; x: number; y: number; dx: number; dy: number }
+  | { type: 'key'; key: string }
+  | { type: 'text'; text: string };
+
 /** Settings a screen may change. */
 export type BrowserSettingsPatch = Partial<Pick<BrowserPreferences, 'showWindow' | 'useMyChrome' | 'preferredBrowser' | 'explainerSeen'>>;
 
@@ -114,6 +127,9 @@ export interface BrowserChannelTypes {
   'browser:download': { request: void; response: BrowserInfo };
   'browser:cancel-download': { request: void; response: boolean };
   'browser:check-my-chrome': { request: void; response: MyChromeCheck };
+  'browser:open': { request: BrowserOpenRequest; response: { ok: boolean; error?: string } };
+  'browser:input': { request: { sessionId: string; event: BrowserInputEvent }; response: void };
+  'browser:view-size': { request: { sessionId: string; width: number; height: number }; response: void };
 }
 
 /** window.claude.browser — the computer's own window only (capabilities.assistantBrowser); remote-shim's methods reject. */
@@ -134,6 +150,12 @@ export interface BrowserBridge {
   download: () => Promise<BrowserInfo>;
   cancelDownload: () => Promise<boolean>;
   checkMyChrome: () => Promise<MyChromeCheck>;
+  /** The person browses themselves: an address or search, or back/forward/reload. */
+  open: (req: BrowserOpenRequest) => Promise<{ ok: boolean; error?: string }>;
+  /** A click, scroll or key on the panel's picture, sent on to the page. */
+  input: (sessionId: string, event: BrowserInputEvent) => void;
+  /** The panel's picture area, so a hidden browser lays its pages out to fit. */
+  viewSize: (sessionId: string, width: number, height: number) => void;
   onState: (cb: (state: BrowserSessionState) => void) => () => void;
   onFrame: (cb: (frame: BrowserFrame) => void) => () => void;
   onInfoChanged: (cb: () => void) => () => void;

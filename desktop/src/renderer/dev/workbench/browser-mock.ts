@@ -78,6 +78,9 @@ export function createBrowserMock(sessionIds: () => string[]) {
     download: async () => info(),
     cancelDownload: async () => true,
     checkMyChrome: async () => ({ ok: false, message: 'Chrome isn\'t open, or its remote-debugging switch is off.' }),
+    open: async () => ({ ok: true }),
+    input: () => {},
+    viewSize: () => {},
     onState: (cb: (s: BrowserSessionState) => void) => {
       stateListeners.add(cb);
       // Tell the screen about every conversation at once, as the real app does

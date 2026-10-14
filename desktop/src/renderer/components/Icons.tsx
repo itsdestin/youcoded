@@ -80,6 +80,31 @@ export function GlobeIcon({ className = 'w-4 h-4' }: IconProps) {
   );
 }
 
+/** Back / forward arrows and reload — the Browser panel's page buttons */
+export function BackIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 12H5" /><path d="M11 6l-6 6 6 6" />
+    </svg>
+  );
+}
+
+export function ForwardIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14" /><path d="M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+export function ReloadIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" />
+    </svg>
+  );
+}
+
 /** Game controller icon — handheld style */
 export function GamepadIcon({ className = 'w-4 h-4' }: IconProps) {
   return (
