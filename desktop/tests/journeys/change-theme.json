@@ -4,7 +4,7 @@
     "screen": null,
     "width": 1440,
     "height": 900,
-    "theme": "meadow-mist",
+    "theme": "midnight",
     "latency": 0,
     "params": ""
   },
@@ -21,7 +21,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Appearance Meadow Mist",
+        "label": "Appearance Midnight",
         "nth": 1
       }
     },
@@ -43,7 +43,7 @@
     },
     {
       "do": "expect",
-      "text": "Meadow Mist",
+      "text": "Midnight",
       "not": true
     },
     {
