@@ -86,6 +86,10 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
       return c.environment === 'sandbox'
         ? { what: "See Plaid's made-up practice banks, using your Plaid keys.", limit: 'Nothing real is reached.' }
         : { what: 'See balances, credit limits and due dates from banks you connect through Plaid, using your Plaid keys.', limit: 'Cannot move money. Each bank is added only when you sign in to it in your browser, and you can remove it any time.' };
+    // Page start session (spec 2026-10-14, §4). The second sentence is the
+    // safety: the message is shown in full and nothing is sent until Start.
+    case 'session':
+      return { what: 'Open a new-conversation window with a message this page writes.', limit: "You'll see the message and choose the project before anything is sent." };
   }
 }
 

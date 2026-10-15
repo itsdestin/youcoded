@@ -3994,7 +3994,7 @@ function createPagesMock(empty: boolean): PagesBridge {
           if ((c.kind === 'key' || c.kind === 'device') && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
         }
         // Allowing (or dismissing "code changed") records the current code too.
-        return { ...p, codeChanged: false, connections: conns.map((c) => ({ ...c, approved: true, ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+        return { ...p, codeChanged: false, connections: conns.map((c) => ({ ...c, approved: true, ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: true } : {}) })), refresh: p.refresh ?? (conns.some((c) => c.kind !== 'session') ? { at: new Date().toISOString(), failed: false } : undefined) };
       });
       publish();
       return { ok: true, pages: summaries() };

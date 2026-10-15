@@ -115,7 +115,7 @@ import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
 import { PagesView } from './components/pages/PagesView';
 import { PageHost } from './components/pages/PageHost';
-import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
+import { PageCreateDialog, usePageCreate } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
@@ -732,7 +732,7 @@ function AppInner() {
   const dispatchArtifact = artifactStore.dispatch;
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
-  const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
+  const [pageCreate, setPageCreate, offerPageSession] = usePageCreate();
   // Document comments' Ask Your Assistant on the Projects screen (review deck
   // Q-1): the same new-session dialog, started in that file's project with the
   // request waiting in the composer (FilesTab raises the event).
@@ -4044,6 +4044,8 @@ function AppInner() {
         settingsBadge={settingsBadge}
         settingsDangerBadge={settingsDangerBadge} projectRoot={currentSession?.cwd ?? null}
         onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+        // WHY (page start session, spec 2026-10-14): a page's button opens this SAME window, its message waiting; nothing is sent until Start, then Enter. Refused while it is open (review F2).
+        onStartSession={offerPageSession}
       />
       <PageCreateDialog
         request={pageCreate}
