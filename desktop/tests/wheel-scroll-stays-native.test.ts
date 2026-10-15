@@ -65,28 +65,39 @@ export function stringConstants(text: string): Map<string, string> {
 }
 
 /**
- * The constants visible in `file`: its own, plus the ones it imports by name from a relative module. Per file (a
- * constant in one file never stands for a same-named one in another).
+ * The value of the string constant `name` as seen in `file`: its own `const NAME = '...'`, or one it imports by
+ * name from a relative module (followed through that module's own imports). Per file — a constant in one file
+ * never stands for a same-named one in another. WHY one name at a time: resolving every imported constant of a
+ * file walked its imports and theirs, ~470 files for one scan, which pushed the scan past its timeout under load.
  */
-export function constantsFor(file: string, cache = new Map<string, Map<string, string>>()): Map<string, string> {
-  const hit = cache.get(file);
-  if (hit) return hit;
-  const text = readFileSync(file, 'utf8');
-  const out = stringConstants(text);
-  cache.set(file, out);
-  for (const st of parse(text).statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !st.moduleSpecifier.text.startsWith('.')) continue;
-    const base = resolve(dirname(file), st.moduleSpecifier.text);
-    const target = ['.ts', '.tsx', '/index.ts', '/index.tsx'].map((e) => base + e).find(existsSync);
-    const named = st.importClause?.namedBindings;
-    if (!target || !named || !ts.isNamedImports(named)) continue;
-    const theirs = constantsFor(target, cache);
-    for (const el of named.elements) {
-      const v = theirs.get((el.propertyName ?? el.name).text);
-      if (v !== undefined) out.set(el.name.text, v);
+type FileFacts = { consts: Map<string, string>; imports: Array<{ local: string; imported: string; target: string }> };
+export function lookupConstant(file: string, name: string, facts = new Map<string, FileFacts>(), seen = new Set<string>()): string | undefined {
+  if (seen.has(file)) return undefined; // an import cycle
+  let f = facts.get(file);
+  if (!f) {
+    const text = readFileSync(file, 'utf8');
+    const imports: FileFacts['imports'] = [];
+    for (const st of parse(text).statements) {
+      if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !st.moduleSpecifier.text.startsWith('.')) continue;
+      const base = resolve(dirname(file), st.moduleSpecifier.text);
+      const target = ['.ts', '.tsx', '/index.ts', '/index.tsx'].map((e) => base + e).find(existsSync);
+      const named = st.importClause?.namedBindings;
+      if (!target || !named || !ts.isNamedImports(named)) continue;
+      for (const el of named.elements) imports.push({ local: el.name.text, imported: (el.propertyName ?? el.name).text, target });
     }
+    f = { consts: stringConstants(text), imports };
+    facts.set(file, f);
   }
-  return out;
+  seen.add(file);
+  let value = f.consts.get(name);
+  // a named import that resolves wins over a same-named local, the last one winning
+  for (const im of f.imports) {
+    if (im.local !== name) continue;
+    const v = lookupConstant(im.target, im.imported, facts, seen);
+    if (v !== undefined) value = v;
+  }
+  seen.delete(file);
+  return value;
 }
 
 const WATCHED = new Set(['wheel', 'mousewheel', 'touchstart', 'touchmove']);
@@ -165,13 +176,24 @@ export function blockingRegistrations(text: string, consts: ReadonlyMap<string, 
 
 describe('wheel scrolling stays native', () => {
   const files = walk(join(ROOT, 'src/renderer'));
-  const cache = new Map<string, Map<string, string>>();
-  const sitesIn = (file: string) => blockingRegistrations(readFileSync(file, 'utf8'), constantsFor(file, cache));
+  const facts = new Map<string, FileFacts>();
+  // WHY cheap first (it timed out at 120 s in a loaded full-suite run): the scan used to parse all ~750 renderer
+  // files with the TypeScript compiler AND resolve every file's imported constants (re-parsing its imports, and
+  // theirs) before asking a single question. Both shortcuts below are exact, not heuristics:
+  //  - a file can only be flagged through a call named addEventListener, a handler property containing
+  //    wheel/touch, or a watched string literal — none possible without one of these words in its text;
+  //  - resolving constants only ever CLEARS a flag (an unknown event name is already flagged), so constants
+  //    are looked up only for a file that is flagged without them, and only for a name the scan meets.
+  const MAY_REGISTER = /addEventListener|wheel|touchstart|touchmove/i;
+  const sitesIn = (file: string) => {
+    const text = readFileSync(file, 'utf8');
+    if (!MAY_REGISTER.test(text) || blockingRegistrations(text).length === 0) return [];
+    const lazy = { get: (name: string) => lookupConstant(file, name, facts) } as ReadonlyMap<string, string>;
+    return blockingRegistrations(text, lazy);
+  };
   const rel = (f: string) => relative(ROOT, f).replace(/\\/g, '/');
 
-  // WHY the explicit timeout: this parses every renderer file with the TypeScript compiler. It takes ~2 s alone but
-  // exceeded the 30 s default when the full suite runs ~1,100 files in parallel (seen red in `verify.sh --full`).
-  it('no renderer call site registers a wheel/touch listener that can make a scroll wait, outside the allowlist', { timeout: 120_000 }, () => {
+  it('no renderer call site registers a wheel/touch listener that can make a scroll wait, outside the allowlist', () => {
     const offenders: string[] = [];
     for (const file of files) {
       for (const site of sitesIn(file)) {
