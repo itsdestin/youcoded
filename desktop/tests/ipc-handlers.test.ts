@@ -783,6 +783,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   let readFile: ReturnType<typeof vi.spyOn>;
   let stat: ReturnType<typeof vi.spyOn>;
   let httpsGet: ReturnType<typeof vi.spyOn>;
+  let updateStatus: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -795,9 +796,17 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     // The build kicks a release check; keep it off the network.
     const https = await import('node:https');
     httpsGet = vi.spyOn(https.default, 'get').mockImplementation((() => ({ on: () => ({ on: () => ({}) }) })) as any);
+    // WHY (flaky "sends a changed payload once…"): the update service is a module-level singleton, and
+    // the EARLIER describes in this file call registerIpcHandlers with the real https.get. Whenever
+    // GitHub's reply lands (slow under a loaded full run), it swaps the cached update status from a
+    // 4-key fallback to a 7-key object — the status payload changes between two ticks and the dedupe
+    // correctly sends it twice. Pin the status so a stray reply cannot change what these tests compare.
+    const { getUpdateService } = await import('../src/main/update-service');
+    updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus')
+      .mockReturnValue({ current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any);
   });
   afterEach(() => {
-    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore();
+    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore(); updateStatus.mockRestore();
     vi.useRealTimers();
   });
 
