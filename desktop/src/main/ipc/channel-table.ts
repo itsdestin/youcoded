@@ -190,8 +190,17 @@ type RemoteOutcome = { reply: false } | { reply: true; payload: unknown };
 /** Runs one table entry for a phone. The single place a phone's policy is applied, so a family
  *  moved into the table cannot forget it: desktop-only and phone-refused channels answer their
  *  declared refusal without the handler ever running. */
-export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, ctx: MainChannelCtx): Promise<RemoteOutcome> {
-  if (def.desktopOnly || def.remoteAllowed === false || def.kind === 'push') {
+export async function serveRemoteChannel(
+  def: MainChannelDef, payload: unknown, ctx: MainChannelCtx,
+  /** WHY `owner` (2026-10-14, Android clean rebuild P1): the Android app's own page, signed in to the backend running
+   *  on the same phone (remote-server.ts local mode), is that backend's owner, not a visitor. It gets what a window
+   *  gets: phone refusals (`remoteAllowed:false`), folder gates and the over-the-network size caps do not apply.
+   *  `desktopOnly` still refuses — those handlers need Electron itself — and reply/error shaping still applies,
+   *  because the page reading the answer is the same shim a phone browser runs. */
+  opts: { owner?: boolean } = {},
+): Promise<RemoteOutcome> {
+  const owner = opts.owner === true;
+  if (def.desktopOnly || (def.remoteAllowed === false && !owner) || def.kind === 'push') {
     const refusal = def.refusal ?? { kind: 'unsupported' as const };
     if (refusal.kind === 'silent') return { reply: false };
     if (refusal.kind === 'reply') return { reply: true, payload: refusal.payload };
@@ -209,11 +218,11 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
   // WHY the guard runs inside the try (2026-09-30 one-core R3-7): the file gates look folders up on disk and
   // can throw; that must answer like the handler throwing, never leave the phone's request hanging.
   try {
-    if (def.remoteGuard) {
+    if (def.remoteGuard && !owner) {
       const refused = await def.remoteGuard(payload, ctx);
       if (refused !== undefined) return { reply: true, payload: refused };
     }
-    const phonePayload = def.remotePayload ? await def.remotePayload(payload, ctx) : payload;
+    const phonePayload = def.remotePayload && !owner ? await def.remotePayload(payload, ctx) : payload;
     const result = await def.handler(phonePayload, ctx);
     return { reply: true, payload: def.remoteReply ? def.remoteReply(result, phonePayload) : result };
   } catch (error) {

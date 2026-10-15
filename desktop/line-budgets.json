@@ -11,7 +11,7 @@
     "main/ipc-handlers.ts": 2495,
     "main/harness/native-session-host.ts": 5385,
     "renderer/App.tsx": 4677,
-    "main/remote-server.ts": 1325,
+    "main/remote-server.ts": 1310,
     "main/harness/harness-session.ts": 4288,
     "renderer/components/SettingsPanel.tsx": 3291,
     "renderer/remote-shim.ts": 3431,
