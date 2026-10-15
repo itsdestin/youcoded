@@ -178,6 +178,11 @@ const NO_FILL_MS = 10_000;
 let fillRound = 0;
 
 function setConversationPhase(phase: ConversationPhase): void {
+  // WHY not on the Android app's own backend (Destin, 2026-10-15: "this conversation may be out of date" banners for
+  // conversations running on the phone): the strip describes a copy of a COMPUTER's conversation. On the phone's own
+  // backend there is no copy — the app loads conversations the way a desktop window does and never reports a fill
+  // round, so the 10 s no-report timer turned every connect into "may be out of date".
+  if (isAndroidLocal()) return;
   conversationPhase = phase;
   dispatchEvent('remote:conversation-status', { phase });
 }

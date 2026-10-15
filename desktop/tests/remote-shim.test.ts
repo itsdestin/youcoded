@@ -1044,6 +1044,32 @@ describe('remote-shim — conversation status', () => {
       ws.close();
     });
   });
+
+  // Destin, 2026-10-15: "this conversation may be out of date" banners for conversations running on the phone.
+  describe('remote:conversation-status on the Android app\'s own backend', () => {
+    it('never says a conversation may be out of date: there is no computer copy, and no fill round reports', async () => {
+      vi.resetModules();
+      FakeWebSocket.instances = [];
+      (globalThis as any).WebSocket = FakeWebSocket;
+      (globalThis as any).window = globalThis;
+      (globalThis as any).location = { protocol: 'file:', host: '', search: '?bridgeToken=t&bridgePort=9901' };
+      (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
+      const local = await import('../src/renderer/remote-shim');
+      local.installShim();
+      const seen: string[] = [];
+      (window as any).claude.on.remoteConversationStatus((st: { phase: string }) => seen.push(st.phase));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const p = local.connect('android-local', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', platform: 'android' });
+      await p;
+      vi.advanceTimersByTime(20_000);
+      expect(seen).toEqual([]);
+      vi.useRealTimers();
+      ws.close();
+    });
+  });
 });
 
 // Destin, 2026-09-11, phone test of remote access batches 2/3: "the themes also aren't
