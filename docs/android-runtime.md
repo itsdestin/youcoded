@@ -51,8 +51,11 @@ sources (`pins.env`): Alpine Linux **musl** packages (Node, bash, git, ripgrep),
 | No `xdg-open` | `yc-open.c` is `usr/bin/xdg-open` and `BROWSER`: asks the app to open the link (a notification when the app is off screen — Android blocks background activity starts) |
 | Background apps are frozen | `BackendService` is a `specialUse` foreground service; keep-awake requests take a capped partial wake lock |
 
-Claude Code is NOT given the shim (it is a Bun single-file binary: only its interpreter is rewritten). Its
-hooks and tools ran without it on the phone. Its self-updater is off (`DISABLE_AUTOUPDATER=1`): a new Claude
+Claude Code ships **unmodified** — Anthropic's terms for offering it in a product say "the Claude Code binary must
+not be modified" (code.claude.com/docs/en/legal-and-compliance). `claude-launch.c` (usr/bin/claude) runs it
+through the bundled loader instead of rewriting its header, and it gets no shim; its hooks and tools ran without one.
+Users sign in through Claude Code's own flow with their own account (the terms forbid paying for or intermediating
+their usage). Its self-updater is off (`DISABLE_AUTOUPDATER=1`): a new Claude
 Code reaches the phone with an app release (bump `CLAUDE_CODE_VERSION` in `pins.env`).
 
 ## On-device layout (`files/` = the app's files folder)
