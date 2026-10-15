@@ -13,6 +13,10 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/library#load-failed', 'view', 'error-state'), params: { fail: 'pages.list' } },
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
+  // The page kit's dropdown OPEN (page-kit.ts PAGE_KIT_JS): the app's own menu look instead of the
+  // browser's white list, with its foot action ("Add another kind…") behind the tapered line.
+  { ...pg('pages/page/page-week-planner#menu-open', 'view'), params: { pagesMenu: 'kind' },
+    escapeStepsBack: 'the first Escape closes the open dropdown list inside the page (as the browser list did), so the app stays on the page' },
   // The paint studio sample: the Pages kit's slider (`.yc-range`, Brush size/Opacity) — shown when
   // the kit took the app's slider look (submit-ticket-6#ST6-Q1).
   pg('pages/page/page-paint', 'view'),

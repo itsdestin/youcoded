@@ -4085,6 +4085,11 @@ function createPagesMock(empty: boolean): PagesBridge {
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
   let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
+  // `?pagesMenu=kind`: the week planner opens its add form with the Kind dropdown open, so the
+  // page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open.
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesMenu') === 'kind') {
+    pages = pages.map((p) => (p.id !== 'page-week-planner' ? p : { ...p, data: { demoMenu: 'f-kind' } }));
+  }
   // `?pagesHome=connected` opens the Home page already allowed at the
   // Tailscale address, so its running state is a screen of its own rather
   // than something only a click-through reaches (home-device deck review).

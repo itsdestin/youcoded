@@ -111,7 +111,7 @@ const PLANNER_HTML = `<!doctype html>
     <div><label class="yc-label">What</label><input class="yc-input" id="f-title" placeholder="Dentist, standup, gym…" required></div>
     <div><label class="yc-label">Day</label><select class="yc-select" id="f-day"></select></div>
     <div><label class="yc-label">Time</label><input class="yc-input" id="f-time" type="time" value="09:00"></div>
-    <div><label class="yc-label">Kind</label><select class="yc-select" id="f-kind"><option value="work">Work</option><option value="home">Home</option><option value="health">Health</option><option value="social">Social</option></select></div>
+    <div><label class="yc-label" for="f-kind">Kind</label><select class="yc-select" id="f-kind"><option value="work">Work</option><option value="home">Home</option><option value="health">Health</option><option value="social">Social</option><option value="__new" data-yc-action>Add another kind…</option></select><input class="yc-input" id="f-newkind" placeholder="New kind, then Enter" hidden></div>
     <div class="yc-row"><button type="button" class="yc-button yc-button--ghost" id="cancel">Cancel</button><button type="submit" class="yc-button yc-button--primary">Save</button></div>
   </form>
   <div class="week" id="week"></div>
@@ -162,7 +162,7 @@ const PLANNER_HTML = `<!doctype html>
       var list = offset===0 ? (events[i]||[]) : [];
       list.slice().sort(function(a,b){ return a.t<b.t?-1:1; }).forEach(function(e){
         total++; if (e.done) done++;
-        var el = document.createElement('div'); el.className = 'ev' + (e.done?' done':''); el.style.setProperty('--c', COLORS[e.k]);
+        var el = document.createElement('div'); el.className = 'ev' + (e.done?' done':''); el.style.setProperty('--c', COLORS[e.k] || 'var(--fg-muted)');
         el.innerHTML = '<time>'+e.t+'</time>'+e.n.replace(/</g,'&lt;');
         el.title = e.done ? 'Mark as not done' : 'Mark as done';
         el.onclick = function(){ e.done = !e.done; persist(); render(); };
@@ -180,6 +180,31 @@ const PLANNER_HTML = `<!doctype html>
   document.getElementById('today').onclick = function(){ offset = 0; render(); };
   document.getElementById('addbtn').onclick = function(){ form.classList.toggle('open'); if (form.classList.contains('open')) document.getElementById('f-title').focus(); };
   document.getElementById('cancel').onclick = function(){ form.classList.remove('open'); form.reset(); };
+  // The kit dropdown's foot action (page-kit.ts PAGE_KIT_JS, \`data-yc-action\`): choosing
+  // "Add another kind…" fires change like any option, so the page puts the kind back and asks
+  // for the new name in a box; Enter adds it to the list and picks it.
+  var kindSel = document.getElementById('f-kind'), newKind = document.getElementById('f-newkind'), lastKind = kindSel.value;
+  kindSel.onchange = function(){
+    if (kindSel.value !== '__new') { lastKind = kindSel.value; return; }
+    kindSel.value = lastKind; newKind.hidden = false; newKind.focus();
+  };
+  newKind.onkeydown = function(ev){
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    var name = newKind.value.trim(); newKind.value = ''; newKind.hidden = true;
+    if (!name) return;
+    var o = document.createElement('option'); o.value = name.toLowerCase(); o.textContent = name;
+    kindSel.insertBefore(o, kindSel.querySelector('[data-yc-action]'));
+    kindSel.value = lastKind = o.value;
+  };
+  // Workbench only: \`?pagesMenu=kind\` (mock-shim.ts) opens the add form with the Kind list open,
+  // so the open kit dropdown is a screen of its own (screens/pages.ts, #menu-open). WHY a press
+  // on the select: that is exactly what opens it for a person; the page frame is out of reach
+  // of the screenshot tool's clicks.
+  if (saved && saved.demoMenu) {
+    form.classList.add('open');
+    setTimeout(function(){ document.getElementById(saved.demoMenu).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })); }, 300);
+  }
   form.onsubmit = function(ev){
     ev.preventDefault();
     var i = +document.getElementById('f-day').value;

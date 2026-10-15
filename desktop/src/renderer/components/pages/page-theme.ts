@@ -15,6 +15,7 @@
 // plus the radius and font scale, i.e. what the style kit is written against.
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+import { PAGE_KIT_JS } from './page-kit';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
@@ -505,7 +506,11 @@ export function prepareHostedDocument(
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
     `<style id="${PAGE_THEME_STYLE_ID}">${themeCss}</style>` +
     `<style id="youcoded-kit">${kitCss}</style>` +
-    `<script>${bootstrap(dataJson, devicesJson)}</script>`;
+    `<script>${bootstrap(dataJson, devicesJson)}</script>` +
+    // WHY here, before the author's head: the kit's dropdown (page-kit.ts PAGE_KIT_JS) must
+    // register its listeners before the page's own, so an open list owns its keys and no page
+    // ever shows the browser's own white dropdown list (design guide, "Building a Page").
+    `<script id="youcoded-kit-js">${PAGE_KIT_JS}</script>`;
   const a = splitAuthorDocument(html);
   // WHY the attribute is baked in: set from first paint, the page never flashes
   // an opaque canvas before the host's first message arrives.
