@@ -109,6 +109,21 @@ function templateSvg(dot, ink = '#000') {
   ${dot ? `<circle cx="12.6" cy="-0.6" r="2.1" fill="${ink}"/>` : ''}
 </svg>`;
 }
+/** The face as ONE solid shape with the eyes and mouth cut out and the sparkles left in — Android's themed
+ *  icon on a DARK home screen, where the one colour is light: it then reads like the real icon (soft face,
+ *  dark eyes, white sparkles). WHY a second shape (Destin, 2026-10-15, android-icon-choice I-1): the outline
+ *  template reads right on a light home screen but stares on a dark one; this one is the reverse. Android
+ *  picks by dark mode (mipmap-night-anydpi-v26). Same geometry as templateSvg. */
+function solidFaceSvg(ink = '#fff') {
+  const E = [[4.3, 5.2], [9.7, 4.9]];
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 -2.5 15 15">
+  <defs><mask id="cut"><rect x="-1" y="-3" width="16" height="16" fill="#fff"/>
+  ${E.map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="1.6" ry="2.2" fill="#000"/>`).join('')}
+  <path d="M5.6 8.35 Q7 8 8.4 8.35 Q8.9 8.5 8.7 8.95 Q8 10.25 7 10.25 Q6 10.25 5.3 8.95 Q5.1 8.5 5.6 8.35Z" fill="#000"/>
+  ${E.map(([x, y]) => `<circle cx="${x + .55}" cy="${y - .9}" r=".62" fill="#fff"/>`).join('')}</mask></defs>
+  <rect width="14" height="12" rx="4" fill="${ink}" mask="url(#cut)"/>
+</svg>`;
+}
 function macTrayIcons() {
   for (const [name, dot] of [['tray-macTemplate', false], ['tray-alert-macTemplate', true]]) {
     const svgPath = path.join(TMP, `${name}.svg`);
@@ -153,6 +168,8 @@ function android() {
   // Monochrome (Android 13 themed icons) reads ALPHA only: the menu-bar face, so it keeps its features.
   const monoSvg = path.join(TMP, 'mono.svg');
   fs.writeFileSync(monoSvg, templateSvg(false, '#fff'));
+  const monoNightSvg = path.join(TMP, 'mono-night.svg');
+  fs.writeFileSync(monoNightSvg, solidFaceSvg('#fff'));
   for (const [bucket, scale] of Object.entries(DENSITIES)) {
     const dir = path.join(RES, `mipmap-${bucket}`), px = Math.round(108 * scale), facePx = Math.round(64 * scale);
     fs.mkdirSync(dir, { recursive: true });
@@ -161,6 +178,9 @@ function android() {
     const mono = path.join(TMP, `mono-${bucket}.png`);
     execFileSync('rsvg-convert', ['-w', String(Math.round(66 * scale)), '-h', String(Math.round(66 * scale)), monoSvg, '-o', mono]);
     execFileSync('magick', [mono, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`, path.join(dir, 'ic_launcher_monochrome.png')]);
+    const monoNight = path.join(TMP, `mono-night-${bucket}.png`);
+    execFileSync('rsvg-convert', ['-w', String(Math.round(66 * scale)), '-h', String(Math.round(66 * scale)), monoNightSvg, '-o', monoNight]);
+    execFileSync('magick', [monoNight, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`, path.join(dir, 'ic_launcher_monochrome_night.png')]);
   }
 }
 
