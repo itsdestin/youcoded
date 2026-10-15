@@ -16,18 +16,31 @@ const info = (over: Record<string, unknown> = {}) => ({ sessionId: 's1', record:
 
 describe('page -> recorder announcements', () => {
   it('carries the input event\'s own timestamp and the cause, as a JSON string (detail objects do not cross the preload world boundary)', () => {
+    // WHY the clock is pinned: an intent counts only if performance.now() is within 5 s of its
+    // timeStamp, and in a test worker performance.now() is the worker PROCESS's age. A fixed
+    // 1234.5 therefore only passed while the fork was < 6.2 s old — on a loaded machine the fork's
+    // start-up alone ran past that (reproduced: 4 CPU hogs on one core, "c" came back "auto").
+    // Pinning "now" 100 ms after the input keeps the fixed timestamp the test checks for.
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1334.5);
     noteSwitchIntent('menu', { timeStamp: 1234.5 });
     announceSwitch(info());
+    clock.mockRestore();
     expect(heard).toHaveLength(1);
     expect(heard[0].d).toMatchObject({ c: 'menu', t: 1234.5, id: 's1', vm: 'chat', k: 'claude', s: 0, n: 3, r: 1 });
   });
 
   it('a switch with no input of its own is "auto", and an input is consumed by the switch it caused', () => {
+    // WHY pinned: same 5 s freshness window as above — a stall between noting and announcing on a
+    // busy machine would make the FIRST switch "auto" too, and the consumption check would pass for
+    // the wrong reason. A fixed clock means only consumption can turn s3 into "auto".
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(10_000);
     noteSwitchIntent('pill', { timeStamp: performance.now() });
     announceSwitch(info());
+    expect(heard[0].d.c).toBe('pill');
     announceSwitch(info({ sessionId: 's2' }));
     document.addEventListener('yc:switch', ((e: CustomEvent) => heard.push({ name: 'x', d: JSON.parse(e.detail) })) as unknown as EventListener, { once: true });
     announceSwitch(info({ sessionId: 's3' }));
+    clock.mockRestore();
     expect(heard.at(-1)!.d).toMatchObject({ c: 'auto', id: 's3' });
     expect(heard.at(-1)!.d.t).toBeUndefined();
   });
