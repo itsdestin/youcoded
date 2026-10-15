@@ -280,9 +280,9 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   return {
     stop: async () => {
       remoteServer.stop();
-      ipcWiring.cleanup?.();
+      void ipcWiring.cleanup?.();
       await nativeRuntime?.cleanup();
-      sessionManager.destroyAll?.();
+      void sessionManager.destroyAll?.();
     },
   };
 }

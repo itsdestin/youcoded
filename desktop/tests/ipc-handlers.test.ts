@@ -838,13 +838,15 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   it('sends a changed payload once and does not repeat an identical one', async () => {
     const { sends, tick } = await boot();
     await tick();
-    expect(sends()).toBe(1);
+    // WHY waitFor: the tick's file reads are real I/O, which a faked clock does not wait for; under load the push
+    // lands after the tick returns. Wait for the push itself, then settle for the negative.
+    await vi.waitFor(() => expect(sends()).toBe(1));
     await tick();
     await tick();
     expect(sends()).toBe(1); // same files, same answer — nothing to tell the windows
     usageJson = '{"five_hour":{"used":1}}';
     await tick();
-    expect(sends()).toBe(2);
+    await vi.waitFor(() => expect(sends()).toBe(2));
   });
 
   it('skips the tick while the window is hidden, then pushes the moment it is focused again', async () => {
