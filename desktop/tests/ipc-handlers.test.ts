@@ -4,6 +4,7 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { nativeStoreSlug, ccProjectSlug } from '../src/main/slug-encoding';
 
 // Mock electron before importing ipc-handlers, which transitively imports
@@ -43,6 +44,39 @@ const phoneCreate = (opts: any) => findChannel('session:create')!.handler(opts, 
 import * as conversationsService from '../src/main/conversations/service';
 import { startConversationStore, stopConversationStore, getConversationStore, pruneNativePhantomRecords } from '../src/main/conversations/service';
 import { startTagRegistry } from '../src/main/conversations/tag-registry-service';
+
+// WHY no test here may touch the network: every registerIpcHandlers call starts the app's update
+// check, a real request to GitHub. Its reply landing mid-test changed the status payload and failed
+// the status-push dedupe test on a loaded machine, and a unit test must not depend on GitHub's
+// timing or availability. Any socket or fetch a test opens is recorded and fails the file in afterAll.
+const networkAttempts: string[] = [];
+let releaseChecks = 0;
+beforeAll(async () => {
+  // The update check's https.get answers with a network error, as if offline: the app keeps its
+  // "no update known" status, exactly as it does on a machine with no connection.
+  const https = await import('node:https');
+  vi.spyOn(https.default, 'get').mockImplementation((() => {
+    releaseChecks++;
+    const req = new EventEmitter() as EventEmitter & { destroy: () => void };
+    req.destroy = () => {};
+    queueMicrotask(() => req.emit('error', new Error('offline (stubbed in ipc-handlers.test.ts)')));
+    return req;
+  }) as any);
+  const net = await import('node:net');
+  vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: any, ...args: any[]) {
+    const o = args[0];
+    networkAttempts.push(typeof o === 'object' && o ? `${o.host ?? o.path ?? '?'}:${o.port ?? ''}` : String(o));
+    throw new Error('ipc-handlers.test.ts: a test opened a network socket');
+  } as any);
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
+    networkAttempts.push(`fetch ${String(input?.url ?? input)}`);
+    throw new Error('ipc-handlers.test.ts: a test called fetch');
+  });
+});
+afterAll(() => {
+  expect(networkAttempts, 'a test in this file reached for the network').toEqual([]);
+  expect(releaseChecks, 'the update check no longer goes through https.get: the stub above is not standing in for it').toBeGreaterThan(0);
+});
 
 describe('IPC Handlers', () => {
   it('registers all expected IPC channels', () => {
@@ -782,16 +816,15 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   let usageJson: string | null;
   let readFile: ReturnType<typeof vi.spyOn>;
   let stat: ReturnType<typeof vi.spyOn>;
-  let httpsGet: ReturnType<typeof vi.spyOn>;
   let updateStatus: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    // WHY pinned: the payload carries the update status, held by ONE shared update service. Every
-    // registerIpcHandlers call earlier in this file starts a REAL GitHub release check, and its reply
-    // (or error) can land in the middle of a test here — under a loaded machine it did — changing the
-    // payload between two ticks with no file changed ("expected 2 to be 1"). The gate's dedupe is what
-    // these tests pin, so the update status is held still for them.
+    // WHY pinned: the payload carries the update status, held by ONE shared update service that every
+    // registerIpcHandlers call in this file asks to check for a release. When those checks were real,
+    // a reply landing mid-test changed the payload between two ticks with no file changed ("expected
+    // 2 to be 1" on a loaded machine). The file-wide stub now answers them offline; the gate's dedupe is
+    // what these tests pin, so the update status is also held still here, whatever a check answers.
     const { getUpdateService } = await import('../src/main/update-service');
     updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus').mockReturnValue(
       { current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any,
@@ -802,12 +835,10 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
     stat = vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    // The build kicks a release check; keep it off the network.
-    const https = await import('node:https');
-    httpsGet = vi.spyOn(https.default, 'get').mockImplementation((() => ({ on: () => ({ on: () => ({}) }) })) as any);
+    // (The release check the build kicks is answered offline by the file-wide stub at the top.)
   });
   afterEach(() => {
-    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore(); updateStatus.mockRestore();
+    readFile.mockRestore(); stat.mockRestore(); updateStatus.mockRestore();
     vi.useRealTimers();
   });
 
