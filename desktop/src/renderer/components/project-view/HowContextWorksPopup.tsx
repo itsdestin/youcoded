@@ -170,9 +170,13 @@ function TopicPage({ data }: { data: TopicPageData }) {
       {data.example && (
         <>
           <MicroLabel>Example</MicroLabel>
-          <pre className="bg-inset border border-edge-dim rounded-lg p-3 text-xs font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mt-1.5 mb-0">
-            {data.example}
-          </pre>
+          {/* WHY a frame around the <pre> (2026-10-15, the one scroll fade): the fade is a mask,
+              so on the box itself it would fade the border and fill too; only the text fades. */}
+          <div className="bg-inset border border-edge-dim rounded-lg overflow-hidden mt-1.5">
+            <pre className="scroll-mask-x p-3 text-xs font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mb-0">
+              {data.example}
+            </pre>
+          </div>
         </>
       )}
     </div>
@@ -399,7 +403,12 @@ export function HowContextWorksPopup({ initialTab, onClose }: HowContextWorksPop
         <div className="flex-1 flex flex-col sm:flex-row min-h-0 gap-2 sm:gap-0">
           {/* Left nav column */}
           {/* WHY no border-b on narrow: a line across the popup (guide "Card levels"). */}
-          <aside className="w-full sm:w-[190px] shrink-0 sm:border-r border-edge-dim p-2 flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible overflow-y-auto no-scrollbar sm:[scrollbar-width:auto]">
+          {/* WHY scroll-mask on an inner box (2026-10-15, the one scroll fade): it fades whichever
+              way this nav scrolls — sideways as the phone strip, down as the desktop column. The
+              divider stays on the outer box, because the fade is a mask and would otherwise fade
+              the divider line at its ends too. */}
+          <div className="w-full sm:w-[190px] shrink-0 sm:border-r border-edge-dim flex min-h-0">
+          <aside className="scroll-mask flex-1 min-w-0 min-h-0 p-2 flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible overflow-y-auto no-scrollbar sm:[scrollbar-width:auto]">
             {INFO_TABS.map((t) => {
               const active = t.id === activeTab;
               const { Icon } = t;
@@ -424,9 +433,10 @@ export function HowContextWorksPopup({ initialTab, onClose }: HowContextWorksPop
               );
             })}
           </aside>
+          </div>
 
           {/* Scrollable content column */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 min-w-0">
+          <div className="scroll-mask flex-1 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 min-w-0">
             {renderPage(activeTab)}
           </div>
         </div>

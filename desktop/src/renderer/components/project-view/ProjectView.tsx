@@ -844,7 +844,12 @@ export function ProjectView(props: ProjectViewProps) {
             ~200px slot under a hero that never moves. sm+ keeps the fixed-chrome
             layout (hero pinned, body scrolls independently) — there's vertical
             room for it there, and it's the design the view was built around. */}
-        <main className="screen-pane screen-pane--frame flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0 rounded-xl bg-canvas">
+        {/* WHY the phone scroll moved to an inner box (2026-10-15, the one scroll fade): the page
+            fades at its scrolled edges, and the fade is a mask — on <main> itself it would fade
+            the pane's own fill, rounded corners and frosted glass too. <main> stays the pane;
+            the inner box scrolls on phones and is a plain column at sm+, as <main> was. */}
+        <main className="screen-pane screen-pane--frame flex-1 flex flex-col overflow-hidden min-w-0 rounded-xl bg-canvas">
+        <div className="scroll-mask flex-1 min-h-0 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden">
           {/* No projects at all (first-run guide, spec §1 item 5): the
               explainer card replaces BOTH the hero and the seg-row + tab body —
               three tabs with "0" badges over nothing is a dashboard for nothing.
@@ -924,12 +929,13 @@ export function ProjectView(props: ProjectViewProps) {
                   ("Conversations" alone is ~168px), which used to put the last
                   segment out of reach entirely. Two ~35px icons plus one
                   labelled segment fits inside ~374px with room to spare.
-                  overflow-x-auto stays as a backstop for a very long label at a
-                  very small width; it should not normally engage. */}
+                  No overflow-x-auto backstop (removed 2026-10-15, the one-fade pass):
+                  .layer-surface's unlayered `overflow: hidden` always beat it, so it
+                  never scrolled — it only marked the row as a scroll area. */}
               <div
                 // WHY rounded-control-group / rounded-control (decisions "Control shape follows the
                 // theme"): the switcher takes the theme's control corner, not a fixed pill.
-                className="flex items-center gap-1 p-1 layer-surface !rounded-control-group max-sm:w-full max-w-full overflow-x-auto no-scrollbar"
+                className="flex items-center gap-1 p-1 layer-surface !rounded-control-group max-sm:w-full max-w-full"
                 style={{ boxShadow: 'none' }}
               >
                 {SEGMENTS.map((s) => {
@@ -1105,6 +1111,7 @@ export function ProjectView(props: ProjectViewProps) {
           </div>
           </>
           )}
+        </div>
         </main>
       </div>
 

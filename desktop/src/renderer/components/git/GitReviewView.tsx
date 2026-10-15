@@ -246,7 +246,7 @@ export function GitReviewView({
       </div>
 
       {/* card timeline */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+      <div className="scroll-mask flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
         {uncommitted && (
           <GitReviewCard
             accent
@@ -296,7 +296,7 @@ export function GitReviewView({
               // adds only the height cap, no second border. The action row
               // below stays a sibling of this div, not a child, so it's always
               // visible.
-              <div className="scroll-box-cap overflow-y-auto">
+              <div className="scroll-mask scroll-box-cap overflow-y-auto">
                 <UnifiedDiff oldStr="" newStr="" structuredPatch={uncommitted.hunks} fill />
               </div>
             )}
@@ -391,7 +391,7 @@ export function GitReviewView({
               {/* Same single-scroll-surface wrapper as the uncommitted card
                   above — see the WHY comment there. */}
               {Array.isArray(body) && (
-                <div className="scroll-box-cap overflow-y-auto">
+                <div className="scroll-mask scroll-box-cap overflow-y-auto">
                   <UnifiedDiff oldStr="" newStr="" structuredPatch={body} fill />
                 </div>
               )}

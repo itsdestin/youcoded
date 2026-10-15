@@ -111,9 +111,13 @@ export function TypeableSelect({ options, value, onCommit, disabled, placeholder
       className={fieldClasses('md', 'w-full')} />
     {open && !disabled && createPortal(
       // WHY custom: native option menus cannot follow YouCoded's active theme.
-      <PopoverPanel ref={menuRef} layer={4} data-select-portal="" className="fixed p-1 max-h-64 overflow-y-auto"
+      // WHY the list scrolls on the inner listbox (2026-10-15, the one scroll fade): the panel is
+      // .layer-surface, whose unlayered `overflow: hidden` beat the Tailwind overflow-y-auto that
+      // sat on it, so a long option list was clipped instead of scrolled (Select.tsx's note). The
+      // listbox now scrolls and fades its edges, like Select's.
+      <PopoverPanel ref={menuRef} layer={4} data-select-portal="" className="fixed max-h-64 flex flex-col"
         style={rect}>
-        <div id={listboxId} role="listbox" aria-label={label}>{options.map((option, index) => <div id={`${listboxId}-${index}`} key={option.value || 'none'} role="option"
+        <div id={listboxId} role="listbox" aria-label={label} className="scroll-mask min-h-0 p-1 overflow-y-auto">{options.map((option, index) => <div id={`${listboxId}-${index}`} key={option.value || 'none'} role="option"
           aria-selected={option.value === value} aria-disabled={option.disabled || undefined}
           onMouseEnter={() => { if (!option.disabled) setActive(index); }} onMouseDown={(event) => event.preventDefault()}
           onClick={() => commitOption(index)} className={`px-2.5 py-1.5 rounded-md text-2xs ${option.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${index === active && !option.disabled ? 'bg-inset' : ''}`}>

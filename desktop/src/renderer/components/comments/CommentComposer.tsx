@@ -62,7 +62,10 @@ export function CommentComposer({
         // the SAME text and padding tokens, so the caret lines up with the
         // reply box's. data-edit-menu: real cut/copy/paste on right-click
         // (build-menu.ts) — Electron ships no default context menu.
-        className={`flex-1 min-w-0 bg-transparent border-0 outline-none resize-none leading-snug ${FIELD_TEXT} ${FIELD_SIZE.sm}`}
+        // scroll-mask: once the text passes the cap and scrolls, the lines out of view fade like
+        // every other scroll area (2026-10-15). The class's scroll padding keeps the caret's line
+        // clear of the fade, so what is being typed is never dimmed.
+        className={`scroll-mask flex-1 min-w-0 bg-transparent border-0 outline-none resize-none leading-snug ${FIELD_TEXT} ${FIELD_SIZE.sm}`}
         data-edit-menu
       />
       {/* self-end + mb-1: on one line the arrow sits centred beside the text

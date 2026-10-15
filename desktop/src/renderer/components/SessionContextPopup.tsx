@@ -130,8 +130,12 @@ const MD_SCALE = `text-2xs text-fg-2
  *  quote stops reading as a detail of the row above it. */
 function Md({ text, flush = false }: { text: string; flush?: boolean }) {
   return (
-    <div className={`max-h-64 overflow-y-auto bg-well p-3 ${flush ? '' : 'rounded-lg border border-edge-dim'} ${MD_SCALE}`}>
+    // WHY the fill and border on an outer box (2026-10-15, the one scroll fade): the fade is a
+    // mask, so on the filled box itself it would fade the fill and border too; only the text fades.
+    <div className={`bg-well overflow-hidden ${flush ? '' : 'rounded-lg border border-edge-dim'}`}>
+    <div className={`scroll-mask max-h-64 overflow-y-auto p-3 ${MD_SCALE}`}>
       <MarkdownContent content={text} />
+    </div>
     </div>
   );
 }
@@ -194,7 +198,7 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
           // overflow-y-auto) — without fill, UnifiedDiff stacked its own
           // 15-line cap + button inside it, a second scrollbar hiding the
           // rest of the cut text (review round 1, 2026-09-18).
-          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div>
+          ? <div className="bg-well overflow-hidden"><div className="scroll-mask max-h-64 overflow-y-auto"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div></div>
           : <Md text={supplied} flush />}
       </div>
     </>
@@ -387,7 +391,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
       <div className="space-y-4">
         {/* The tab strip scrolls sideways rather than squeezing, so no label is
             ever cut in half on a phone (review-5 S-3). */}
-        <div className="-mx-1 px-1 overflow-x-auto">
+        <div className="scroll-mask scroll-mask--chips -mx-1 px-1 overflow-x-auto">
           <SegmentedTabs
             variant="contained"
             aria-label="What the assistant was given"

@@ -222,7 +222,7 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
       ) : visible.length === 0 ? (
         <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>No conversations to pick up yet.</p>
       ) : (
-        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
+        <div className="scroll-mask" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
           {visible.map((s) => {
             const blocked = s.missingProject || s.notSyncedYet;
             const expanded = expandedId === s.sessionId;

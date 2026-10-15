@@ -921,7 +921,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           change on disk. Replaces the old two-<pre> columns, which were not a
           diff at all (spec §6.2). */}
       {showDiff && conflict && (
-        <div className="border-b border-edge shrink-0 overflow-auto max-h-[40%] p-2">
+        // WHY the bottom line on an outer box (2026-10-15, the one scroll fade): the diff fades at
+        // its scrolled edges, and the fade is a mask — on this box it would fade its own bottom
+        // line too while more is below. The outer box keeps the line and the 40% cap.
+        <div className="border-b border-edge shrink-0 max-h-[40%] flex flex-col">
+        <div className="scroll-mask overflow-auto min-h-0 p-2">
           {/* WHY SectionLabel (decisions "Heading ladder": small labels in normal case, no spaced
               capitals): this was the retired `tracking-wider uppercase` eyebrow. */}
           <SectionLabel className="mb-1">What keeping yours changes (disk → your draft)</SectionLabel>
@@ -931,6 +935,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               hid the rest of a long conflict diff behind that inner cap
               (review round 1, 2026-09-18). */}
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
+        </div>
         </div>
       )}
       <div className="flex-1 overflow-hidden flex">

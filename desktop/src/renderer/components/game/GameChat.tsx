@@ -58,7 +58,7 @@ export default function GameChat({ connection }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-1.5 flex flex-col gap-1">
+      <div className="scroll-mask flex-1 overflow-y-auto px-3 py-1.5 flex flex-col gap-1">
         {state.chatMessages.length === 0 ? (
           <p className="text-xs text-fg-muted italic">No messages yet</p>
         ) : (

@@ -201,6 +201,12 @@ export default function LibraryScreen({
         title={<span className="truncate">Your library</span>}
         onBack={onExit}
       />
+      {/* NO .scroll-mask here — a deliberate exception to the one scroll fade (listed in
+          tests/scroll-mask.test.ts): the tab pill and cards are frosted glass (.layer-surface). A mask would make this scroller a "backdrop root",
+          so every frosted card inside would stop blurring the wallpaper (measured 2026-10-15: the
+          hero and filter bar showed the wallpaper sharp through them on Meadow Mist). The fade
+          here needs a masked wallpaper copy laid over the page (the chat's ChatEdgeFade) — an
+          open question for Destin, not decided here. */}
       <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* WHY no h1 or exit here (decisions "Full-screen titles", H-1; "Way back to
           chat", H-5): the band above names the screen, centred with its icon, and

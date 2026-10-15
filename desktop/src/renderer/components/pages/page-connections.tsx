@@ -391,7 +391,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   );
 
   const shell = (children: React.ReactNode) => (
-    <div className="absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
+    <div className="scroll-mask absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
       <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col gap-4">{children}</div>
     </div>
   );

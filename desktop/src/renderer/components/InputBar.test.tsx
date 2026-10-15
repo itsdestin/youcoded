@@ -13,9 +13,9 @@ import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 
 // jsdom (per this repo's vitest.config.ts) has no global setupFiles/polyfills —
-// useScrollFade (mounted unconditionally by InputBar's textarea) reaches for
-// ResizeObserver, which jsdom doesn't implement. A no-op stub is enough since
-// this test never asserts on the fade behavior itself.
+// parts of InputBar (the quick-chip row's skill picker uses useScrollFade) reach
+// for ResizeObserver, which jsdom doesn't implement. A no-op stub is enough since
+// this test never asserts on that behavior itself.
 class NoopResizeObserver {
   observe() {}
   unobserve() {}

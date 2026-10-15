@@ -274,7 +274,7 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
             className="flex-1 min-h-0 w-full font-mono leading-relaxed"
           />
         ) : (
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="scroll-mask flex-1 min-h-0 overflow-auto">
             {isMarkdown
               ? <MarkdownContent content={content ?? ''} />
               : <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-fg-2 m-0">{content}</pre>}

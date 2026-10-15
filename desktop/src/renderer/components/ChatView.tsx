@@ -1024,7 +1024,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               last message under the input bar. chat-scroll--below-find-row
               drops the header-clearing padding-top while the row is open —
               the content no longer starts under the header, it starts under
-              the row. */}
+              the row.
+              NO .scroll-mask here — a deliberate exception to the one scroll fade (listed in
+              tests/scroll-mask.test.ts): a mask makes the scroller a backdrop root,
+              and every frosted bubble inside would stop blurring the wallpaper. In the Minimalist
+              (float) layout the transcript's edge fade is ChatEdgeFade, a masked copy of the
+              wallpaper laid OVER this scroller (pinned by float-chrome-pops.test.ts); the framed
+              layouts cut messages at the frame's edge and have no fade yet — an open question for
+              Destin, not decided here. */}
           <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || shownStrip ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a

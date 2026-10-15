@@ -656,9 +656,13 @@ function PlanBubbleContent({
             {prompts.length} allowed {prompts.length === 1 ? 'action' : 'actions'} if approved
           </button>
           {showPrompts && (
-            <pre className="mt-1 text-2xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto max-h-40">
-              {JSON.stringify(prompts, null, 2)}
-            </pre>
+            // WHY a frame around the <pre> (2026-10-15, the one scroll fade): the fade is a mask,
+            // so on the filled box it would fade the fill too; only the text fades.
+            <div className="mt-1 bg-panel rounded-sm overflow-hidden">
+              <pre className="scroll-mask text-2xs text-fg-dim p-2 overflow-auto max-h-40">
+                {JSON.stringify(prompts, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       )}

@@ -264,7 +264,7 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   const recent = load.state === 'ready' ? load.status.recent : null;
   const projectFiles = (project?.files ?? []).filter((f) => !recent?.some((r) => r.path === f.path));
   return (
-    <div className="absolute inset-0 overflow-y-auto">
+    <div className="scroll-mask absolute inset-0 overflow-y-auto">
       {/* Photo-only: a first run (nothing recent) is its own screen, named without '#' so a deck can link its picture. */}
       {recent && <ScreenMark name={recent.length === 0 ? 'office/first-run' : 'office/home'} />}
       <div className="w-full max-w-4xl mx-auto px-4 py-6 flex flex-col gap-7">

@@ -453,7 +453,13 @@ export default function MarketplaceScreen({
       {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
           stray horizontal wiggle from rail cards / wallpaper transform. Ref'd
           for both chunked grids' useChunkedReveal (Task 8) — it's the one
-          scrolling root either mode uses. */}
+          scrolling root either mode uses.
+          NO .scroll-mask here — a deliberate exception to the one scroll fade (listed in
+          tests/scroll-mask.test.ts): the page's hero, filter bar and cards are frosted glass (.layer-surface). A mask would make this scroller a "backdrop root",
+          so every frosted card inside would stop blurring the wallpaper (measured 2026-10-15: the
+          hero and filter bar showed the wallpaper sharp through them on Meadow Mist). The fade
+          here needs a masked wallpaper copy laid over the page (the chat's ChatEdgeFade) — an
+          open question for Destin, not decided here. */}
       <div ref={scrollRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* WHY no title or exit here any more (decisions "Full-screen titles", H-1, and
           "Way back to chat", H-5): the screen names itself in the band above, centred

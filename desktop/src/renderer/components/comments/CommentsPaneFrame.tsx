@@ -65,7 +65,7 @@ export function CommentsPaneFrame({ path, children, frameRef, projectRoot }: Pro
         </div>
         {/* The list is its own scroller: cards are not tied to positions in
             the document, so scrolling the document must not carry them away. */}
-        <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
+        <div className="scroll-mask flex-1 min-h-0 overflow-y-auto">{children}</div>
         {/* Floats over the list's bottom (no bar behind it, Destin round 5);
             the list's pb-28 lets the last card scroll clear of it. */}
         {actionsInPane && (

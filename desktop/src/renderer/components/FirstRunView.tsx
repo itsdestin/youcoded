@@ -323,7 +323,11 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     // WHY brand-surface (first-run deck B-2, "brand lavender, always"): setup has no
     // theme yet, so it wears the brand's own palette; the app's primitives inside it
     // read the brand colours through the same tokens they use everywhere else.
-    <div className="brand-surface absolute inset-0 overflow-y-auto">
+    <div className="brand-surface absolute inset-0">
+    {/* WHY an inner scroller (2026-10-15, the one scroll fade): the fade is a mask, and on the
+        brand surface itself it would fade the lavender background away at the edges too. The
+        surface stays put; only the setup content fades as it scrolls. */}
+    <div className="scroll-mask absolute inset-0 overflow-y-auto">
       {state && <ScreenMark name="first-run" />}
       {/* WHY a fixed top and not centred (deck first-run-3 P3-2, Destin: "the brand stuff
           can be bigger and sit at a fixed upwards of center position, then the
@@ -394,6 +398,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
       {/* The "Skip setup (I installed via terminal)" link is gone — review
           2026-09-05 P-6. Three sign-ins and a key/local route cover every way
           in; the skip left people on a screen with nothing signed in. */}
+    </div>
     </div>
   );
 }

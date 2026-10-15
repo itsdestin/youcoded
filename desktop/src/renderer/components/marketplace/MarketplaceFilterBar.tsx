@@ -219,7 +219,11 @@ function FilterSheet({
         role="dialog"
         aria-modal
         aria-labelledby="marketplace-filter-sheet-title"
-        className="fixed inset-x-2 max-h-[80vh] overflow-y-auto rounded-2xl flex flex-col"
+        // WHY no overflow here (2026-10-15, the one scroll fade): the panel is .layer-surface,
+        // whose unlayered `overflow: hidden` beat this Tailwind overflow-y-auto, so a tall
+        // sheet clipped instead of scrolling. The groups between the header and Apply now
+        // scroll (and fade) on their own; the header and Apply stay in view.
+        className="fixed inset-x-2 max-h-[80vh] rounded-2xl flex flex-col"
         style={{ bottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-edge-dim bg-panel">
@@ -232,12 +236,12 @@ function FilterSheet({
             Clear all
           </button>
         </header>
-        <div className="flex-1 flex flex-col gap-4 p-4">
+        <div className="scroll-mask flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 p-4">
           <SheetGroup label="Type">
             {/* P-1 #1: same pick-one switch as the wide bar. Seven segments do
                 not fit a phone — the row scrolls sideways INSIDE the sheet's
                 padding (round 1 bled past the edge, which read as a bug). */}
-            <div className="w-full overflow-x-auto">
+            <div className="scroll-mask scroll-mask--chips w-full overflow-x-auto">
               <SegmentedTabs
                 variant="pill"
                 tabs={typeTabs}

@@ -444,7 +444,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
         <aside className={`screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
-          <div className="flex-1 overflow-y-auto p-2">
+          <div className="scroll-mask flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
               <RailGroup label="Built in">
                 {builtin.map((p) => (
@@ -503,7 +503,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
           {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}
           {emptyPages && (
-            <div className="absolute inset-0 overflow-y-auto flex flex-col">
+            <div className="scroll-mask absolute inset-0 overflow-y-auto flex flex-col">
               <PagesEmptyCard onMake={onCreatePage} />
             </div>
           )}

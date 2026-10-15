@@ -68,7 +68,7 @@ export default function SystemMarker({ marker }: Props) {
           <div className="text-xs font-medium text-fg-muted mb-2">
             Compaction summary
           </div>
-          <pre className="text-xs text-fg-2 whitespace-pre-wrap break-words font-sans leading-relaxed max-h-96 overflow-y-auto">
+          <pre className="text-xs text-fg-2 whitespace-pre-wrap break-words font-sans leading-relaxed max-h-96 overflow-y-auto scroll-mask-y">
             {marker.summary}
           </pre>
         </div>

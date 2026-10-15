@@ -79,10 +79,15 @@ function CollapsibleBlock({ children, maxLines = 20, className = '' }: { childre
   const cap = open && overflow ? 'scroll-box-cap' : '';
   return (
     <div className="relative">
-      <pre className={`text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
-        {shown}
-        {overflow && !open && <span className="text-fg-muted">{'\n'}…</span>}
-      </pre>
+      {/* WHY a frame around the scroller (2026-10-15, the one scroll fade): the fade is a mask, so
+          on the box itself it would fade its fill and border too. The frame keeps them whole; only
+          the text fades, at an edge with more. CSS-only, so no listener per tool card. */}
+      <div className="bg-panel rounded-sm overflow-hidden">
+        <pre className={`scroll-mask-y text-xs text-fg-dim p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
+          {shown}
+          {overflow && !open && <span className="text-fg-muted">{'\n'}…</span>}
+        </pre>
+      </div>
       {overflow && (
         <button
           onClick={() => setOpen(o => !o)}
@@ -250,9 +255,14 @@ function ErrorBlock({ error }: { error: string }) {
     <div>
       {/* Words in the text colour; the red is the box's tint and outline (small-fixes-3#SF3-10). */}
       <div className="text-3xs uppercase tracking-wider text-fg-2 mb-1">Error</div>
-      <pre className="text-xs text-fg-2 bg-destructive/10 border border-destructive/30 rounded-sm p-2 overflow-auto max-h-48 whitespace-pre-wrap">
-        {error}
-      </pre>
+      {/* WHY a frame around the scroller (2026-10-15, the one scroll fade): the fade is a mask, so
+          on the box itself it would fade its fill and border too. The frame keeps them whole; only
+          the text fades, at an edge with more. CSS-only, so no listener per tool card. */}
+      <div className="bg-destructive/10 border border-destructive/30 rounded-sm overflow-hidden">
+        <pre className="scroll-mask-y text-xs text-fg-2 p-2 overflow-auto max-h-48 whitespace-pre-wrap">
+          {error}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -414,7 +424,10 @@ function ShellView({ tool, commandField, sessionId }: {
       {/* Inside the details like any failed command's output — not pinned (Destin, review 5). */}
       <AdminRefusedNote tool={tool} />
       <div className="relative group">
-        <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
+        {/* WHY no overflow-auto (2026-10-15, the one scroll fade): break-all + pre-wrap wrap every
+            line and the box has no height cap, so it can never scroll — the class only made it
+            look like a scroll area to the fade guard. */}
+        <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
         </pre>
         {cmd && (
@@ -679,6 +692,10 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
       />
       {rows.length > 0 ? (
         <>
+          {/* WHY the frame is its own box (2026-10-15, the one scroll fade): the expanded box
+              fades its rows at a scrolled edge, and the fade is a mask — on the framed box it
+              would fade the border and fill too. */}
+          <div className={`${READ_BOX_BASE} overflow-hidden`}>
           <div
             ref={boxRef}
             data-testid="read-box"
@@ -686,7 +703,7 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
             // there is nothing to scroll inside THIS box until expanded —
             // only the expanded scroller needs overflow-auto + the cap
             // (review round 1, 2026-09-18).
-            className={expanded ? `${READ_BOX_BASE} overflow-auto scroll-box-cap` : READ_BOX_BASE}
+            className={expanded ? 'scroll-mask-y overflow-auto scroll-box-cap' : undefined}
           >
             {drawn.map(r => (
               <div key={r.lineNo} className="flex items-start">
@@ -695,6 +712,7 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
               </div>
             ))}
             {expanded && reveal.hasMore && <div ref={reveal.sentinelRef} data-reveal-sentinel className="h-px" aria-hidden />}
+          </div>
           </div>
           {overflow && (
             <button

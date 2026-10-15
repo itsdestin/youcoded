@@ -446,7 +446,7 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
         </span>
         <span style={{ color: '#999', fontStyle: 'italic', fontSize: 13, paddingRight: 6, borderRight: `1px solid ${GRID}` }}>fx</span>
         {/* the whole value, wrapped (up to about four lines, then scrolls) — long text used to end in "…" */}
-        <span style={{ fontSize: 13, fontFamily: '"Cascadia Code", Consolas, monospace', color: selInfo.isFormula ? '#1a6dc4' : '#1d1d1d', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 76, overflowY: 'auto', minWidth: 0 }}>
+        <span className="scroll-mask" style={{ fontSize: 13, fontFamily: '"Cascadia Code", Consolas, monospace', color: selInfo.isFormula ? '#1a6dc4' : '#1d1d1d', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 76, overflowY: 'auto', minWidth: 0 }}>
           {selInfo.content}
         </span>
       </div>

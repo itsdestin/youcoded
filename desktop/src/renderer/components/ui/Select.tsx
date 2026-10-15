@@ -265,7 +265,7 @@ export function Select({
             <div
               role="listbox"
               aria-label={ariaLabel}
-              className="p-1 max-h-64 overflow-y-auto"
+              className="scroll-mask p-1 max-h-64 overflow-y-auto"
               onKeyDown={onKeyDown}
             >
               {options.map((opt, i) => {

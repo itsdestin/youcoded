@@ -31,7 +31,7 @@ export default function TerminalToolbar({ sessionId }: TerminalToolbarProps) {
   const separatorHeight = isAndroid() ? 'h-6' : 'h-4';
 
   return (
-    <div className="flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
+    <div className="scroll-mask scroll-mask--chips flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
       <ToolbarButton
         label="Ctrl"
         active={ctrlActive}

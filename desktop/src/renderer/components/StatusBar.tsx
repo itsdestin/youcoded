@@ -775,7 +775,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           now owns -- it was one of the two places that had independently
           discovered transform centering breaks a bounded scroll region. Its
           "No flex-1" workaround is gone too: that was needed because its body
-          was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
+          was a bare scrolling div with no min-height:0, which Dialog's body
           supplies. */}
       {/* WHY no line under the title, and an "Always on" section instead (final-fixes#PR-7d,
           Destin: "remove subheader under status bar widgets, add a new "always on" section with

@@ -85,7 +85,7 @@ export default function VocabularyPanel({ bridge, onClose }: { bridge: VoiceVoca
       {saved !== null && <section>
         <SectionLabel className="mb-2">Your words</SectionLabel>
         <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-        <div ref={listRef} role="region" aria-label="Vocabulary phrases" className="max-h-48 overflow-y-auto">
+        <div ref={listRef} role="region" aria-label="Vocabulary phrases" className="scroll-mask max-h-48 overflow-y-auto">
           <div className="flex flex-wrap gap-1.5">
             {visible.map((phrase) => <VocabularyChip key={phrase} phrase={phrase} disabled={saving} onRemove={remove} />)}
             {phrases.length === 0 && <span className="text-xs text-fg-muted">No words yet.</span>}

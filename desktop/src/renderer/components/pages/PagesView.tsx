@@ -92,7 +92,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
         />
       </header>
 
-      <main className="flex-1 overflow-y-auto min-h-0">
+      <main className="scroll-mask flex-1 overflow-y-auto min-h-0">
         <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 flex flex-col gap-6">
           {!loaded && <LoadingState what="pages" />}
           {loaded && failed && (

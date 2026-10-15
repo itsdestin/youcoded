@@ -113,7 +113,7 @@ export function ImportFileDialog({
                 anything not listed here (see import-file.ts). Capped list with
                 an overflow line so a 50-file batch can't push the buttons off
                 screen. */}
-            <ul className="max-h-24 overflow-y-auto text-xs font-mono text-fg-2 flex flex-col gap-0.5">
+            <ul className="scroll-mask max-h-24 overflow-y-auto text-xs font-mono text-fg-2 flex flex-col gap-0.5">
               {collisions.slice(0, MAX_NAMED_COLLISIONS).map((name) => (
                 <li key={name} className="truncate">{name}</li>
               ))}

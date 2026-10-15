@@ -252,7 +252,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           and the chat below it can fill the remaining height instead of
           growing into an unbounded scroll container. */}
       {/* a size container: the chess board reads `cqh` off it to stay inside a short pane (ChessBoard.tsx) */}
-      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'overflow-y-auto'}`} style={{ containerType: 'size' }}>
+      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'scroll-mask overflow-y-auto'}`} style={{ containerType: 'size' }}>
         {/* Photo-only marks: the open game's own screen, once it has drawn. */}
         {openGame?.kind === 'solo' && !playing && board !== null && <ScreenMark name={`chat/games/${openGame.id === 'twenty-forty-eight' ? '2048' : openGame.id}`} />}
         {openGame?.kind === 'versus' && <ScreenMark name={`chat/games/${openGame.id}${inPlay ? '' : '/lobby'}`} />}
