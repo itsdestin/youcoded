@@ -294,7 +294,7 @@ describe('the main process\'s handle on the Browser worker', () => {
   it('forks only when first needed, and relays calls and state', async () => {
     const fork = vi.fn(() => fakeWorker((m, reply) => {
       if (m.t === 'call') {
-        reply({ t: 'state', state: { sessionId: m.sessionId, run: 'running', windowShown: false, myChrome: false, browserLabel: 'Chrome', tabs: [], prompt: null, error: null, used: true, busy: false, downloadPercent: null } });
+        reply({ t: 'state', state: { sessionId: m.sessionId, run: 'running', windowShown: false, myChrome: false, browserLabel: 'Chrome', tabs: [], prompt: null, error: null, used: true, busy: false, downloadPercent: null, zoom: null } });
         reply({ t: 'reply', id: m.id, ok: true, value: { text: `ran ${m.tool}` } });
       }
     }));

@@ -30,13 +30,17 @@ export const BROWSER_TOOL_SPECS = {
     description: [
       'Open a web address in the assistant\'s own browser (a real Chrome-family browser with its own saved sign-ins, separate from the user\'s), or go back/forward. Returns the page outline with element refs like [ref=e12] for BrowserAct.',
       'Use this (instead of WebFetch) when a page needs a sign-in, clicking, typing, or runs scripts to show its content. http and https only. Opening an address on this computer or the home network asks the user first.',
+      // WHY (Destin, 2026-10-15): the assistant may judge a page needs more
+      // (or less) room; the zoom is the same one the user's panel shows.
+      'Can also set the page zoom (alone or with an address). The default already shows a desktop-width page; zoom out further when a page is crowded or a screenshot should fit more, zoom in when text in screenshots is too small. Zoom 100 shows the page at the panel\'s own width, which often gets a site\'s phone layout. The user sees the same zoom in their panel.',
       UNTRUSTED,
     ].join(' '),
-    shortDescription: 'Open a web address in the browser (or go back/forward); returns the page outline with [ref=…] handles.',
+    shortDescription: 'Open a web address in the browser (or go back/forward, or set the zoom); returns the page outline with [ref=…] handles.',
     schema: z.object({
       url: z.string().optional().describe('The address to open, e.g. https://example.com/page. A bare domain gets https:// added.'),
       go: z.enum(['back', 'forward']).optional().describe('Instead of an address: go back or forward in this tab\'s history.'),
       newTab: z.boolean().optional().describe('Open the address in a new tab instead of the current one.'),
+      zoom: z.union([z.number().int().min(25).max(100), z.literal('auto')]).optional().describe('Page zoom in percent (25–100); lower lays the page out wider. "auto" returns to the default. Applies to this conversation\'s tabs.'),
     }).strict(),
   },
   BrowserSnapshot: {

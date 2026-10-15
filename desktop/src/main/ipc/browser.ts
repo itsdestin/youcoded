@@ -219,6 +219,11 @@ export const browserChannels: MainChannelDef[] = [
       wire();
       const payload = raw as { sessionId?: unknown; nav?: unknown; address?: unknown; tab?: unknown; index?: unknown } | undefined;
       const sessionId = str(payload?.sessionId, 'sessionId');
+      if (payload && 'zoom' in payload) {
+        // The panel's − / + / %: a percent, or 'auto' for the default.
+        const zoom = payload.zoom === 'auto' ? 'auto' : Math.round(num(payload.zoom, 'zoom'));
+        return getBrowserClient().command<{ ok: boolean; error?: string }>({ cmd: 'open', sessionId, zoom });
+      }
       if (payload && 'tab' in payload) {
         const tab = TAB_ACTIONS.find((t) => t === payload.tab);
         if (!tab) throw new TypeError('Unknown tab action');

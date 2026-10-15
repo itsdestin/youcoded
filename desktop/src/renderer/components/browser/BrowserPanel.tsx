@@ -12,7 +12,7 @@
 // only when `visible`), it asks for pictures only while mounted and the app
 // window isn't hidden, and each picture is written straight to the <img> — no
 // React state per frame — then acknowledged so the next one may come.
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
 import { Button, Callout, DocumentTabs, EmptyState, ErrorState, LoadingState, TextInput, ZoomPill } from '../ui';
@@ -107,37 +107,30 @@ function pagePointClamped(rect: { left: number; top: number; width: number; heig
   return { x: Math.round(x), y: Math.round(y) };
 }
 
-/** The page width (CSS px) the panel shows by default. WHY (Destin, 2026-10-15):
- *  a page laid out at the panel's own ~460 px got sites' phone layouts (menus
- *  behind ☰, sidebars gone) and gave the assistant small screenshots. A laptop-
- *  wide page shrunk to fit the panel keeps desktop layouts, like Ctrl+minus. */
-const AUTO_PAGE_WIDTH = 1024;
-/** The zoom steps the − / + buttons move through, as in a browser. */
-const ZOOM_STEPS = [0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1];
+/** The zoom steps (percent) the − / + buttons move through, as in a browser.
+ *  The zoom itself lives in the browser (browser-service setZoom), shared with
+ *  the assistant; the default follows the panel's width. */
+const ZOOM_STEPS = [25, 33, 50, 67, 75, 80, 90, 100];
 
-/** The page size to lay out for a picture area of `w`×`h` at `zoom`: zooming
- *  out lays the page out bigger, keeping the panel's shape, so the shrunken
- *  picture fills the panel exactly. */
-export function layoutSize(w: number, h: number, zoom: number): { w: number; h: number } {
-  return { w: w / zoom, h: h / zoom };
+/** The next step out from `percent` (null at the smallest). */
+function zoomStepOut(percent: number): number | null {
+  return [...ZOOM_STEPS].reverse().find((z) => z < percent) ?? null;
 }
-
-/** The default zoom for a picture area `w` wide: whatever shows AUTO_PAGE_WIDTH,
- *  never above 100% (a wide panel shows the page at its real size). */
-export function autoZoom(w: number): number {
-  return w > 0 ? Math.min(1, w / AUTO_PAGE_WIDTH) : 1;
+/** The next step in from `percent` (null at 100%). */
+function zoomStepIn(percent: number): number | null {
+  return ZOOM_STEPS.find((z) => z > percent) ?? null;
 }
 
 /** The live picture of the chat's current tab — also the person's way to use it. */
-const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: { sessionId: string; title: string; onPanelKey: (k: PanelKey) => void }) {
+const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey, zoom, onZoom }: {
+  sessionId: string; title: string; onPanelKey: (k: PanelKey) => void;
+  /** The page zoom to show in the pill; null hides it (pages can't be zoomed). */
+  zoom: { percent: number; auto: boolean } | null;
+  onZoom: (z: number | 'auto') => void;
+}) {
   const img = useRef<HTMLImageElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [hasFrame, setHasFrame] = useState(false);
-  /** The picture area's size, settled (debounced) — the page is laid out from it. */
-  const [area, setArea] = useState({ w: 0, h: 0 });
-  /** The person's own zoom; null = the default (auto, follows the panel's width). */
-  const [zoomPick, setZoomPick] = useState<number | null>(null);
-  const zoom = zoomPick ?? autoZoom(area.w);
   /** The page size the current picture shows (CSS px) — clicks map onto it. */
   const frame = useRef({ w: 1280, h: 800 });
 
@@ -164,7 +157,10 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
     return () => { off(); stop(); document.removeEventListener('visibilitychange', onVis); };
   }, [sessionId]);
 
-  // Measure the picture area. Debounced: dragging the panel edge relayouts once.
+  // Tell the browser the picture area's size; it lays the page out at that
+  // size divided by the zoom, so a zoomed-out page is wider than the panel and
+  // its picture is shrunk to fit (clicks map through the picture's scale —
+  // pagePoint). Debounced: dragging the panel edge relayouts once.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -175,23 +171,14 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       if (!r || r.width <= 0 || r.height <= 0) return;
       size = { w: r.width, h: r.height };
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { timer = null; setArea(size); }, 200);
+      timer = setTimeout(() => { timer = null; bridge().viewSize(sessionId, size.w, size.h); }, 200);
     });
     ro.observe(el);
     return () => { ro.disconnect(); if (timer) clearTimeout(timer); };
   }, [sessionId]);
 
-  // Tell the browser what size to lay the page out at: the area divided by
-  // the zoom, so a zoomed-out page is wider than the panel and its picture is
-  // shrunk to fit (clicks already map through the picture's scale — pagePoint).
-  useEffect(() => {
-    if (area.w <= 0 || area.h <= 0) return;
-    const s = layoutSize(area.w, area.h, zoom);
-    bridge().viewSize(sessionId, s.w, s.h);
-  }, [sessionId, area, zoom]);
-
-  const zoomOut = () => setZoomPick([...ZOOM_STEPS].reverse().find((z) => z < zoom - 0.005) ?? zoom);
-  const zoomIn = () => setZoomPick(ZOOM_STEPS.find((z) => z > zoom + 0.005) ?? zoom);
+  const zoomOut = zoom ? zoomStepOut(zoom.percent) : null;
+  const zoomIn = zoom ? zoomStepIn(zoom.percent) : null;
 
   // Ack after the picture is drawn, so a busy screen slows the stream instead of queueing.
   const onLoad = useCallback(() => { bridge().ackFrame(sessionId); }, [sessionId]);
@@ -422,16 +409,16 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       {hasFrame && <ScreenMark name="chat/browser" />}
       {/* The page's zoom, as in any browser. Clicking the % returns to the
           default (desktop-width page fitted to the panel). */}
-      {hasFrame && (
+      {hasFrame && zoom && (
         <ZoomPill
           className="absolute bottom-2 right-2"
-          percent={Math.round(zoom * 100)}
-          canZoomOut={zoom > ZOOM_STEPS[0] + 0.005}
-          canZoomIn={zoom < 1 - 0.005}
+          percent={zoom.percent}
+          canZoomOut={zoomOut !== null}
+          canZoomIn={zoomIn !== null}
           zoomInDisabledReason="Already at actual size"
-          onZoomOut={zoomOut}
-          onZoomIn={zoomIn}
-          onReset={() => setZoomPick(null)}
+          onZoomOut={() => { if (zoomOut !== null) onZoom(zoomOut); }}
+          onZoomIn={() => { if (zoomIn !== null) onZoom(zoomIn); }}
+          onReset={() => onZoom('auto')}
         />
       )}
     </div>
@@ -462,9 +449,16 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // repeated here or it could never be seen (UX review 2, U1).
   const narrow = useNarrowViewport();
 
+  // WHY numbered loads (Destin, 2026-10-15: "Got it" sometimes wouldn't
+  // dismiss): a load begun before a change could land after it and put the old
+  // settings back. Only the newest answer counts.
+  const infoSeq = useRef(0);
   useEffect(() => {
     let live = true;
-    const load = () => { void bridge().info().then((i: BrowserInfo) => { if (live) setInfo(i); }).catch(() => {}); };
+    const load = () => {
+      const n = ++infoSeq.current;
+      void bridge().info().then((i: BrowserInfo) => { if (live && n === infoSeq.current) setInfo(i); }).catch(() => {});
+    };
     load();
     const off = bridge().onInfoChanged(load);
     return () => { live = false; off(); };
@@ -477,8 +471,16 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const myChrome = (running ? state?.myChrome : info?.settings.useMyChrome) ?? false;
   const webPage = !!active && /^https?:/i.test(active.url);
 
+  // Gone the moment it's pressed; the saved setting follows. A failed save
+  // only means it shows again next time.
+  const [explainerDismissed, setExplainerDismissed] = useState(false);
   const dismissExplainer = useCallback(async () => {
-    try { setInfo(await bridge().updateSettings({ explainerSeen: true })); } catch { /* stays visible; harmless */ }
+    setExplainerDismissed(true);
+    const n = ++infoSeq.current;
+    try {
+      const i = await bridge().updateSettings({ explainerSeen: true });
+      if (n === infoSeq.current) setInfo(i);
+    } catch { /* hidden for now; shows again next time */ }
   }, []);
 
   // The header's buttons match Session Files' (Destin, 2026-10-13): open
@@ -500,7 +502,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const addressBox = useRef<HTMLInputElement>(null);
-  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' | 'stop' } | { tab: 'new' | 'select' | 'close'; index?: number }) => {
+  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' | 'stop' } | { tab: 'new' | 'select' | 'close'; index?: number } | { zoom: number | 'auto' }) => {
     setOpenError(null);
     try {
       const r = await bridge().open({ sessionId, ...req });
@@ -509,6 +511,11 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       setOpenError(err instanceof Error ? err.message : "That page couldn't be opened.");
     }
   }, [sessionId]);
+  const onZoom = useCallback((z: number | 'auto') => { void go({ zoom: z }); }, [go]);
+  // Primitive parts, so the memo'd picture redraws only when the zoom changes.
+  const zoomPercent = state?.zoom?.percent;
+  const zoomAuto = state?.zoom?.auto;
+  const zoom = useMemo(() => (zoomPercent === undefined ? null : { percent: zoomPercent, auto: !!zoomAuto }), [zoomPercent, zoomAuto]);
   // A new tab is empty: the address box takes the typing straight away, as in Chrome.
   const newTab = useCallback(async () => {
     await go({ tab: 'new' });
@@ -568,7 +575,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         {/* A new tab is a white page: say what to do instead (the picture is
             still drawn underneath it, so the stream stays warm). */}
         <div className="relative flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden shadow-sm">
-          <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} />
+          <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} zoom={zoom} onZoom={onZoom} />
           {blank && !active?.loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-panel pointer-events-none">
               <EmptyState message="Type an address or a search above." />
@@ -642,7 +649,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         />
       </div>
       {openError && <p role="alert" className="text-2xs text-fg-muted px-3 py-1.5">{openError}</p>}
-      {info && !info.settings.explainerSeen && (
+      {info && !info.settings.explainerSeen && !explainerDismissed && (
         <Callout className="mx-3 my-2" title="The assistant's own browser">
           <p>Private: separate from your own browser and sign-ins. Sites you sign into here stay signed in until you sign out. You can click, scroll and type in the page yourself.</p>
           <div className="flex justify-end mt-2">

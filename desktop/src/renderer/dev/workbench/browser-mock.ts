@@ -30,6 +30,7 @@ export function createBrowserMock(sessionIds: () => string[]) {
     const base: BrowserSessionState = {
       sessionId, run: 'running', windowShown: false, myChrome: false, browserLabel: 'Google Chrome',
       tabs, prompt: null, error: null, used: true, busy: scene === 'working', downloadPercent: null,
+      zoom: { percent: 45, auto: true },
     };
     switch (scene) {
       case 'site': return { ...base, busy: true, prompt: { kind: 'site', id: 'p1', host: 'library.example.org', allowAlways: true, message: 'Let the assistant click and type on library.example.org?' } };
