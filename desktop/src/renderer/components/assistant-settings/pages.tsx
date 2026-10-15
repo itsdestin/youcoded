@@ -16,6 +16,8 @@ import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
 import { ErrorState, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } from '../ui';
+import BrowserSettings, { BROWSER_INFO } from '../browser/BrowserSettings';
+import { GlobeIcon } from '../Icons';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -28,7 +30,7 @@ import { ErrorState, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } 
 // Session Defaults, Model Providers, Permissions, Specialists — re-homed, not
 // redrawn: the blocks are the ones the popups rendered.
 
-export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists';
+export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists' | 'browser';
 
 export interface AssistantDefaults {
   skipPermissions: boolean;
@@ -73,6 +75,9 @@ export interface PageDef {
   /** Provider pages exist only where the native runtime does — the same gate
    *  the Model Providers row had (false over remote access, false on Android). */
   needsNative?: boolean;
+  /** The Browser page exists only on the computer's own window
+   *  (capabilities.assistantBrowser — false on phones, Android and remote). */
+  needsBrowser?: boolean;
   render: (ctx: PageContext) => React.ReactNode;
 }
 
@@ -402,5 +407,16 @@ export const PAGES: PageDef[] = [
     explainer: { intro: SPECIALISTS_EXPLAINER_INTRO, sections: SPECIALISTS_EXPLAINER_SECTIONS },
     icon: <Icon><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" /><path d="M16 5.5a3 3 0 0 1 0 5.6" /><path d="M17.5 14.5c2 .6 3.5 2.4 3.5 4.5" /></Icon>,
     render: (ctx) => <SpecialistsSection cwd={ctx.cwd} />,
+  },
+  {
+    // WHY here (Destin, 2026-10-15, browser-fit-1#N-1): the Browser was its own row in
+    // Settings; it is a tool the assistant uses, so it sits with the assistant's other
+    // settings. Last in the list: the least-visited page.
+    id: 'browser',
+    label: 'Browser',
+    needsBrowser: true,
+    info: BROWSER_INFO,
+    icon: <GlobeIcon className="w-4 h-4" />,
+    render: () => <BrowserSettings />,
   },
 ];

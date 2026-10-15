@@ -5,6 +5,7 @@ import SettingsExplainer, { InfoIconButton } from '../SettingsExplainer';
 import { AnchorTip, Dialog, SettingRow } from '../ui';
 import { PAGES, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { browserSupported } from '../../state/browser-store';
 
 // Every page id, for `shoot` (see useScreenOpen below).
 const PAGE_IDS: readonly PageId[] = PAGES.map((p) => p.id);
@@ -160,9 +161,13 @@ export default function AssistantSettingsRow({
   // The same gate the Model Providers row had: provider pages exist only where
   // the native runtime does (false over remote access, false on Android).
   const nativeSupported = (window as any).claude?.native?.supported === true;
+  // The Browser page's own gate: the computer's own window only.
+  const hasBrowser = browserSupported();
   const pages = useMemo(
-    () => PAGES.filter((p) => (platform === 'android' ? p.id === 'general' : !p.needsNative || nativeSupported)),
-    [platform, nativeSupported],
+    () => PAGES.filter((p) => (platform === 'android'
+      ? p.id === 'general'
+      : (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser))),
+    [platform, nativeSupported, hasBrowser],
   );
 
   useEffect(() => {

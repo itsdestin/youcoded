@@ -1,31 +1,31 @@
-// Settings → Browser (2026-10-13; spec docs/active/specs/2026-10-13-assistant-browser-design.md
-// §2 Screens, design review UX #4/#13/#18). A row in the settings list opening a
-// dialog — the PerformanceButton pattern. The computer's own window only
-// (capabilities.assistantBrowser); nothing renders elsewhere.
+// Assistant settings → Browser (2026-10-13; spec docs/archive/specs/2026-10-13-assistant-browser-design.md
+// §2 Screens, design review UX #4/#13/#18). The computer's own window only
+// (capabilities.assistantBrowser); the page list hides it everywhere else.
+//
+// WHY a page of Assistant settings, not its own row in Settings (Destin, 2026-10-15,
+// browser-fit-1#N-1: "it should probably be hidden under assistant settings"): the
+// Browser is a tool the assistant uses, like its models and permissions, so it lives
+// with them. The page only draws once picked, so merely opening Settings still never
+// starts the Browser's worker process.
 //
 // Two plain questions instead of "modes": WHICH browser (the assistant's own,
 // or My Chrome — Experimental) and whether to SHOW a window. Everything else is
 // the things a person may want to undo: allowed sites, saved sign-ins.
 import { useCallback, useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { BrowserInfo, MyChromeCheck } from '../../../shared/browser-types';
-import { browserSupported } from '../../state/browser-store';
-import { useScreenOpen } from '../../shoot-mode';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, LoadingState, OneJobCard, OneJobText, ProgressBar, RadioGroup, SectionLabel, Select, SettingRow, Toggle } from '../ui';
-import { GlobeIcon } from '../Icons';
 
 function bridge() { return (window as any).claude.browser; }
 
 const WHICH = ['own', 'my-chrome'] as const;
 
-export function browserSettingsSummary(info: BrowserInfo | null): string {
-  if (!info) return 'The assistant\'s own web browser';
-  if (info.settings.useMyChrome) return 'My Chrome (Experimental)';
-  if (!info.chosen) return info.install.phase === 'downloading' ? `Downloading… ${info.install.percent}%` : 'No browser found yet';
-  return `${info.chosen.label} · ${info.settings.showWindow ? 'window shown' : 'hidden'}`;
-}
+/** The page's (i) beside its title — what was the old dialog's subtitle. */
+export const BROWSER_INFO = {
+  label: 'About the Browser',
+  body: <p>The assistant's own web browser, for sites that need clicking, typing or a sign-in.</p>,
+};
 
-export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
+export default function BrowserSettings() {
   const [info, setInfo] = useState<BrowserInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [check, setCheck] = useState<MyChromeCheck | null>(null);
@@ -75,7 +75,7 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
   const which = s?.useMyChrome ? 'my-chrome' : 'own';
 
   return (
-    <Dialog open onClose={onClose} title="Browser" subtitle="The assistant's own web browser, for sites that need clicking, typing or a sign-in." size="panel" screen="settings/browser">
+    <>
       {loadError && <ErrorState className="mb-3" message={loadError} onRetry={load} />}
       {!info && !loadError && <LoadingState what="browser settings" />}
       {/* WHY rebuilt on the shared pieces (2026-10-14, the new-surface check after merging master;
@@ -215,7 +215,7 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
         title={pending?.kind === 'window' ? (pending.value ? 'Show the browser window?' : 'Hide the browser window?') : 'Switch browsers?'}
         size="panel"
         layer={3}
-        noScreen="a two-button confirm inside Settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
+        noScreen="a two-button confirm inside Assistant settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
       >
         {/* WHY the shared one-job card (guide "Popups": every one-job popup, short questions too). */}
         <OneJobCard actions={<>
@@ -236,7 +236,7 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
         size="panel"
         layer={3}
         destructive
-        noScreen="a two-button confirm inside Settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
+        noScreen="a two-button confirm inside Assistant settings → Browser; its wording is pinned by BrowserSettings.test.tsx"
       >
         <OneJobCard actions={<>
           <Button variant="danger" onClick={() => { setConfirmClear(false); void run(() => bridge().clearSignins()); }}>Sign out of everything</Button>
@@ -245,34 +245,6 @@ export function BrowserSettingsDialog({ onClose }: { onClose: () => void }) {
           <OneJobText><p>The assistant's browser closes and forgets every sign-in. You'll need to sign in again the next time a task needs it. Your own browser isn't affected.</p></OneJobText>
         </OneJobCard>
       </Dialog>
-    </Dialog>
-  );
-}
-
-export default function BrowserSettingsButton() {
-  const [open, setOpen] = useState(false);
-  const [summary, setSummary] = useState<string>(browserSettingsSummary(null));
-  const supported = browserSupported();
-  useScreenOpen('settings/browser', () => setOpen(true), undefined, supported); // photo-only build
-  // WHY no fetch until the dialog has been opened: drawing this row must not
-  // start the Browser's worker process for someone who never browses.
-  const [seen, setSeen] = useState(false);
-  useEffect(() => {
-    if (!supported || !seen || open) return;
-    let live = true;
-    void bridge().info().then((i: BrowserInfo) => { if (live) setSummary(browserSettingsSummary(i)); }).catch(() => {});
-    return () => { live = false; };
-  }, [supported, seen, open]);
-  if (!supported) return null;
-  return (
-    <>
-      <SettingRow
-        icon={<GlobeIcon className="w-4 h-4 text-fg-muted" />}
-        title="Browser"
-        description={summary}
-        onClick={() => { setSeen(true); setOpen(true); }}
-      />
-      {open && createPortal(<BrowserSettingsDialog onClose={() => setOpen(false)} />, document.body)}
     </>
   );
 }

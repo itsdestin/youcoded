@@ -27,7 +27,6 @@ import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
 import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
-import BrowserSettingsButton from './browser/BrowserSettingsButton';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
@@ -3109,8 +3108,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
         />
 
-        <BrowserSettingsButton />{/* the assistant's web browser — computer's own window only */}
-
+        {/* The Browser's settings are a page of Assistant settings (Destin, 2026-10-15). */}
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         <BuddyButton />
