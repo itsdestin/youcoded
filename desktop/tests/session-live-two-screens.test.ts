@@ -12,6 +12,9 @@ import { createSessionChatState, type SessionChatState } from '../src/renderer/s
 import { routeSessionLive } from '../src/renderer/state/transcript-batch';
 import { dispatchSlashCommand } from '../src/renderer/state/slash-command-dispatcher';
 import { DESKTOP_WINDOW_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
+// A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
+// for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
+const NO_RECORD_SCREEN = { ...ANDROID_LOCAL_CAPABILITIES, sessionRecord: false, terminalTransport: 'raw-bytes' as const };
 
 const S = 's1';
 function screen() {
@@ -145,8 +148,8 @@ describe('the screen that typed draws each line exactly once', () => {
 
   it('the Android app\'s own runtime, which has no record, still draws them from the screen', () => {
     const { A } = setup();
-    run('/clear', ANDROID_LOCAL_CAPABILITIES, A);
-    run('/compact', ANDROID_LOCAL_CAPABILITIES, A);
+    run('/clear', NO_RECORD_SCREEN, A);
+    run('/compact', NO_RECORD_SCREEN, A);
     expect(markers(A.get())).toEqual(['Conversation cleared']);
     expect(A.get().compactionPending).not.toBeNull();
   });

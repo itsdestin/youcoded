@@ -47,11 +47,14 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 
 import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
 import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
+// A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
+// for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
+const NO_RECORD_SCREEN = { ...ANDROID_LOCAL_CAPABILITIES, sessionRecord: false, terminalTransport: 'raw-bytes' as const };
 
 // The lifecycle tests below pin WHEN the detector decides to show or dismiss a card. That reading runs in the renderer only on a host with no record of
 // its own (the Android app's own runtime); everywhere else the computer's main process reads the terminal (tests/session-screens.test.ts runs the SAME
 // decisions there). So these run as that host, where the detector draws what it finds directly.
-beforeEach(() => { (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
+beforeEach(() => { (window as any).claude = { capabilities: NO_RECORD_SCREEN }; });
 
 // A recognized setup prompt (title in SETUP_PROMPT_TITLES).
 const RESUME_MENU = `Resume Session
@@ -627,7 +630,7 @@ describe('usePromptDetector — where a card is drawn from (one-core R5-4b)', ()
     expect(report).not.toHaveBeenCalled();
   });
   it('the Android app\'s own runtime, which has no host record, still draws the card itself', () => {
-    (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES };
+    (window as any).claude = { capabilities: NO_RECORD_SCREEN };
     seeMenu();
     expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });

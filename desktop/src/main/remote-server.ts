@@ -23,7 +23,7 @@ import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import { VITE_DEV_PORT } from '../shared/ports';
-import { PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
+import { ANDROID_LOCAL_CAPABILITIES, PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
 import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON, REFRESH_NOTICE } from '../shared/fill-protocol';
 import { createSessionChatState, serializeChatState } from '../renderer/state/chat-types';
 import type { NativeSendResult } from '../shared/types';
@@ -165,7 +165,7 @@ export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild:
 
 /** The handshake a signed-in screen receives. WHY (one-core R4-1, S7): `protocolVersion` and `capabilities` tell the screen what it
  *  may do (shared/capabilities.ts); `sessionNaming` is the older single capability the UI reads before first paint. */
-export function authOkMessage(who: { deviceId: string; secret?: string }, focusSessionId: string | null = null) {
+export function authOkMessage(who: { deviceId: string; secret?: string }, focusSessionId: string | null = null, local = false) {
   return {
     type: 'auth:ok' as const,
     deviceId: who.deviceId,
@@ -173,7 +173,7 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     platform: 'desktop' as const,
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
+    capabilities: { ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES), sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
   };
@@ -826,7 +826,7 @@ export class RemoteServer {
           if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
           releaseUnauth();
           this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true });
-          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId()))); return;
+          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
         }
 
         // No password configured

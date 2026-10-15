@@ -27,7 +27,11 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
  *   userdata/                   the backend's Electron-style userData
  */
 class RuntimeInstaller(private val context: Context) {
-    val files: File = context.filesDir
+    // WHY canonical (2026-10-15): Android names this folder twice (/data/user/0/<pkg> and /data/data/<pkg>, one
+    // a link to the other). Programs see the kernel's name (/data/data, what Claude Code records in file paths and
+    // project slugs); filesDir gives the other. Two spellings of one folder made the backend call files inside
+    // the home folder "outside the project". Every path we hand out uses the resolved one.
+    val files: File = context.filesDir.canonicalFile
     val usr = File(files, "usr")
     val bin = File(usr, "bin")
     val lib = File(usr, "lib")
@@ -68,9 +72,8 @@ class RuntimeInstaller(private val context: Context) {
             if (rel.contains("libexec/git-core/")) link(target, File(usr, "libexec/git-core/" + rel.substringAfterLast('/')))
             else link(target, File(bin, rel.substringAfterLast('/')))
         }
-        // git runs its own subcommands as git-core/git; Claude Code is its musl build (interpreter patched).
+        // git runs its own subcommands as git-core/git. (usr/bin/claude is the launcher, from binmap.)
         link(File(nativeLibDir, "libgit.so"), File(usr, "libexec/git-core/git"))
-        link(File(nativeLibDir, "libclaude.so"), File(bin, "claude"))
 
         progress("Unpacking tools…")
         File(etc, "ssl/certs").mkdirs()

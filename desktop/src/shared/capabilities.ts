@@ -9,8 +9,7 @@
 //
 // Keep this file DATA ONLY (no imports, literal values): scripts/generate-preload-channels.mjs copies
 // PROTOCOL_VERSION and DESKTOP_WINDOW_CAPABILITIES into preload.ts, because Electron's sandboxed preload cannot import
-// another module. Kotlin's MessageRouter.kt mirrors ANDROID_LOCAL_CAPABILITIES (pinned by
-// tests/capabilities.test.ts, the way bundled-plugins-parity pins its list).
+// another module.
 
 /** The version of the handshake and message shapes between a screen and its host. Bump it when a message changes in a
  *  way an older screen or host would misread; a screen never refuses a host over it (it falls back to
@@ -107,22 +106,26 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   assistantBrowser: false,
 };
 
-/** What the Android app can do on its OWN runtime (not paired to a computer). Mirrored in MessageRouter.kt. */
+/** What the Android app's own page can do on the phone's own backend (not paired to a computer).
+ *  WHY these values (2026-10-14, Android clean rebuild): the phone runs the desktop backend itself, and the app's page is
+ *  that backend's owner (remote-local.ts), so it gets a window's abilities except what needs a desktop: no extra windows,
+ *  no OS file manager, no buddy, no built-in Browser. Links open through the app (host-bridge.ts); git and ripgrep are
+ *  bundled. Sent in the local handshake (remote-server.ts authOkMessage). */
 export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   nativeWindows: false,
   openInOs: false,
-  openExternal: false,
-  git: false,
+  openExternal: true,
+  git: true,
   themePictures: true,
   themeRigs: false,
-  terminalTransport: 'raw-bytes',
+  terminalTransport: 'text',
   terminalScreenRead: true,
-  nativeSessions: false,
+  nativeSessions: true,
   buddy: false,
   projectWrites: true,
-  contentSearch: false,
-  liveHandoff: false,
-  sessionRecord: false,
+  contentSearch: true,
+  liveHandoff: true,
+  sessionRecord: true,
   assistantBrowser: false,
 };
 

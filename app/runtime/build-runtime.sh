@@ -13,8 +13,7 @@
 #    build variant (.dev, .releasetest) gets its own build of this folder.
 #  - musl is built from source with patch-musl.py (name lookups read $YOUCODED_ETC/resolv.conf).
 #  - ycshim.c is linked FIRST into every executable: io_uring, #! scripts, /bin/sh, /etc.
-#  - Claude Code is its official musl build with only its interpreter rewritten (a Bun single-file
-#    binary: nothing else in it is edited).
+#  - Claude Code is its official musl build, byte-for-byte; claude-launch.c starts it through the loader.
 # Needs: bash, curl, tar, python3, clang + lld (any recent LLVM). Downloads are cached in $CACHE.
 set -euo pipefail
 
@@ -137,9 +136,11 @@ if [ ! -s "$CC_TGZ" ]; then
   curl -fsSL -o "$CC_TGZ" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/-/claude-code-linux-arm64-musl-$CLAUDE_CODE_VERSION.tgz"
 fi
 tar xzf "$CC_TGZ" -O package/claude > "$JNI/libclaude.so"
-# Only the interpreter changes (proved on a phone: Bun finds its embedded program either way); no shim —
-# editing more of a Bun binary is not safe, and it needs no shim: its hooks and tools ran without one.
-"$PATCHELF" --set-interpreter "$INTERP" "$JNI/libclaude.so"
+# Shipped UNMODIFIED (Anthropic's terms: "the Claude Code binary must not be modified"). usr/bin/claude is
+# claude-launch.c, which runs it through the bundled loader. It gets no shim: its hooks and tools ran without one.
+clang "${CCX[@]}" -O2 -fPIE -pie -nostdlib -DLOADER="\"$INTERP\"" "$SR/usr/lib/Scrt1.o" "$SR/usr/lib/crti.o" "$HERE/claude-launch.c" "$SR/usr/lib/crtn.o" \
+  -o "$JNI/libclaudelaunch.so" -L"$SR/usr/lib" -lc -Wl,--dynamic-linker="$INTERP"
+echo "libclaudelaunch.so usr/bin/claude" >> "$ASSETS/binmap.txt"
 echo "$CLAUDE_CODE_VERSION" > "$ASSETS/claude-code-version.txt"
 
 # --- data files ----------------------------------------------------------------------------------
