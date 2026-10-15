@@ -85,11 +85,14 @@ object WebViewUrlPolicy {
      * pairing credential — and its file access. Any other file:// address is
      * refused, not handed out: no other app can open a file:// URL from here.
      */
-    fun decide(url: String, isPairedHost: (host: String, port: Int) -> Boolean): UrlDecision {
+    fun decide(url: String, isPairedHost: (host: String, port: Int) -> Boolean, devServersInApp: Boolean = false): UrlDecision {
         val uri = parse(url)
         if (uri != null && isMintedDownload(uri, isPairedHost)) return UrlDecision.DOWNLOAD
         if (url.startsWith("file:")) return if (isBundledAsset(url)) UrlDecision.LOAD else UrlDecision.BLOCK
-        if (isDevServer(uri)) return UrlDecision.LOAD
+        // WHY only when asked (independent review, 2026-10-15): Claude Code now runs ON the phone, so a link to a dev
+        // server it started (http://localhost:5173) would replace the app's own page — and reach the app's JavaScript
+        // bridge. Only a debug build, whose own page may come from a laptop's dev server, keeps them in place.
+        if (isDevServer(uri)) return if (devServersInApp) UrlDecision.LOAD else UrlDecision.OPEN_EXTERNALLY
         return UrlDecision.OPEN_EXTERNALLY
     }
 
@@ -212,6 +215,7 @@ object WebViewUrlPolicy {
 class WebViewUrlRouter(
     private val actions: Actions,
     private val isPairedHost: (host: String, port: Int) -> Boolean,
+    private val devServersInApp: Boolean = false,
 ) {
     interface Actions {
         fun download(url: String, fileName: String)
@@ -219,7 +223,7 @@ class WebViewUrlRouter(
     }
 
     /** Returns true when the WebView must NOT load the URL itself. */
-    fun onNavigation(url: String): Boolean = when (WebViewUrlPolicy.decide(url, isPairedHost)) {
+    fun onNavigation(url: String): Boolean = when (WebViewUrlPolicy.decide(url, isPairedHost, devServersInApp)) {
         UrlDecision.DOWNLOAD -> { actions.download(url, WebViewUrlPolicy.downloadFileName(url)); true }
         UrlDecision.OPEN_EXTERNALLY -> { actions.openExternally(url); true }
         UrlDecision.BLOCK -> true
@@ -227,7 +231,7 @@ class WebViewUrlRouter(
     }
 
     fun onDownloadRequested(url: String) {
-        when (WebViewUrlPolicy.decide(url, isPairedHost)) {
+        when (WebViewUrlPolicy.decide(url, isPairedHost, devServersInApp)) {
             UrlDecision.DOWNLOAD -> actions.download(url, WebViewUrlPolicy.downloadFileName(url))
             // A download from an ordinary website goes to the browser, as a tap
             // on its link would. A blob: or data: download is page-made content

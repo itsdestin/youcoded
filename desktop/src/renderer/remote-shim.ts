@@ -15,8 +15,8 @@ import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT }
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
-// The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
-import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
+// The phone's own backend (localBridgeUrl) and the Android app itself (invokeAndroidHost) — WHY there.
+import { localBridgeUrl, invokeAndroidHost, hasAndroidHost, setAndroidHostEventSink } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
@@ -178,8 +178,10 @@ const NO_FILL_MS = 10_000;
 let fillRound = 0;
 
 function setConversationPhase(phase: ConversationPhase): void {
-  // The Android app on its own local bridge never fills from a computer: a phase there
-  // would end as "may be out of date" with a Refresh that has nothing to refresh.
+  // WHY not on the Android app's own backend (Destin, 2026-10-15: "this conversation may be out of date" banners for
+  // conversations running on the phone): the strip describes a copy of a COMPUTER's conversation. On the phone's own
+  // backend there is no copy — the app loads conversations the way a desktop window does and never reports a fill
+  // round, so the 10 s no-report timer turned every connect into "may be out of date".
   if (isAndroidLocal()) return;
   conversationPhase = phase;
   dispatchEvent('remote:conversation-status', { phase });
@@ -416,8 +418,7 @@ function failRequestsCutOffByDrop(): void {
   for (const [id, entry] of pending) {
     if (entry.outcomeUnknown) continue;
     clearTimeout(entry.timeout);
-    if (isAndroidLocal()) pending.delete(id);
-    else entry.outcomeUnknown = true;
+    entry.outcomeUnknown = true;
     entry.reject(unknownOutcomeError('Lost the connection before the computer answered.'));
   }
 }
@@ -885,18 +886,6 @@ function noteUnsupported(channel: string): void {
   }));
 }
 
-/** A rejection shaped exactly like the host's `unsupported` refusal, minus the
- *  notice. WHY: a few channels are asked for AUTOMATICALLY — on launch, on
- *  opening Settings — and the phone's bridge cannot answer them until the
- *  rebuild. Every caller already handles the rejection; what none of them
- *  wants is a toast about it on an ordinary screen. Until 2026-09-10 the
- *  bridge answered these with a bare `{error}` object that RESOLVED, which
- *  crashed Project View (a status object with no `spaces`) and threw inside
- *  the chat reducer on every launch. */
-function refuseQuietlyOnPhone(channel: string): Promise<never> {
-  return Promise.reject(new Error(`remote-unsupported: ${channel}`));
-}
-
 /** Settle one pending request from the host's answer. THE only place a
  *  response resolves or rejects a caller's promise.
  *
@@ -1262,6 +1251,10 @@ function routePush(type: string, payload: any): void {
       // .onPresenceEvent subscribers registered via addListener receive the
       // payload object verbatim; the renderer (Task 7) interprets it.
       dispatchEvent('social:presence-event', payload);
+      break;
+    case 'first-run:state':
+      // The phone's own backend runs setup (sign-in) for this device: its wizard's progress (firstRun.onStateChanged).
+      dispatchEvent('first-run:state', payload);
       break;
   }
 }
@@ -1989,6 +1982,8 @@ async function pickAndUploadFiles(): Promise<string[]> {
 
 /** Install the window.claude shim. Call once on app startup in browser mode. */
 export function installShim(): void {
+  // The Android app's own pushes (voice words) arrive through its host object, not the socket.
+  setAndroidHostEventSink((type, payload) => dispatchEvent(type, payload));
   // Wake checks (2026-09-11): see checkConnectionAfterWake. Guarded for pages without a DOM.
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => {
@@ -2057,15 +2052,11 @@ export function installShim(): void {
       create: (opts: any) => invoke('session:create', opts),
       // The ONE way a conversation is filled (one-core R5-2; the host half is main/session-open.ts). Sends where this page got to (`have`,
       // and how far the terminal drew) and answers with a page or just the events it missed; the caller applies the answer and then
-      // calls `play` for the pushes in it. On the phone's OWN bridge there is no host record to fill from: refused quietly, as
-      // `transcript:page` is, and the caller reads that as "nothing to load".
-      open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) =>
-        isAndroidLocal() ? refuseQuietlyOnPhone('session:open') : openSessionRemote(req),
+      // calls `play` for the pushes in it. The phone's own backend is the same desktop backend, so it fills the same way (2026-10-14).
+      open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) => openSessionRemote(req),
       // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
-      // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
-      // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
+      // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile.
       unwatch: (sessionId: string) => {
-        if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
         // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
         openedHere.delete(sessionId);
         ptyEarly.delete(sessionId);
@@ -2114,13 +2105,13 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
-      // Android's own runtime only: its host has no screen reader. A computer's windows and phones never call this (the computer reads the terminal itself).
-      reportInputBlocked: (sessionId: string, blocked: boolean) => { if (isAndroidLocal()) fire('session:input-blocked', { sessionId, blocked }); },
+      // WHY a no-op (2026-10-14, Android clean rebuild): only the old Kotlin runtime needed the page to read its terminal for it;
+      // every host now runs the desktop backend, which reads the terminal itself (session-screens.ts).
+      reportInputBlocked: (_sessionId: string, _blocked: boolean) => {},
       // What the computer noted for these send ids (one-core R5-4b), asked about with the record epoch each message was SENT under (`sendEpochs`),
       // never the one the page holds now: after a computer restart and a refill the new epoch would say "not received" about a message the old
-      // computer did receive. The Android app's own runtime has no host record and nothing to lose on a network: resolves to undefined.
+      // computer did receive.
       sendOutcomes: async (sessionId: string, ids: string[]) => {
-        if (isAndroidLocal()) return undefined;
         // Group by the epoch each message was sent under; an id this page never sent (or lost on reload) has none, and the computer answers "unknown".
         const groups = new Map<string | undefined, string[]>();
         for (const id of ids) { const e = sendEpochs.get(id); groups.set(e, [...(groups.get(e) ?? []), id]); }
@@ -2580,10 +2571,7 @@ export function installShim(): void {
     // browsers + Android (PITFALLS parity rule). onEvent returns an
     // unsubscribe function to match preload's shape.
     syncSpaces: {
-      // The phone has no Sync Spaces engine (audit 2026-09-10); status is polled
-      // on mount by Settings, Project View and the folder switcher, so it is
-      // refused without a notice — see refuseQuietlyOnPhone.
-      status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
+      status: () => invoke('syncspaces:status'),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
       // Resolves only when the sync has finished (it drives "Syncing…"), and a
@@ -2874,15 +2862,15 @@ export function installShim(): void {
           // so the user reads why there is no microphone instead of watching a
           // button go quietly dead.
           ? Promise.resolve({ state: 'unavailable', reason: VOICE_REMOTE_REASON })
-          : invoke('voice:status'),
+          : invokeAndroidHost('voice:status'),
       download: (): Promise<void> =>
-        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:download'),
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invokeAndroidHost('voice:download'),
       start: (): Promise<void> =>
-        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:start'),
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invokeAndroidHost('voice:start'),
       stop: (): Promise<void> =>
-        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:stop'),
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invokeAndroidHost('voice:stop'),
       cancel: (): Promise<void> =>
-        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:cancel'),
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invokeAndroidHost('voice:cancel'),
       onEvent: (cb: (e: unknown) => void) => {
         // Refuses the same way: once we are talking to a desktop, no voice event
         // can ever arrive, so subscribe to nothing and hand back an unsubscribe
@@ -2903,7 +2891,9 @@ export function installShim(): void {
     //   dev.onInstallProgress).
     system: {
       notifyStackState: (empty: boolean) => {
-        fire('system:notify-stack-state', { empty });
+        // WHY to the app (2026-10-14, Android clean rebuild): the hardware back button is the Android app's, not the
+        // backend's; the app answers 'system:back' pushes through its host object. A browser tab has no back to manage.
+        if (hasAndroidHost()) void invokeAndroidHost('system:notify-stack-state', { empty }).catch(() => {});
       },
       onBack: (cb: () => void) => {
         const handler: Callback = () => cb();
@@ -2952,41 +2942,45 @@ export function installShim(): void {
       clearSetupStatus: () =>
         invoke('dev:setup-clear'),
     },
-    // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
+    // First-run is the device's own setup. A browser reaching a computer never runs it: COMPLETE, so the renderer
+    // never enters first-run mode. WHY the Android app's own page does (2026-10-14, Android clean rebuild): its
+    // backend runs on the phone, so signing in to Claude there IS this device's setup — the same channels a window uses.
     firstRun: {
-      getState: () => Promise.resolve({ currentStep: 'COMPLETE' }),
-      retry: () => Promise.resolve(),
-      // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
-      startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
-      submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
-      cancelAuth: () => Promise.resolve(),
-      skip: () => Promise.resolve(),
+      getState: () => isAndroidLocal() ? invoke('first-run:state') : Promise.resolve({ currentStep: 'COMPLETE' }),
+      retry: () => isAndroidLocal() ? invoke('first-run:retry') : Promise.resolve(),
+      // Same widened type as preload's (FirstRunState['authMode']).
+      startAuth: (mode: FirstRunState['authMode']) => isAndroidLocal() ? invoke('first-run:start-auth', { mode }) : Promise.resolve(),
+      submitApiKey: (key: string, service?: string) => isAndroidLocal() ? invoke('first-run:submit-api-key', { key, service }) : Promise.resolve(),
+      cancelAuth: () => isAndroidLocal() ? invoke('first-run:cancel-auth') : Promise.resolve(),
+      skip: () => isAndroidLocal() ? invoke('first-run:skip') : Promise.resolve(),
       // First-run local models (2026-09-14): never shown here, and the band describes the HOST's
       // first download, which a phone cannot read — so every one answers "nothing".
       localSetup: () => Promise.resolve(null),
       connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
       localDownload: () => Promise.resolve(null),
       resumeLocalDownload: () => Promise.resolve(),
-      onStateChanged: (_cb: Callback) => (() => {}),
+      onStateChanged: (cb: Callback) => {
+        if (!isAndroidLocal()) return () => {};
+        addListener('first-run:state', cb);
+        return () => removeListener('first-run:state', cb);
+      },
     },
     // Android-only bridge methods — when connected to a remote desktop, these
     // return immediate defaults since the remote server doesn't handle android:* messages
+    // WHY the Android app answers these itself (2026-10-14, Android clean rebuild): they are the phone's own
+    // business — its saved computers, its camera, its version — so they go to the app (invokeAndroidHost), never over
+    // the socket, and they work the same whether the socket points at the phone's backend or a paired computer.
+    // A plain browser tab has no app: it keeps the answers it always had.
     android: {
-      getTier: () => targetUrl ? Promise.resolve('CORE') : invoke('android:get-tier'),
-      setTier: (tier: string) => targetUrl ? Promise.resolve() : invoke('android:set-tier', { tier }),
-      getAbout: () => targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
-      // The saved computers live in the phone's runtime: while paired they are asked on a
-      // side connection (invokeLocalBridge — WHY there), never answered "done" unasked.
-      // A plain browser tab keeps its old answers; it has no such list.
-      getPairedDevices: () => isAndroidPaired() ? invokeLocalBridge('android:get-paired-devices')
-        : targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
+      getTier: () => hasAndroidHost() ? invokeAndroidHost('android:get-tier') : Promise.resolve('CORE'),
+      setTier: (tier: string) => hasAndroidHost() ? invokeAndroidHost('android:set-tier', { tier }) : Promise.resolve(),
+      getAbout: () => hasAndroidHost() ? invokeAndroidHost('android:get-about') : Promise.resolve({ version: '', build: '' }),
+      getPairedDevices: () => hasAndroidHost() ? invokeAndroidHost('android:get-paired-devices') : Promise.resolve([]),
       savePairedDevice: (device: { name: string; host: string; port: number; password: string }) =>
-        isAndroidPaired() ? invokeLocalBridge('android:save-paired-device', device)
-          : targetUrl ? Promise.resolve() : invoke('android:save-paired-device', device),
+        hasAndroidHost() ? invokeAndroidHost('android:save-paired-device', device) : Promise.resolve(),
       removePairedDevice: (host: string, port: number) =>
-        isAndroidPaired() ? invokeLocalBridge('android:remove-paired-device', { host, port })
-          : targetUrl ? Promise.resolve() : invoke('android:remove-paired-device', { host, port }),
-      scanQr: () => targetUrl ? Promise.resolve(null) : invoke('android:scan-qr'),
+        hasAndroidHost() ? invokeAndroidHost('android:remove-paired-device', { host, port }) : Promise.resolve(),
+      scanQr: () => hasAndroidHost() ? invokeAndroidHost('android:scan-qr') : Promise.resolve(null),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
     removeAllListeners: (channel: string) => removeAllListeners(channel),
@@ -3063,12 +3057,8 @@ export function installShim(): void {
       claimPending: () => Promise.resolve([] as any[]),
       // A REAL call, not a stub, when a desktop is on the other end: paging is the only way back through a long
       // conversation, so it must reach the desktop. (A conversation's NEWEST page arrives with its fill, `session.open`.)
-      // On the phone's OWN bridge there is no pager (deliberately absent since
-      // 2026-08-27, see tests/transcript-page-channel-parity.test.ts): App.tsx
-      // asks for the first page of every session on launch, so the refusal is
-      // quiet — the callers already treat it as "no older messages".
       requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string; toEnd?: boolean }) =>
-        isAndroidLocal() ? refuseQuietlyOnPhone('transcript:page') : invoke('transcript:page', {
+        invoke('transcript:page', {
           sessionId: req.sessionId,
           beforeCursor: req.beforeCursor ?? null,
           ...(req.toEnd ? { toEnd: true } : {}),

@@ -24,12 +24,9 @@ android {
         targetSdk = 35
         versionCode = 21
         versionName = "1.3.0"
-        // WHY: the bootstrap only ships an aarch64 runtime (bootstrap-aarch64.zip,
-        // Termux's binary-aarch64 index), but ML Kit / zstd / the terminal JNI
-        // bring native libs for all four ABIs, so the APK advertised
-        // armeabi-v7a, x86 and x86_64 too — it installed on those phones and
-        // then died at first-run setup with a download error (audit 2026-09-10).
-        // Filtering makes the incompatibility honest at install time.
+        // WHY: the bundled programs (app/runtime/build-runtime.sh) are arm64 only, but ML Kit brings
+        // native libs for all four ABIs, so the APK would advertise armeabi-v7a, x86 and x86_64 too and
+        // install on phones it cannot run on. Filtering makes that honest at install time.
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -110,6 +107,25 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             buildConfigField("int", "BRIDGE_PORT", "9961")
             matchingFallbacks += listOf("release")
+        }
+    }
+
+    // WHY (2026-10-14, Android clean rebuild): the bundled programs ship as jniLibs so Android unpacks them
+    // into the one folder an app may execute from. They must stay files on disk, not inside the APK.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/*.so"
+        }
+    }
+
+    // The runtime's programs name their package's files folder (/data/data/<applicationId>/files/usr/lib),
+    // so each variant gets its own build of them (runtimeTasks below); the backend is the same for all.
+    sourceSets {
+        getByName("main").assets.srcDir(layout.buildDirectory.dir("backend-assets"))
+        for (variant in listOf("debug", "release", "releaseTest")) {
+            getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("runtime/$variant/jniLibs"))
+            getByName(variant).assets.srcDir(layout.buildDirectory.dir("runtime/$variant/assets"))
         }
     }
 
@@ -215,6 +231,54 @@ tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(bundleWebUi)
 }
 
+// The phone's programs and the desktop backend (Android clean rebuild, 2026-10-14). Both are cached by
+// Gradle: they rebuild only when their scripts, pins or the desktop source change.
+fun bashCommand(script: File, vararg args: String): List<String> = listOf("bash", script.absolutePath) + args
+
+val buildBackend = tasks.register<Exec>("buildBackend") {
+    description = "Pack the desktop backend for the phone (app/runtime/build-backend.sh)"
+    group = "build"
+    // The backend compiles with the desktop's own dependencies, which bundleWebUi installs (npm ci). WHY (CI,
+    // 2026-10-15): on a fresh checkout this task ran first and found no node_modules.
+    dependsOn(bundleWebUi)
+    val repoRoot = rootProject.projectDir
+    val script = file("runtime/build-backend.sh")
+    val out = layout.buildDirectory.dir("backend").get().asFile
+    val assetsOut = layout.buildDirectory.dir("backend-assets").get().asFile
+    inputs.file(script)
+    inputs.dir(File(repoRoot, "desktop/src/main"))
+    inputs.dir(File(repoRoot, "desktop/src/shared"))
+    inputs.dir(File(repoRoot, "desktop/hook-scripts"))
+    // The backend compiles a few renderer modules and ships the skill registry from there, plus these files
+    // (independent review, 2026-10-15: without them a change there shipped the previous backend).
+    inputs.dir(File(repoRoot, "desktop/src/renderer"))
+    inputs.file(File(repoRoot, "desktop/package.json"))
+    inputs.file(File(repoRoot, "desktop/scripts/install-hooks.js"))
+    inputs.file(File(repoRoot, "desktop/tsconfig.json"))
+    inputs.file(File(repoRoot, "desktop/package-lock.json"))
+    outputs.dir(assetsOut)
+    commandLine(bashCommand(script, out.absolutePath))
+    doLast {
+        assetsOut.mkdirs()
+        File(out, "backend.tgz").copyTo(File(assetsOut, "backend.tgz"), overwrite = true)
+    }
+}
+
+val variantAppIds = mapOf("Debug" to "com.youcoded.app.dev", "Release" to "com.youcoded.app", "ReleaseTest" to "com.youcoded.app.releasetest")
+for ((variant, appId) in variantAppIds) {
+    val runtimeTask = tasks.register<Exec>("buildRuntime$variant") {
+        description = "Build the phone's programs for $appId (app/runtime/build-runtime.sh)"
+        group = "build"
+        val out = layout.buildDirectory.dir("runtime/${variant.replaceFirstChar { it.lowercase() }}").get().asFile
+        inputs.dir(file("runtime"))
+        outputs.dir(out)
+        commandLine(bashCommand(file("runtime/build-runtime.sh"), appId, out.absolutePath))
+    }
+    tasks.matching { it.name == "pre${variant}Build" }.configureEach {
+        dependsOn(runtimeTask, buildBackend)
+    }
+}
+
 dependencies {
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
@@ -227,37 +291,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
 
-    // Termux terminal emulator (vendored) — runs the PTY session and emits
-    // raw bytes via the patched RawByteListener. Tier 2 (xterm-in-WebView)
-    // moved rendering to xterm.js in the React WebView; the native Termux
-    // terminal-view library is no longer referenced. Vendored module stays
-    // because it owns the PTY fork + JNI waitpid loop + RawByteListener.
-    //
-    // LICENSE NOTE: terminal-emulator-vendored is Apache License 2.0 (the
-    // vendor drop preserves Termux's LICENSE and NOTICE for that library).
-    // The Android app itself is MIT, like the rest of the repo (see
-    // app/LICENSE). Apache 2.0 only asks that the NOTICE file travel with
-    // redistributions.
-    //
-    // WHY this changed (2026-09): the earlier "GPLv3" label here rested on a
-    // wrong reading of Termux's license. Termux's LICENSE.md says the
-    // termux-app repo is GPLv3 *except* the terminal-emulator and
-    // terminal-view libraries, which it carves out as Apache 2.0. Nothing
-    // else in this APK is copyleft, so the Android app was never obliged to
-    // be GPLv3 and has been relicensed to MIT.
-    implementation(project(":terminal-emulator-vendored"))
 
-    // Apache Commons Compress for extracting .deb packages (ar + tar + xz + zstd)
+    // Unpacking the backend and data files the app ships (RuntimeInstaller.kt).
     implementation("org.apache.commons:commons-compress:1.28.0")
-    implementation("org.tukaani:xz:1.12")
-    implementation("com.github.luben:zstd-jni:1.5.7-11")
-
-    // Markdown parsing for chat view
-    implementation("org.commonmark:commonmark:0.30.0")
-
-    // WebSocket server for React UI bridge
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.java-websocket:Java-WebSocket:1.6.0")
 
     // Security: encrypted credential storage for paired device passwords
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
@@ -274,15 +310,5 @@ dependencies {
     // Unit tests
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20260719")
-    // Coroutines test support for runTest in SubagentWatcherTest
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    // kotlin.test assertions (assertTrue/assertEquals/etc.) for JVM unit tests
     testImplementation(kotlin("test"))
-    // MockWebServer for AnalyticsServiceTest — version matches the OkHttp
-    // already on the main classpath (4.12.0).
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    // Mockito for stubbing Android Context in SkillScannerTest. Needed because
-    // SkillScanner takes a Context to read web/data/skill-registry.json from
-    // app assets — there's no in-memory fake equivalent (unlike SharedPreferences).
-    testImplementation("org.mockito:mockito-core:5.23.0")
 }

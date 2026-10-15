@@ -25,6 +25,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { AttentionState } from '../state/chat-types';
 import { ANDROID_LOCAL_CAPABILITIES, DESKTOP_WINDOW_CAPABILITIES } from '../../shared/capabilities';
+// A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
+// for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
+const NO_RECORD_SCREEN = { ...ANDROID_LOCAL_CAPABILITIES, sessionRecord: false, terminalTransport: 'raw-bytes' as const };
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
 vi.mock('../state/chat-context', () => ({ useChatDispatch: () => dispatch }));
@@ -57,7 +60,7 @@ const CLEAR_OK = { type: 'ATTENTION_STATE_CHANGED', sessionId: 's1', state: 'ok'
 describe('useAttentionClassifier — only clears attention for sessions it owns', () => {
   // This hook now runs only on a host with a terminal buffer and NO record of its own (the Android app's own runtime): everywhere else the
   // computer's main process owns the "may be stuck" reading (one-core R5-4b), and the last test below pins that the hook stays out of its way.
-  beforeEach(() => { dispatch.mockClear(); (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
+  beforeEach(() => { dispatch.mockClear(); (window as any).claude = { capabilities: NO_RECORD_SCREEN }; });
   afterEach(() => { delete (window as any).claude; });
 
   it('dispatches NOTHING for a parked native session (no PTY buffer to read)', () => {

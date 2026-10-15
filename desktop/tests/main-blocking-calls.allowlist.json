@@ -7,6 +7,7 @@
     "unreviewed-hot-path-candidate = seeded 2026-09-23 from the code as it stood, not yet judged; converting these to async is welcome — then delete the entry."
   ],
   "startup-or-shutdown-only": [
+    {"file": "headless/headless-main.ts", "fn": "readSecrets", "call": "fs.readSync", "count": 1, "reason": "Android backend only: reads the owner token and secrets key from stdin once, before anything is loaded or listening (no event loop to block yet)."},
     {"file": "crash-diagnostics.ts", "fn": "reportPreviousCrashes", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts reports the previous run's crash dumps once during launch"},
     {"file": "crash-diagnostics.ts", "fn": "reportPreviousCrashes", "call": "fs.statSync", "count": 1, "reason": "startup only: main.ts reports the previous run's crash dumps once during launch"},
     {"file": "legacy-cleanup.ts", "fn": "cleanupLegacyYoucodedCore", "call": "fs.existsSync", "count": 1, "reason": "startup only: main.ts removes the retired youcoded-core clone once during launch"},
@@ -484,8 +485,8 @@
     {"file": "remote-devices.ts", "fn": "RemoteDeviceStore.load", "call": "fs.readFileSync", "count": 1},
     {"file": "remote-devices.ts", "fn": "RemoteDeviceStore.save", "call": "fs.mkdirSync", "count": 1},
     {"file": "remote-devices.ts", "fn": "RemoteDeviceStore.save", "call": "fs.writeFileSync", "count": 1},
-    {"file": "remote-server.ts", "fn": "RemoteServer.start", "call": "fs.existsSync", "count": 1},
-    {"file": "remote-server.ts", "fn": "RemoteServer.start", "call": "fs.statSync", "count": 1},
+    {"file": "remote-server.ts", "fn": "RemoteServer.listen", "call": "fs.existsSync", "count": 1},
+    {"file": "remote-server.ts", "fn": "RemoteServer.listen", "call": "fs.statSync", "count": 1},
     {"file": "saved-folders.ts", "fn": "readFolders", "call": "fs.readFileSync", "count": 1},
     {"file": "saved-folders.ts", "fn": "writeFolders", "call": "fs.mkdirSync", "count": 1},
     {"file": "saved-folders.ts", "fn": "writeFolders", "call": "fs.renameSync", "count": 1},

@@ -11,6 +11,8 @@ import fs from 'fs';
 import path from 'path';
 import { sweepOldUploads } from './upload-store';
 import { randomUUID } from 'crypto';
+import { proxyHttpToVite, proxyUpgradesToVite } from './remote-dev-proxy';
+import { localTokenMatches, ownerDesktopServices, type LocalModeOptions } from './remote-local';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
@@ -21,7 +23,7 @@ import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import { VITE_DEV_PORT } from '../shared/ports';
-import { PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
+import { ANDROID_LOCAL_CAPABILITIES, PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
 import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON, REFRESH_NOTICE } from '../shared/fill-protocol';
 import { createSessionChatState, serializeChatState } from '../renderer/state/chat-types';
 import type { NativeSendResult } from '../shared/types';
@@ -95,6 +97,8 @@ const CLOSE_TOO_SLOW = 4009;
 
 interface AuthenticatedClient {
   id: string;
+  /** The device's own app, signed in with the local token: this backend's owner (remote-local.ts). */
+  owner?: boolean;
   ws: WebSocket;
   deviceId: string;
   ip: string;
@@ -161,7 +165,7 @@ export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild:
 
 /** The handshake a signed-in screen receives. WHY (one-core R4-1, S7): `protocolVersion` and `capabilities` tell the screen what it
  *  may do (shared/capabilities.ts); `sessionNaming` is the older single capability the UI reads before first paint. */
-export function authOkMessage(who: { deviceId: string; secret?: string }, focusSessionId: string | null = null) {
+export function authOkMessage(who: { deviceId: string; secret?: string }, focusSessionId: string | null = null, local = false) {
   return {
     type: 'auth:ok' as const,
     deviceId: who.deviceId,
@@ -169,7 +173,7 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     platform: 'desktop' as const,
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
+    capabilities: { ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES), sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
   };
@@ -256,8 +260,11 @@ export class RemoteServer {
       /** WHY (2026-10-01 one-core R5-1, seam S6): phones are members of the same registry as windows, so
        *  "who wants this session" is one list. Absent in tests that do not model one. */
       audience?: SocketAudience;
+      /** Local mode, for the Android app's own backend: see remote-local.ts. */
+      local?: LocalModeOptions;
     },
   ) {
+    this.local = opts?.local ?? null;
     this.audience = opts?.audience ?? null;
     this.devices = new RemoteDeviceStore();
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
@@ -266,6 +273,7 @@ export class RemoteServer {
     this.broadcastToWindows = opts?.broadcastToWindows ?? sendToAllWindows;
   }
   private broadcastToWindows: (channel: string, payload: unknown) => void;
+  private local: LocalModeOptions | null = null;
   private audience: SocketAudience | null;
   private serveBuiltPage: boolean;
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
@@ -322,6 +330,11 @@ export class RemoteServer {
   }
 
   async start(): Promise<void> {
+    if (this.local) {
+      if (this.running) return;
+      this.bindAddress = '127.0.0.1'; this.serveBuiltPage = true; // loopback; a phone has no dev server
+      return this.listen(this.local.port, undefined); // the app's page connects with no path
+    }
     if (!this.config.enabled) {
       console.log('[RemoteServer] Disabled in config, not starting');
       return;
@@ -341,7 +354,10 @@ export class RemoteServer {
       throw new Error(this.lastStartError);
     }
     this.bindAddress = ts.ip;
+    return this.listen(this.config.port, '/ws');
+  }
 
+  private listen(port: number, wsPath: string | undefined): Promise<void> {
     // Subscribe to the events this server relays itself (terminal bytes, session create/exit). Session-scoped pushes reach a phone
     // through publish (publish.ts).
     this.sessionManager.on('pty-output', this.onPtyOutput);
@@ -387,7 +403,7 @@ export class RemoteServer {
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
-        this.proxyToVite(req, res, viteDevUrl);
+        proxyHttpToVite(req, res, viteDevUrl);
       }
     });
 
@@ -397,7 +413,7 @@ export class RemoteServer {
     // hijack this WebSocket (CSWSH). See remote-origin.ts for the rule.
     this.wss = new WebSocketServer({
       server: this.httpServer,
-      path: '/ws',
+      path: wsPath,
       maxPayload: 52428800,
       verifyClient: (info, cb) => {
         if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
@@ -413,30 +429,8 @@ export class RemoteServer {
     });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
-    // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR
-    if (!hasStaticBuild) {
-      this.httpServer.on('upgrade', (req, socket, _head) => {
-        if (req.url === '/ws') return; // handled by our WebSocketServer
-        // Use http:// URL — WebSocket upgrade is an HTTP request with Upgrade header
-        const proxyUrl = new URL(req.url || '/', viteDevUrl);
-        const proxyReq = http.request(proxyUrl, {
-          method: 'GET',
-          headers: req.headers,
-        });
-        proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
-          socket.write(
-            `HTTP/1.1 101 Switching Protocols\r\n` +
-            Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n') +
-            '\r\n\r\n'
-          );
-          if (proxyHead.length) socket.write(proxyHead);
-          proxySocket.pipe(socket);
-          socket.pipe(proxySocket);
-        });
-        proxyReq.on('error', () => socket.destroy());
-        proxyReq.end();
-      });
-    }
+    // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR. Never in local mode, where every path is ours.
+    if (!hasStaticBuild && !this.local) proxyUpgradesToVite(this.httpServer, viteDevUrl);
 
     // Status data is now fed by ipc-handlers.ts via broadcastStatusData() —
     // no independent polling needed. This eliminates duplicate file reads.
@@ -477,7 +471,7 @@ export class RemoteServer {
       // answers on the tailnet name and REFUSES the machine's home-wifi address, which is
       // contract row R10 — and it needs neither Tailscale Serve nor an administrator
       // password, because nothing about Tailscale's own configuration changes.
-      server.listen(this.config.port, this.bindAddress ?? undefined, () => {
+      server.listen(port, this.bindAddress ?? undefined, () => {
         if (settled) return;
         settled = true;
         server.removeListener('error', onError);
@@ -485,7 +479,7 @@ export class RemoteServer {
         this.lastStartError = null;
         // The liveness ping is armed by addClient (first client) and disarmed on
         // the last drop — see startLiveness (simplification audit W14).
-        console.log(`[RemoteServer] Listening on port ${this.config.port}`);
+        console.log(`[RemoteServer] Listening on ${this.bindAddress ?? '*'}:${port}`);
         this.emitStatus();
         resolve();
       });
@@ -751,24 +745,6 @@ export class RemoteServer {
     return compressed;
   }
 
-  // --- Dev mode: proxy HTTP requests to Vite dev server ---
-
-  private proxyToVite(req: http.IncomingMessage, res: http.ServerResponse, viteUrl: string): void {
-    const url = new URL(req.url || '/', viteUrl);
-    const proxyReq = http.request(url, {
-      method: req.method,
-      headers: req.headers,
-    }, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      proxyRes.pipe(res);
-    });
-    proxyReq.on('error', () => {
-      res.writeHead(502);
-      res.end('Vite dev server not available');
-    });
-    req.pipe(proxyReq);
-  }
-
   // --- WebSocket connection handling ---
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
@@ -843,6 +819,14 @@ export class RemoteServer {
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'expected-auth' }));
           ws.close(4000, 'Expected auth');
           return;
+        }
+
+        // Local mode: the app's own page, and nothing else, signs in — with this run's token (remote-local.ts).
+        if (this.local) {
+          if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
+          releaseUnauth();
+          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true });
+          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
         }
 
         // No password configured
@@ -955,11 +939,11 @@ export class RemoteServer {
     this.getNativeRuntime()?.fills.forget(`s${client.audienceId}`);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean } = {}): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean } = {}): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
-      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(),
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true,
     };
     this.clients.add(client);
     // Join the window registry as a member with a negative id (one-core R5-1). A phone is sent a session's pushes once it has
@@ -1063,7 +1047,8 @@ export class RemoteServer {
           this.broadcast({ type: channel, payload: data });
           this.broadcastToWindows(channel, data);
         },
-      });
+        desktop: client.owner ? ownerDesktopServices({ broadcast: (m) => this.broadcast(m), sessionRoots: () => this.sessionRoots(), sessionManager: this.sessionManager }) : undefined,
+      }, { owner: client.owner === true });
       // Only an awaited request (it has an id) is answered.
       if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
       for (const fn of afterReply) { try { fn(); } catch (err) { console.warn('[remote-server] after-reply callback failed:', String(err)); } }

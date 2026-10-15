@@ -1,5 +1,5 @@
 // What a screen can do (src/shared/capabilities.ts): the three sets of values, how a handshake's object is read, and that
-// every place that spells the values out (the preload copy, Android's Kotlin) says the same thing.
+// every place that spells the values out (the preload copy) says the same thing.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,6 @@ import {
 import { readSource } from './helpers/guard-scope';
 
 const root = path.resolve(__dirname, '..');
-const KOTLIN_ROUTER = path.resolve(root, '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'bridge', 'MessageRouter.kt');
 
 describe('reading a handshake\'s capabilities', () => {
   it('takes every known value as sent', () => {
@@ -54,7 +53,7 @@ describe('a computer older than the session record', () => {
   it('a computer that has a record says so explicitly', () => {
     expect(normalizeCapabilities({ sessionRecord: true }).sessionRecord).toBe(true);
     const server = fs.readFileSync(path.join(root, 'src', 'main', 'remote-server.ts'), 'utf8');
-    expect(server).toContain('{ ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== \'0\' }');
+    expect(server).toContain('{ ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES), sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== \'0\' }');
   });
 });
 
@@ -67,16 +66,5 @@ describe('every copy of the values agrees', () => {
     }
     expect(preload).toContain("nativeSessions: process.env.YOUCODED_NATIVE !== '0'");
   });
-
-  it('Android\'s MessageRouter.kt reports the same version and the same Android values', () => {
-    const kt = readSource(KOTLIN_ROUTER);
-    expect(kt.match(/const val PROTOCOL_VERSION = (\d+)/)?.[1], 'PROTOCOL_VERSION in MessageRouter.kt').toBe(String(PROTOCOL_VERSION));
-    const block = kt.match(/fun buildCapabilities\(\): JSONObject \{([\s\S]*?)\n    \}/);
-    expect(block, 'could not find buildCapabilities() in MessageRouter.kt').not.toBeNull();
-    const kotlin: Record<string, unknown> = {};
-    for (const m of block![1].matchAll(/put\("(\w+)",\s*("[^"]*"|true|false)\)/g)) kotlin[m[1]] = m[2].startsWith('"') ? m[2].slice(1, -1) : m[2] === 'true';
-    expect(kotlin).toEqual({ ...ANDROID_LOCAL_CAPABILITIES });
-    expect(kt).toContain('put("protocolVersion", PROTOCOL_VERSION)');
-    expect(kt).toContain('put("capabilities", buildCapabilities())');
-  });
+  // Android clean rebuild (2026-10-14): the phone's backend reports desktop's own values; no Kotlin copy to compare.
 });

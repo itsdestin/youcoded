@@ -14,6 +14,10 @@
   "entry": [
     "src/main/preload.ts",
     "src/main/pty-worker.js",
+    // The Android app's backend: `node dist/main/headless/headless-main.js` (Android clean rebuild, 2026-10-14).
+    // electron-headless.ts is reached through a resolver hook and headless-boot.ts through require(), which
+    // knip cannot follow; every file here is an entry.
+    "src/main/headless/*.ts",
     "scripts/*.js",
     "src/**/*.test.ts",
     "src/**/*.test.tsx",

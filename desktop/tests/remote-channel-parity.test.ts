@@ -1,5 +1,5 @@
 // Every remote channel exists on every surface it needs: the shim (src/renderer/remote-shim.ts),
-// the WS host (src/main/remote-server.ts), preload, the desktop IPC handlers and Android.
+// the WS host (src/main/remote-server.ts), preload and the desktop IPC handlers.
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -52,7 +52,7 @@ describe('remote channels — every channel is answered', () => {
    * surface is exercised by simply running the desktop app.
    *
    * This is the guard that was missing. `remote:status` shipped to preload, the shim, the
-   * desktop IPC handlers and Android, and not to the host; the panel requests it in the same
+   * desktop IPC handlers, and not to the host; the panel requests it in the same
    * `Promise.all` as the config, the Tailscale info and the device list, so one missing case
    * opened the whole Remote Access screen blank on a phone. Every test that could have caught
    * it was a `toContain` over source text for the channels somebody remembered to list.
@@ -193,10 +193,9 @@ describe('remote channels — device list channels', () => {
   const preload = read('../src/main/preload.ts');
   const handlers = read('../src/main/ipc-handlers.ts');
   const shim = read('../src/renderer/remote-shim.ts');
-  const kotlin = read('../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   const CHANNELS = ['remote:devices:list', 'remote:devices:rename', 'remote:devices:unpair'];
 
-  describe('the device list exists on every platform', () => {
+  describe('the device list exists on every surface', () => {
     it('each channel is registered in preload, the desktop handlers and the shim', () => {
       // WHY a parity test and not a type: a bridge type (SharedBridge in shared/backend-contract.ts)
       // compares SHAPES, so a channel missing from one side of the bridge type-checks and
@@ -213,19 +212,12 @@ describe('remote channels — device list channels', () => {
       expect(handlers).not.toContain('ipcMain.handle(IPC.REMOTE_DEVICES');
     });
 
-    it('Android answers all three rather than falling through to unsupported', () => {
-      // The bridge types in shared/backend-contract.ts cannot see Kotlin, so a missing case here is invisible until a
-      // phone hits it. Every channel must appear in the when-block.
-      for (const c of CHANNELS) expect(kotlin).toContain(`"${c}"`);
-    });
-
     it('the channel that looked like it removed access is gone, not merely unused', () => {
       // remote:disconnect-client closed the socket and left the credential valid. Keeping it
       // beside Unpair would put two near-identical labels with very different consequences
       // next to each other.
       expect(preload).not.toContain('disconnectClient');
       expect(shim).not.toContain('disconnectClient:');
-      expect(kotlin).not.toContain('"remote:disconnect-client"');
       expect(read('../src/main/remote-server.ts')).not.toContain('disconnectClient(clientId: string)');
       // And it has no case in the WS host either. It briefly had one, answering an explicit
       // `{ok:false}` so an un-upgraded client would be told no — but a shim only converts
@@ -239,9 +231,8 @@ describe('remote channels — device list channels', () => {
 
 // Remote access batch 2, design §6 "Surfaces" (T4): the strip's two channels on
 // every surface. Preload declares them (desktop never shows the strip), desktop
-// IPC answers not-remote, the shim implements them, the host handles
-// remote:rehydrate (remote-channel-parity.test.ts checks the host case), and
-// Android relies on its catch-all. App's own use was pinned in
+// IPC answers not-remote, the shim implements them, and the host handles
+// remote:rehydrate (remote-channel-parity.test.ts checks the host case). App's own use was pinned in
 // remote-place-app-wiring.test.ts, deleted 2026-09-16 (Plan B Task 4, no replacement —
 // see state/remote-place.ts).
 describe('remote channels — rehydrate channels', () => {

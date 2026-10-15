@@ -599,14 +599,15 @@ describe('remote-shim — phone refusals', () => {
       expect(notices[0].message).toBe("Syncing across your devices isn't available on the phone yet.");
     });
 
-    it('refuses transcript:page and syncspaces:status quietly, without touching the bridge', async () => {
+    // WHY (2026-10-14, Android clean rebuild): the phone's own bridge is now the desktop backend itself, so the
+    // channels it used to refuse quietly (it had no pager and no Sync Spaces) are sent to it like any other.
+    it('sends transcript:page and syncspaces:status to the phone\'s own backend', async () => {
       const ws = await connectPhone();
-      const sentBefore = ws.sent.length;
-      const page = await settle((window as any).claude.detach.requestTranscriptPage({ sessionId: 's1' }));
-      const status = await settle((window as any).claude.syncSpaces.status());
-      expect(page.error?.message).toBe('remote-unsupported: transcript:page');
-      expect(status.error?.message).toBe('remote-unsupported: syncspaces:status');
-      expect(ws.sent.length).toBe(sentBefore);
+      void (window as any).claude.syncSpaces.status().catch(() => {});
+      void (window as any).claude.detach.requestTranscriptPage({ sessionId: 's1' }).catch(() => {});
+      const types = ws.sent.map((m) => JSON.parse(m).type);
+      expect(types).toContain('syncspaces:status');
+      expect(types).toContain('transcript:page');
       expect(notices).toHaveLength(0);
     });
 
@@ -807,31 +808,39 @@ describe('remote-shim — voice gate', () => {
       });
     });
 
-    // The other direction: on the phone, with no remote target, the calls really
-    // do go to the on-device bridge. Without this the refusal tests above could
-    // pass with a namespace that refuses ALWAYS.
-    it('on the phone the calls actually reach the local bridge', async () => {
-      setProtocol('file:');
-      const shim = await loadShim();
-      const connecting = shim.connect('android-local', false);
-      const ws = FakeWebSocket.instances[0];
-      ws.open();
-      ws.receive({ type: 'auth:ok', token: 'tok', platform: 'android' });
-      await connecting;
-      shim.installShim();
-      const voice = (window as any).claude.voice;
+    // The other direction: on the phone, with no remote target, the calls really do go to the Android app
+    // (its speech recognizer), through the host object its WebView injects — never over the socket, which
+    // now leads to the backend. Without this the refusal tests above could pass with a namespace that
+    // refuses ALWAYS.
+    it('on the phone the calls actually reach the Android app', async () => {
+      const calls: Array<{ id: string; type: string; payload: unknown }> = [];
+      (window as any).YouCodedHost = { invoke: (id: string, type: string, json: string) => calls.push({ id, type, payload: JSON.parse(json) }) };
+      try {
+        setProtocol('file:');
+        const shim = await loadShim();
+        const connecting = shim.connect('android-local', false);
+        const ws = FakeWebSocket.instances[0];
+        ws.open();
+        ws.receive({ type: 'auth:ok', token: 'tok', platform: 'android' });
+        await connecting;
+        shim.installShim();
+        const voice = (window as any).claude.voice;
+        const sentBefore = ws.sent.length;
 
-      const p = voice.status();
-      const msg = JSON.parse(ws.sent[ws.sent.length - 1]);
-      expect(msg.type).toBe('voice:status');
-      ws.receive({ type: 'voice:status:response', id: msg.id, payload: { state: 'ready', engine: 'android' } });
-      expect(await p).toEqual({ state: 'ready', engine: 'android' });
+        const p = voice.status();
+        expect(calls.map((c) => c.type)).toEqual(['voice:status']);
+        (window as any).__youcodedHost.reply(calls[0].id, JSON.stringify({ state: 'ready', engine: 'android' }));
+        expect(await p).toEqual({ state: 'ready', engine: 'android' });
+        expect(ws.sent.length).toBe(sentBefore);
 
-      // ...and the host's push events reach an onEvent subscriber.
-      const seen: any[] = [];
-      voice.onEvent((e: any) => seen.push(e));
-      ws.receive({ type: 'voice:event', payload: { type: 'partial', committed: 'Hello.', tail: 'there' } });
-      expect(seen).toEqual([{ type: 'partial', committed: 'Hello.', tail: 'there' }]);
+        // ...and the app's push events reach an onEvent subscriber.
+        const seen: any[] = [];
+        voice.onEvent((e: any) => seen.push(e));
+        (window as any).__youcodedHost.event('voice:event', JSON.stringify({ type: 'partial', committed: 'Hello.', tail: 'there' }));
+        expect(seen).toEqual([{ type: 'partial', committed: 'Hello.', tail: 'there' }]);
+      } finally {
+        delete (window as any).YouCodedHost;
+      }
     });
   });
 });

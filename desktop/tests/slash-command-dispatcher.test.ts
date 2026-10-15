@@ -2,6 +2,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSlashCommand, type DispatcherCallbacks } from '../src/renderer/state/slash-command-dispatcher';
 import { ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
+// A screen whose host keeps no session record and that reads its own terminal — the old Android runtime's shape, kept
+// for an older computer that sends no record (the Android app now runs the desktop backend, 2026-10-14).
+const NO_RECORD_SCREEN = { ...ANDROID_LOCAL_CAPABILITIES, sessionRecord: false, terminalTransport: 'raw-bytes' as const };
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 
@@ -29,8 +32,8 @@ function dispatchModelCommand(raw: string, callbacks: DispatcherCallbacks = {}, 
 }
 
 // These pin what a screen draws ITSELF; a host with a record draws the divider from the host's event instead (tests/session-live-two-screens.test.ts),
-// so they run as the Android app's own runtime, which has none (one-core R5-4a).
-beforeEach(() => { (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
+// so they run as a screen whose host has none (one-core R5-4a).
+beforeEach(() => { (window as any).claude = { capabilities: NO_RECORD_SCREEN }; });
 afterEach(() => { delete (window as any).claude; });
 
 describe('dispatchSlashCommand — typed /model <alias> never falls through to a chat turn', () => {

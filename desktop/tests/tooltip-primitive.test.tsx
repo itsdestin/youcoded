@@ -279,3 +279,29 @@ describe('a hint with nothing to say says nothing', () => {
     expect(screen.getByRole('button').getAttribute('aria-label')).toBe(null);
   });
 });
+
+describe('a click or tap does not leave the hint behind', () => {
+  it('the focus a mouse click gives the control does not reopen the hint it closed', () => {
+    render(<Tooltip text="Hint"><button>x</button></Tooltip>);
+    const b = screen.getByRole('button');
+    fireEvent.pointerDown(b, mouse);
+    fireEvent.focus(b);
+    fireEvent.pointerUp(b, mouse);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('nor does the focus a tap gives it', () => {
+    render(<Tooltip text="Hint"><button>x</button></Tooltip>);
+    const b = screen.getByRole('button');
+    fireEvent.pointerDown(b, finger);
+    fireEvent.focus(b);
+    fireEvent.pointerUp(b, finger);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('focus from the keyboard still opens it', () => {
+    render(<Tooltip text="Hint"><button>x</button></Tooltip>);
+    fireEvent.focus(screen.getByRole('button'));
+    expect(screen.getByRole('tooltip').textContent).toBe('Hint');
+  });
+});

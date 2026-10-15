@@ -110,7 +110,10 @@ function createUpdateService() {
     if (Date.now() - lastReleaseCheck > RELEASE_CHECK_INTERVAL) {
       fetchLatestRelease().catch(() => {});
     }
-    const status = cachedUpdateStatus || { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
+    // WHY currentOnlyStatus, not a shorter literal: before the first check finishes the answer must have the SAME
+    // shape as after a failed one, or the status push sees a "change" when the check gives up and re-sends the
+    // status bar for nothing (seen as a flaky ipc-handlers status-dedup test under load, 2026-10-15).
+    const status = cachedUpdateStatus || currentOnlyStatus();
 
     // Dev-only: force update_available=true for manual UpdatePanel verification without waiting for a real release.
     // Set YOUCODED_DEV_FAKE_UPDATE=1 to simulate a new release one patch ahead of the current version.
