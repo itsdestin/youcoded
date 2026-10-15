@@ -15,7 +15,7 @@
 import React, { useEffect, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { Button, CloseButton, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
+import { Button, CloseButton, LoadingState, ScreenError, SectionLabel, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -96,8 +96,10 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
         <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 flex flex-col gap-6">
           {!loaded && <LoadingState what="pages" />}
           {loaded && failed && (
-            <ErrorState
-              message="The list of pages could not be read."
+            // WHY ScreenError (gt-r1#B-3): the whole Pages screen is this list.
+            <ScreenError
+              title="Your pages couldn't load"
+              message="Nothing was removed."
               onRetry={() => reloadAfterOfficeSave()}
             />
           )}

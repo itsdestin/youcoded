@@ -227,6 +227,53 @@ export function ErrorState(props: ErrorStateProps) {
   );
 }
 
+export type ScreenErrorProps = {
+  /** What couldn't load, as the box's lead line: "The marketplace couldn't load". */
+  title: string;
+  /** One plain sentence — what still holds, or what to try. No machine words. */
+  message?: React.ReactNode;
+  /** The raw failure, folded under Details above the buttons. */
+  details?: string;
+  onRetry: () => void;
+  onReportBug?: () => void;
+  busy?: boolean;
+};
+
+/**
+ * The full-screen error: a whole screen (Marketplace, Library, Pages) that has nothing to
+ * show because its one load failed.
+ *
+ * WHY its own shape (Destin, guide test gt-r1#B-3: "we need better full-screen error states
+ * for when nothing on the page loads at all"): the ordinary notice box at the top of an
+ * otherwise empty full screen read as a stray strip, not as "this screen didn't load". Here it
+ * sits in the middle of the screen at a readable width, with the guide's notice order —
+ * what failed, one sentence, Details, then a full-width filled Try again (Report bug
+ * outlined under it). Same tinted box as every notice, so it is still the one error look.
+ */
+export function ScreenError({ title, message, details, onRetry, onReportBug, busy }: ScreenErrorProps) {
+  return (
+    // WHY a fixed top gap, not vertical centring: the screens it sits in (Marketplace's body,
+    // Library's tab, Pages' list) aren't all full-height boxes, so "centred" landed at the top on
+    // two of three. A set distance from the top puts it in the same spot on every screen.
+    <div className="w-full flex justify-center px-4 pt-24 pb-12">
+      <Callout
+        tone="danger"
+        role="alert"
+        className="w-full max-w-sm"
+        title={title}
+        details={details}
+        actionsPlacement="below"
+        actions={<>
+          <Button variant="primary" className="w-full" onClick={onRetry} disabled={busy}>Try again</Button>
+          {onReportBug && <Button variant="secondary" className="w-full" onClick={onReportBug} disabled={busy}>Report bug</Button>}
+        </>}
+      >
+        {message}
+      </Callout>
+    </div>
+  );
+}
+
 export type FieldErrorProps = {
   children: React.ReactNode;
   className?: string;

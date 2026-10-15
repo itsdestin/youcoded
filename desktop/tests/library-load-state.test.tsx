@@ -120,7 +120,7 @@ describe('LibraryScreen — a load that did not finish is not "nothing installed
     expect(await screen.findByText('Nothing installed yet.')).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('tab', { name: /themes/i })); });
 
-    expect(await screen.findByText(/couldn.t load your installed themes/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your installed themes couldn.t load/i)).toBeInTheDocument();
     expect(screen.queryByText('No themes installed yet.')).toBeNull();
   });
 

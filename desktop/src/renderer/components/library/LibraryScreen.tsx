@@ -7,7 +7,7 @@ import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
-import { Button, EmptyState, ErrorState, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
+import { Button, EmptyState, ScreenError, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
@@ -55,8 +55,12 @@ export default function LibraryScreen({
     const failure = what === 'themes' ? (mp.error ?? mp.themesError) : mp.error;
     if (failure) {
       return (
-        <ErrorState
-          message={`Couldn't load your installed ${what}: ${plainMessage(failure)}`}
+        // WHY ScreenError (gt-r1#B-3): the tab has nothing to show, so it gets the full-screen
+        // error; the raw reason moves under Details instead of after a colon in the sentence.
+        <ScreenError
+          title={`Your installed ${what} couldn't load`}
+          message="Nothing was removed."
+          details={plainMessage(failure)}
           onRetry={() => { void mp.refresh(); }}
         />
       );

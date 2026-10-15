@@ -20,7 +20,7 @@ import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetail
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
-import { Button, EmptyState, ErrorState, LoadingState } from "../ui";
+import { Button, EmptyState, LoadingState, ScreenError } from "../ui";
 import { ScreenBand } from "../ScreenBand";
 import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
@@ -422,7 +422,9 @@ export default function MarketplaceScreen({
   const registryState = registryEmpty && mp.loading
     ? <LoadingState what="the marketplace" />
     : registryEmpty && mp.error
-      ? <ErrorState mode="recoverable" message={mp.error} onRetry={() => { void mp.refresh(); }} />
+      // WHY ScreenError (gt-r1#B-3): nothing on the screen loaded, so it gets the full-screen
+      // error, and the raw message moves under Details (guide: machine words never in the sentence).
+      ? <ScreenError title="The marketplace couldn't load" message="Your installed plugins and themes still work." details={mp.error} onRetry={() => { void mp.refresh(); }} />
       : null;
 
   return (

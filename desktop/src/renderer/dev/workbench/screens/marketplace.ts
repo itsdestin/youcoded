@@ -51,5 +51,7 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('library/themes', 'view'),
   { ...mp('library#empty', 'view', 'empty-state'), params: { marketplace: 'empty' } },
   { ...mp('library#load-failed', 'view', 'error-state'), params: { fail: 'skills.list' } },
+  // Nothing loaded at all: the full-screen error (gt-r1#B-3).
+  { ...mp('marketplace#load-failed', 'view', 'error-state'), params: { marketplace: 'empty', fail: 'skills.list' } },
   { ...mp('library/themes#load-failed', 'view', 'error-state'), params: { fail: 'theme.marketplace.list' } },
 ];

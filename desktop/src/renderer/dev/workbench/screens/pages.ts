@@ -9,6 +9,8 @@ const PHONE = { width: 390, height: 844 };
 
 export const PAGES: readonly ScreenEntry[] = [
   pg('pages', 'view'),
+  // The list couldn't be read: the full-screen error (gt-r1#B-3).
+  { ...pg('pages/library#load-failed', 'view', 'error-state'), params: { fail: 'pages.list' } },
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
   // The paint studio sample: the Pages kit's slider (`.yc-range`, Brush size/Opacity) — shown when

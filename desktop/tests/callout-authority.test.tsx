@@ -25,6 +25,17 @@ function surface(): HTMLElement {
 }
 
 describe('Callout', () => {
+  // Destin, gt-r1#E-2/#E-3: sentence, then Details, then the buttons — in every shape.
+  it('puts its buttons below the Details fold, whichever shape it is', () => {
+    for (const shape of [{}, { compact: true }, { actionsPlacement: 'below' as const }]) {
+      cleanup();
+      render(<Callout tone="danger" details="ENOSPC" actions={<button>Try again</button>} {...shape}>body</Callout>);
+      const fold = screen.getByText('Details');
+      const button = screen.getByRole('button', { name: 'Try again' });
+      expect(fold.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING, JSON.stringify(shape)).toBeTruthy();
+    }
+  });
+
   it('has one geometry across all three tones', () => {
     const structural = new Set<string>();
     for (const tone of ['info', 'warning', 'danger'] as const) {

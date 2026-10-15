@@ -145,6 +145,20 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
       {children && <div className={`text-xs ${t.body}`}>{children}</div>}
     </>
   );
+  // WHY buttons BELOW the Details fold whenever there is one (Destin, guide test gt-r1#E-2/#E-3:
+  // "the try again button should go below the details line"; "buttons below details dropdown,
+  // not above"): the box reads top to bottom — what happened, the machine's own words if you want
+  // them, then what you can do. Buttons above the fold split the explanation in two. Applies to
+  // every shape (slim, beside, below), so no caller has to choose.
+  if (fold && actions) {
+    return (
+      <div role={role} className={`rounded-lg ${compact ? 'px-2.5 py-1.5' : 'p-3'} border ${t.surface} ${className}`.trim()}>
+        {text}
+        {fold}
+        <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+      </div>
+    );
+  }
   if (compact) {
     return (
       <div role={role} className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
