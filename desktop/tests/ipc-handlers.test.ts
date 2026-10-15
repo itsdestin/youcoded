@@ -783,9 +783,19 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   let readFile: ReturnType<typeof vi.spyOn>;
   let stat: ReturnType<typeof vi.spyOn>;
   let httpsGet: ReturnType<typeof vi.spyOn>;
+  let updateStatus: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    // WHY pinned: the payload carries the update status, held by ONE shared update service. Every
+    // registerIpcHandlers call earlier in this file starts a REAL GitHub release check, and its reply
+    // (or error) can land in the middle of a test here — under a loaded machine it did — changing the
+    // payload between two ticks with no file changed ("expected 2 to be 1"). The gate's dedupe is what
+    // these tests pin, so the update status is held still for them.
+    const { getUpdateService } = await import('../src/main/update-service');
+    updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus').mockReturnValue(
+      { current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any,
+    );
     usageJson = null;
     readFile = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p: any) => {
       if (String(p).endsWith('.usage-cache.json') && usageJson != null) return usageJson;
@@ -797,7 +807,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     httpsGet = vi.spyOn(https.default, 'get').mockImplementation((() => ({ on: () => ({ on: () => ({}) }) })) as any);
   });
   afterEach(() => {
-    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore();
+    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore(); updateStatus.mockRestore();
     vi.useRealTimers();
   });
 
