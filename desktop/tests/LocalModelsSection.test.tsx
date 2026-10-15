@@ -508,13 +508,20 @@ describe('fields main computes', () => {
       // stayed on the failure. Now the next read succeeds two seconds later and
       // draws the whole working dialog — with a stale "could not read" line under
       // it for as long as it is open.
+      // WHY the gate: the poll runs every 50 ms here, so on a busy machine the
+      // second (working) read could land and wipe the line before waitFor's
+      // first look — the test then failed on a dialog that behaved correctly.
+      // Later reads wait until the test has SEEN the failure.
       let calls = 0;
+      let seen!: () => void;
+      const sawFailure = new Promise<void>((r) => { seen = r; });
       (globalThis as any).window = (globalThis as any).window ?? {};
       (globalThis as any).window.claude = {
         models: {
           settings: vi.fn(async () => {
             calls += 1;
             if (calls === 1) throw new Error('Could not read this model’s settings.');
+            await sawFailure;
             return SETTINGS;
           }),
           setSettings: vi.fn().mockResolvedValue(SETTINGS),
@@ -526,6 +533,7 @@ describe('fields main computes', () => {
       render(<LocalModelRow model={COMPLETE} onRefresh={async () => {}} />);
       await act(async () => { fireEvent.click(screen.getByLabelText(/^Settings for /)); });
       await waitFor(() => expect(screen.getByText('Could not read this model’s settings.')).toBeTruthy());
+      seen();
       await waitFor(
         () => expect(screen.queryByText('Could not read this model’s settings.')).toBeNull(),
         POLLED,
