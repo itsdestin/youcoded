@@ -98,9 +98,11 @@ function trayIcons(theme, dir, prefix = 'tray') {
 // One colour, so macOS can turn it black on a light menu bar and white on a dark one: the face's
 // outline, full-size solid eyes with a sparkle cut into each top-right, the smile; eyes and smile
 // raised a touch. Electron treats a file whose name ends in "Template" as a template image.
-function templateSvg(dot, ink = '#000') {
+// `centered`: the menu-bar frame leaves room above the face for the alert dot, so the face sits 1/15 low;
+// Android's themed icon has no dot and centres the face (Destin, 2026-10-15: "isn't really properly centered").
+function templateSvg(dot, ink = '#000', centered = false) {
   const E = [[4.3, 5.2], [9.7, 4.9]];
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 -2.5 15 15">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 ${centered ? -1.5 : -2.5} 15 15">
   <defs><mask id="ring"><rect width="14" height="12" rx="4" fill="#fff"/><rect x="1.15" y="1.15" width="11.7" height="9.7" rx="2.95" fill="#000"/></mask>
   <mask id="spark"><rect x="-1" y="-3" width="16" height="16" fill="#fff"/>${E.map(([x, y]) => `<circle cx="${x + .55}" cy="${y - .9}" r=".62" fill="#000"/>`).join('')}</mask></defs>
   <rect width="14" height="12" rx="4" fill="${ink}" mask="url(#ring)"/>
@@ -116,7 +118,7 @@ function templateSvg(dot, ink = '#000') {
  *  picks by dark mode (mipmap-night-anydpi-v26). Same geometry as templateSvg. */
 function solidFaceSvg(ink = '#fff') {
   const E = [[4.3, 5.2], [9.7, 4.9]];
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 -2.5 15 15">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 -1.5 15 15">
   <defs><mask id="cut"><rect x="-1" y="-3" width="16" height="16" fill="#fff"/>
   ${E.map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="1.6" ry="2.2" fill="#000"/>`).join('')}
   <path d="M5.6 8.35 Q7 8 8.4 8.35 Q8.9 8.5 8.7 8.95 Q8 10.25 7 10.25 Q6 10.25 5.3 8.95 Q5.1 8.5 5.6 8.35Z" fill="#000"/>
@@ -162,12 +164,13 @@ function liquidGlass() {
 // visible. The face panel's corner is its farthest point (~0.54 of its width from the centre), so a
 // 60dp-wide panel keeps every corner inside that circle. The tile is its own vector layer
 // (drawable/ic_launcher_background.xml).
+const MONO_DP = 50;
 function android() {
   const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
   const face = shoot('face', 'default', 1024);
   // Monochrome (Android 13 themed icons) reads ALPHA only: the menu-bar face, so it keeps its features.
   const monoSvg = path.join(TMP, 'mono.svg');
-  fs.writeFileSync(monoSvg, templateSvg(false, '#fff'));
+  fs.writeFileSync(monoSvg, templateSvg(false, '#fff', true));
   const monoNightSvg = path.join(TMP, 'mono-night.svg');
   fs.writeFileSync(monoNightSvg, solidFaceSvg('#fff'));
   for (const [bucket, scale] of Object.entries(DENSITIES)) {
@@ -176,10 +179,12 @@ function android() {
     execFileSync('magick', [face, '-filter', 'Lanczos', '-resize', `${facePx}x${facePx}`, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`,
       path.join(dir, 'ic_launcher_foreground.png')]);
     const mono = path.join(TMP, `mono-${bucket}.png`);
-    execFileSync('rsvg-convert', ['-w', String(Math.round(66 * scale)), '-h', String(Math.round(66 * scale)), monoSvg, '-o', mono]);
+    // 50dp, not the full 66dp safe zone: themed glyphs on a home screen sit at about half the tile (Destin,
+    // 2026-10-15: at 66dp the face's outline nearly touched the tile's edge).
+    execFileSync('rsvg-convert', ['-w', String(Math.round(MONO_DP * scale)), '-h', String(Math.round(MONO_DP * scale)), monoSvg, '-o', mono]);
     execFileSync('magick', [mono, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`, path.join(dir, 'ic_launcher_monochrome.png')]);
     const monoNight = path.join(TMP, `mono-night-${bucket}.png`);
-    execFileSync('rsvg-convert', ['-w', String(Math.round(66 * scale)), '-h', String(Math.round(66 * scale)), monoNightSvg, '-o', monoNight]);
+    execFileSync('rsvg-convert', ['-w', String(Math.round(MONO_DP * scale)), '-h', String(Math.round(MONO_DP * scale)), monoNightSvg, '-o', monoNight]);
     execFileSync('magick', [monoNight, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`, path.join(dir, 'ic_launcher_monochrome_night.png')]);
   }
 }
