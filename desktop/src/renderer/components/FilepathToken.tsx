@@ -109,6 +109,10 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
       onClick={onClick}
       // Right-click menu recovers the path here (left-click still opens the drawer).
       data-file-path={menuPath || undefined}
+      // Copying a selection over this chip gives the full path, not the name
+      // shown (chip-copy.ts). Pill only: the inline variant's label is already
+      // the words the message wrote, so it copies as written.
+      data-copy-path={menuPath || undefined}
     >
       <FileGlyph ext={ext} />
       <span className="font-mono text-[0.85em] text-fg group-hover:underline underline-offset-2 decoration-fg-muted">
