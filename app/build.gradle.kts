@@ -238,6 +238,9 @@ fun bashCommand(script: File, vararg args: String): List<String> = listOf("bash"
 val buildBackend = tasks.register<Exec>("buildBackend") {
     description = "Pack the desktop backend for the phone (app/runtime/build-backend.sh)"
     group = "build"
+    // The backend compiles with the desktop's own dependencies, which bundleWebUi installs (npm ci). WHY (CI,
+    // 2026-10-15): on a fresh checkout this task ran first and found no node_modules.
+    dependsOn(bundleWebUi)
     val repoRoot = rootProject.projectDir
     val script = file("runtime/build-backend.sh")
     val out = layout.buildDirectory.dir("backend").get().asFile

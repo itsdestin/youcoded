@@ -18,6 +18,7 @@ DEPS="$OUT/deps"
 
 say() { echo "[build-backend] $*"; }
 
+[ -d "$DESKTOP/node_modules" ] || { echo "[build-backend] desktop/node_modules is missing: run the bundleWebUi task (or npm ci in desktop/) first" >&2; exit 1; }
 say "compiling the backend"
 # Into our own folder, never the desktop's dist/: the page bundle (bundleWebUi) is copied out of
 # dist/renderer, and tsc's output there would ride along into the app.
