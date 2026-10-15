@@ -42,6 +42,42 @@ describe('Browser panel', () => {
     expect(b.frameListeners()).toBe(0);
   });
 
+  it('the zoom pill shows the shared zoom and sends the person\'s steps to the browser', async () => {
+    const b = installBrowserBridge();
+    setBrowserState(browserState({ zoom: { percent: 45, auto: true } }));
+    render(<BrowserPanel sessionId="s1" />);
+    act(() => b.pushFrame('s1'));
+    expect(screen.getByRole('button', { name: 'Reset to fit (currently 45%)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+    await waitFor(() => expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', zoom: 33 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    await waitFor(() => expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', zoom: 50 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to fit (currently 45%)' }));
+    await waitFor(() => expect(b.bridge.open).toHaveBeenCalledWith({ sessionId: 's1', zoom: 'auto' }));
+    // A zoom the assistant picked shows here too.
+    act(() => setBrowserState(browserState({ zoom: { percent: 100, auto: false } })));
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+    // A shown window or My Chrome can't be zoomed: no pill.
+    act(() => setBrowserState(browserState({ zoom: null })));
+    expect(screen.queryByRole('button', { name: 'Zoom out' })).not.toBeInTheDocument();
+  });
+
+  it('"Got it" hides the explainer at once, even if an older settings answer lands after', async () => {
+    const b = installBrowserBridge(browserInfo({ settings: { ...browserInfo().settings, explainerSeen: false } }));
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    const gotIt = await screen.findByRole('button', { name: 'Got it' });
+    // A settings load already on its way still says "not seen".
+    let finishStale!: (i: ReturnType<typeof browserInfo>) => void;
+    b.bridge.info.mockImplementationOnce(() => new Promise((r) => { finishStale = r; }));
+    act(() => { for (const cb of b.bridge.onInfoChanged.mock.calls.map((c) => c[0])) cb(); });
+    fireEvent.click(gotIt);
+    expect(screen.queryByRole('button', { name: 'Got it' })).not.toBeInTheDocument();
+    await act(async () => { finishStale(browserInfo({ settings: { ...browserInfo().settings, explainerSeen: false } })); });
+    expect(screen.queryByRole('button', { name: 'Got it' })).not.toBeInTheDocument();
+    expect(b.bridge.updateSettings).toHaveBeenCalledWith({ explainerSeen: true });
+  });
+
   it('says what the browser is doing, in plain words', () => {
     expect(browserStatusWord(null)).toBe('Idle');
     expect(browserStatusWord(browserState({ busy: true }))).toBe('Working');

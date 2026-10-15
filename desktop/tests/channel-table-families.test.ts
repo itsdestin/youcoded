@@ -263,6 +263,19 @@ describe('modes and defaults: same answer, same file, through either door', () =
 });
 
 describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () => {
+  // WHY a private home (CI, 2026-10-15): settings.json in the shared test home
+  // is written by test files in other workers at the same time; under load the
+  // write lock's 3 s wait ran out and the phone's save answered false.
+  let home = '';
+  let homeSpy: ReturnType<typeof vi.spyOn> | null = null;
+  beforeAll(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-settings-doors-'));
+    homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
+  });
+  afterAll(() => {
+    homeSpy?.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5 });
+  });
   it('a paired phone cannot write onto Object.prototype, and neither can the computer', async () => {
     expect((await overRemote('settings:set', { field: '__proto__.polluted', value: 1 })).answer).toBe(false);
     expect(await overIpc('settings:set', { field: 'constructor.prototype.polluted', value: 1 })).toBe(false);

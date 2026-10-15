@@ -314,10 +314,31 @@ describe('Browser, live', () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-fit'));
     const width = () => service.pages('s-fit')[0].evaluate(() => window.innerWidth);
     expect(await width()).toBe(1280); // no panel has reported yet: a laptop-sized page
+    // A narrow panel shows a desktop-width page shrunk to fit — never its own
+    // phone width (sites hid their menus there and screenshots were small).
     service.setViewSize('s-fit', 420.4, 700);
-    await vi.waitFor(async () => expect(await width()).toBe(420));
+    await vi.waitFor(async () => expect(await width()).toBe(1024));
+    expect(service.state('s-fit').zoom).toEqual({ percent: 41, auto: true });
     const second = await service.newPage('s-fit');
-    await vi.waitFor(async () => expect(await second.evaluate(() => window.innerWidth)).toBe(420));
+    await vi.waitFor(async () => expect(await second.evaluate(() => window.innerWidth)).toBe(1024));
+    // At 100% the page is the panel's own width again.
+    service.setZoom('s-fit', 1);
+    await vi.waitFor(async () => expect(await width()).toBe(420));
+  }, 60_000);
+
+  live()('the assistant can set the page zoom, and the panel shows the same zoom', async () => {
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-zoom'));
+    service.setViewSize('s-zoom', 500, 800);
+    const width = () => service.pages('s-zoom')[0].evaluate(() => window.innerWidth);
+    await vi.waitFor(async () => expect(await width()).toBe(1024));
+    const r = await runBrowserTool(env, 'BrowserNavigate', { zoom: 25 }, ctx('s-zoom'));
+    expect(r.isError).toBeFalsy();
+    expect(r.text).toContain('Zoom is now 25%');
+    await vi.waitFor(async () => expect(await width()).toBe(2000));
+    expect(service.state('s-zoom').zoom).toEqual({ percent: 25, auto: false });
+    await runBrowserTool(env, 'BrowserNavigate', { zoom: 'auto' }, ctx('s-zoom'));
+    await vi.waitFor(async () => expect(await width()).toBe(1024));
+    expect(service.state('s-zoom').zoom).toEqual({ percent: 49, auto: true });
   }, 60_000);
 
   // Destin, 2026-10-14: an expanded panel showed the page with empty bands either
@@ -339,6 +360,8 @@ describe('Browser, live', () => {
       // draws at density 2, so 1800 page pixels arrive as 3600 — over the 2560 cap, so 2560.
       const f = frames.filter((x) => x.width === 1800).at(-1)!;
       expect(jpegWidth(Buffer.from(f.data, 'base64'))).toBe(2560);
+      // At 100% a narrower panel lays the page out at its own width.
+      service.setZoom('s-wide', 1);
       service.setViewSize('s-wide', 600, 500);
       await vi.waitFor(async () => {
         await page.evaluate(() => { document.body.style.background = `#${Math.floor(Math.random() * 900 + 100)}`; });

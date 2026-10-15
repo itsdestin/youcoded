@@ -43,6 +43,13 @@ const HIDDEN_PIXEL_RATIO = 2;
  *  WHY 2560 wide (was 1280, Destin 2026-10-14): an expanded panel on a big
  *  screen showed the page with empty bands either side, unlike any browser. */
 const VIEW_MIN = 320;
+/** The page width (CSS px) a panel shows by default. WHY (Destin, 2026-10-15):
+ *  laid out at the panel's own ~460 px, sites sent phone layouts (menus behind
+ *  ☰, sidebars gone) and the assistant's screenshots were small. A laptop-wide
+ *  page shrunk to fit the panel keeps desktop layouts, like Ctrl+minus. */
+const AUTO_PAGE_WIDTH = 1024;
+/** The furthest a page can be zoomed out; below this nothing is readable. */
+const ZOOM_MIN = 0.25;
 const VIEW_MAX_W = 2560;
 const VIEW_MAX_H = 2000;
 /** The live picture's largest size in screen pixels. It bounds the cost of a
@@ -128,6 +135,8 @@ interface SessionEntry {
   idleTimer: NodeJS.Timeout | null;
   /** The Browser panel's picture area (CSS px), when a panel has reported one. */
   viewSize: { width: number; height: number } | null;
+  /** The page zoom someone picked (0.25–1), or null for the default (zoomOf). */
+  zoom: number | null;
   /** The person's clicks and keys, run in order. */
   inputChain: Promise<unknown>;
   /** The scroll waiting its turn in `inputChain`; later scroll steps merge into it. */
@@ -180,7 +189,7 @@ export class BrowserService extends EventEmitter {
   private entry(sessionId: string): SessionEntry {
     let e = this.sessions.get(sessionId);
     if (!e) {
-      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, inputChain: Promise.resolve(), wheelPending: null, movePending: null, justClosed: [] };
+      e = { pages: [], active: null, used: false, busy: 0, prompt: null, promptResolve: null, notes: [], lastUrls: [], queue: Promise.resolve(), idleTimer: null, viewSize: null, zoom: null, inputChain: Promise.resolve(), wheelPending: null, movePending: null, justClosed: [] };
       this.sessions.set(sessionId, e);
     }
     return e;
@@ -204,6 +213,7 @@ export class BrowserService extends EventEmitter {
       used: e?.used ?? false,
       busy: (e?.busy ?? 0) > 0,
       downloadPercent: this.downloadPercent,
+      zoom: this.canZoom() ? { percent: Math.round((e ? this.zoomOf(e) : 1) * 100), auto: (e?.zoom ?? null) === null } : null,
     };
   }
 
@@ -649,17 +659,54 @@ export class BrowserService extends EventEmitter {
    *  page. A shown window or My Chrome keeps its own size. */
   setViewSize(sessionId: string, width: number, height: number): void {
     const e = this.entry(sessionId);
-    const w = Math.round(Math.min(VIEW_MAX_W, Math.max(VIEW_MIN, width)));
-    const h = Math.round(Math.min(VIEW_MAX_H, Math.max(VIEW_MIN, height)));
+    const w = Math.round(Math.max(1, width));
+    const h = Math.round(Math.max(1, height));
     // Ignore jitter: a few pixels would relayout the page for nothing.
     if (e.viewSize && Math.abs(e.viewSize.width - w) < 8 && Math.abs(e.viewSize.height - h) < 8) return;
+    const autoBefore = this.zoomOf(e);
     e.viewSize = { width: w, height: h };
     for (const p of e.pages) this.fitToPanel(e, p);
+    // The default zoom follows the panel's width — the panel's % must too.
+    if (this.zoomOf(e) !== autoBefore) this.emitState(sessionId);
   }
 
+  /** The conversation's page zoom (0.25–1): the person's or the assistant's
+   *  pick, else the default — whatever shows a desktop-width page in the panel.
+   *  Without a panel the page is laptop-sized already, so the default is 100%. */
+  private zoomOf(e: SessionEntry): number {
+    if (e.zoom !== null) return e.zoom;
+    return e.viewSize ? Math.max(ZOOM_MIN, Math.min(1, e.viewSize.width / AUTO_PAGE_WIDTH)) : 1;
+  }
+
+  /** Can this browser's pages be zoomed? Only a hidden one: a shown window or
+   *  My Chrome keeps its own size, which the person controls there. */
+  canZoom(): boolean { return !this.windowShown && !this.myChrome; }
+
+  /** Set the conversation's page zoom — from the panel's − / + or the assistant
+   *  (BrowserNavigate `zoom`). null returns to the default. WHY one setting for
+   *  both (Destin, 2026-10-15): they look at the same page, so a zoom the
+   *  assistant picks must show in the panel's % and the reverse. */
+  setZoom(sessionId: string, zoom: number | null): number {
+    const e = this.entry(sessionId);
+    e.zoom = zoom === null || !Number.isFinite(zoom) ? null : Math.max(ZOOM_MIN, Math.min(1, zoom));
+    for (const p of e.pages) this.fitToPanel(e, p);
+    this.emitState(sessionId);
+    return this.zoomOf(e);
+  }
+
+  /** Lay a page out at the panel's area divided by the zoom: zoomed out, the
+   *  page is wider than the panel and its picture is shrunk to fit, so sites
+   *  keep their desktop layouts (Destin, 2026-10-15). No panel yet: the
+   *  laptop-sized page, likewise divided. */
   private fitToPanel(e: SessionEntry, page: Page): void {
-    if (!e.viewSize || this.windowShown || this.myChrome) return;
-    void page.setViewportSize(e.viewSize).catch(() => undefined);
+    if (!this.canZoom()) return;
+    const area = e.viewSize ?? BACKGROUND_VIEWPORT;
+    const z = this.zoomOf(e);
+    const size = {
+      width: Math.round(Math.min(VIEW_MAX_W, Math.max(VIEW_MIN, area.width / z))),
+      height: Math.round(Math.min(VIEW_MAX_H, Math.max(VIEW_MIN, area.height / z))),
+    };
+    void page.setViewportSize(size).catch(() => undefined);
   }
 
   /** The person typed an address (or words to search for) in the panel. Opens

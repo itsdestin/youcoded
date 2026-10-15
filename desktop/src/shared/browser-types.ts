@@ -43,6 +43,10 @@ export interface BrowserSessionState {
   busy: boolean;
   /** Browser download progress 0–100 while a download runs, else null. */
   downloadPercent: number | null;
+  /** The page zoom the panel's − / + shows (the person and the assistant share
+   *  it); `auto` = the default, which follows the panel's width. null when the
+   *  pages can't be zoomed (a shown window or My Chrome). */
+  zoom: { percent: number; auto: boolean } | null;
 }
 
 /** One live picture of a conversation's current tab (base64 JPEG). */
@@ -99,7 +103,9 @@ export interface MyChromeCheck { ok: boolean; message: string }
 type BrowserOpenRequest =
   | { sessionId: string; address: string }
   | { sessionId: string; nav: 'back' | 'forward' | 'reload' | 'stop' }
-  | { sessionId: string; tab: 'new' | 'select' | 'close'; index?: number };
+  | { sessionId: string; tab: 'new' | 'select' | 'close'; index?: number }
+  /** The panel's − / + (a percent), or its % button ('auto' = the default). */
+  | { sessionId: string; zoom: number | 'auto' };
 
 /** The person using the page through the panel's picture. Coordinates are page
  *  (CSS) pixels of the live picture's frame. */

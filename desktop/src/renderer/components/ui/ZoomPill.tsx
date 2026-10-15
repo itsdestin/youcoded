@@ -34,7 +34,10 @@ export function ZoomPill({
   onZoomIn, onZoomOut, onReset, loupe, className = '',
 }: ZoomPillProps) {
   return (
-    <OverlayPanel layer={1} data-loupe-block className={`flex items-center px-0.5 py-0.5 ${className}`.trim()}>
+    // data-pinned-control: a control that stays on screen, not a popup — so the
+    // screen checker (scripts/shoot/explore-page.mjs listLayers) doesn't expect
+    // Escape to close it. In the Browser panel nothing closes on Escape.
+    <OverlayPanel layer={1} data-loupe-block data-pinned-control className={`flex items-center px-0.5 py-0.5 ${className}`.trim()}>
       <Button
         size="icon"
         variant="ghost"
