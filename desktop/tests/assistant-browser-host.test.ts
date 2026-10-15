@@ -131,8 +131,14 @@ describe('My Chrome (Experimental), against a separately started Chrome', () => 
 
   afterAll(async () => {
     delete process.env.YOUCODED_MY_CHROME_DIR;
-    chrome?.kill('SIGKILL');
-    if (chromeDir) fs.rmSync(chromeDir, { recursive: true, force: true, maxRetries: 5 });
+    // WHY wait for the exit (CI, 2026-10-15: ENOTEMPTY): a killed Chrome keeps
+    // writing into its folder for a moment, so removing it at once raced it.
+    if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
+      const exited = new Promise((resolve) => chrome!.once('exit', resolve));
+      chrome.kill('SIGKILL');
+      await exited;
+    }
+    if (chromeDir) fs.rmSync(chromeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
   live('opens its own tab in the person\'s Chrome after asking, leaves theirs alone, and never closes their browser', async () => {
