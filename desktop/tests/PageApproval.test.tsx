@@ -74,3 +74,15 @@ describe('the approval screen', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 });
+
+// Page start session (spec 2026-10-14, §4): the card's line for a page that may
+// open a new conversation says what happens and that nothing is sent first.
+describe('a page that may open a new conversation', () => {
+  it('says it opens a new-conversation window, and that nothing is sent before you choose', () => {
+    render(<PageApproval page={page([{ id: 'start-session', kind: 'session', approved: false }])} onNotNow={() => {}} />);
+    expect(screen.getByText(/Open a new-conversation window with a message this page writes\./)).toBeInTheDocument();
+    expect(screen.getByText("You'll see the message and choose the project before anything is sent.")).toBeInTheDocument();
+    // No key or address to enter: the one press allows it.
+    expect(screen.getByRole('button', { name: 'Allow and open' })).toBeEnabled();
+  });
+});

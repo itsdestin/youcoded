@@ -280,6 +280,15 @@ export function parseConnections(raw: unknown): PageConnection[] {
         if (environment) c = { id, kind: 'plaid', environment, keyHelp: cleanSteps(o.keyHelp) };
         break;
       }
+      // Page start session (spec 2026-10-14): open the new-conversation window
+      // with a message waiting. No settings, so nothing else the manifest wrote
+      // on the line is kept. One per page: a second would be a second card line
+      // for the same thing.
+      case 'session': {
+        if (out.some((x) => x.kind === 'session')) break;
+        c = { id, kind: 'session' };
+        break;
+      }
       default: break;
     }
     if (!c) continue;
@@ -349,6 +358,9 @@ export function fingerprint(c: PageConnection): string {
     // Switching practice → real banks changes which money the page can see, so
     // it asks again.
     case 'plaid': return `plaid|${c.environment}`;
+    // A constant: the approval is keyed to the declaration alone (spec
+    // 2026-10-14, §3, Q-7), so no edit to the page can make it ask again.
+    case 'session': return 'session';
   }
 }
 
@@ -383,6 +395,8 @@ export function covers(c: PageConnection, target: string | URL): boolean {
     // Never reachable through youcoded.fetch: Plaid is only ever called by main
     // (plaid.ts), so a page cannot aim the Plaid keys at an address of its own.
     case 'plaid': return false;
+    // Not a network destination: opening a conversation window reaches nothing.
+    case 'session': return false;
   }
 }
 
@@ -399,6 +413,10 @@ const GITHUB_HOST = 'api.github.com';
  *  exactly or at a `/` boundary, and never through an encoded path. */
 export function methodAllowed(c: PageConnection, method: string, pathname = '/'): boolean {
   const m = method.toUpperCase();
+  // WHY explicit: covers() already refuses every address for it, but a kind
+  // that is not a network connection must not read as "every method allowed"
+  // to any later caller that checks this alone.
+  if (c.kind === 'session') return false;
   if (c.kind === 'youcoded') {
     if (m === 'GET' || m === 'HEAD') return true;
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(m) || pathname.includes('%')) return false;

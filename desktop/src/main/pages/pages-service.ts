@@ -260,6 +260,9 @@ class PagesService {
       const restamped: Record<string, PageApproval> = {};
       for (const c of info.connections) {
         const r = recorded[c.id];
+        // A session line keeps no code hash (spec 2026-10-14, §3), so dismissing
+        // the note never gives it one — else the next rebuild would show the note.
+        if (c.kind === 'session') continue;
         if (r && r.htmlHash !== htmlHash) restamped[c.id] = { ...r, htmlHash };
       }
       if (Object.keys(restamped).length > 0) {
@@ -295,7 +298,10 @@ class PagesService {
     const htmlHash = hashHtml(info.html);
     const fresh: Record<string, PageApproval> = {};
     for (const c of waiting) {
-      fresh[c.id] = { fingerprint: fingerprint(c), approvedAt: at, htmlHash, ...(c.kind === 'device' ? { address: c.address } : {}) };
+      // WHY '' for a session line: its approval is keyed to the manifest line,
+      // not the page's code (spec 2026-10-14, §3, Q-7). An empty hash is what
+      // the "code changed" check already skips (pages-store codeMovedSince).
+      fresh[c.id] = { fingerprint: fingerprint(c), approvedAt: at, htmlHash: c.kind === 'session' ? '' : htmlHash, ...(c.kind === 'device' ? { address: c.address } : {}) };
     }
     try { await store.recordApprovals(pageKey, fresh); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
@@ -537,9 +543,11 @@ class PagesService {
     const store = this.deps.connections;
     switch (c.kind) {
       // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
+      // Opening a conversation window (session) holds no credential at all.
       case 'public':
       case 'open':
       case 'plaid':
+      case 'session':
         return null;
       case 'device':
       case 'key': {
