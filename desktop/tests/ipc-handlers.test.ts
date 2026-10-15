@@ -6,9 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { nativeStoreSlug, ccProjectSlug } from '../src/main/slug-encoding';
 
-// Mock electron before importing ipc-handlers, which transitively imports
-// main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
-// and Menu.setApplicationMenu at module scope, both of which crash without this mock.
+// Mock electron before importing ipc-handlers: the families it wires import electron at module scope. (It no
+// longer imports main.ts — the permission overrides moved to app-signals.ts, 2026-10-14.)
 vi.mock('electron', () => {
   // getAllWindows is a static method on the real BrowserWindow class —
   // broadcastToAllWindows (called after a successful tags:create/update/delete)

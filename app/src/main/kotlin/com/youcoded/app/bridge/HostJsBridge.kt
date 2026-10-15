@@ -39,13 +39,19 @@ class HostJsBridge(
         fun setBackStackEmpty(empty: Boolean)
     }
 
+    /** This run's page token (MainActivity sets it when it loads the page). A call without it is ignored: Android
+     *  hands this object to every frame, and only the app's own page knows the token (independent review, 2026-10-15). */
+    @Volatile var expectedToken: String = ""
+
     private val main = Handler(Looper.getMainLooper())
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var voice: VoiceRecognizer? = null
     private var micDenied = false
 
     @JavascriptInterface
-    fun invoke(id: String, type: String, payloadJson: String) {
+    fun invoke(id: String, type: String, payloadJson: String, token: String) {
+        val want = expectedToken
+        if (want.isEmpty() || !java.security.MessageDigest.isEqual(want.toByteArray(), token.toByteArray())) return
         val payload = runCatching { JSONObject(payloadJson) }.getOrElse { JSONObject() }
         io.launch {
             try {

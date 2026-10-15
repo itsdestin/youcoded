@@ -58,6 +58,11 @@ Users sign in through Claude Code's own flow with their own account (the terms f
 their usage). Its self-updater is off (`DISABLE_AUTOUPDATER=1`): a new Claude
 Code reaches the phone with an app release (bump `CLAUDE_CODE_VERSION` in `pins.env`).
 
+**Known limit — work profiles and other phone users.** Every program's loader and library path names
+`/data/data/<appId>/files`, the files folder of the phone's MAIN user. In a work profile, Samsung Secure Folder
+or a second user, the app's files live under `/data/user/<n>/…`, so the bundled programs cannot start there.
+A fix would build the programs with a relative-path launcher or rewrite the paths at first launch.
+
 ## On-device layout (`files/` = the app's files folder)
 
 `usr/{bin,lib,libexec/git-core,share,etc}` · `backend/` (unpacked backend.tgz; `node_modules/node-pty/build/Release/pty.node`

@@ -31,7 +31,8 @@ export interface Capabilities {
   /** Animated theme mascots (rigs) draw inline. They fetch theme-asset:// files at draw time. */
   themeRigs: boolean;
   /** How the terminal receives its bytes: 'text' = pty:output strings (what a computer sends to a window or a phone),
-   *  'raw-bytes' = pty:raw-bytes (Android's own runtime). Waiting for the wrong one draws a blank terminal. */
+   *  'raw-bytes' = pty:raw-bytes (the old Kotlin Android runtime; no host sends it since the 2026-10-14 rebuild, when the
+   *  Android app began running this backend and receiving 'text'). Waiting for the wrong one draws a blank terminal. */
   terminalTransport: 'text' | 'raw-bytes';
   /** The terminal's screen text can be read on this device (the "is Claude stuck?" check). A screen watching a
    *  computer has no buffer of its own; the computer reports attention instead. */

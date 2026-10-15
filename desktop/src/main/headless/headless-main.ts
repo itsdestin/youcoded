@@ -5,14 +5,40 @@
 // YOUCODED_HOST_SOCKET); on a laptop it can be run by hand to test the phone's backend in a browser
 // pointed at the built page with ?bridgePort=<port>&bridgeToken=<token>.
 import './install-electron-shim'; // must be first: every backend module below imports `electron`
+import fs from 'fs';
 
 function fail(message: string): never {
   console.error(`[headless] ${message}`);
   process.exit(2);
 }
 
+/** The owner token and the secrets key. WHY not the environment (independent review, 2026-10-15): every terminal this
+ *  backend starts inherits its environment (pty-worker.js), and on the phone everything runs as the app's one user,
+ *  so Claude Code — or any tool it runs — could read them there, or from this process's own /proc/<pid>/environ, and
+ *  print them into a conversation that syncs. The Android app writes them as ONE JSON line on this process's stdin
+ *  (YOUCODED_SECRETS_ON_STDIN=1) and closes it; a laptop test run may still pass them as variables. */
+function readSecrets(): { token: string; key: string | undefined } {
+  if (process.env.YOUCODED_SECRETS_ON_STDIN !== '1') {
+    const fromEnv = { token: process.env.YOUCODED_HEADLESS_TOKEN ?? '', key: process.env.YOUCODED_SECRET_KEY };
+    delete process.env.YOUCODED_SECRET_KEY;
+    delete process.env.YOUCODED_HEADLESS_TOKEN;
+    return fromEnv;
+  }
+  const buf = Buffer.alloc(4096);
+  let text = '';
+  while (!text.includes('\n')) {
+    const n = fs.readSync(0, buf, 0, buf.length, null);
+    if (n <= 0) break;
+    text += buf.toString('utf8', 0, n);
+  }
+  const line = JSON.parse(text.split('\n')[0] || '{}') as { token?: string; key?: string };
+  return { token: line.token ?? '', key: line.key };
+}
+
 const port = Number(process.env.YOUCODED_HEADLESS_PORT);
-const token = process.env.YOUCODED_HEADLESS_TOKEN ?? '';
+const { token, key } = readSecrets();
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- the stand-in itself, loaded by path after the hook
+(require('./electron-headless') as typeof import('./electron-headless')).holdSecretKey(key);
 if (!Number.isInteger(port) || port <= 0 || port > 65535) fail('YOUCODED_HEADLESS_PORT must be a port number.');
 if (token.length < 32) fail('YOUCODED_HEADLESS_TOKEN must be at least 32 characters.');
 

@@ -627,8 +627,7 @@ function TerminalView({ sessionId, visible }: Props) {
   }, [visible, sessionId]);
 
   // Write PTY output to terminal; notify registry when buffer is updated.
-  // The Android app on its OWN runtime consumes pty:raw-bytes (Uint8Array) —
-  // Tier 2 of android-terminal-data-parity. Everything else consumes pty:output
+  // The old Kotlin Android runtime consumed pty:raw-bytes (Uint8Array). Everything consumes pty:output
   // (string), which is all a desktop host ever sends, to a window or a phone.
   // WHY not isTouchDevice(), and WHY !isRemoteMode(): a phone BROWSER is a touch
   // device too (it reports 'browser' — remote-shim auth:ok), and the Android app
@@ -637,7 +636,8 @@ function TerminalView({ sessionId, visible }: Props) {
   // a stream that never comes and draw a blank terminal.
   // Both hooks are called every render; only their argument depends on this.
   // WHY a capability read (one-core R4-1): the host says which stream it sends this screen (shared/capabilities.ts), so
-  // the old two-flag guess ("Android and not paired") is gone. Android's own runtime says 'raw-bytes'; a computer says 'text'.
+  // the old two-flag guess ("Android and not paired") is gone. Every host says 'text' since the 2026-10-14 Android rebuild
+  // (the Android app runs this backend); the raw-bytes branch is unused and can go with the next cleanup of that path.
   const useRawBytes = getCapabilities().terminalTransport === 'raw-bytes';
   // Remote access batch 2 (§7): the host could not continue this terminal from
   // where the phone left off (a host restart, or a session destroyed and

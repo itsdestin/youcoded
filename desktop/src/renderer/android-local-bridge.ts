@@ -18,7 +18,7 @@ export function localBridgeUrl(): string {
 /** What the Android app injects (addJavascriptInterface): one async call in, answers come back through
  *  `window.__youcodedHost.reply`, and the app's own pushes (voice words) through `.event`. */
 interface YouCodedHostObject {
-  invoke(id: string, type: string, payloadJson: string): void;
+  invoke(id: string, type: string, payloadJson: string, token: string): void;
 }
 
 type HostPending = { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
@@ -47,7 +47,11 @@ export function invokeAndroidHost(type: string, payload?: unknown): Promise<any>
     const timer = setTimeout(() => { hostPending.delete(id); reject(new Error('The phone did not answer.')); }, HOST_TIMEOUT_MS);
     hostPending.set(id, { resolve, reject, timer });
     try {
-      host.invoke(id, type, JSON.stringify(payload ?? null));
+      // WHY the token (independent review, 2026-10-15): Android hands this object to EVERY frame in the WebView,
+      // including a previewed HTML file or a Page in an iframe. Only the app's own page knows this run's token
+      // (its own query string), so the app answers only calls that carry it.
+      const token = new URLSearchParams(location.search).get('bridgeToken') ?? '';
+      host.invoke(id, type, JSON.stringify(payload ?? null), token);
     } catch (e) {
       clearTimeout(timer); hostPending.delete(id);
       reject(e instanceof Error ? e : new Error(String(e)));

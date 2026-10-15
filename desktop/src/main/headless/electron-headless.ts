@@ -109,7 +109,21 @@ export const shell = {
     try { await hostCall('openPath', { path: p }); return ''; } catch (e) { return e instanceof Error ? e.message : String(e); }
   },
   showItemInFolder(p: string): void { hostNotify('openPath', { path: path.dirname(p) }); },
-  async trashItem(p: string): Promise<void> { await fs.promises.rm(p, { recursive: true, force: true }); },
+  // WHY a trash folder, not a delete (independent review, 2026-10-15): git's "Discard" on an untracked file relies on
+  // the trash being recoverable (git-service.ts). The phone has no system trash, so the file moves under userData.
+  async trashItem(p: string): Promise<void> {
+    const dir = path.join(userDataDir(), 'Trash');
+    await fs.promises.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, `${Date.now()}-${path.basename(p)}`);
+    try {
+      await fs.promises.rename(p, dest);
+    } catch (e) {
+      // Another filesystem (rename cannot cross it): copy, then remove the original only once the copy exists.
+      if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+      await fs.promises.cp(p, dest, { recursive: true });
+      await fs.promises.rm(p, { recursive: true, force: true });
+    }
+  },
   beep(): void {},
   readShortcutLink(): never { throw new Error('Shortcuts are a Windows feature.'); },
   writeShortcutLink(): boolean { return false; },
@@ -126,10 +140,15 @@ export const dialog = {
 
 // Secrets: AES-256-GCM under a key the host app generates once and keeps in the Android Keystore,
 // handed to this process in YOUCODED_SECRET_KEY (64 hex chars). Format: iv(12) | tag(16) | data.
+// WHY held here and removed from the environment (independent review, 2026-10-15): the backend's environment is
+// copied into every terminal it starts (pty-worker.js), so Claude Code — and any `env`, install script or tool it
+// runs — could read the key that seals saved API keys. headless-main.ts hands it over once and deletes the variable.
+let heldSecretKey: Buffer | null = null;
+export function holdSecretKey(hex: string | undefined): void {
+  heldSecretKey = hex && /^[0-9a-f]{64}$/i.test(hex) ? Buffer.from(hex, 'hex') : null;
+}
 function secretKey(): Buffer | null {
-  const hex = process.env.YOUCODED_SECRET_KEY;
-  if (!hex || !/^[0-9a-f]{64}$/i.test(hex)) return null;
-  return Buffer.from(hex, 'hex');
+  return heldSecretKey;
 }
 export const safeStorage = {
   isEncryptionAvailable: (): boolean => secretKey() !== null,

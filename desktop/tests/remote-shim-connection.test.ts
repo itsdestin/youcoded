@@ -874,10 +874,10 @@ describe('remote-shim — overlapping connections', () => {
     // WHY (2026-10-14, Android clean rebuild): the saved computers are the Android app's own, so they go to the
     // app through the host object its WebView injects — never over a socket, and the connection to the computer
     // is never touched.
-    const calls: Array<{ id: string; type: string; payload: unknown }> = [];
+    const calls: Array<{ id: string; type: string; payload: unknown; token?: string }> = [];
     beforeEach(() => {
       calls.length = 0;
-      (globalThis as any).YouCodedHost = { invoke: (id: string, type: string, json: string) => calls.push({ id, type, payload: JSON.parse(json) }) };
+      (globalThis as any).YouCodedHost = { invoke: (id: string, type: string, json: string, token: string) => calls.push({ id, type, payload: JSON.parse(json), token }) };
     });
     afterEach(() => { delete (globalThis as any).YouCodedHost; });
     const reply = (i: number, value: unknown, error?: string) => (globalThis as any).__youcodedHost.reply(calls[i].id, JSON.stringify(value), error);
@@ -887,6 +887,8 @@ describe('remote-shim — overlapping connections', () => {
       const sockets = FakeWebSocket.instances.length;
       const removing = claude().android.removePairedDevice('desk', 9900);
       expect(calls.map(({ type, payload }) => ({ type, payload }))).toEqual([{ type: 'android:remove-paired-device', payload: { host: 'desk', port: 9900 } }]);
+      // The app answers only calls carrying this run's page token (it hands its object to every frame).
+      expect(calls[0].token).toBe('bt');
       reply(0, true);
       await expect(removing).resolves.toBe(true);
       expect(FakeWebSocket.instances.length).toBe(sockets);       // no side connection

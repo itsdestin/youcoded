@@ -74,7 +74,7 @@ object AppWebView {
                 override fun openExternally(url: String) {
                     runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }
                 }
-            }, isPairedHost = { h, port -> PairedDeviceStore.isPaired(context, h, port) })
+            }, isPairedHost = { h, port -> PairedDeviceStore.isPaired(context, h, port) }, devServersInApp = BuildConfig.DEBUG)
             setDownloadListener { url, _, _, _, _ -> urlRouter.onDownloadRequested(url) }
 
             val themesDir = File(homeDir, ".claude/wecoded-themes")

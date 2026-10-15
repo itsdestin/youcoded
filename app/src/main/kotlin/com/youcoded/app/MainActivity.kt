@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
         LaunchedEffect(ready?.token) {
             if (ready != null && ready.token != loadedToken) {
                 loadedToken = ready.token
+                host.expectedToken = ready.token
                 webView?.loadUrl(AppWebView.pageUrl(ready.port, ready.token))
             }
         }

@@ -51,6 +51,7 @@ class BackendService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var runJob: Job? = null
     private var process: Process? = null
+    @Volatile private var generation = 0
     private var hostServer: HostSocketServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -72,13 +73,25 @@ class BackendService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_RESTART) { stopBackend(); runJob?.cancel(); runJob = null }
-        if (runJob?.isActive != true) runJob = scope.launch { runLoop() }
+        if (intent?.action == ACTION_RESTART || runJob?.isActive != true) {
+            // WHY a generation and an IO hop (independent review, 2026-10-15): a Retry used to cancel the loop while it
+            // was still blocked reading the old process's output; when that read ended, the old loop cleared the NEW
+            // process's handle, and stopping the old process waited up to 3 s on the main thread. Each loop now owns
+            // one generation and quits as soon as a newer one starts; stopping happens off the main thread.
+            val gen = ++generation
+            runJob?.cancel()
+            runJob = scope.launch {
+                stopBackend()
+                runLoop(gen)
+            }
+        }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        stopBackend()
+        // Main thread: ask the backend to stop and move on (no waiting here); a newer generation ends any loop.
+        generation++
+        synchronized(this) { process?.also { process = null } }?.destroy()
         hostServer?.close()
         networkCallback?.let { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) }
         setKeepAwake(false)
@@ -87,29 +100,35 @@ class BackendService : Service() {
         super.onDestroy()
     }
 
-    /** Start, wait, restart. Pauses grow 1 s → 30 s while the backend keeps dying, and reset once it runs a while. */
-    private suspend fun runLoop() {
+    /** Start, wait, restart. A backend that ran and then stopped is restarted, with pauses growing 1 s → 30 s while
+     *  it keeps dying. One that never became ready stops here and shows Failed (with its own last words) until Retry —
+     *  WHY (independent review, 2026-10-15): looping set "Restarting…" straight over Failed, so the screen with Retry
+     *  never showed and the app sat on a spinner. */
+    private suspend fun runLoop(gen: Int) {
         var pauseMs = 1_000L
-        while (true) {
+        while (gen == generation) {
+            val becameReady: Boolean
             try {
                 if (!installer.isCurrent()) installer.install { _state.value = State.Starting(it) }
                 writeResolvConf()
                 val started = System.currentTimeMillis()
-                val code = runBackendOnce()
-                Log.w(TAG, "backend exited with $code")
+                becameReady = runBackendOnce(gen)
                 if (System.currentTimeMillis() - started > 60_000) pauseMs = 1_000L
             } catch (e: Exception) {
                 Log.e(TAG, "backend failed to start", e)
-                _state.value = State.Failed(e.message ?: "The assistant could not start.")
+                if (gen == generation) _state.value = State.Failed(e.message ?: "The assistant could not start.")
+                return
             }
+            if (gen != generation) return
+            if (!becameReady) return // Failed is on screen; Retry starts a new generation
             _state.value = State.Starting("Restarting the assistant…")
             delay(pauseMs)
             pauseMs = (pauseMs * 2).coerceAtMost(30_000L)
         }
     }
 
-    /** One run of the backend. Returns its exit code. */
-    private fun runBackendOnce(): Int {
+    /** One run of the backend. True when it became ready before it exited. */
+    private fun runBackendOnce(gen: Int): Boolean {
         _state.value = State.Starting("Starting the assistant…")
         val port = BuildConfig.BRIDGE_PORT
         val token = randomHex(32)
@@ -118,9 +137,9 @@ class BackendService : Service() {
 
         val env = installer.environment(mapOf(
             "YOUCODED_HEADLESS_PORT" to port.toString(),
-            "YOUCODED_HEADLESS_TOKEN" to token,
+            // The token and the secrets key go on stdin, never in the environment (headless-main.ts readSecrets — why).
+            "YOUCODED_SECRETS_ON_STDIN" to "1",
             "YOUCODED_HOST_SOCKET" to "@$hostName",
-            "YOUCODED_SECRET_KEY" to SecretKeyStore.key(applicationContext),
             "YOUCODED_APP_VERSION" to appVersion(),
         ))
         val pb = ProcessBuilder(File(installer.bin, "node").path, "dist/main/headless/headless-main.js")
@@ -129,7 +148,15 @@ class BackendService : Service() {
         pb.environment().clear()
         pb.environment().putAll(env)
         val p = pb.start()
-        process = p
+        p.outputStream.use { stdin ->
+            val secrets = org.json.JSONObject().put("token", token).put("key", SecretKeyStore.key(applicationContext))
+            stdin.write((secrets.toString() + "\n").toByteArray())
+        }
+        synchronized(this) {
+            if (gen != generation) { p.destroyForcibly(); return false }
+            process = p
+        }
+        var ready = false
         val log = File(installer.userData, "backend.log")
         log.parentFile?.mkdirs()
         p.inputStream.bufferedReader().use { reader ->
@@ -137,23 +164,25 @@ class BackendService : Service() {
                 while (true) {
                     val line = reader.readLine() ?: break
                     out.write(line); out.newLine(); out.flush()
-                    if (line.startsWith("YOUCODED_HEADLESS_READY")) _state.value = State.Ready(port, token)
+                    if (line.startsWith("YOUCODED_HEADLESS_READY") && gen == generation) {
+                        ready = true
+                        _state.value = State.Ready(port, token)
+                    }
                 }
             }
         }
         val code = p.waitFor()
-        process = null
-        if (_state.value is State.Ready) _state.value = State.Starting("The assistant stopped; restarting…")
-        else _state.value = State.Failed(lastLines(log))
-        return code
+        synchronized(this) { if (process === p) process = null }
+        Log.w(TAG, "backend exited with $code")
+        if (gen == generation && !ready) _state.value = State.Failed(lastLines(log))
+        return ready
     }
 
+    /** Stop the running backend, if any. Blocking (up to 3 s): never call on the main thread. */
     private fun stopBackend() {
-        process?.let { p ->
-            p.destroy()
-            if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
-        }
-        process = null
+        val p = synchronized(this) { process.also { process = null } } ?: return
+        p.destroy()
+        if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
     }
 
     /** What the backend asks of the phone (headless/host-bridge.ts). Runs off the main thread. */

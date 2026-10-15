@@ -246,6 +246,12 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
     inputs.dir(File(repoRoot, "desktop/src/main"))
     inputs.dir(File(repoRoot, "desktop/src/shared"))
     inputs.dir(File(repoRoot, "desktop/hook-scripts"))
+    // The backend compiles a few renderer modules and ships the skill registry from there, plus these files
+    // (independent review, 2026-10-15: without them a change there shipped the previous backend).
+    inputs.dir(File(repoRoot, "desktop/src/renderer"))
+    inputs.file(File(repoRoot, "desktop/package.json"))
+    inputs.file(File(repoRoot, "desktop/scripts/install-hooks.js"))
+    inputs.file(File(repoRoot, "desktop/tsconfig.json"))
     inputs.file(File(repoRoot, "desktop/package-lock.json"))
     outputs.dir(assetsOut)
     commandLine(bashCommand(script, out.absolutePath))
