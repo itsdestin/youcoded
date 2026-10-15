@@ -1,6 +1,7 @@
 import { getCapabilities } from '../../platform';
 import { getSheetSelectionText } from '../artifact-views/artifact-find-bridge';
 import { copyText, readText } from './clipboard';
+import { chipPathOf, selectionTextWithChipPaths } from './chip-copy';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
 // "Add comment" writes straight into the shared doc-comments store — no
@@ -53,6 +54,15 @@ function selectionText(): string {
   return window.getSelection()?.toString() ?? '';
 }
 
+// What Copy puts on the clipboard: like selectionText, but a file chip gives its
+// full path (chip-copy.ts) — the same as Ctrl+C. Copy only: comments and "Ask
+// about this" match their quote against the words on screen, so they keep
+// selectionText.
+function selectionCopyText(): string {
+  const sel = window.getSelection();
+  return selectionTextWithChipPaths(sel) ?? sel?.toString() ?? '';
+}
+
 // App chrome (every <button>, and anything marked `select-none`) is not
 // highlightable (globals.css + the chrome areas' own classes), so it is not
 // copy material from this menu either (Destin, 2026-09-10): right-clicking it
@@ -72,10 +82,20 @@ function isChrome(el: Element): boolean {
 // An element's text as a user could have selected it: text inside chrome is
 // skipped. A live selection already leaves chrome out in Chromium (measured
 // 2026-09-10), so this only matters for the no-selection fallback.
-function readableText(root: Element): string {
+// `chipPaths`: write file chips as their full path (Copy), rather than the name
+// on screen (quotes, which are matched against the screen's words).
+function readableText(root: Element, chipPaths = false): string {
   let text = '';
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let lastChip: Element | null = null;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    // A file chip copies as its full path, once (chip-copy.ts), not its name.
+    const chip = chipPaths ? chipPathOf(node) : null;
+    if (chip) {
+      if (chip.chip !== lastChip) text += chip.path;
+      lastChip = chip.chip;
+      continue;
+    }
     if (node.parentElement && !isChrome(node.parentElement)) text += node.textContent ?? '';
   }
   return text;
@@ -169,7 +189,7 @@ function buildDocRef(quote: string, ref: string, path: string): ComposeRef {
 
 // Copy + Select all — shared tail for every read-only chat menu.
 function textBasics(bubble: Element | null): MenuEntry[] {
-  const sel = selectionText();
+  const sel = selectionCopyText();
   return [
     {
       type: 'item',
@@ -180,7 +200,7 @@ function textBasics(bubble: Element | null): MenuEntry[] {
       disabled: !sel && !bubble,
       // readableText, not textContent: a whole-message copy must leave tool
       // card titles and other chrome out (see isChrome).
-      run: () => void copyText(sel || (bubble ? readableText(bubble) : '')),
+      run: () => void copyText(sel || (bubble ? readableText(bubble, true) : '')),
     },
     {
       type: 'item',
