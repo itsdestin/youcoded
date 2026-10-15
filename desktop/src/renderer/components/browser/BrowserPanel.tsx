@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, DocumentTabs, EmptyState, ErrorState, LoadingState, TextInput } from '../ui';
+import { Button, Callout, DocumentTabs, EmptyState, ErrorState, LoadingState, TextInput, ZoomPill } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
@@ -107,11 +107,37 @@ function pagePointClamped(rect: { left: number; top: number; width: number; heig
   return { x: Math.round(x), y: Math.round(y) };
 }
 
+/** The page width (CSS px) the panel shows by default. WHY (Destin, 2026-10-15):
+ *  a page laid out at the panel's own ~460 px got sites' phone layouts (menus
+ *  behind ☰, sidebars gone) and gave the assistant small screenshots. A laptop-
+ *  wide page shrunk to fit the panel keeps desktop layouts, like Ctrl+minus. */
+const AUTO_PAGE_WIDTH = 1024;
+/** The zoom steps the − / + buttons move through, as in a browser. */
+const ZOOM_STEPS = [0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1];
+
+/** The page size to lay out for a picture area of `w`×`h` at `zoom`: zooming
+ *  out lays the page out bigger, keeping the panel's shape, so the shrunken
+ *  picture fills the panel exactly. */
+export function layoutSize(w: number, h: number, zoom: number): { w: number; h: number } {
+  return { w: w / zoom, h: h / zoom };
+}
+
+/** The default zoom for a picture area `w` wide: whatever shows AUTO_PAGE_WIDTH,
+ *  never above 100% (a wide panel shows the page at its real size). */
+export function autoZoom(w: number): number {
+  return w > 0 ? Math.min(1, w / AUTO_PAGE_WIDTH) : 1;
+}
+
 /** The live picture of the chat's current tab — also the person's way to use it. */
 const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: { sessionId: string; title: string; onPanelKey: (k: PanelKey) => void }) {
   const img = useRef<HTMLImageElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  /** The picture area's size, settled (debounced) — the page is laid out from it. */
+  const [area, setArea] = useState({ w: 0, h: 0 });
+  /** The person's own zoom; null = the default (auto, follows the panel's width). */
+  const [zoomPick, setZoomPick] = useState<number | null>(null);
+  const zoom = zoomPick ?? autoZoom(area.w);
   /** The page size the current picture shows (CSS px) — clicks map onto it. */
   const frame = useRef({ w: 1280, h: 800 });
 
@@ -138,8 +164,7 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
     return () => { off(); stop(); document.removeEventListener('visibilitychange', onVis); };
   }, [sessionId]);
 
-  // Tell the browser the picture area's size, so a hidden browser lays the
-  // page out to fit it. Debounced: dragging the panel edge relayouts once.
+  // Measure the picture area. Debounced: dragging the panel edge relayouts once.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -150,11 +175,23 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       if (!r || r.width <= 0 || r.height <= 0) return;
       size = { w: r.width, h: r.height };
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => { timer = null; bridge().viewSize(sessionId, size.w, size.h); }, 200);
+      timer = setTimeout(() => { timer = null; setArea(size); }, 200);
     });
     ro.observe(el);
     return () => { ro.disconnect(); if (timer) clearTimeout(timer); };
   }, [sessionId]);
+
+  // Tell the browser what size to lay the page out at: the area divided by
+  // the zoom, so a zoomed-out page is wider than the panel and its picture is
+  // shrunk to fit (clicks already map through the picture's scale — pagePoint).
+  useEffect(() => {
+    if (area.w <= 0 || area.h <= 0) return;
+    const s = layoutSize(area.w, area.h, zoom);
+    bridge().viewSize(sessionId, s.w, s.h);
+  }, [sessionId, area, zoom]);
+
+  const zoomOut = () => setZoomPick([...ZOOM_STEPS].reverse().find((z) => z < zoom - 0.005) ?? zoom);
+  const zoomIn = () => setZoomPick(ZOOM_STEPS.find((z) => z > zoom + 0.005) ?? zoom);
 
   // Ack after the picture is drawn, so a busy screen slows the stream instead of queueing.
   const onLoad = useCallback(() => { bridge().ackFrame(sessionId); }, [sessionId]);
@@ -383,6 +420,20 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       {!hasFrame && <div className="my-6"><LoadingState what="the picture" verb="Waiting for" variant="inline" /></div>}
       {/* Photo-only build: the panel counts as showing once a picture is drawn. */}
       {hasFrame && <ScreenMark name="chat/browser" />}
+      {/* The page's zoom, as in any browser. Clicking the % returns to the
+          default (desktop-width page fitted to the panel). */}
+      {hasFrame && (
+        <ZoomPill
+          className="absolute bottom-2 right-2"
+          percent={Math.round(zoom * 100)}
+          canZoomOut={zoom > ZOOM_STEPS[0] + 0.005}
+          canZoomIn={zoom < 1 - 0.005}
+          zoomInDisabledReason="Already at actual size"
+          onZoomOut={zoomOut}
+          onZoomIn={zoomIn}
+          onReset={() => setZoomPick(null)}
+        />
+      )}
     </div>
       {/* Outside the picture's box: React passes a portal's keys up its parents,
           and the box would send the menu's arrow keys on to the page. */}
