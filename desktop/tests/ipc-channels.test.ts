@@ -63,31 +63,30 @@ function expectTableEntry(file: string, konst: string, channel: string): void {
     .not.toContain(`case '${channel}'`);
 }
 
+// Android clean rebuild (2026-10-14): the phone runs the desktop backend, so the SessionService.kt (Kotlin)
+// parity checks that used to sit beside these are gone. Comments below that still name SessionService.kt or
+// Android stubs describe that retired app.
 describe('IPC channel consistency', () => {
   const preloadSource = readSource('src', 'main', 'preload.ts');
   const typesSource = readSource('src', 'shared', 'backend-contract.ts');
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
-  test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
-    const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+  test('handoff channels are served by both desktop transports through the table', () => {
     const host = readSource('src', 'main', 'remote-server.ts');
     // WHY (2026-09-30 one-core R3-5): both desktop doors now serve handoff:* from ONE table entry each.
     const entries = readSource('src', 'main', 'ipc', 'handoff.ts');
     const shim = readSource('src', 'renderer', 'remote-shim.ts');
-    // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
     for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
       HANDOFF_WAIT: 'wait', HANDOFF_RETRY: 'retry', HANDOFF_SAVED_COPY: 'saved-copy', HANDOFF_FORCE: 'force',
       HANDOFF_CANCEL: 'cancel', HANDOFF_CREATE_PARAMS: 'create-params' })) {
       const channel = `handoff:${action}`;
       expect(preloadIpc.get(name)).toBe(channel);
       expect(typesIpc.get(name)).toBe(channel);
-      expect(kotlin).toContain(`"${channel}"`);
       expect(entries).toContain(`IPC.${name}`);
       expect(host).not.toContain(`case '${channel}':`);
       expect(shim).toContain(`invoke('${channel}'`);
     }
-    expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
   });
 
   // Without this, every assertion below passes vacuously the moment one of the
@@ -191,14 +190,6 @@ describe('dev:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
-  it('all dev:* types are handled by SessionService.kt (Android)', () => {
-    const ktPath = path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    );
-    const src = readSourceFile(ktPath);
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
-  });
 });
 
 // Regression net for the account:* IPC channels introduced by the
@@ -219,19 +210,12 @@ describe('shell:open-external channel parity', () => {
     expect(readFrom('src', 'renderer', 'remote-shim.ts')).toContain("invoke('shell:open-external'");
   });
 
-  it('is handled by SessionService.kt (Android)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    expect(src).toContain('"shell:open-external" ->');
-  });
-
   it('every surface gates on the SCHEME, http/https only', () => {
     // The scheme check is the actual security boundary for a URL the model
     // chose — the tile is only ever opened by a user click, but file:,
     // intent: and javascript: must never reach an opener on any platform.
     // WHY ipc/shell.ts (one-core R3-8): shell:open-external is a channel-table entry now.
     expect(readFrom('src', 'main', 'ipc', 'shell.ts')).toMatch(/\^https\?:\\\/\\\//);
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    expect(kt).toContain('url.startsWith("http://") || url.startsWith("https://")');
   });
 });
 
@@ -257,10 +241,6 @@ describe('account:* channel parity', () => {
     const src = read('src', 'main', 'ipc', 'account.ts');
     for (const t of NEW_TYPES) expect(src).toContain(`IPC.${t.toUpperCase().replace(/[:-]/g, '_')}`);
     expect(read('src', 'main', 'marketplace-api-handlers.ts')).not.toMatch(/ipcMain\.handle\(\s*"account:/);
-  });
-  it('all account:* types are handled by SessionService.kt (Android)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
   it('no marketplace:auth:* strings remain anywhere', () => {
     for (const p of [['src','main','preload.ts'],['src','renderer','remote-shim.ts'],['src','main','marketplace-api-handlers.ts']] as const) {
@@ -332,10 +312,6 @@ describe('social:* channel parity', () => {
       expect(read('src', 'main', 'social-handlers.ts'), `${t} is still registered by hand in social-handlers.ts`).not.toContain(`ipcMain.handle("${t}"`);
     }
   });
-  it('all social:* types are handled by SessionService.kt (Android)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
-  });
 });
 
 // Regression net for terminal:get-screen-text, introduced by the
@@ -376,14 +352,6 @@ describe('terminal:get-screen-text channel parity', () => {
     expectTableEntry('ui', 'TERMINAL_GET_SCREEN_TEXT', CHANNEL);
   });
 
-  it('terminal:get-screen-text is handled by SessionService.kt (Android)', () => {
-    const ktPath = path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    );
-    const src = readSourceFile(ktPath);
-    expect(src).toContain(`"${CHANNEL}"`);
-  });
 });
 
 // Regression net for native:retry (stalled-turn design, 2026-08-16). Five
@@ -409,13 +377,6 @@ describe('native:retry channel parity', () => {
   });
   it('has no leftover case in remote-server.ts (the table answers first)', () => {
     expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
-  });
-  it('is answered not-implemented by SessionService.kt (Android)', () => {
-    const src = readSourceFile(path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    ));
-    expect(src).toContain(`"${CHANNEL}"`);
   });
 });
 
@@ -447,13 +408,6 @@ describe('session:menu-lock channel parity', () => {
   it('is invoked by remote-shim.ts', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
   });
-  it('is handled by SessionService.kt (Android)', () => {
-    const src = readSourceFile(path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    ));
-    expect(src).toMatch(/"session:menu-lock"\s*->/);
-  });
 });
 
 // Regression net for pty:raw-bytes. Tier 1 introduced the Android broadcaster;
@@ -476,14 +430,6 @@ describe('pty:raw-bytes channel parity', () => {
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
-  it('pty:raw-bytes is broadcast by SessionService.kt (Android)', () => {
-    const ktPath = path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    );
-    const src = readSourceFile(ktPath);
-    expect(src).toContain(`"${CHANNEL}"`);
-  });
 });
 
 // Regression net for the update:changelog IPC channel introduced by the
@@ -504,14 +450,6 @@ describe('update:changelog channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
-  it('update:changelog type is handled by SessionService.kt (Android)', () => {
-    const ktPath = path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    );
-    const src = readSourceFile(ktPath);
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
-  });
 });
 
 // Regression net for the analytics:* IPC channels introduced by the
@@ -540,49 +478,25 @@ describe('analytics:* channel parity', () => {
   // SessionService.kt analytics:* handlers. It acts as the regression net —
   // when Phase 7 lands, this turns green and confirms Android parity is
   // complete.
-  it('both analytics:* types are handled by SessionService.kt (Android)', () => {
-    const ktPath = path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    );
-    const src = readSourceFile(ktPath);
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
-  });
 });
 
 // Regression net for system:back and system:notify-stack-state introduced by the
 // android-back-button implementation. system:notify-stack-state flows React → Android
-// (via SessionService.handleBridgeMessage). system:back flows Android → React
-// (broadcast by MainActivity, subscribed in remote-shim). Both channel names must
+// (handled by HostJsBridge). system:back flows Android → React
+// (pushed by HostJsBridge, subscribed in remote-shim). Both channel names must
 // appear literally in their respective files — drift would silently break back-button
 // support on one platform.
 describe('system:back and system:notify-stack-state parity', () => {
-  test('system:notify-stack-state appears in preload.ts, types.ts, remote-shim.ts, SessionService.kt', () => {
-    const stackStateSites = {
-      'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
-      'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
-      'SessionService.kt': readSourceFile(
-        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt')),
-    };
-
-    const channel = 'system:notify-stack-state';
-    for (const [siteName, source] of Object.entries(stackStateSites)) {
-      expect(source, `expected '${channel}' to appear in ${siteName}`).toContain(channel);
-    }
-  });
-
-  test('system:back appears in preload.ts, types.ts, remote-shim.ts, MainActivity.kt', () => {
-    const backSites = {
-      'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
-      'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
-      'MainActivity.kt': readSourceFile(
-        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt')),
-    };
-
-    const channel = 'system:back';
-    for (const [siteName, source] of Object.entries(backSites)) {
+  // Android clean rebuild (2026-10-14): the Kotlin side is now HostJsBridge.kt (the stack state arrives as a
+  // host message; back is pushed to the page).
+  const sites = {
+    'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
+    'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
+    'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
+    'HostJsBridge.kt': readSourceFile(path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/bridge/HostJsBridge.kt')),
+  };
+  test.each(['system:notify-stack-state', 'system:back'])('%s appears in every file that carries it', (channel) => {
+    for (const [siteName, source] of Object.entries(sites)) {
       expect(source, `expected '${channel}' to appear in ${siteName}`).toContain(channel);
     }
   });
@@ -607,13 +521,6 @@ describe('performance:* and app:restart parity', () => {
     }
   });
 
-  it('all three types are handled by SessionService.kt (Android)', () => {
-    const kt = readSourceFile(
-      path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'));
-    for (const ch of channels) {
-      expect(kt, `${ch} missing from SessionService.kt`).toContain(`"${ch}"`);
-    }
-  });
 });
 
 // Regression net for artifact:* IPC channels introduced by the artifact-viewer
@@ -640,11 +547,6 @@ describe('artifact IPC parity', () => {
   const preload = readSourceFile('src/main/preload.ts');
   const shim = readSourceFile('src/renderer/remote-shim.ts');
 
-  // Kotlin file lives in the sibling app/ directory of the youcoded sub-repo
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const kotlinExists = fs.existsSync(kotlinPath);
-  const kotlin = kotlinExists ? readSourceFile(kotlinPath) : '';
-
   for (const channel of channels) {
     it(`channel ${channel} is referenced in preload.ts`, () => {
       expect(preload, `${channel} missing from preload.ts`).toContain(channel);
@@ -664,14 +566,6 @@ describe('artifact IPC parity', () => {
     }
 
     // Phase 8: Expected to fail until Android handlers land; left in place as a tracker
-    it(`channel ${channel} is registered in SessionService.kt`, () => {
-      if (kotlinExists) {
-        expect(kotlin, `${channel} missing from SessionService.kt`).toContain(channel);
-      } else {
-        // App directory not present in this worktree yet (Phase 8 pending)
-        console.warn(`SessionService.kt not found at ${kotlinPath} — skipping Android parity check`);
-      }
-    });
   }
 });
 
@@ -693,10 +587,6 @@ describe('project:* channel parity', () => {
   it('served by one channel-table entry each, with no hand-written copy left', () => {
     for (const t of NEW_TYPES) expectTableEntry('project', konstOf(t), t);
   });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt).toContain(`"${t}"`);
-  });
 });
 
 // Session references (spec 2026-08-10). FIVE surfaces, like project:* — the two
@@ -717,10 +607,6 @@ describe('chatsearch:* channel parity', () => {
   // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/chatsearch.ts), served to windows and phones.
   it('served by one channel-table entry each, with no hand-written copy left', () => {
     for (const t of NEW_TYPES) expectTableEntry('chatsearch', konstOf(t), t);
-  });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt).toContain(`"${t}"`);
   });
 });
 
@@ -768,35 +654,6 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     expect(shim).toContain('syncspaces:event');
   });
 
-  // Plan 2b Task 11 — the five lease/device REQUEST channels also have an Android
-  // stub (SessionService.kt returns not-implemented-on-mobile) so a mobile invoke
-  // rejects fast instead of 30s-timing-out. Assert the Kotlin stub covers all five.
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const leaseDeviceRequestChannels = [
-    'syncspaces:lease-query',
-    'syncspaces:lease-takeover',
-    'syncspaces:lease-force',
-    'syncspaces:list-devices',
-    'syncspaces:rename-device',
-    'syncspaces:remove-device',
-    // Synced project description (project-description spec, Task 3). Desktop-only
-    // for now, so it rides the SAME not-implemented-on-mobile stub arm. Without
-    // it the phone's description editor waits ~30s for a response that never
-    // arrives instead of rejecting immediately — delete the Kotlin arm and this
-    // assertion is the only thing that notices.
-    'syncspaces:set-project-description',
-  ];
-  if (fs.existsSync(kotlinPath)) {
-    const kotlin = readSourceFile(kotlinPath);
-    for (const ch of leaseDeviceRequestChannels) {
-      it(`${ch} has an Android not-implemented-on-mobile stub in SessionService.kt`, () => {
-        expect(kotlin).toContain(`"${ch}"`);
-      });
-    }
-  } else {
-    it.skip('SessionService.kt not found — skipping Android lease/device stub check', () => {});
-  }
-
   // session:moved is a PUSH event (Task 8 broadcasts it), NOT a request — so it
   // has no ipc-handlers/Kotlin request handler. Assert only the two surfaces that
   // CONSUME it: preload (ipcRenderer.on) + remote-shim (addListener push routing).
@@ -831,21 +688,6 @@ describe('folders:set-description channel parity (desktop surfaces)', () => {
     });
   }
 
-  // Android carries a REAL handler for this one (not a stub): folders:rename
-  // already has a native implementation, so its description sibling needs one
-  // too — without the `"folders:set-description" ->` arm the phone silently
-  // no-ops, the card refreshes, and the user's text is gone with no error.
-  // Guarded by existsSync so a moved Kotlin path degrades to a skip rather
-  // than exploding, same as the syncspaces stub block above.
-  const kotlinFolderPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  if (fs.existsSync(kotlinFolderPath)) {
-    const kotlin = readSourceFile(kotlinFolderPath);
-    it('folders:set-description has a real Android handler arm in SessionService.kt', () => {
-      expect(kotlin).toContain('"folders:set-description" ->');
-    });
-  } else {
-    it.skip('SessionService.kt not found — skipping Android folders:set-description check', () => {});
-  }
 });
 
 // Connect-GitHub modal (device-flow auth, 2026-07-14). The four REQUEST channels
@@ -873,20 +715,6 @@ describe('github:* channel parity (desktop surfaces)', () => {
       expect(shim).toContain(ch);
       expect(table).toContain(constant);
     });
-  }
-
-  // The four request channels also carry an Android stub (SessionService.kt
-  // returns not-implemented-on-mobile) so a mobile invoke rejects fast.
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  if (fs.existsSync(kotlinPath)) {
-    const kotlin = readSourceFile(kotlinPath);
-    for (const [ch] of channels) {
-      it(`${ch} has an Android not-implemented-on-mobile stub in SessionService.kt`, () => {
-        expect(kotlin).toContain(`"${ch}"`);
-      });
-    }
-  } else {
-    it.skip('SessionService.kt not found — skipping Android github stub check', () => {});
   }
 
   // github:connect-done is a PUSH event (main broadcasts it when the flow settles),
@@ -962,10 +790,6 @@ describe('native:*/provider:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc/native.ts / ipc/provider.ts`).toBe(true);
     for (const t of NEW_TYPES.filter((c) => c.startsWith('provider:'))) expectTableEntry('provider', CHANNEL_TO_CONST[t].slice(4), t);
   });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
-  });
   // WHY (2026-09-30 one-core R3-5): the request/response native channels are ONE table entry each, so a
   // phone is answered by the same body as a window and there is no second `case` to forget. Pinned: each
   // entry exists, and remote-server has no leftover case for it.
@@ -975,7 +799,6 @@ describe('native:*/provider:* channel parity', () => {
       expect(read('src', 'main', 'ipc', 'native.ts')).toMatch(new RegExp(`name: ${constant.replace('.', '\\.')}, kind: 'handle'`));
       expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${channel}'`);
     });
-  // The mode push (push-only, so no Kotlin or remote-server request case): the
   // chip in every window and on every phone depends on receiving it.
   it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
     expect(read('src', 'main', 'preload.ts')).toContain(`NATIVE_PERMISSION_MODE: 'native:permission-mode'`);
@@ -1017,30 +840,24 @@ describe('search:* channel parity', () => {
   it('served by one channel-table entry each, with no hand-written copy left', () => {
     for (const t of NEW_TYPES) expectTableEntry('search', CHANNEL_TO_CONST[t].slice(4), t);
   });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
-  });
 });
 
 // Custom tags + per-session notes (session-tags feature).
 // The channels must exist across all three parity surfaces so the shared
 // React UI works identically on desktop (preload/Electron IPC), remote
-// browsers (remote-shim/WebSocket), and Android (SessionService.kt).
+// browsers (remote-shim/WebSocket); the phone runs the desktop backend.
 describe('custom tags + notes channel parity', () => {
   const read = (rel: string) => readSourceFile(path.join(__dirname, rel));
   const preload = read('../src/main/preload.ts');
   const remoteShim = read('../src/renderer/remote-shim.ts');
-  const sessionService = read('../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   const channels = [
     'session:set-tag', 'session:set-note', 'session:get-meta',
     'tags:list', 'tags:create', 'tags:update', 'tags:delete',
   ];
   for (const ch of channels) {
-    test(`${ch} present in preload, remote-shim, and SessionService.kt`, () => {
+    test(`${ch} present in preload and remote-shim`, () => {
       expect(preload).toContain(ch);
       expect(remoteShim).toContain(ch);
-      expect(sessionService).toContain(ch);
     });
   }
 });
@@ -1057,7 +874,6 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
   const remoteShim = read('src', 'renderer', 'remote-shim.ts');
   const remoteServer = read('src', 'main', 'remote-server.ts');
   const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
-  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
 
   it('preload.ts declares both channel strings and exposes both methods', () => {
     expect(preload).toContain("'session:reopen-list'");
@@ -1087,12 +903,6 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
     expect(remoteServer).not.toContain("case 'session:forget-reopen'");
   });
 
-  it('SessionService.kt (Android never shows this screen) answers []/{ok:true}', () => {
-    expect(kotlin).toContain('"session:reopen-list" ->');
-    expect(kotlin).toContain('"session:forget-reopen" ->');
-    expect(kotlin).toMatch(/"session:reopen-list" ->[\s\S]{0,200}?org\.json\.JSONArray\(\)/);
-    expect(kotlin).toMatch(/"session:forget-reopen" ->[\s\S]{0,200}?JSONObject\(\)\.put\("ok", true\)/);
-  });
 });
 
 // Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
@@ -1109,7 +919,6 @@ describe('window:close-request / window:answer-close / window:close-request-canc
   const remoteShim = read('src', 'renderer', 'remote-shim.ts');
   const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
   const main = read('src', 'main', 'main.ts');
-  const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
 
   it('preload.ts and shared/backend-contract.ts carry byte-identical channel strings', () => {
     for (const [name, channel] of [
@@ -1138,12 +947,6 @@ describe('window:close-request / window:answer-close / window:close-request-canc
     expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
   });
 
-  it('is absent from remote-shim.ts and SessionService.kt — Electron-only, no shim/Android twin', () => {
-    for (const channel of ['window:close-request', 'window:answer-close', 'window:close-request-cancelled']) {
-      expect(remoteShim).not.toContain(channel);
-      expect(kotlin).not.toContain(channel);
-    }
-  });
 });
 
 // Local llama.cpp engine (Plan B, Task 9). The engine:* IPC surface must carry
@@ -1175,10 +978,6 @@ describe('engine:* channel parity (Plan B)', () => {
     }
     expect(src).toContain('send(IPC.ENGINE_INSTALL_PROGRESS, p)');
     expect(src).toContain('send(IPC.ENGINE_STATUS_CHANGED, s)');
-  });
-  it('SessionService.kt stubs every request-response engine channel', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const ch of channels) expect(src).toContain(`"${ch}"`);
   });
 });
 
@@ -1264,14 +1063,6 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     expect(src).toContain('send(IPC.MODELS_DOWNLOAD_PROGRESS, p)');
     expect(src).toContain("remoteServer?.broadcast({ type: 'models:download-progress'");
   });
-  // On a line that is NOT commented out, for the same reason: commenting the
-  // Kotlin string leaves it in the file, so a bare text scan stays green while
-  // the phone falls through to "Unknown message" and the shared UI waits.
-  it('SessionService.kt stubs every request-response channel', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    const live = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-    for (const [ch] of channels) expect(live).toContain(`"${ch}"`);
-  });
   // A dropped SECOND argument is invisible everywhere else: main receives an
   // empty patch, changes nothing, returns the settings unchanged, and the dialog
   // renders that as a save that worked — the user toggles "Keep loaded" on,
@@ -1282,58 +1073,6 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     // One object per call since one-core R2 (same keys the phone shim sends).
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, { modelId, patch })');
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, { repo, quant })');
-  });
-  // Android NAMES these six — and only these six — as `unsupported` inside the
-  // not-implemented list; every other desktop-only channel listed there sends the
-  // plain not-implemented error. (Since 2026-09-10 the dispatcher's final `else`
-  // ALSO answers `unsupported`, for channels it has no branch for at all — that is
-  // the catch-all, not a seventh label, and it is pinned in
-  // android-honest-build.test.ts.)
-  //
-  // WHY the set has to be checked for EQUALITY and not just for presence: a
-  // Kotlin `when` branch runs from its FIRST comma-separated value down to the
-  // one carrying the `-> {`. Written into the middle of the long
-  // not-implemented list, this branch's `-> {` silently swallowed the eighteen
-  // native:* / provider:* channels above it — `provider:list` runs every time
-  // the model picker opens, so a phone doing no remote access started popping
-  // "provider:list isn't available via remote access yet." A presence-only
-  // check called that green, because the six were all still present.
-  it('SessionService.kt marks exactly the six local-engine channels unsupported', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-
-    // Walk the `when` the way Kotlin does: labels accumulate until a line
-    // carries `->`, and everything accumulated belongs to THAT branch.
-    const armOf = new Map<string, string>();
-    let pending: string[] = [];
-    for (const line of src.split('\n')) {
-      const t = line.trim();
-      if (t.startsWith('//')) continue;
-      const labels = [...t.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-      if (labels.length === 0) continue;
-      if (t.includes('->')) {
-        const terminator = labels[labels.length - 1];
-        for (const l of [...pending, ...labels]) if (!armOf.has(l)) armOf.set(l, terminator);
-        pending = [];
-      } else if (/^("[^"]+",\s*)+$/.test(t)) {
-        pending.push(...labels);
-      }
-    }
-
-    // Sanity: if the walk found nothing the equality below would pass vacuously.
-    expect(armOf.get('provider:list')).toBe('github:disconnect');
-
-    const six = [
-      'engine:prereqs', 'engine:run-in-terminal', 'engine:set-config',
-      'models:add-vision', 'models:set-settings', 'models:settings',
-    ];
-    const inTheArm = [...armOf.entries()]
-      .filter(([, terminator]) => terminator === 'models:add-vision')
-      .map(([ch]) => ch).sort();
-    expect(inTheArm).toEqual(six);
-
-    // …and the branch actually answers `unsupported`.
-    const arrow = src.indexOf('"models:add-vision" -> {');
-    expect(src.slice(arrow, arrow + 400)).toContain('.put("unsupported", true)');
   });
 
   // The FIFTH surface. remote-server.ts is where a remote browser's request
@@ -1387,17 +1126,11 @@ describe('model memory lifecycle channel parity', () => {
     // One publish reaches the windows and every phone (publish.ts); the equivalence test pins what each receives.
     expect(src).toContain('publish(sessionId, IPC.NATIVE_MODEL_STATE, full)');
   });
-  it('SessionService.kt stubs every request-response channel', () => {
-    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const [ch] of invokeChannels) expect(src).toContain(`"${ch}"`);
-  });
 });
 
 describe('git:* IPC parity (git surface)', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
 
   const channels = ['git:file-status', 'git:file-review', 'git:commit-file-diff', 'git:stage', 'git:unstage', 'git:commit', 'git:discard', 'git:watch', 'git:unwatch'];
 
@@ -1407,9 +1140,6 @@ describe('git:* IPC parity (git surface)', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(shim).toContain(`'${ch}'`);
       expectTableEntry('git', konstOf(ch), ch);
-    });
-    it(`${ch} has an Android not-implemented-on-mobile stub`, () => {
-      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
     });
   }
 
@@ -1428,8 +1158,6 @@ describe('office:* channel parity', () => {
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
   const handlers = readSourceFile(path.join(__dirname, '../src/main/office/office-ipc.ts'));
   const unsupported = readSourceFile(path.join(__dirname, '../src/renderer/remote-unsupported.ts'));
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
 
   const channels = [
     'office:status', 'office:create', 'office:pick', 'office:open',
@@ -1443,9 +1171,6 @@ describe('office:* channel parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(shim).toContain(`'${ch}'`);
       expect(handlers).toContain(`'${ch}'`);
-    });
-    it(`${ch} has an Android not-implemented-on-mobile stub`, () => {
-      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
     });
   }
 
@@ -1461,7 +1186,6 @@ describe('office:* channel parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(gate).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);
-      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
     }
   });
 
@@ -1473,7 +1197,6 @@ describe('office:* channel parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(sync).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);
-      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
     }
   });
 
@@ -1486,7 +1209,6 @@ describe('office:* channel parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(comments).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);
-      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
     }
   });
 
@@ -1494,28 +1216,11 @@ describe('office:* channel parity', () => {
 
 // docComments:* IPC parity — T3/T4 of the doc-comments build (design
 // docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). T4 adds
-// the Android arm this block's own header used to say was deliberately
-// deferred: list/add/reply/resolve/reopen/move are now REAL Kotlin `when`
-// branches in SessionService.kt (DocCommentsStore.kt/DocCommentsGate.kt/
-// DocCommentsDispatch.kt), reopen-1's "full phone support" superseding the
-// git-style desktop-only stub an earlier revision of the design gave this
-// feature. watch/unwatch stay `not-implemented-on-mobile` (a general
-// FileObserver-based-push gap, §1.6) — same shape as artifacts:watch-project
-// (review 1, F10), never the bare `{unsupported:true}` catch-all.
 describe('docComments:* IPC parity', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
   const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
   const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
-  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
-  // F6 (T4 implementation review): the actual per-channel dispatch was
-  // extracted out of SessionService.kt's own `when` block into a pure,
-  // directly-unit-testable function (DocCommentsBridgeTest.kt is the Kotlin
-  // half of that same extraction) — SessionService.kt's own arm for these
-  // eight labels is now just plumbing that hands the message to it.
-  const bridgePath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/doccomments/DocCommentsBridge.kt');
-  const bridge = fs.existsSync(bridgePath) ? readSourceFile(bridgePath) : null;
 
   const channels: Array<[string, string]> = [
     ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
@@ -1546,9 +1251,6 @@ describe('docComments:* IPC parity', () => {
       expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'doc-comments', 'ipc-handlers.ts'))).not.toContain('ipcMain');
       expect(server).not.toContain(`case '${ch}':`);
     });
-    it(`${ch} has a Kotlin arm in SessionService.kt`, () => {
-      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
-    });
   }
 
   it('docComments:changed push channel present in preload + remote-shim', () => {
@@ -1572,57 +1274,6 @@ describe('docComments:* IPC parity', () => {
     expect(handlers).toContain('wireDocCommentsPush(');
   });
 
-  it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
-    if (!bridge) return;
-    // The exact JSON shape T4's own pinning-test row calls for: a typed,
-    // explicit branch — {ok:false, error:'not-implemented-on-mobile'} — not
-    // MessageRouter.buildUnsupportedResponse's {ok:false, unsupported:true}
-    // no-branch-at-all catch-all (a different mechanism per ipc-bridge.md).
-    // F6 moved this branch's body into DocCommentsBridge.kt's
-    // handleDocCommentsMessage — SessionService.kt's own combined `when` arm
-    // for all eight docComments:* labels is now just plumbing (see this
-    // describe block's own `bridge` comment above).
-    const watchBranch = bridge.match(/"docComments:watch",\s*"docComments:unwatch"\s*->\s*JSONObject\(\)[\s\S]*?\n/);
-    expect(watchBranch, 'docComments:watch/:unwatch branch not found in DocCommentsBridge.kt').toBeTruthy();
-    expect(watchBranch![0]).toContain('"not-implemented-on-mobile"');
-    expect(watchBranch![0]).not.toContain('unsupported');
-  });
-
-  it('docComments:list/add/reply/resolve/reopen/move/edit/delete are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
-    if (!kotlin || !bridge) return;
-    // SessionService.kt's own combined arm hands every one of these labels
-    // to the real dispatch function (F6) — a stub would instead answer
-    // inline with nothing calling out to doccomments/.
-    expect(kotlin).toContain('com.youcoded.app.doccomments.handleDocCommentsMessage');
-    // The real per-type logic lives in DocCommentsBridge.kt now — each
-    // channel below must call its own real store/dispatch function, never
-    // just fall through to the bare not-implemented-on-mobile shape.
-    const realCallByChannel: Record<string, string> = {
-      'docComments:list': 'listNativeComments(',
-      'docComments:add': 'addComment(',
-      'docComments:reply': 'replyToComment(',
-      'docComments:resolve': 'resolveComment(',
-      'docComments:reopen': 'reopenComment(',
-      'docComments:move': 'moveComment(',
-      // Edit/delete build (2026-09-28, design doc §"Edit and delete").
-      'docComments:edit': 'editComment(',
-      'docComments:edit-reply': 'editReply(',
-      'docComments:delete': 'deleteComment(',
-      'docComments:delete-reply': 'deleteReply(',
-    };
-    for (const [ch, realCall] of Object.entries(realCallByChannel)) {
-      // WHY 3000, not 2000: T17/T19 grew every mutation case with its own
-      // native-format `when` branch (DOCX/XLSX dispatch alongside the sidecar
-      // fallback) — `docComments:add`'s case body is now ~2177 chars and
-      // `docComments:reply`'s ~2008, both already past the old 2000 budget
-      // (measured 2026-09-27), which made this test fail to find EITHER
-      // branch at all, not fail on its content.
-      const branch = bridge.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,3000}?\\n        \\}\\n`));
-      expect(branch, `${ch} branch not found in DocCommentsBridge.kt`).toBeTruthy();
-      expect(branch![0]).toContain(realCall);
-      expect(branch![0]).not.toContain('"not-implemented-on-mobile"');
-    }
-  });
 });
 
 // Four-surface parity for the native:* channels.
@@ -1672,16 +1323,6 @@ describe('native:* channel parity', () => {
     for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`'${t}'`);
   });
 
-  it('every native:* channel is answered by SessionService.kt (Android)', () => {
-    // Android's native runtime is M8, so these are honest not-implemented
-    // replies rather than implementations — but a channel absent from the list
-    // gets NO reply at all, which hangs the shared React UI instead of degrading it.
-    const src = readSourceFile(path.join(
-      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    ));
-    for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`"${t}"`);
-  });
 });
 
 // Five-surface parity for the permissions management UI (M5 2a). A channel
@@ -1711,10 +1352,6 @@ describe('permissions:* channel parity', () => {
       expect(table, `${t} missing from ipc/permissions.ts`).toContain(CHANNEL_TO_CONST[t]);
       expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
     }
-  });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
 });
 
@@ -1756,10 +1393,6 @@ describe('specialists:* channel parity', () => {
       expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
     }
   });
-  it('stubbed in SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
-  });
   // specialists:event is a PUSH, not a request — it is exempt from the
   // ipc-handlers.ts (no `ipcMain.handle`, only a `.on()` forwarder) and
   // Kotlin/remote-server "request" surfaces the same way native:model-state
@@ -1769,12 +1402,9 @@ describe('specialists:* channel parity', () => {
   it('specialists:event push channel present in preload + remote-shim only', () => {
     const preload = read('src', 'main', 'preload.ts');
     const shim = read('src', 'renderer', 'remote-shim.ts');
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(preload).toContain(`'specialists:event'`);
     expect(shim).toContain(`'specialists:event'`);
     // Never a request stub: unlike the five channels above, this is push-only
-    // and must not appear in Kotlin's not-implemented list at all.
-    expect(kt).not.toContain(`"specialists:event"`);
   });
 });
 
@@ -1796,15 +1426,6 @@ describe('fs:* channel parity', () => {
   // WHY (2026-09-30 one-core R3-7): one table entry (main/ipc/files.ts), served to windows and phones.
   it('served by one channel-table entry, with no hand-written copy left', () => {
     for (const t of NEW_TYPES) expectTableEntry('files', konstOf(t), t);
-  });
-  it('handled by SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
-  });
-  it('the Android cap mirrors READ_HEAD_MAX_BYTES', async () => {
-    const { READ_HEAD_MAX_BYTES } = await import('../src/shared/read-head');
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    expect(kt).toContain(`coerceIn(1, ${READ_HEAD_MAX_BYTES})`);
   });
 });
 
@@ -1834,10 +1455,6 @@ describe('marketplace feedback channel parity', () => {
     const src = read('src', 'main', 'ipc', 'marketplace.ts');
     const consts: Record<string, string> = { 'marketplace:thumb': 'IPC.MARKETPLACE_THUMB,', 'marketplace:thumb:get': 'IPC.MARKETPLACE_THUMB_GET,', 'marketplace:comment': 'IPC.MARKETPLACE_COMMENT,' };
     for (const t of NEW_TYPES) expect(src, `${t} has no channel-table entry`).toContain(`name: ${consts[t]}`);
-  });
-  it('handled by SessionService.kt (Android)', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
   it('the thumb handlers forward the TOTALS, not just the vote', () => {
     // Both thumbs routes return { vote, thumbs_up, thumbs_down }. A handler that
@@ -1879,33 +1496,6 @@ describe('marketplace feedback channel parity', () => {
   });
 });
 
-// The marketplace Worker's host is spelled out in two languages: TypeScript
-// (MARKETPLACE_API_HOST) and Kotlin (MarketplaceFetcher.kt, which the Android
-// catalog fetch builds `$MARKETPLACE_API_HOST/catalog` from). Neither can import
-// the other, so the string is duplicated — exactly the drift these parity tests
-// exist to catch. If someone moves the Worker, both copies must move together or
-// Android silently keeps fetching the old host and falls back to index.json
-// forever, with no error anywhere.
-describe('marketplace Worker host parity (desktop ↔ Android)', () => {
-  it('MarketplaceFetcher.kt names the same host as MARKETPLACE_API_HOST', () => {
-    const tsSrc = readSourceFile(
-      path.join(__dirname, '..', 'src', 'renderer', 'state', 'marketplace-api-client.ts'));
-    const ktSrc = readSourceFile(
-      path.join(
-        __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'skills', 'MarketplaceFetcher.kt',
-      ));
-
-    const ts = tsSrc.match(/export const MARKETPLACE_API_HOST = "([^"]+)"/);
-    expect(ts, 'MARKETPLACE_API_HOST not found in marketplace-api-client.ts').toBeTruthy();
-
-    const kt = ktSrc.match(/const val MARKETPLACE_API_HOST = "([^"]+)"/);
-    expect(kt, 'MARKETPLACE_API_HOST not found in MarketplaceFetcher.kt').toBeTruthy();
-
-    expect(kt![1]).toBe(ts![1]);
-  });
-});
-
 // Five-surface parity for the games arcade's scores (spec §6.1). Android runs
 // the SAME React UI, so a channel missing there does not fail loudly — the
 // leaderboard silently degrades to "no board", which looks identical to having
@@ -1936,19 +1526,7 @@ describe('arcade:* channel parity', () => {
     }
   });
 
-  it('has a REAL Android handler arm, not a not-implemented stub', () => {
-    const kt = readSourceFile(
-      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    // `"channel" ->` is the arm marker. A channel listed in the shared
-    // not-implemented fall-through would appear WITHOUT the arrow, which is
-    // what this distinguishes — Android has a real HTTP client for this API,
-    // so a stub here would be a silently worse product, not a platform limit.
-    for (const t of TYPES) expect(kt, `${t} has no real arm in SessionService.kt`).toContain(`"${t}" ->`);
-  });
-
   it('the shim sends an OBJECT payload, never bare positional args', () => {
-    // Kotlin reads msg.payload.optString(...) — a bare arg arrives as nothing.
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of TYPES) {
       const call = src.match(new RegExp(`invoke\\('${t}'(,\\s*([^)]*))?\\)`));
@@ -2011,19 +1589,14 @@ describe('buddy:* helper channel parity', () => {
     }
   });
 
-  it('has NO Android or remote-server arm, deliberately', () => {
+  it('has NO remote-server arm, deliberately', () => {
     // Pinned so the omission stays a decision. If the buddy ever grows an
-    // Android or remote presence, this test is the thing that has to change,
     // and changing it is the prompt to add all three channels there properly.
-    const kt = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
     const remoteServer = read('src', 'main', 'remote-server.ts');
     for (const t of TYPES) {
-      expect(kt, `${t} appeared in SessionService.kt — update this block`).not.toContain(`"${t}"`);
       expect(remoteServer, `${t} appeared in remote-server.ts — update this block`).not.toContain(`'${t}'`);
     }
-    // Sanity: the buddy really has no Android surface at all, which is the
     // premise of the paragraph above. `buddy:show` predates this feature.
-    expect(kt).not.toContain('"buddy:show"');
   });
 });
 
@@ -2035,10 +1608,7 @@ describe('buddy:* helper channel parity', () => {
 //
 //   preload.ts          the desktop app       — every channel
 //   voice/voice-handlers.ts  the desktop's main process — every channel
-//   SessionService.kt   the Android app       — the five the phone can do,
-//                                               plus a not-implemented stub for
-//                                               the two that are desktop-only
-//   remote-shim.ts      Android's window.claude — the five, minus the two
+//   remote-shim.ts      the phone's window.claude — the five, minus the two
 //                                               desktop-only ones
 //
 // A remote BROWSER tab gets no voice at all; that is a runtime decision (the
@@ -2049,10 +1619,6 @@ describe('voice:* channel parity', () => {
   const preload = read('src', 'main', 'preload.ts');
   const shim = read('src', 'renderer', 'remote-shim.ts');
   const handlers = read('src', 'main', 'voice', 'voice-handlers.ts');
-  const kotlinPath = path.join(
-    __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-    'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-  );
 
   /** The five calls every surface that has a microphone can answer. */
   const SHARED = ['voice:status', 'voice:download', 'voice:start', 'voice:stop', 'voice:cancel'];
@@ -2086,30 +1652,6 @@ describe('voice:* channel parity', () => {
       expect(shim, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
     }
   });
-
-  if (fs.existsSync(kotlinPath)) {
-    const kotlin = readSourceFile(kotlinPath);
-    it('SessionService.kt has a real arm for the four calls the phone answers', () => {
-      // voice:download is NOT here — a phone downloads no speech model — so it
-      // rides the not-implemented stub asserted below.
-      for (const t of ['voice:status', 'voice:start', 'voice:stop', 'voice:cancel']) {
-        expect(kotlin, `${t} has no real arm in SessionService.kt`).toContain(`"${t}" ->`);
-      }
-    });
-    it('SessionService.kt stubs the two desktop-only calls so the phone fails fast', () => {
-      // Listed WITHOUT the `->` arrow: they share the not-implemented-on-mobile
-      // fall-through. A missing entry means a 30-second timeout on the phone
-      // instead of an immediate, explained refusal.
-      for (const t of ['voice:download', 'voice:mic-access']) {
-        expect(kotlin, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
-      }
-    });
-    it('SessionService.kt pushes voice:event', () => {
-      expect(kotlin).toContain('"voice:event"');
-    });
-  } else {
-    it.skip('SessionService.kt not found — skipping Android voice parity', () => {});
-  }
 
   // ── The two named exceptions to the parity rule ────────────────────────────
   // .claude/rules/ipc-bridge.md keeps a CLOSED list of members that exist on one
@@ -2195,15 +1737,6 @@ describe('openrouter:* sign-in channel parity', () => {
     expect(entries).toMatch(/name: IPC\.OPENROUTER_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
   });
 
-  it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
-    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of TYPES) {
-      expect(kt).toContain(`"${t}"`);
-      expect(kt).not.toContain(`"${t}" ->`);
-    }
-  });
-
   it('supported is set on every surface: on in preload and the workbench, off over remote', () => {
     expect(read('src', 'main', 'preload.ts')).toMatch(/openrouter:\s*\{\s*supported: process\.env\.YOUCODED_NATIVE !== '0'/);
     expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const openrouter = \{[\s\S]*?supported: true,/);
@@ -2265,18 +1798,6 @@ describe('chatgpt:* channel parity', () => {
     expect(read('src', 'main', 'ipc', 'chatgpt.ts')).toMatch(/name: IPC\.CHATGPT_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
   });
 
-  it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
-    const kt = readSourceFile(
-      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of TYPES) {
-      expect(kt, `${t} not listed in SessionService.kt`).toContain(`"${t}"`);
-      // `"channel" ->` is the real-arm marker (see the arcade block). Android
-      // cannot run the sign-in, so an arm here would be a fake, not a feature.
-      expect(kt, `${t} has a real arm in SessionService.kt — it must be a not-implemented stub`).not.toContain(`"${t}" ->`);
-    }
-  });
-
   it('the preload flag and the mock/remote flags exist, so the renderer gate (=== true) is honest everywhere', () => {
     // Review R1-9: a `supported` the renderer reads as `=== true` must be SET
     // on every surface — undefined hides the card in the workbench and on the
@@ -2322,13 +1843,6 @@ describe('claude-code:status channel parity', () => {
   it('registered in ipc-handlers.ts (through the IPC constant)', () => {
     expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
     expectTableEntry('claude-code', 'CLAUDE_CODE_STATUS', T);
-  });
-
-  it('has a REAL Android arm — the phone runs Claude Code too', () => {
-    const kt = readSourceFile(
-      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    expect(kt, `${T} has no arm in SessionService.kt`).toContain(`"${T}" ->`);
   });
 
   it('the workbench mock answers it, so no review shot greys out its own models', () => {
@@ -2386,12 +1900,6 @@ describe('claude-code:install channel parity', () => {
     expectTableEntry('claude-code', 'CLAUDE_CODE_INSTALL', T);
   });
 
-  it('refused on Android, and the refusal reaches the caller as an error', () => {
-    const kt = readSourceFile(
-      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    expect(kt).toContain(`"${T}",`);
-    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/REJECT_ON_NOT_OK[\s\S]*'claude-code:install'/);
-  });
 });
 
 describe('first-run local channels', () => {
@@ -2549,11 +2057,6 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(PAGE_VIDEO_CHANNELS).toEqual({ start: 'pages:video-start', stop: 'pages:video-stop', ping: 'pages:video-ping' });
   });
 
-  it('Android answers every live socket and camera video call (not-implemented, a phone-only feature of the computer)', () => {
-    const kotlin = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
-    for (const t of [...SOCKET, ...VIDEO]) expect(kotlin, t).toContain(`"${t}"`);
-  });
-
   it('the socket-event push is declared, subscribed in preload, handled by the shim, and sent only to the owner', () => {
     expect(read('src', 'shared', 'pages-types.ts')).toContain(`'${SOCKET_EVENT}'`);
     expect(read('src', 'main', 'preload.ts')).toContain(`'${SOCKET_EVENT}'`);
@@ -2585,7 +2088,6 @@ describe('session:terminal-ack (terminal flow control)', () => {
   const sessionTable = readSource('src', 'main', 'ipc', 'session.ts');
   const handlers = readSource('src', 'main', 'ipc-handlers.ts');
   const shim = readSource('src', 'renderer', 'remote-shim.ts');
-  const kotlin = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
 
   it('desktop: the same channel string in preload and the contract, sent by ackOutput, handled in main through the table', () => {
     expect(preload).toContain("TERMINAL_ACK: 'session:terminal-ack'");
@@ -2602,16 +2104,11 @@ describe('session:terminal-ack (terminal flow control)', () => {
     expect(readSource('src', 'main', 'remote-server.ts')).not.toMatch(/ackOutput|bounceSize/);
   });
 
-  it('the repaint request is desktop-window-only the same way: shim no-op, silent refusal for a phone, Android has no branch', () => {
+  it('the repaint request is desktop-window-only the same way: shim no-op, silent refusal for a phone', () => {
     expect(preload).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
     expect(contract).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
     expect(sessionTable).toMatch(/name: IPC\.TERMINAL_REPAINT, kind: 'on', desktopOnly: true, refusal: \{ kind: 'silent' \}/);
     expect(shim).toMatch(/requestRepaint: \(_sessionId: string\) => \{\}/);
-    expect(kotlin).not.toContain('session:terminal-repaint');
   });
 
-  it('Android deliberately omits it: its own PTY runtime has no worker credit loop, and the shim never sends it', () => {
-    expect(kotlin).not.toContain('session:terminal-ack');
-    expect(kotlin).toContain('session:terminal-ready');   // the sibling it was modelled on IS handled there
-  });
 });

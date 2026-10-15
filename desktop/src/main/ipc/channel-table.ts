@@ -194,13 +194,14 @@ export async function serveRemoteChannel(
   def: MainChannelDef, payload: unknown, ctx: MainChannelCtx,
   /** WHY `owner` (2026-10-14, Android clean rebuild P1): the Android app's own page, signed in to the backend running
    *  on the same phone (remote-server.ts local mode), is that backend's owner, not a visitor. It gets what a window
-   *  gets: phone refusals (`remoteAllowed:false`), folder gates and the over-the-network size caps do not apply.
-   *  `desktopOnly` still refuses — those handlers need Electron itself — and reply/error shaping still applies,
+   *  gets: `desktopOnly` ("this device's own", e.g. first-run sign-in) and phone refusals (`remoteAllowed:false`)
+   *  do not refuse it, and neither do folder gates or the over-the-network size caps. Electron calls inside such a
+   *  handler reach the headless stand-in (headless/electron-headless.ts). Reply/error shaping still applies,
    *  because the page reading the answer is the same shim a phone browser runs. */
   opts: { owner?: boolean } = {},
 ): Promise<RemoteOutcome> {
   const owner = opts.owner === true;
-  if (def.desktopOnly || (def.remoteAllowed === false && !owner) || def.kind === 'push') {
+  if (((def.desktopOnly || def.remoteAllowed === false) && !owner) || def.kind === 'push') {
     const refusal = def.refusal ?? { kind: 'unsupported' as const };
     if (refusal.kind === 'silent') return { reply: false };
     if (refusal.kind === 'reply') return { reply: true, payload: refusal.payload };

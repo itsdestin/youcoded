@@ -49,10 +49,11 @@ describe('the owner page through the channel table', () => {
     expect(owner).toEqual({ reply: true, payload: { got: 1 } });
   });
 
-  it('still refuses a channel that needs Electron itself', async () => {
+  it('runs a channel that is this device\'s own (desktopOnly), which a visiting phone is refused', async () => {
     const d = def({ desktopOnly: true });
-    expect(await serveRemoteChannel(d, 1, ctx(), { owner: true })).toMatchObject({ reply: true, payload: { unsupported: true } });
+    expect(await serveRemoteChannel(d, 1, ctx())).toMatchObject({ reply: true, payload: { unsupported: true } });
     expect(d.handler).not.toHaveBeenCalled();
+    expect(await serveRemoteChannel(d, 1, ctx(), { owner: true })).toEqual({ reply: true, payload: { got: 1 } });
   });
 
   it('skips the phone\'s folder gate and size caps, keeps the reply shaping', async () => {

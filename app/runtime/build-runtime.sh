@@ -13,8 +13,8 @@
 #    build variant (.dev, .releasetest) gets its own build of this folder.
 #  - musl is built from source with patch-musl.py (name lookups read $YOUCODED_ETC/resolv.conf).
 #  - ycshim.c is linked FIRST into every executable: io_uring, #! scripts, /bin/sh, /etc.
-#  - Claude Code is its official musl build, run through the loader (it is a Bun single-file binary;
-#    editing its headers is not safe).
+#  - Claude Code is its official musl build with only its interpreter rewritten (a Bun single-file
+#    binary: nothing else in it is edited).
 # Needs: bash, curl, tar, python3, clang + lld (any recent LLVM). Downloads are cached in $CACHE.
 set -euo pipefail
 
@@ -85,6 +85,11 @@ CCX=(--target=aarch64-alpine-linux-musl --sysroot="$SR" -fuse-ld=lld)
 say "ycshim"
 clang "${CCX[@]}" -O2 -fPIC -shared -nostdlib "$HERE/ycshim.c" -o "$JNI/libycshim.so" -L"$SR/usr/lib" -lc
 
+say "yc-open (xdg-open)"
+clang "${CCX[@]}" -O2 -fPIE -pie -nostdlib "$SR/usr/lib/Scrt1.o" "$SR/usr/lib/crti.o" "$HERE/yc-open.c" "$SR/usr/lib/crtn.o" \
+  -o "$JNI/libycopen.so" -L"$SR/usr/lib" -lc -Wl,--dynamic-linker="$INTERP"
+echo "libycopen.so usr/bin/xdg-open" >> "$ASSETS/binmap.extra"
+
 say "node-pty"
 NODE_PTY="$HERE/../../desktop/node_modules/node-pty"
 CXXINC="$(ls -d "$SR"/usr/include/c++/* | head -1)"
@@ -108,6 +113,8 @@ for pair in $RUNTIME_EXECUTABLES; do
   echo "$so $rel" >> "$ASSETS/binmap.txt"
 done
 
+cat "$ASSETS/binmap.extra" >> "$ASSETS/binmap.txt"; rm -f "$ASSETS/binmap.extra"
+
 : > "$ASSETS/libmap.txt"
 while IFS= read -r f; do
   base="$(basename "$f")"
@@ -130,6 +137,9 @@ if [ ! -s "$CC_TGZ" ]; then
   curl -fsSL -o "$CC_TGZ" "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/-/claude-code-linux-arm64-musl-$CLAUDE_CODE_VERSION.tgz"
 fi
 tar xzf "$CC_TGZ" -O package/claude > "$JNI/libclaude.so"
+# Only the interpreter changes (proved on a phone: Bun finds its embedded program either way); no shim —
+# editing more of a Bun binary is not safe, and it needs no shim: its hooks and tools ran without one.
+"$PATCHELF" --set-interpreter "$INTERP" "$JNI/libclaude.so"
 echo "$CLAUDE_CODE_VERSION" > "$ASSETS/claude-code-version.txt"
 
 # --- data files ----------------------------------------------------------------------------------

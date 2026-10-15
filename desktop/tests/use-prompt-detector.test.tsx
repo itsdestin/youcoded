@@ -460,28 +460,32 @@ describe('usePromptDetector — every readable dialog ends up with a card', () =
   });
 });
 
-// Android (review F1): the REAL multi-server MCP dialog, as Android's terminal
-// hands it over (exported by startup-dialogs.test.ts). Until the session has
-// started — which on Android now means "Claude Code ran a hook", never "the
-// screen showed something" — it must reach the safety net, and a menu card must
-// not count as "started".
-import fs from 'fs';
-import path from 'path';
+// The REAL multi-server MCP dialog as the terminal screen shows it (captured from Claude Code).
+// Until the session has started — "Claude Code ran a hook", never "the screen showed
+// something" — it must reach the safety net, and a menu card must not count as "started".
 import { promptShowMeansStarted } from '../src/renderer/state/startup-dialog-store';
 
-describe('Android startup: the multi-server MCP dialog', () => {
-  const fx = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'test', 'resources',
-    'startup-dialogs', 'mcp-two-100x35-dialog-2-visible.json'), 'utf8'));
+describe('Startup: the multi-server MCP dialog', () => {
+  const rule = '\u2500'.repeat(100);
+  const fx = { screen: [
+    ' '.repeat(100), rule,
+    '  2 new MCP servers found in this project',
+    '  Select any you wish to enable.', '',
+    '  MCP servers may execute code or access system resources. All tool calls require approval. Learn',
+    '  more in the MCP documentation.', '',
+    '  \u276f [\u2714] demo', '    [\u2714] other', '       Enable selected',
+    ' Space to select \u00b7 Esc to reject all',
+  ].join('\n') };
   beforeEach(() => { mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.sessions.clear(); });
 
   it('reaches the safety net while the session is starting', () => {
     renderHook(() => usePromptDetector({ isStarting: () => true }));
     mocks.screen.text = fx.screen;
-    fireBuffer('android-1');
-    expect(getUnreadableStartupDialog('android-1')).toEqual({ heading: '2 new MCP servers found in this project' });
+    fireBuffer('startup-1');
+    expect(getUnreadableStartupDialog('startup-1')).toEqual({ heading: '2 new MCP servers found in this project' });
   });
 
-  it('only Android\'s explicit ready signal starts a session — a dialog card never does', () => {
+  it('only the explicit ready signal starts a session — a dialog card never does', () => {
     expect(promptShowMeansStarted('_session_ready')).toBe(true);
     expect(promptShowMeansStarted('menu_no_exit_yes_i_trus')).toBe(false);
     expect(promptShowMeansStarted('bypass_warning')).toBe(false);

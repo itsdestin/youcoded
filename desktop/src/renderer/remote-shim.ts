@@ -1247,6 +1247,10 @@ function routePush(type: string, payload: any): void {
       // payload object verbatim; the renderer (Task 7) interprets it.
       dispatchEvent('social:presence-event', payload);
       break;
+    case 'first-run:state':
+      // The phone's own backend runs setup (sign-in) for this device: its wizard's progress (firstRun.onStateChanged).
+      dispatchEvent('first-run:state', payload);
+      break;
   }
 }
 
@@ -2882,7 +2886,9 @@ export function installShim(): void {
     //   dev.onInstallProgress).
     system: {
       notifyStackState: (empty: boolean) => {
-        fire('system:notify-stack-state', { empty });
+        // WHY to the app (2026-10-14, Android clean rebuild): the hardware back button is the Android app's, not the
+        // backend's; the app answers 'system:back' pushes through its host object. A browser tab has no back to manage.
+        if (hasAndroidHost()) void invokeAndroidHost('system:notify-stack-state', { empty }).catch(() => {});
       },
       onBack: (cb: () => void) => {
         const handler: Callback = () => cb();
@@ -2931,22 +2937,28 @@ export function installShim(): void {
       clearSetupStatus: () =>
         invoke('dev:setup-clear'),
     },
-    // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
+    // First-run is the device's own setup. A browser reaching a computer never runs it: COMPLETE, so the renderer
+    // never enters first-run mode. WHY the Android app's own page does (2026-10-14, Android clean rebuild): its
+    // backend runs on the phone, so signing in to Claude there IS this device's setup — the same channels a window uses.
     firstRun: {
-      getState: () => Promise.resolve({ currentStep: 'COMPLETE' }),
-      retry: () => Promise.resolve(),
-      // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
-      startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
-      submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
-      cancelAuth: () => Promise.resolve(),
-      skip: () => Promise.resolve(),
+      getState: () => isAndroidLocal() ? invoke('first-run:state') : Promise.resolve({ currentStep: 'COMPLETE' }),
+      retry: () => isAndroidLocal() ? invoke('first-run:retry') : Promise.resolve(),
+      // Same widened type as preload's (FirstRunState['authMode']).
+      startAuth: (mode: FirstRunState['authMode']) => isAndroidLocal() ? invoke('first-run:start-auth', { mode }) : Promise.resolve(),
+      submitApiKey: (key: string, service?: string) => isAndroidLocal() ? invoke('first-run:submit-api-key', { key, service }) : Promise.resolve(),
+      cancelAuth: () => isAndroidLocal() ? invoke('first-run:cancel-auth') : Promise.resolve(),
+      skip: () => isAndroidLocal() ? invoke('first-run:skip') : Promise.resolve(),
       // First-run local models (2026-09-14): never shown here, and the band describes the HOST's
       // first download, which a phone cannot read — so every one answers "nothing".
       localSetup: () => Promise.resolve(null),
       connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
       localDownload: () => Promise.resolve(null),
       resumeLocalDownload: () => Promise.resolve(),
-      onStateChanged: (_cb: Callback) => (() => {}),
+      onStateChanged: (cb: Callback) => {
+        if (!isAndroidLocal()) return () => {};
+        addListener('first-run:state', cb);
+        return () => removeListener('first-run:state', cb);
+      },
     },
     // Android-only bridge methods — when connected to a remote desktop, these
     // return immediate defaults since the remote server doesn't handle android:* messages

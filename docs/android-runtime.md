@@ -1,123 +1,75 @@
----
-origin: youcoded-dev@1f60c2a:docs/android-runtime.md
----
+# Android runtime
 
-> Migrated from youcoded-dev docs/PITFALLS.md (2026-07-15 triage). The path-scoped rule in youcoded-dev/.claude/rules/android-runtime.md is the terse always-injected layer; this doc is the depth.
+How the Android app runs YouCoded. Since the 2026-10-14 clean rebuild the phone runs **the desktop's own
+backend**, headless, in a Node process inside the app; the Kotlin code is a thin shell. Plan and the
+on-phone proof: `youcoded-dev/docs/active/plans/2026-10-14-android-clean-rebuild-plan.md`.
 
-# Android Runtime
+## Shape
 
-The Android app runs Claude Code (a Node.js CLI) inside a Termux-derived environment. Several non-obvious constraints apply.
+```
+Android app (one APK)
+├─ Kotlin shell  app/src/main/kotlin/com/youcoded/app/
+│   MainActivity        the one screen: "starting…", then the WebView; QR scanner, mic prompt, file picker, back
+│   ui/AppWebView        WebView on file:///android_asset/web/index.html?bridgeToken=…&bridgePort=…
+│   bridge/HostJsBridge  window.YouCodedHost: the page's phone-only calls (voice, saved computers, QR, back, version)
+│   runtime/BackendService  foreground service: lays out programs, starts/restarts node, resolv.conf, wake lock
+│   runtime/RuntimeInstaller files/usr symlinks into the native-lib folder; unpacks backend.tgz
+│   runtime/HostSocketServer the backend's calls to the phone (open a link, keep awake, notify)
+├─ WebView: the shared React page, remote-shim in "android-local" mode → ws://localhost:<port>, token sign-in
+└─ node desktop/dist/main/headless/headless-main.js  (the desktop backend, Electron replaced by a stand-in)
+    └─ node-pty → Claude Code 2.1.x (official musl build), bash, git, rg — all bundled
+```
 
-## System Fundamentals
+- **The backend** is `desktop/src/main/headless/`: `headless-main.ts` points `require('electron')` at
+  `electron-headless.ts` (paths from the environment, links/keep-awake over the host socket, secrets sealed
+  with a key the app keeps in the Android Keystore, "no windows" for window APIs), then `headless-boot.ts`
+  builds main.ts's backend half. Keep it in step with `main.ts` when a service a phone should have is added there.
+- **The socket door** runs in local mode (`remote-local.ts`): loopback only, no Tailscale or password, one
+  per-run token. That client is the backend's **owner**: the channel table treats it like a window
+  (`serveRemoteChannel(..., { owner: true })` — `desktopOnly`, `remoteAllowed:false` and folder gates do not
+  refuse it). Capability gating of desktop-only features on the phone is P4 of the plan.
+- **Phone-only calls** never go over the socket: `invokeAndroidHost` (`desktop/src/renderer/android-local-bridge.ts`)
+  ↔ `HostJsBridge.kt`. The two lists are pinned equal by `desktop/tests/android-host-channels.test.ts`.
 
-### `LD_LIBRARY_PATH` is mandatory
-The app relocates Termux binaries from `/data/data/com.termux/files/usr` to `context.filesDir/usr`, so `DT_RUNPATH` baked into binaries is stale. `LD_LIBRARY_PATH` overrides it. Set in `Bootstrap.buildRuntimeEnv()`. **Do not remove.**
+## Bundled programs (`app/runtime/`)
 
-### All binaries route through `/system/bin/linker64`
-SELinux W^X bypass (Android 10+). Three layers, each with a distinct role:
+`build-runtime.sh <applicationId> <out>` (Gradle `buildRuntime<Variant>`) assembles them from pinned
+sources (`pins.env`): Alpine Linux **musl** packages (Node, bash, git, ripgrep), musl built from source with
+`patch-musl.py`, `ycshim.c`, `yc-open.c`, node-pty cross-built, and Claude Code's official
+`linux-arm64-musl` package. `build-backend.sh` (Gradle `buildBackend`) packs the desktop backend
+(`backend.tgz`, production dependencies, other platforms' native builds removed).
 
-1. **LD_PRELOAD (`libtermux-exec-ld-preload.so`)** — intercepts `execve()` in C/Rust programs, routes through linker64
-2. **`claude-wrapper.js`** — NOT exec routing. Handles /tmp rewriting, fs.accessSync bypass, shell path fixing, BASH_ENV injection
-3. **`linker64-env.sh`** — bash function wrappers for Go binaries (gh, fzf, micro) that bypass LD_PRELOAD
+**What Android forbids, and the answer to each** (all seen on a Galaxy Z Flip7, Android 17):
 
-**Use the linker variant of termux-exec.** Bootstrap.kt copies `libtermux-exec-linker-ld-preload.so` over `libtermux-exec-ld-preload.so` after installing `termux-exec`.
+| Android rule | Answer |
+|---|---|
+| An app may only execute files Android unpacked into its native-library folder | Every program ships as `jniLibs/arm64-v8a/lib<name>.so` (`useLegacyPackaging`); `files/usr/bin/<name>` are symlinks to them |
+| No `/lib/ld-musl-aarch64.so.1` | Each program's interpreter is rewritten (patchelf) to `/data/data/<appId>/files/usr/lib/ld-musl-aarch64.so.1`, a symlink to the bundled musl; RUNPATH `files/usr/lib`. The path names the package, so each variant (`.dev`, `.releasetest`) has its own build |
+| App seccomp kills `io_uring_setup` (libuv probes it; `UV_USE_IO_URING=0` does not help) | `ycshim.c` (linked first into every program) answers ENOSYS |
+| No exec of files in the app's data folder (`#!` scripts) | The shim runs the script's interpreter instead (execve/execv/execvp/execvpe) |
+| No `/bin/sh`, `/usr/bin/env`, `/etc/resolv.conf`, `/etc/ssl` | Shim maps missing `/bin/*`, `/usr/bin/*` to PATH and `/etc/x` to `$YOUCODED_ETC/x`; musl reads `$YOUCODED_ETC/resolv.conf` (patch-musl.py); `BackendService` writes it from the active network; `SSL_CERT_FILE`/`GIT_SSL_CAINFO` name the bundled CA file |
+| No `xdg-open` | `yc-open.c` is `usr/bin/xdg-open` and `BROWSER`: asks the app to open the link (a notification when the app is off screen — Android blocks background activity starts) |
+| Background apps are frozen | `BackendService` is a `specialUse` foreground service; keep-awake requests take a capped partial wake lock |
 
-### No `/tmp`
-Use `$HOME/.cache/tmpdir` via `TMPDIR` and `CLAUDE_CODE_TMPDIR`. The specific path (`$HOME/.cache/tmpdir`, not `$HOME/tmp`) avoids Termux Node.js's compiled-in `/tmp` rewriting from double-applying.
+Claude Code is NOT given the shim (it is a Bun single-file binary: only its interpreter is rewritten). Its
+hooks and tools ran without it on the phone. Its self-updater is off (`DISABLE_AUTOUPDATER=1`): a new Claude
+Code reaches the phone with an app release (bump `CLAUDE_CODE_VERSION` in `pins.env`).
 
-### No glibc
-Bionic only. The `native/execve-interceptor.c` research artifact was deleted in `e94154b3` (never deployed).
+## On-device layout (`files/` = the app's files folder)
 
-### Go binaries can't exec scripts in `~/.claude-mobile/`
-The `linker64-env.sh` bash wrappers only cover binaries YOU invoke from bash. They do NOT protect a Go binary's OWN `fork/exec` calls: Go issues a raw `SYS_execve` syscall that bypasses termux-exec's LD_PRELOAD intercept (the shim only patches libc `execve`). So any script under `~/.claude-mobile/*` (e.g. an `xdg-open`/`open` shim on PATH, or a helper script) exec'd by a Go child fails with `EACCES` at fork/exec. Hit in the wild by rclone's Google Drive OAuth auto-browser-open — fixed in youcoded `6469e058` (`authGdriveWithBrowserIntent` streams stderr and opens the URL via `PlatformBridge.openUrl` / `Intent.ACTION_VIEW`). Two safe paths for any future Go integration: (1) spawn the Go process FROM bash with the linker64 wrappers so only the Go binary itself runs, and (2) route any URL-open / native UI through `PlatformBridge` or a `CompletableDeferred` native-UI bridge — never a `~/.claude-mobile/` shim. Reference implementation: the rclone fix, `authGdriveWithBrowserIntent` in `SyncService.kt` (called from `SessionService.kt`).
+`usr/{bin,lib,libexec/git-core,share,etc}` · `backend/` (unpacked backend.tgz; `node_modules/node-pty/build/Release/pty.node`
+is copied from the native-lib folder) · `home/` (HOME: `~/.claude`, conversations) · `userdata/` (the
+backend's userData; `backend.log` is the backend's console) · `tmp/` (TMPDIR). `RuntimeInstaller` rebuilds the
+links whenever the app version or the native-lib folder changes.
 
-## Canonical sources
+## Developing
 
-- `claude-wrapper.js` — canonical at `app/src/main/assets/claude-wrapper.js`. Deployed at every PTY start (inline in `PtyBridge.start()` — search `claude-wrapper.js` there; line numbers drift — reads the asset and writes it to `$HOME/.claude-mobile/claude-wrapper.js` before each launch). There is no separate `Bootstrap.deployWrapperJs()` method. **Edit the asset file directly.**
-
-## Vendored Termux terminal-emulator
-
-Android depends on a **vendored copy** of Termux's `terminal-emulator` at `youcoded/terminal-emulator-vendored/` (Maven coordinate would be `com.github.termux.termux-app:terminal-emulator:v0.118.1`, but we build it locally). The vendor drop is patched to expose a `RawByteListener` on `TerminalEmulator.append()` — used by `PtyBridge.rawByteFlow` and broadcast as `pty:raw-bytes` WebSocket push events for the React xterm renderer.
-
-Source of truth for the origin tag and patch shape: `terminal-emulator-vendored/VENDORED.md`. Never edit this module outside the documented patch.
-
-The vendored emulator is **headless** as of Tier 2. The native Termux `TerminalView` UI was removed from `ChatScreen.kt` and the `terminal-view:v0.118.1` Maven dependency dropped. `TerminalSession` still owns the PTY fork + JNI waitpid loop + emulator processing; only the rendering layer changed.
-
-## Terminal rendering (Tier 2)
-
-Terminal rendering on Android happens in xterm.js inside the WebView, not in a native Termux `TerminalView`. The pipeline:
-
-1. `PtyBridge` runs the PTY in `TerminalSession` (vendored emulator). Bytes from `pty.read()` reach `TerminalEmulator.append()`.
-2. The `RawByteListener` patch fires on the terminal thread before the emulator processes the bytes. `PtyBridge.rawByteFlow` (a `MutableSharedFlow` with `tryEmit`) carries them.
-3. `SessionService.launchRawByteBroadcast` collects from `rawByteFlow`, batches at ~16ms / 8KB, base64-encodes, and broadcasts `pty:raw-bytes` over the WebSocket.
-4. In React, `remote-shim.ts` dispatches per-session events. `usePtyRawBytes` (`desktop/src/renderer/hooks/usePtyRawBytes.ts`) decodes base64 → `Uint8Array` and feeds `terminal.write()` on xterm.
-5. xterm renders to canvas in the WebView. The React `TerminalView` component (`desktop/src/renderer/components/TerminalView.tsx`) is the same component desktop uses — the touch-platform branch sets `disableStdin: true`, skips `terminal.onData`, swaps to `usePtyRawBytes`, uses 12px font, and registers a one-finger touch-scroll handler.
-
-Typing on touch flows through `InputBar` minimal-mode `<textarea>` → `sendInput(text + '\r')`, NOT through xterm's hidden textarea (which is suppressed by `disableStdin`). Special keys (Esc, Tab, Ctrl, ←/→, ↑/↓ scroll buttons) come from `TerminalToolbar` and `TerminalScrollButtons`.
-
-The `layoutInsets` SharedFlow, its `LayoutInsets` data class and the React `layout-update` sender were deleted on 2026-09-10 (youcoded#468); `screenMode` and `viewModeRequest` were removed 2026-07-22 (`ChatScreen.kt:17,21` records it). Nothing native reads the chat's chrome geometry any more.
-
-## Shared runtime environment
-
-Runtime fixes MUST work in both `PtyBridge` and `DirectShellBridge`. Both share:
-- `Bootstrap.buildRuntimeEnv()` (called from `start()` in both `PtyBridge.kt` and `DirectShellBridge.kt`)
-- `Bootstrap.deployBashEnv()` (likewise, as `env["BASH_ENV"]`)
-
-## Reactivity
-
-**Do not poll `isRunning`.** Use the reactive `sessionFinished` `StateFlow` (fed by a JNI `waitpid()` thread).
-
-## Native UI Bridge Pattern (Deferred)
-
-When an IPC handler needs native Android UI (file picker, folder picker, QR scanner):
-
-1. `SessionService` creates a `CompletableDeferred<T>` and stores it (e.g., `pendingFolderPicker`)
-2. `SessionService` calls a callback (e.g., `onFolderPickerRequested`) to notify the Activity
-3. `MainActivity` shows the native UI (Compose dialog or `ActivityResultContract`)
-4. On result, `MainActivity` calls `deferred.complete(result)`
-5. `SessionService` awaits the deferred and sends the response back via WebSocket
-
-Used by: `dialog:open-file`, `dialog:open-folder`, `android:scan-qr`.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `app/.../ui/WebViewHost.kt` | Hosts React UI in WebView, loads bundled web assets |
-| `app/.../bridge/LocalBridgeServer.kt` | WebSocket server on :9901, bridges React IPC to Kotlin |
-| `app/.../bridge/PlatformBridge.kt` | Android-native operations (file picker, clipboard, URLs) |
-| `app/.../runtime/Bootstrap.kt` | Package management, environment setup, shell function generation |
-| `app/.../runtime/SessionService.kt` | Main IPC dispatcher — a `"ns:verb" ->` branch per channel (hundreds; the workspace `ipc-bridge.md` rule carries the latest count) |
-| `app/.../runtime/PtyBridge.kt` | Claude Code terminal session (PTY + event bridge) |
-| `app/.../runtime/DirectShellBridge.kt` | Standalone bash shell session |
-| `app/.../runtime/ManagedSession.kt` | Session lifecycle, status, approval flow, prompt detection; a session counts as STARTED only when Claude Code's first hook arrives (`sessionStarted`, then `_session_ready`), and `awaitingStart` rides `session:list` |
-| `app/.../parser/EventBridge.kt` | Hook socket: `admit()` (owner gate — only a SessionStart claims a session; a nested `claude` is dropped) then `route()` (fire-and-forget / pass an ask for another session straight back / hold for a card); the 2h app hold (`PERMISSION_HOLD_MS`) under the relay's 2h30m backstop and Claude Code's 3h hook timeout |
-| `app/.../parser/InkSelectParser.kt` | Reads Claude Code's menus; unnumbered startup dialogs become `pick` buttons the shared renderer answers by verified navigation (pinned by `InkSelectParserStartupTest`) |
-| `app/.../runtime/MenuAnswerLock.kt` | One device answers a session's menu at a time (`session:menu-lock`, 20 s lease) — mirror of desktop `menu-answer-lock.ts` |
-| `app/.../artifacts/ProjectManager.kt` | `judgeRelativeRecord` — when a `../` file record may be trusted (mirror of desktop `write-authorization.ts`) |
-| `app/.../runtime/SessionRegistry.kt` | Multi-session management |
-| `app/.../assets/claude-wrapper.js` | Node.js monkey-patch (CANONICAL SOURCE) |
-| `app/.../assets/hook-relay.js` + `hook-relay-blocking.js` | Unix socket event relay for structured hook events (the blocking one holds a PermissionRequest open for an answer) |
-| `app/.../skills/LocalSkillProvider.kt` | Skill marketplace backend |
-| `app/.../skills/PluginInstaller.kt` | Installs Claude Code plugins via git clone/copy |
-| `app/.../ui/TierPickerScreen.kt` | First-run package tier selection (Compose) |
-| `app/.../ui/SetupScreen.kt` | Bootstrap progress display (Compose) |
-| `app/.../ui/FolderPickerDialog.kt` | Native folder browser (Compose) |
-
-## PITFALLS-triage additions (2026-07-15)
-
-### Exec permissions & GitHub auth
-
-- **`~/.claude-mobile/exec-wrappers/*` must be chmod 0755, not 0700.** Java's default `File.setExecutable(true)` gives 0700 under Android's 0077 umask. Those wrappers are exec'd by subprocesses spawned from Go binaries (notably `gh` spawning `git` during `gh auth setup-git`). At 0700 the shebang interpretation path via `/system/bin/sh` fails with EACCES even though the child runs as the same app uid — shebang exec is stricter than a direct `linker64` invocation. Fix: `setReadable(true, false)` + `setExecutable(true, false)` in `Bootstrap.deployBashEnv()`. Wider perms stay inside the uid-isolated app sandbox (`/data/data/<pkg>/`) so nothing new is exposed. Don't "tighten" back to 0700.
-- **Git HTTPS auth uses `~/.netrc`, NOT `gh auth setup-git`.** Go's raw-syscall exec breaks `gh auth setup-git` on Android (it configures git's credential-helper subsystem, which re-spawns processes that can't traverse the exec-wrapper path). Instead the OAuth token from `~/.config/gh/hosts.yml` is mirrored into `~/.netrc` as `machine github.com login x-access-token password <token>` (mode 0600). libcurl reads `.netrc` natively, so `git push` over HTTPS needs no credential-helper exec. Two keepers: `Bootstrap.syncGhTokenToNetrc()` during first-run `Bootstrap.setup()` (skipped on already-bootstrapped installs), and the `gh` bash wrapper's `_youcoded_sync_gh_netrc` post-hook after any `gh auth login/logout/refresh/token/switch`. Add any new gh-auth-changing command to the post-hook's case list. Do NOT reintroduce `gh auth setup-git` anywhere — it fails silently or with EACCES.
-- **`gh auth login --web` polling is flaky — retry once** if it dies with "error connecting to github.com". The device-flow long-poll Go HTTP call sometimes errors mid-poll on Android even when `curl` to github.com works (most likely Go's HTTP/2 client on Android's network stack, not YouCoded's runtime; ~1-of-3 success in the wild). Treat it as a known transient; don't paper over with a retry wrapper in `gh()` (would double-prompt with a new device code). If it worsens, consider `GODEBUG=http2client=0` to force HTTP/1.1 polling.
-
-### Build-type parity (R8 minification)
-
-Debug and release Android builds are NOT equivalent. The release flavor enables R8 minification (`isMinifyEnabled = true`); debug skips it. Anything that depends on R8-stable behavior works in `assembleDebug` and silently breaks in `assembleRelease`.
-
-- **Don't use string-based reflection against your own code** — `getMethod("name")`, `getDeclaredMethod`, `Class.forName`, `KClass`, `KFunction`, `::class.declaredMembers`. R8 obfuscates the target's name and the lookup throws. The `PluginInstaller.buildEnv()` bug (commit `912f5ca7`, 2026-04-30) was exactly this: `bootstrap.javaClass.getMethod("buildRuntimeEnv")` returned NoSuchMethodException in release, the silent `try/catch` fallback shipped a stripped env without `LD_PRELOAD`, and every marketplace install died with `cannot exec 'remote-https': Permission denied`. Shipped from 2026-03-25 (`e18ab861`, R8 first enabled) through v1.2.2 because every dev/CI build was debug.
-- **Direct calls always; reflection only when unavoidable.** When unavoidable (third-party libs, generic IPC), add an explicit `-keep` rule in `app/proguard-rules.pro` for the targeted class/methods. Don't rely on `try { reflection } catch { fallback }` — silent fallbacks mask R8-induced failures.
-- **`Bootstrap` has a defensive `-keep` rule** so future code that re-introduces reflection against it can't silently break. Negligible APK cost for one class. Don't remove it without an audit confirming nothing reflects against `Bootstrap`.
-- **`./gradlew :app:assembleReleaseTest` is the parity check** — same R8/shrinker/proguard config as production release, signed with the debug keystore, installs side-by-side as `com.youcoded.app.releasetest` ("YouCoded ReleaseTest", bridge port 9961). Runs automatically on every push via `android-ci.yml` and on demand via `android-test-build.yml`. Run it locally before tagging if you've touched reflection, annotation processing, or any symbol-name-dependent code.
-- **Don't rely on the GitHub runner image for `node`.** Android workflows `setup-node@v7` explicitly so `bundleWebUi` (which shells to `npm` via `scripts/build-web-ui.sh`) doesn't depend on whatever ubuntu-latest ships.
+- Build: `JAVA_HOME=<JDK 21> ANDROID_HOME=$HOME/.android-sdk ./gradlew :app:assembleDebug` (needs clang + lld,
+  python3, curl; downloads are cached in `app/build/runtime-cache`). Debug installs as **YouCoded Dev**
+  (`com.youcoded.app.dev`, port 9951) beside the real app.
+- Backend logs: `adb shell run-as com.youcoded.app.dev cat files/userdata/backend.log`.
+- Fast backend iteration without a rebuild: compile the desktop (`npx tsc`), push `dist/` into
+  `files/backend` with `run-as`, and kill the `node` process (the service restarts it).
+- The page can be driven from a laptop browser: `adb forward tcp:9951 tcp:9951`, read the token from the
+  node process's environment (`run-as … /proc/<pid>/environ`), open `app/src/main/assets/web/index.html?bridgeToken=…&bridgePort=9951`
+  from file://.

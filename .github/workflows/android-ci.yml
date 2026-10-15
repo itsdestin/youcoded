@@ -42,6 +42,15 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+      # The app's bundled programs (app/runtime/build-runtime.sh) are cross-built with clang + lld and
+      # assembled from pinned downloads, cached by their pins (Android clean rebuild, 2026-10-14).
+      - name: Install runtime build tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Cache runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: app/build/runtime-cache
+          key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
 
       # bundleWebUi (a Gradle dep of preBuild) shells out to
       # scripts/build-web-ui.sh, which since 2026-09-16 runs `npm run build:web`

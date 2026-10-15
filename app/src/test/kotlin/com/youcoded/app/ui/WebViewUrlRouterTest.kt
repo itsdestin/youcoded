@@ -264,8 +264,8 @@ class WebViewUrlRouterTest {
      * the router's own construction, not anywhere later in the file.
      * Gradle runs unit tests from the module directory (app/).
      */
-    @Test fun `WebViewHost drives the router from both the override and the download listener`() {
-        val src = File("src/main/kotlin/com/youcoded/app/ui/WebViewHost.kt").readText()
+    @Test fun `AppWebView drives the router from both the override and the download listener`() {
+        val src = File("src/main/kotlin/com/youcoded/app/ui/AppWebView.kt").readText()
             .replace(Regex("""/\*[\s\S]*?\*/"""), "")
             .replace(Regex("""(?<!:)//[^\n]*"""), "")
         val sig = src.indexOf("fun shouldOverrideUrlLoading(")

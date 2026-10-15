@@ -12,12 +12,11 @@
 //
 // Two things are pinned here:
 //   1. The legal invariant — no shipped hook script names the credentials file,
-//      the usage endpoint, or usage-fetch.js, and no usage-fetch.js exists on
-//      either platform. A regex over the source is the right tool for THIS
+//      the usage endpoint, or usage-fetch.js, and no usage-fetch.js exists. A regex over the source is the right tool for THIS
 //      half: the thing being forbidden is the presence of the code at all.
 //   2. The data contract — statusline.sh writes ~/.claude/.usage-cache.json in
 //      the exact shape the readers (ipc-handlers buildStatusData, StatusBar's
-//      usage-5h/usage-7d chips, UsageCard, Android SessionService) parse:
+//      usage-5h/usage-7d chips, UsageCard) parse:
 //      { five_hour: { utilization: <0-100>, resets_at: <ISO string> },
 //        seven_day: { ... } }, converted from CC's used_percentage and
 //      epoch-SECONDS resets_at. This half runs the shipped parser, because a
@@ -31,7 +30,6 @@ import path from 'path';
 import { readSource } from './helpers/guard-scope';
 
 const HOOK_SCRIPTS = path.resolve(__dirname, '..', 'hook-scripts');
-const ANDROID_ASSETS = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets');
 const STATUSLINE = path.join(HOOK_SCRIPTS, 'statusline.sh');
 // WHY readSource: line endings normalised, so a CRLF checkout neither breaks the
 // parser extraction below nor fails the byte-for-byte parity case.
@@ -44,10 +42,9 @@ const scriptSource = readSource(STATUSLINE);
 describe('no shipped hook script touches the Claude.ai OAuth token', () => {
   const shipped = [
     ...fs.readdirSync(HOOK_SCRIPTS).map((f) => path.join(HOOK_SCRIPTS, f)),
-    ...fs.readdirSync(ANDROID_ASSETS).map((f) => path.join(ANDROID_ASSETS, f)),
   ].filter((f) => fs.statSync(f).isFile());
 
-  it('ships no usage-fetch.js on either platform', () => {
+  it('ships no usage-fetch.js', () => {
     const offenders = shipped.filter((f) => path.basename(f) === 'usage-fetch.js');
     expect(offenders).toEqual([]);
   });
@@ -76,14 +73,6 @@ describe('no shipped hook script touches the Claude.ai OAuth token', () => {
     // script — not an ast-grep language here.
     expect(scriptSource).not.toMatch(/USAGE_FETCH/);
     expect(scriptSource).not.toMatch(/toolkit_root/);
-  });
-
-  it('the Android statusline.sh is the same script', () => {
-    // The two copies have always been byte-identical; a fix that lands on one
-    // platform only would leave the other still doing the forbidden thing.
-    // WHY still a source read: two files in two trees must stay identical —
-    // cross-file parity, which no rule expresses.
-    expect(readSource(path.join(ANDROID_ASSETS, 'statusline.sh'))).toBe(scriptSource);
   });
 });
 
