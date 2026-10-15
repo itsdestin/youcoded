@@ -52,7 +52,7 @@ export { Radio, RadioGroup } from './Radio';
 export type { RadioProps, RadioGroupProps } from './Radio';
 
 export { LoadingState, EmptyState, ErrorState, ScreenError, FieldError } from './states';
-export type { LoadingStateProps, EmptyStateProps, ErrorStateProps, ScreenErrorProps, FieldErrorProps, StateVariant } from './states';
+export type { LoadingStateProps, EmptyStateProps, ErrorStateProps, FieldErrorProps, StateVariant } from './states';
 
 export { AnchorTip } from './AnchorTip';
 export type { AnchorTipProps, AnchorTipTrigger, AnchorTipPlacement } from './AnchorTip';

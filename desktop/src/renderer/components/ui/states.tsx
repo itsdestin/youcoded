@@ -227,7 +227,7 @@ export function ErrorState(props: ErrorStateProps) {
   );
 }
 
-export type ScreenErrorProps = {
+type ScreenErrorProps = {
   /** What couldn't load, as the box's lead line: "The marketplace couldn't load". */
   title: string;
   /** One plain sentence — what still holds, or what to try. No machine words. */

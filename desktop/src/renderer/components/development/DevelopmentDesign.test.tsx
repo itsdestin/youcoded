@@ -208,7 +208,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const line = await screen.findByText(/The download didn’t finish/);
     const box = line.closest('div.rounded-lg') as HTMLElement;
     expect(box.className).toMatch(/destructive/);
-    expect(box.querySelector('button')?.textContent).toBe('Try again');
+    // The box's LAST button is Try again: Details comes first, the buttons under it (gt-r1#E-2).
+    expect([...box.querySelectorAll('button')].pop()?.textContent).toBe('Try again');
     expect(screen.queryByText(/Could not reach github\.com\./)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/Could not reach github\.com\./)).toBeTruthy();
