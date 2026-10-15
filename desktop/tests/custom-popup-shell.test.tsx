@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { join } from 'node:path';
 import { readSource } from './helpers/guard-scope';
 import FileViewerOverlay from '../src/renderer/components/marketplace/FileViewerOverlay';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const components = join(__dirname, '..', 'src', 'renderer', 'components');
 
 // WHY: these two special overlays do not share Dialog's header/body markup.
@@ -24,12 +24,15 @@ describe('approved custom popup shells', () => {
     expect(css).toMatch(/\[data-file-viewer-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });
 
-  it('tracks file scroll room and masks only edges with hidden content', () => {
+  it('fades the file body with the app\'s one fade, and feeds it on browsers without CSS scroll timelines', () => {
+    // Stand in for a browser without scroll-driven animations (Firefox remote): only there does
+    // useScrollFade set the data-fade-* flags the CSS fallback reads.
+    vi.spyOn(CSS, 'supports').mockReturnValue(false);
     const { container } = render(<FileViewerOverlay target={{ pluginId: 'demo', pluginName: 'Plugin name', kind: 'skill', name: 'sample' }} onClose={() => {}} />);
     const body = container.querySelector('[data-file-viewer-scroll]') as HTMLElement;
     expect(body).not.toBeNull();
     expect(body.className).toContain('overflow-y-auto');
-    expect(body.className).not.toContain('scroll-fade');
+    expect(body.className).toContain('scroll-mask');
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 });
     Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 300 });
     fireEvent.scroll(body);
@@ -38,9 +41,8 @@ describe('approved custom popup shells', () => {
     fireEvent.scroll(body);
     expect([body.dataset.fadeTop, body.dataset.fadeBottom]).toEqual(['true', 'false']);
     const css = readSource(join(components, 'marketplace', 'FileViewerOverlay.css'));
-    expect(css).toMatch(/\[data-file-viewer-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--file-fade-bottom:\s*42px;/);
-    expect(css).toContain('transparent 4%, transparent 96%');
-    expect(css).toContain('mask-composite: add;');
+    // No private copy of the look (it had an unfaded 4% side strip) — scroll-mask.css owns it.
+    expect(css).not.toMatch(/mask-image/);
   });
 
   // The Tags & note popup gave up its own shell (pick-menus-15, 2026-10-04): it is the

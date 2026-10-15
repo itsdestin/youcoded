@@ -223,8 +223,8 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         onClick={onClose}
       />
 
-      {/* Drawer — overflow-hidden clips the scroll-fade pseudos to the rounded-t-xl
-          corners so fades don't paint into the square corners above.
+      {/* Drawer — overflow-hidden clips the scrolling list to the rounded-t-xl
+          corners.
 
           `command-drawer` is a STYLING HOOK, not decoration: globals.css uses it
           to cancel the backdrop-filter that theme-engine puts on every
@@ -323,10 +323,10 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
              marketplace is always one click away. When a search has zero matches
              it stands alone; when NOTHING is listed in browse mode an <EmptyState>
              with a "Browse the Marketplace" button takes its place (P-9 #3). */}
-        {/* Padding lives on an inner wrapper so the scroll-fade element itself has
-            no padding — sticky fade pseudos sit flush with the drawer's outer edges.
+        {/* Padding lives on an inner wrapper so the scrolling element itself has
+            no padding — the fade then meets the drawer's outer edges.
             The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
-        <div ref={scrollRef} className="scroll-fade min-h-0 flex-1">
+        <div ref={scrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row

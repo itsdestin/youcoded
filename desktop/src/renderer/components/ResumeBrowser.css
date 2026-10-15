@@ -11,18 +11,6 @@
   pointer-events: none;
   background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
 }
-@property --resume-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
-@property --resume-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
-[data-resume-list] {
-  mask-image:
-    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--resume-fade-top) / 2), #000 var(--resume-fade-top), #000 calc(100% - var(--resume-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--resume-fade-bottom) / 2), transparent 100%),
-    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
-  mask-composite: add;
-  transition: --resume-fade-top 150ms ease-out, --resume-fade-bottom 150ms ease-out;
-}
-/* Preserve scroll-fade's overflow and flags, but suppress only this list's
-   opaque overlay. This prevents a pale strip over wallpaper-theme panels. */
-[data-resume-list]::before,
-[data-resume-list]::after { content: none; }
-[data-resume-list][data-fade-top="true"] { --resume-fade-top: 42px; }
-[data-resume-list][data-fade-bottom="true"] { --resume-fade-bottom: 42px; }
+/* Resume's scroll fade is the app's one fade (`.scroll-mask`, styles/scroll-mask.css) since
+   2026-10-15 — this file used to carry a private copy (42px, eased, with an unfaded 4% strip at
+   each side that Destin had already removed from dialogs: "the fade looks really strange"). */

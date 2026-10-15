@@ -5,15 +5,5 @@
    chips are small. No scrollbar, like the rails. */
 [data-detail-chips] { scrollbar-width: none; }
 [data-detail-chips]::-webkit-scrollbar { display: none; }
-[data-detail-chips][data-fade="right"] {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-}
-[data-detail-chips][data-fade="left"] {
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
-  mask-image: linear-gradient(to right, transparent, #000 24px);
-}
-[data-detail-chips][data-fade="both"] {
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
-  mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
-}
+/* The edge fade is the app's one fade (`.scroll-mask scroll-mask--chips` on the row, FactChips.tsx),
+   24px as before; it used to be a per-card state + window resize listener that set data-fade. */

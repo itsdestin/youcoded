@@ -69,7 +69,7 @@ describe('Dialog footer', () => {
   it('sits outside the scrolling body, after it, so it never scrolls away', () => {
     render(<Popups onEnter={() => {}} />);
     const footerButton = screen.getByRole('button', { name: 'Close session' });
-    const body = screen.getByRole('button', { name: 'Open another' }).closest('.scroll-fade')!;
+    const body = screen.getByRole('button', { name: 'Open another' }).closest('.scroll-mask')!;
     expect(body).not.toContainElement(footerButton);
     expect(body.compareDocumentPosition(footerButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

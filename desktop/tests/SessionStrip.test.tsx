@@ -144,7 +144,7 @@ describe('All sessions menu reordering', () => {
     );
     fireEvent.click(view.getByLabelText('All sessions'));
     const portal = document.getElementById('root') as HTMLElement;
-    const list = portal.querySelector('.scroll-fade') as HTMLElement;
+    const list = portal.querySelector('.scroll-mask') as HTMLElement;
     const rows = Array.from(list.querySelectorAll('[data-session-id]')) as HTMLElement[];
     // Give the rows a real stacked layout: row i occupies y = i*ROW_H … +ROW_H,
     // so "above the midline" and "below" are actual positions rather than an
@@ -777,9 +777,9 @@ describe('sessions in other windows', () => {
     fireEvent.click(view.getByLabelText('All sessions'));
     const heading = view.getByText('Sessions in other windows');
     const peerList = heading.nextElementSibling as HTMLElement;
-    // Both lists carry `.scroll-fade`; the local one is the one that is not the
+    // Both lists carry `.scroll-mask`; the local one is the one that is not the
     // peer container. Picking by index would silently follow a reorder.
-    const localList = Array.from(document.body.querySelectorAll('.scroll-fade'))
+    const localList = Array.from(document.body.querySelectorAll('.scroll-mask'))
       .find((el) => el !== peerList) as HTMLElement;
     return { ...view, peerList, localList, onCloseSession };
   }

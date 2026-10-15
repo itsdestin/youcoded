@@ -155,7 +155,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
           <div
             ref={favBoxRef}
             onWheel={markFavsTouched} onPointerDown={markFavsTouched} onTouchStart={markFavsTouched}
-            className="scroll-mask max-h-64 overscroll-contain p-2 pb-12"
+            className="scroll-mask overflow-y-auto scrollbar-none max-h-64 overscroll-contain p-2 pb-12"
             // 40 = the buttons' top edge (8px padding + a 32px button). pb-12 (48) leaves the
             // last card 8px above them — the same gap as between cards (review-4 AR4-1).
             style={{ ['--scroll-mask-under' as string]: '40px' }}

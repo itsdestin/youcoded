@@ -1,18 +1,23 @@
 import { useEffect, useRef, type RefObject } from 'react';
 
-// Attach to any scrollable element to hide the scrollbar and fade the
-// content at whichever edge has hidden scroll room. The hook sets two
-// data attributes — `data-fade-top` and `data-fade-bottom` — which a fade
-// class reads:
-//   • `.scroll-mask` (styles/scroll-mask.css) — USE THIS for a new list. The
-//     content itself fades to clear, so it blends into wallpaper and glass.
-//   • `.scroll-fade` (globals.css) — the older painted band, kept only for the
-//     files listed in tests/scroll-mask.test.ts (a new file using it fails).
-// WHY the steer (project-switcher friction, 2026-10-05): this hook's name
-// points at `.scroll-fade`, the switcher's first draft took it, and its
-// `::before` band became a flex item that opened the list already scrolled
-// ~60px; Destin asked for the masked fade twice (sessions menu, switcher).
-//
+// The FALLBACK half of the app's one scroll fade (`.scroll-mask`, styles/scroll-mask.css).
+// The fade itself is CSS-only: the browser follows each box's own scroll position, no script.
+// This hook only matters in a browser WITHOUT scroll-driven animations (Firefox in a remote
+// browser, an old Android WebView): there it sets data-fade-top/-bottom/-left/-right and the
+// stylesheet's fallback block reads them. Everywhere else it attaches NOTHING — no scroll
+// listener, ResizeObserver or MutationObserver (performance.md rules 2, 3, 6).
+// WHY keep it at all: the popups, Settings and the big lists already call it, and on those
+// browsers it is the difference between a fade and none. A new scroll area needs only the
+// class; calling this is optional.
+// WHY asked per element, not once per page: it runs only when the hook meets a new element
+// (once per mount — the fast path below skips every other render), so it costs nothing, and a
+// test can stand in for a browser without the feature by stubbing CSS.supports (jsdom's says
+// yes to everything).
+function cssDrivesFade(): boolean {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+    && CSS.supports('animation-timeline: scroll()');
+}
+
 // Why useEffect-without-deps instead of [] deps: some callers (e.g.
 // ResumeBrowser) conditionally render with `if (!open) return null`, so the
 // target element only mounts AFTER the enclosing component mounts. With
@@ -39,7 +44,7 @@ export function useScrollFade<T extends HTMLElement>(externalRef?: RefObject<T |
       cleanupRef.current = undefined;
     }
     attachedEl.current = el;
-    if (!el) return;
+    if (!el || cssDrivesFade()) return;
 
     const update = () => {
       // 1px tolerance avoids flicker at exact scroll boundaries
@@ -47,7 +52,7 @@ export function useScrollFade<T extends HTMLElement>(externalRef?: RefObject<T |
       const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
       if (el.dataset.fadeTop !== String(top)) el.dataset.fadeTop = String(top);
       if (el.dataset.fadeBottom !== String(bottom)) el.dataset.fadeBottom = String(bottom);
-      // Sideways too, for a row of chips (`.scroll-fade-x`, 2026-09-10). A
+      // Sideways too, for a row of chips (2026-09-10). A
       // vertical caller reads neither attribute, so this costs it nothing.
       const left = el.scrollLeft > 1;
       const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;

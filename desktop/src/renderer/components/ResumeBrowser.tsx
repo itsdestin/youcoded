@@ -1516,7 +1516,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // and INSIDE the phone popover below 640px (deck round 1 S-7, round 2 S-9 —
   // "project/tags should be dropdowns"), so both widths share one set of controls.
   const chipsRow = (
-        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-fade-x'}>
+        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-mask scroll-mask--chips relative overflow-x-auto overflow-y-hidden scrollbar-none'}>
           {/* Projects: pick-any menu over the distinct project paths in the loaded
               sessions. The menu is portaled to document.body so it escapes the
               OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
@@ -1549,7 +1549,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
             >
               {/* The list scrolls; the footer stays put, so Clear never leaves
                   the screen behind a long list of projects. */}
-              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="max-h-56 overflow-y-auto py-1">
+              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="scroll-mask max-h-56 overflow-y-auto py-1">
                 {availableProjects.map((p) => {
                   const checked = selectedProjects.has(p.path);
                   return (
@@ -1622,7 +1622,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                   <EmptyState variant="inline" message="No tags yet" />
                 </div>
               ) : (
-                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="max-h-64 overflow-y-auto py-1">
+                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="scroll-mask max-h-64 overflow-y-auto py-1">
                   {liveTags.map((t) => {
                     const checked = selectedTagIds.has(t.id);
                     return (
@@ -1832,11 +1832,11 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
           {/* No flex-1: OverlayPanel only has max-h (indefinite height), which breaks
               flex-grow in Chromium. Using default flex: 0 1 auto lets flex-shrink
               clamp this div when content exceeds max-h so overflow-y: auto engages
-              and the scroll-fade hook sees a real scroll. */}
-          {/* WHY: the hook's existing top/bottom flags now drive a content mask,
-              not a painted pseudo on glass. Keep the scroll container unpadded
-              and the inner wrapper padded so the fade meets the list edge. */}
-          <div ref={listRef} data-resume-list className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
+              and the list really scrolls (and fades). */}
+          {/* WHY: the app's one content fade (.scroll-mask), not a painted band on
+              glass. Keep the scroll container unpadded and the inner wrapper
+              padded so the fade meets the list edge. */}
+          <div ref={listRef} data-resume-list className={previewOn ? 'scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1' : 'scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none'}>
             <div className="py-2">
               {loading ? (
                 <div className="flex flex-col items-center">

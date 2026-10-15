@@ -1,54 +1,148 @@
-/* The masked fade — the newer look (ui-consistency work, 2026-09-23): the CONTENT
-   itself fades to transparent at an edge, instead of a panel-coloured band painted
-   over it. So it blends into whatever is behind, wallpaper and glass included.
-   First home: Appearance's themes box (Destin, appearance-panel-review-3: "replace the
-   painted fade ... with our new fade"). Same hook as .scroll-fade (useScrollFade sets
-   data-fade-top / data-fade-bottom). Each edge fades only while there is more that
-   way. --scroll-mask-under (optional) reserves a strip at the bottom where the box's
-   own buttons sit: content is hidden under it and the fade ends at its top edge, so
-   cards pass UNDER the buttons. No @property / transition: the stops snap
-   (performance.md rule 6). */
-.scroll-mask {
-  --scroll-mask-top: 0px;
-  --scroll-mask-bottom: 0px;
-  --scroll-mask-under: 0px;
-  overflow-y: auto;
-  scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--scroll-mask-top), #000 calc(100% - var(--scroll-mask-under) - var(--scroll-mask-bottom)), transparent calc(100% - var(--scroll-mask-under)));
-  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--scroll-mask-top), #000 calc(100% - var(--scroll-mask-under) - var(--scroll-mask-bottom)), transparent calc(100% - var(--scroll-mask-under)));
-}
-.scroll-mask::-webkit-scrollbar { display: none; }
-.scroll-mask[data-fade-top="true"] { --scroll-mask-top: 40px; }
-.scroll-mask[data-fade-bottom="true"] { --scroll-mask-bottom: 40px; }
+/* THE app's one scroll fade (Destin, 2026-10-15: "scrollable areas should always have a
+   scroll-fade applied that matches the fade used elsewhere in the app").
 
-/* The session list's edge fade. The painted band above read as a dark strip
-   over the rows' ends, so here the rows themselves fade to clear, like messages
-   under the controls (R7-1: "make this fade/scroll effect match the new effect
-   we're using elsewhere"). WHY every chrome style, not just 'float' (quick-fix
-   batch, 2026-09-29; ui-labels-batch#LB-5: "this screenshot looks like it still
-   has the old paint fade in the sesion switcher"): the rule used to be scoped to
-   the float style, so the standard style kept the painted band. The painted
-   pseudos carry matching negative margins, so hiding them moves nothing. No row
-   in this list has a blur of its own, so masking the list costs no glass. */
-.session-menu .scroll-fade::before,
-.session-menu .scroll-fade::after {
-  display: none;
-}
-.session-menu .scroll-fade[data-fade-top='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-}
-.session-menu .scroll-fade[data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
-  mask-image: linear-gradient(to top, transparent 0, black 28px);
-}
-.session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
+   The look: the CONTENT itself fades to clear at an edge — only while there is more hidden
+   that way — so it blends into whatever is behind, wallpaper and glass included. Never a
+   panel-coloured band painted over the content (the old `.scroll-fade`, retired here).
+   First home: Appearance's themes box (appearance-panel-review-3: "replace the painted fade
+   ... with our new fade"); the dialog/Settings/Resume fades were the same look under four
+   private names and now read this one.
+
+   USE: add `scroll-mask` to the element that scrolls. That is all: no hook, no ref. It fades
+   whichever way the element actually scrolls (up/down, sideways, or both), and draws no mask
+   at all while nothing overflows. A box repeated many times that scrolls only one way takes
+   `scroll-mask-x` or `scroll-mask-y` instead (half the cost — see the perf note below). It does NOT set overflow or hide the scrollbar — the
+   element keeps its own (`overflow-y-auto scrollbar-none` etc.), so adding the fade never
+   changes how a box scrolls. tests/scroll-mask.test.ts fails a scroll area
+   without it.
+
+   WHY CSS-only (scroll-driven animations): code blocks, tables and tool output repeat dozens
+   of times in a long chat. The old way (useScrollFade) put a scroll listener, a
+   ResizeObserver and a subtree MutationObserver on EVERY box (performance.md rules 2, 3, 6).
+   Here the browser itself follows each box's own scroll position: no script runs, and a box
+   nobody scrolls does no work. Supported by Electron's Chromium (115+), the Android WebView
+   (Chromium, auto-updated) and Safari 26+. Elsewhere (Firefox remote browsers) see the
+   fallback at the bottom.
+
+   HOW: four tiny animations, each tied to the box's own scroll position, flip a 0/1 flag the
+   moment the box leaves an edge (3px into its scroll range at either end); the gradient
+   reads the flags. Flags are unregistered custom properties, so they snap rather than ease —
+   deliberately no @property (performance.md rule 6). The same animations set an "on" token per
+   axis only while that axis can scroll; the gradient needs one to be valid, so a box that fits
+   has NO mask at all. (WHY not set mask-image in a keyframe: a
+   var() inside a keyframe is resolved against the un-animated flags and never updates —
+   measured in Chrome 155, 2026-10-15.)
+
+   SIZE: 40px (the size the app's fades already used: 40 here, 42 in dialogs), never more than
+   a quarter of the box so a short box keeps most of its content readable.
+   `--scroll-mask-under` (optional) reserves a strip at the bottom where the box's own buttons
+   sit: content is hidden under it and the fade ends at its top edge. `--scroll-mask-over` and
+   `--scroll-mask-start` do the same at the top and left for a header row or column that STICKS
+   there (the spreadsheet's letters and row numbers): the sticky part stays solid and the fade
+   starts just past it, where the content actually disappears.
+
+   GLASS: a mask makes the element a "backdrop root" — a frosted (backdrop-filter) element
+   INSIDE it can no longer see the wallpaper. So the chat transcript and the bubble feeds,
+   whose bubbles are frosted, are exempt (their WHY is at each site and in the guard's list). */
+.scroll-mask, .scroll-mask-x, .scroll-mask-y {
+  --scroll-mask-size: 40px;
+  --scroll-mask-under: 0px;
+  --scroll-mask-over: 0px;
+  --scroll-mask-start: 0px;
+  --scroll-mask-t: 0;
+  --scroll-mask-b: 0;
+  --scroll-mask-l: 0;
+  --scroll-mask-r: 0;
+  /* WHY "initial" (guaranteed-invalid): reset, so a box nested inside a scrolling one does not
+     inherit its parent's "on" token and draw a mask it does not need. */
+  --scroll-mask-on-y: initial;
+  --scroll-mask-on-x: initial;
+  --scroll-mask-on: var(--scroll-mask-on-y, var(--scroll-mask-on-x));
+  --scroll-mask-s: min(var(--scroll-mask-size), 25%);
+  --scroll-mask-y: linear-gradient(to bottom, #000 0, #000 var(--scroll-mask-over), transparent var(--scroll-mask-over), #000 calc(var(--scroll-mask-over) + var(--scroll-mask-t) * var(--scroll-mask-s) + var(--scroll-mask-on)), #000 calc(100% - var(--scroll-mask-under) - var(--scroll-mask-b) * var(--scroll-mask-s)), transparent calc(100% - var(--scroll-mask-under)));
+  --scroll-mask-x: linear-gradient(to right, #000 0, #000 var(--scroll-mask-start), transparent var(--scroll-mask-start), #000 calc(var(--scroll-mask-start) + var(--scroll-mask-l) * var(--scroll-mask-s)), #000 calc(100% - var(--scroll-mask-r) * var(--scroll-mask-s)), transparent 100%);
+  /* WHY scroll padding the fade's size (2026-10-15): whatever the browser scrolls into view
+     itself — the caret in a growing text box, the highlighted row while arrowing through a menu,
+     a find-in-page match — stops just clear of the fade instead of sitting half-faded at the
+     edge. Measured in Chrome: typing at line 5 of a scrolled textarea put that line 36px from the
+     top with this, flush against the edge (inside the fade) without it. Up/down only: the
+     sideways rails set their own scroll-px for snapping. */
+  scroll-padding-block: var(--scroll-mask-s);
+  /* Invalid (so: no mask) unless an "on" token is set — see HOW above. */
+  -webkit-mask-image: var(--scroll-mask-y), var(--scroll-mask-x);
+  mask-image: var(--scroll-mask-y), var(--scroll-mask-x);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
 }
 /* A taller fade for full-screen lists (Projects view, 2026-09-29; projects-view#PV-1:
-   "may need to widen fade a bit to get edges of the cards"): at 40px a card's
-   rounded top edge and side lines still read clearly inside the fade; 72px
-   softens the whole edge of a card as it passes under. */
-.scroll-mask--wide[data-fade-top="true"] { --scroll-mask-top: 72px; }
-.scroll-mask--wide[data-fade-bottom="true"] { --scroll-mask-bottom: 72px; }
+   "may need to widen fade a bit to get edges of the cards"): at 40px a card's rounded top
+   edge and side lines still read clearly inside the fade; 72px softens the whole edge of a
+   card as it passes under. */
+.scroll-mask--wide { --scroll-mask-size: 72px; }
+/* A shorter one for a single row of chips (the size those rows used: 24px — DetailPage.css,
+   the old .scroll-fade-x). At 40px a chip-sized row loses most of its last chip. */
+.scroll-mask--chips { --scroll-mask-size: 24px; }
+
+/* Each edge animation also sets its axis's "on" token, for the whole time its timeline is active
+   (fill: both) — so the mask exists exactly while that axis can scroll, with no extra animation. */
+@keyframes scroll-mask-top { from { --scroll-mask-t: 0; --scroll-mask-on-y: 0px; } to { --scroll-mask-t: 1; --scroll-mask-on-y: 0px; } }
+@keyframes scroll-mask-bottom { from { --scroll-mask-b: 1; } to { --scroll-mask-b: 0; } }
+@keyframes scroll-mask-left { from { --scroll-mask-l: 0; --scroll-mask-on-x: 0px; } to { --scroll-mask-l: 1; --scroll-mask-on-x: 0px; } }
+@keyframes scroll-mask-right { from { --scroll-mask-r: 1; } to { --scroll-mask-r: 0; } }
+
+/* WHY three classes for one look (perf, measured 2026-10-15 in Chrome 155 — 300 overflowing code
+   blocks, the app's content-visibility on): each scroll-linked animation costs a little every
+   frame the page scrolls, multiplied by every box. `.scroll-mask` follows both directions (four
+   animations) — right for a single panel or list. A box that only ever scrolls ONE way and
+   repeats many times (code blocks, tables, tool output, diffs) takes `.scroll-mask-x` (sideways)
+   or `.scroll-mask-y` (up/down): two animations, half the per-frame cost. Same look. */
+@supports (animation-timeline: scroll()) {
+  .scroll-mask {
+    /* WHY an inactive timeline means "no mask": a box with nothing to scroll that way has no
+       scroll range, its timeline is inactive and these animations apply nothing. */
+    animation: scroll-mask-top linear both, scroll-mask-bottom linear both,
+               scroll-mask-left linear both, scroll-mask-right linear both;
+    animation-timeline: scroll(self block), scroll(self block),
+                        scroll(self inline), scroll(self inline);
+    /* WHY 6px ranges (each flag flips at their middle, 3px from the edge): a box that scrolls
+       sideways often has a pixel or two of accidental up/down overflow (a chip's border, a
+       rounding at 1.5x). With a 2px range that tiny overflow would draw a full fade along the
+       bottom of a chip row; 3px of slack ignores it, and a real scroll shows its fade after
+       3px of movement — too soon to notice. */
+    animation-range: 0px 6px, calc(100% - 6px) 100%,
+                     0px 6px, calc(100% - 6px) 100%;
+  }
+  .scroll-mask-y {
+    animation: scroll-mask-top linear both, scroll-mask-bottom linear both;
+    animation-timeline: scroll(self block), scroll(self block);
+    animation-range: 0px 6px, calc(100% - 6px) 100%;
+  }
+  .scroll-mask-x {
+    animation: scroll-mask-left linear both, scroll-mask-right linear both;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range: 0px 6px, calc(100% - 6px) 100%;
+  }
+  /* A fade that FOLLOWS a scroller inside it: the box the eye reads is not the box that
+     scrolls. The message box draws its text in a mirror layer behind a see-through <textarea>,
+     so the fade goes on their shared wrapper (`scroll-mask-y scroll-mask--follow`) and reads
+     the textarea's scroll through a named timeline (the textarea carries `scroll-mask-source`). */
+  .scroll-mask-y.scroll-mask--follow {
+    timeline-scope: --scroll-mask-source;
+    animation-timeline: --scroll-mask-source, --scroll-mask-source;
+  }
+  .scroll-mask-source { scroll-timeline: --scroll-mask-source block; }
+}
+/* The followed scroller keeps what it reveals (the caret's line) clear of its wrapper's fade. */
+.scroll-mask-source { scroll-padding-block: var(--scroll-mask-s); }
+
+/* FALLBACK — a browser without scroll-driven animations (Firefox in a remote browser, an old
+   Android WebView). Boxes that still call useScrollFade (the popups, Settings, the big lists)
+   get the same fade from the hook's data-fade-* flags; it attaches its listeners ONLY here
+   (hooks/useScrollFade.ts). Every other box simply scrolls without a fade there. */
+@supports not (animation-timeline: scroll()) {
+  .scroll-mask[data-fade-top] { --scroll-mask-on-y: 0px; }
+  .scroll-mask[data-fade-top="true"] { --scroll-mask-t: 1; }
+  .scroll-mask[data-fade-bottom="true"] { --scroll-mask-b: 1; }
+  .scroll-mask[data-fade-left="true"] { --scroll-mask-l: 1; }
+  .scroll-mask[data-fade-right="true"] { --scroll-mask-r: 1; }
+}

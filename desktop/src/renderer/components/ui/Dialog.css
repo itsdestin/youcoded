@@ -1,7 +1,7 @@
 /* WHY: Destin approved the Settings treatment on both a long About popup and
    a shorter Development popup. Titled Dialog bodies own this treatment; the
    separately reviewed Session files list opts into the same header/scroll
-   classes. Other custom headers and the generic .scroll-fade keep their roles. */
+   classes. Other custom headers keep their roles. */
 .dialog-header, [data-session-files-header] { position: relative; }
 .dialog-header::after, [data-session-files-header]::after {
   content: '';
@@ -13,22 +13,9 @@
   pointer-events: none;
   background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
 }
-@property --dialog-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
-@property --dialog-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
-.dialog-scroll, [data-session-files-scroll] {
-  mask-image:
-    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--dialog-fade-top) / 2), #000 var(--dialog-fade-top), #000 calc(100% - var(--dialog-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--dialog-fade-bottom) / 2), transparent 100%);
-  /* WHY no 4%-side exemption (project-switcher-2#P2-5, 2026-10-06 — Destin on Backup & sync:
-     "the fade looks really strange in this container"): the old second gradient kept the outer
-     4% of the body unfaded. The body's 16px padding is about 4% of a popup, so every card's left
-     and right edge sat in that strip: under the top or bottom fade the card's middle faded while
-     its edges stayed solid and bright — two glowing stripes. Cards now fade evenly across the
-     width. (Removed once before, 2026-09-28, then restored only because it was not the cause of
-     Meadow Mist's separate corner glow — decisions "Meadow Mist corner glow".) */
-  transition: --dialog-fade-top 150ms ease-out, --dialog-fade-bottom 150ms ease-out;
-}
-.dialog-scroll[data-fade-top="true"], [data-session-files-scroll][data-fade-top="true"] { --dialog-fade-top: 42px; }
-.dialog-scroll[data-fade-bottom="true"], [data-session-files-scroll][data-fade-bottom="true"] { --dialog-fade-bottom: 42px; }
-.dialog-scroll::before, .dialog-scroll::after,
-[data-session-files-scroll]::before, [data-session-files-scroll]::after { display: none; }
+/* The body's edge fade is the app's one fade now (`.scroll-mask` on the body, Dialog.tsx), not a
+   private copy (2026-10-15). It keeps what this file decided: no unfaded 4% side strip
+   (project-switcher-2#P2-5, Destin on Backup & sync: "the fade looks really strange in this
+   container" — the cards' left and right edges stayed bright under the fade). The old copy
+   eased in over 150ms through @property; the one fade snaps, as performance.md rule 6 asks. */
 

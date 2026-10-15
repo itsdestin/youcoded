@@ -21,7 +21,7 @@ import { useEnterToConfirm } from '../../hooks/use-enter-to-confirm';
  *
  * 1. THE SCROLL BODY. SettingsPopup set maxHeight but left the panel a plain
  *    block, so callers had to remember `className="flex flex-col"` AND wrap
- *    their own `.scroll-fade`. Two of its seven forgot (Sound, Session
+ *    their own scroll fade. Two of its seven forgot (Sound, Session
  *    Defaults); the symptom is a dialog that clips with no way to reach the
  *    bottom. Destin hit it in Sound on 2026-07-26. Pass `scrollBody={false}`
  *    only when the caller genuinely owns its whole surface.
@@ -315,10 +315,13 @@ export function Dialog({
             </div>
           )}
           {scrollBody ? (
-            // WHY: only a titled dialog has the approved header/body meeting.
-            // Titleless caller-owned surfaces retain their original painted
-            // scroll edges until their separate visual review.
-            <div ref={scrollRef} className={`scroll-fade${title ? ' dialog-scroll' : ''} flex-1`}>
+            // WHY .scroll-mask for every body, titled or not (2026-10-15, Destin: "scrollable
+            // areas should always have a scroll-fade applied that matches the fade used
+            // elsewhere in the app"): titleless bodies used to keep the old painted band.
+            // relative/overflow/min-h-0/scrollbar-none are what the retired .scroll-fade class
+            // carried; min-h-0 lets this flex-1 body shrink and scroll instead of growing.
+            // dialog-scroll stays as the titled-body marker other code and tests find.
+            <div ref={scrollRef} className={`scroll-mask${title ? ' dialog-scroll' : ''} relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-none`}>
               {/* WHY space-y-4 (trial): the guide spaces groups 16px; the body used 20px. */}
               <div className="px-4 py-4 space-y-4">{children}</div>
             </div>

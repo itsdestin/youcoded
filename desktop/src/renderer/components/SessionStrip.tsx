@@ -2325,7 +2325,7 @@ export default function SessionStrip({
           {sessions.length > 0 && (
             <div
               ref={sessionListRef}
-              className="scroll-fade flex-1"
+              className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"
               // WHY (2026-09-07, Destin): lets a "sessions in other windows" row be
               // dragged straight back into this window's list — reuses the same
               // dragAdopt() main already uses for the header pill bar's cross-window
@@ -2631,7 +2631,7 @@ export default function SessionStrip({
                 {/* WHY: Peer windows can hold an unbounded number of sessions.
                     Keep this group inside the same scrolling middle as local
                     sessions, so it cannot hide the New session actions below. */}
-                <div className="scroll-fade flex-1 py-1">
+                <div className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1 py-1">
                   {remoteGroups.flatMap((g) =>
                     g.sessions.map((s) => {
                       const color = sessionStatuses?.get(s.id) || 'gray';
@@ -2734,7 +2734,7 @@ export default function SessionStrip({
 
           {showNewForm ? (
             <div
-              className="p-3 flex-1 min-h-0 flex flex-col gap-2 rounded-b-lg overflow-y-auto scroll-fade"
+              className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none p-3 flex-1 flex flex-col gap-2 rounded-b-lg"
               style={{ maxHeight: 'var(--session-menu-available-height)' }}
             >
               {/* WHY: The creation form is another long list inside the capped

@@ -1200,114 +1200,11 @@ body[data-mode="buddy-chat"] #theme-bg {
   background-color: transparent;
 }
 
-/* Scroll-fade affordance. Applied via useScrollFade hook — hides the scrollbar
-   and overlays a panel-colored gradient at whichever edge still has hidden
-   scroll room. The hook toggles data-fade-top / data-fade-bottom based on
-   scrollTop; the pseudo-element overlays fade in/out via opacity.
-   History notes:
-   - We tried mask-image on the scroll container to match the background
-     automatically. Worked in some places (Settings, CommandDrawer) but failed
-     silently on descendants of .layer-surface OverlayPanels (ResumeBrowser,
-     StatusBar widget editor) — Chromium has clipping/repaint quirks when
-     mask-image sits under a stacking context with backdrop-filter + overflow.
-   - We tried reading the container's computed background so the fade color
-     matched translucent surfaces in wallpaper themes. Made the fade so weak
-     it was visually missing. Reverted.
-   The painted overlay remains the generic fallback. ResumeBrowser now masks
-   only its list after short-height Workbench checks (2026-09-23); the other
-   panel failures above and Android WebView behavior remain unproven.
-   Padding-compensation: sticky pseudos default to sticking at the content-box
-   edge (inside padding). overflow clipping happens at the padding-box edge,
-   so content scrolls visibly through the padding band. --scroll-fade-pad-*
-   (set by the hook) extends the pseudo upward/downward through that band so
-   the fade starts flush with the container's outer scroll edge. */
-.scroll-fade {
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  position: relative;
-  /* min-height: 0 is REQUIRED for .scroll-fade to function when used as a flex-1 child
-     in a flex column. Chromium's flex algorithm resolves `min-height: auto` to the
-     item's content min-size in some configurations (particularly when the parent has
-     only `max-height`, not `height`), even though CSS spec says overflow != visible
-     should make min-height: auto resolve to 0. Without this rule, a flex-1 scroll-fade
-     grows to fit all its content — clientHeight == scrollHeight, overflow-y never
-     engages, and the fade pseudo-elements never activate. Symptom: scroll-fade appears
-     broken (no fade) in popups whose OverlayPanel uses max-h-[Xvh] flex flex-col
-     directly (e.g. ResumeBrowser, StatusBar widget editor). For non-flex callsites
-     (explicit max-h, natural sizing) min-height: 0 is a no-op.
-     overflow-x: hidden clips the fade pseudos to the scroll-fade's own rounded corners
-     (for callsites that give the scroll-fade element itself a border-radius, like the
-     SyncPanel log box's rounded-lg). */
-  min-height: 0;
-}
-.scroll-fade::-webkit-scrollbar { display: none; }
-
-.scroll-fade::before,
-.scroll-fade::after {
-  content: '';
-  display: block;
-  position: sticky;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-.scroll-fade::before {
-  top: 0;
-  height: 36px;
-  margin-bottom: -36px;
-  background: linear-gradient(to bottom, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade::after {
-  bottom: 0;
-  height: 36px;
-  margin-top: -36px;
-  background: linear-gradient(to top, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade[data-fade-top="true"]::before { opacity: 1; }
-.scroll-fade[data-fade-bottom="true"]::after { opacity: 1; }
-
-/* Sideways twin of .scroll-fade for a single row of chips (design guide §4.8:
-   a chip row that does not fit scrolls sideways behind an edge fade). Same hook
-   (useScrollFade sets data-fade-left / data-fade-right), same sticky-pseudo
-   trick turned 90°. First home: the Resume browser's filter chips, where at
-   390px the third chip was simply cut off with nothing saying the row moved. */
-.scroll-fade-x {
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  position: relative;
-}
-.scroll-fade-x::-webkit-scrollbar { display: none; }
-.scroll-fade-x::before,
-.scroll-fade-x::after {
-  content: '';
-  display: block;
-  position: sticky;
-  align-self: stretch;
-  flex: 0 0 24px;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-.scroll-fade-x::before {
-  left: 0;
-  margin-right: -24px;
-  background: linear-gradient(to right, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade-x::after {
-  right: 0;
-  margin-left: -24px;
-  background: linear-gradient(to left, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade-x[data-fade-left="true"]::before { opacity: 1; }
-.scroll-fade-x[data-fade-right="true"]::after { opacity: 1; }
+/* The painted .scroll-fade / .scroll-fade-x bands lived here (a panel-coloured strip over the
+   edge). Retired 2026-10-15 for the one masked fade, styles/scroll-mask.css — Destin: "scrollable
+   areas should always have a scroll-fade applied that matches the fade used elsewhere in the app".
+   The history the old comment carried — mask-image once failed under .layer-surface panels in
+   2026 — was re-checked on every popup the screenshots cover before the band was removed. */
 
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */

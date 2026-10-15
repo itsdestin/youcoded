@@ -1296,7 +1296,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       <Callout tone="danger" actions={errorActions}>
                         {problem}
                         {showSyncDetails && errorMsg && (
-                          <pre className="mt-1.5 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
+                          <pre className="mt-1.5 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto scroll-mask">{errorMsg as string}</pre>
                         )}
                       </Callout>
                     )}
@@ -1720,7 +1720,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {logLines.length === 0 ? (
                     <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
-                    <div ref={logScrollRef} className="scroll-fade max-h-48 rounded-lg bg-inset/40 border border-edge-dim">
+                    // WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, so on the
+                    // bordered box it would fade the border and fill too. The outer box frames;
+                    // the inner one scrolls and fades the log lines only.
+                    <div className="rounded-lg bg-inset/40 border border-edge-dim overflow-hidden">
+                    <div ref={logScrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none max-h-48">
                       <pre className="text-3xs text-fg-dim font-mono px-2 py-2 whitespace-pre-wrap break-all leading-relaxed">
                         {logLines.map((line, i) => {
                           try {
@@ -1742,6 +1746,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           }
                         })}
                       </pre>
+                    </div>
                     </div>
                   )}
                   {/* Outlined, full width (fix batch 2): a follow-up action under a

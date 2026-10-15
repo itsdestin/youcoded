@@ -50,7 +50,7 @@ export default function QuickChips({ onChipTap }: Props) {
     // select-none: quick chips are chrome, not highlightable or copyable
     // (Destin, 2026-09-10). The chip editor is a portaled Dialog, unaffected.
     <div className="relative select-none">
-      <div className="flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
+      <div className="flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center scroll-mask scroll-mask--chips">
         {displayChips.map((chip, i) => (
           <button
             key={`${i}-${chip.label}`}
@@ -239,13 +239,18 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
         {view.kind === 'add' && availableSkills.length > 0 && (
           <section>
             <SectionLabel className="mb-2">Or use an installed skill</SectionLabel>
-            <div ref={skillPickerRef} className={`${CARD_LEVEL_1} scroll-fade max-h-40 p-1`}>
-              {availableSkills.map(skill => (
-                <button key={skill.id} type="button" onClick={() => addFromSkill(skill)}
-                  className="w-full text-left px-2 py-1.5 text-xs text-fg-2 hover:text-fg hover:bg-inset rounded-sm transition-colors">
-                  {skill.displayName || skill.id}
-                </button>
-              ))}
+            {/* WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, and a mask on
+                the card itself would fade its border and fill too. The card frames; the inner
+                box scrolls and fades its rows only. */}
+            <div className={`${CARD_LEVEL_1} overflow-hidden`}>
+              <div ref={skillPickerRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none max-h-40 p-1">
+                {availableSkills.map(skill => (
+                  <button key={skill.id} type="button" onClick={() => addFromSkill(skill)}
+                    className="w-full text-left px-2 py-1.5 text-xs text-fg-2 hover:text-fg hover:bg-inset rounded-sm transition-colors">
+                    {skill.displayName || skill.id}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
         )}

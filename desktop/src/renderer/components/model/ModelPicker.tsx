@@ -417,8 +417,8 @@ export default function ModelPicker({
   // The scroll root the reveal window measures against and resets to the top
   // — the `overflow-y-auto` list div, not the outer panel.
   const listRef = useRef<HTMLDivElement>(null);
-  // Drives the 'flat' list's edge fade (data-fade-top/bottom → .scroll-mask);
-  // a no-op look for the other layouts, which don't carry that class.
+  // The list's edge fade is CSS (.scroll-mask, every layout since 2026-10-15); this hook
+  // only feeds it on a browser without scroll-driven animations.
   useScrollFade(listRef);
   const flat = layout === 'flat';
   // 'flat' behaves like 'inline' everywhere but its look: no trigger, no closed state.
@@ -1017,7 +1017,7 @@ export default function ModelPicker({
 
             <div
               ref={listRef}
-              className={flat ? 'scroll-mask min-h-0 overscroll-contain' : 'flex-1 min-h-0 overflow-y-auto py-1.5'}
+              className={flat ? 'scroll-mask overflow-y-auto scrollbar-none min-h-0 overscroll-contain' : 'scroll-mask flex-1 min-h-0 overflow-y-auto py-1.5'}
               // WHY 238px: six rows (36px) and a half, so a cut-off row says
               // "more below" — the sessions menu's rule (ui-quick-fixes#QF-1).
               style={flat ? { maxHeight: 238 } : undefined}

@@ -353,7 +353,7 @@ function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSess
           </div>
           <ScreenMark name="settings" />
 
-          <div ref={outerScrollRef} className="scroll-fade settings-drawer-scroll flex-1 min-h-0">
+          <div ref={outerScrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none settings-drawer-scroll flex-1">
             {isAndroid() ? (
               <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} syncAutoOpen={syncAutoOpen} onSyncAutoOpenHandled={onSyncAutoOpenHandled} />
             ) : (
@@ -1616,7 +1616,7 @@ function RemoteButton(props: RemoteButtonProps) {
   // sub-screen opened from the bottom of a long panel started scrolled past its own first
   // sentence. Navigating within a dialog should start at the top, like opening a page.
   useEffect(() => {
-    const region = popupRef.current?.querySelector('.scroll-fade');
+    const region = popupRef.current?.querySelector('.dialog-scroll');
     if (region) region.scrollTop = 0;
   }, [showEncryption, showInfo]);
   // No scroll ref here any more — Dialog owns the scroll region and its edge
@@ -1773,7 +1773,7 @@ function RemoteButton(props: RemoteButtonProps) {
 
       {/* D1, finished: BOTH views use the shell's header and scroll body now.
           The main view used to paint its own — an h2, a CloseButton, and a
-          `.scroll-fade flex-1` wrapper — which is the exact set of things D1
+          scroll-fade wrapper — which is the exact set of things D1
           exists to own, and the exact set two of SettingsPopup's seven callers
           got wrong. The body keeps the Dialog's own 16px group gap. */}
       <Dialog screen="settings/remote"

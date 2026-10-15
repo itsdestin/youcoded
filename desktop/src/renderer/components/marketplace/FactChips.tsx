@@ -15,23 +15,9 @@ import './DetailPage.css';
  *  a plain vertical wheel into sideways scrolling would trap the popup's own scrolling
  *  whenever the pointer crossed the row. The fade tells the eye there is more. */
 export function ChipRow({ children }: { children: React.ReactNode }) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [fade, setFade] = React.useState<'none' | 'left' | 'right' | 'both'>('none');
-  // 1px slack absorbs sub-pixel scroll positions (MarketplaceRail's rule).
-  const update = React.useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const max = el.scrollWidth - el.clientWidth;
-    if (max <= 1) { setFade('none'); return; }
-    const left = el.scrollLeft > 1, right = el.scrollLeft < max - 1;
-    setFade(left && right ? 'both' : left ? 'left' : right ? 'right' : 'none');
-  }, []);
-  // Window resize only, as the rails do: the row's width follows the window.
-  React.useEffect(() => {
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, [update, children]);
+  // WHY no state or listeners (2026-10-15, the one-fade pass): the edge fade is the app's one
+  // CSS fade (`.scroll-mask-x scroll-mask--chips`, 24px as before). It used to be React state
+  // plus a window resize listener in EVERY card — a Marketplace page drew dozens of them.
   return (
     // WHY py-1 with a matching -my-1 (Destin, marketplace-detail-5#M5-3: "the bottom of the
     // claude chip is clipping"): a sideways-scrolling box clips vertically too (CSS turns
@@ -41,8 +27,8 @@ export function ChipRow({ children }: { children: React.ReactNode }) {
     // card's spacing unchanged. Pinned in tests/marketplace-detail-shell.test.ts.
     // WHY [&>*]:shrink-0: in a row that scrolls, a chip never squeezes (the author chip
     // shrank to "@de…" on the item cards) — what doesn't fit scrolls under the fade.
-    <div ref={ref} data-detail-chips data-fade={fade} onScroll={update}
-      className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-x-auto py-1 -my-1 [&>*]:shrink-0">
+    <div data-detail-chips
+      className="scroll-mask-x scroll-mask--chips flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-x-auto py-1 -my-1 [&>*]:shrink-0">
       {children}
     </div>
   );

@@ -17,15 +17,12 @@ describe('Resume session keeps its chosen outer header and list edge', () => {
     expect(source).toContain("w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden");
   });
 
-  it('uses conditional unpainted content fading only on the Resume list', () => {
+  it('fades the Resume list with the app\'s one unpainted fade', () => {
     expect(source).toContain('data-resume-list');
     expect(source).toContain('ref={listRef}');
-    expect(css()).toContain('[data-resume-list][data-fade-top="true"]');
-    expect(css()).toContain('[data-resume-list][data-fade-bottom="true"]');
-    expect(css()).toContain('42px');
-    expect(css()).toContain('4%');
-    expect(css()).toContain('mask-image:');
-    expect(css()).toContain('content: none');
+    // The list is a .scroll-mask (content fades; no painted band); the old private copy is gone.
+    expect(source).toMatch(/data-resume-list className=\{previewOn \? 'scroll-mask /);
+    expect(css()).not.toContain('mask-image:');
     expect(css()).not.toContain('background: var(--panel)');
   });
 });

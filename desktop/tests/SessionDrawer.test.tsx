@@ -69,7 +69,7 @@ describe('SessionDrawer — delivered label', () => {
     expect(preview).toBeTruthy();
     expect(preview?.className).toContain('h-12');
     expect(row.querySelector('.justify-center.gap-1')).toBeTruthy();
-    expect(container.querySelector('[data-session-files-scroll].scroll-fade')).toBeTruthy();
+    expect(container.querySelector('[data-session-files-scroll].scroll-mask')).toBeTruthy();
     expect(container.querySelector('[data-session-files-header]')).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Remove chart\.png from this list/ })).toBeInTheDocument();
     // A clipped card would shrink the remove button's coarse-pointer hit target.

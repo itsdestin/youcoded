@@ -46,7 +46,7 @@ describe('Dialog shell', () => {
 
   it('owns a scrolling body — the caller does not supply one', () => {
     render(<Dialog open onClose={() => {}} title="Sound"><p>tall</p></Dialog>);
-    const body = panel().querySelector('.scroll-fade');
+    const body = panel().querySelector('.scroll-mask');
     expect(body, 'Dialog must render its own scroll region').not.toBeNull();
     // flex-1 is what gives the scroll region a bounded height inside the column.
     // Without it the body grows to fit content and overflow never engages.
@@ -57,7 +57,7 @@ describe('Dialog shell', () => {
     // Appearance hands the panel to ThemeScreen; Remote access swaps in
     // SettingsExplainer. Those own their own scroll regions.
     render(<Dialog open onClose={() => {}} scrollBody={false}><p>custom</p></Dialog>);
-    expect(panel().querySelector('.scroll-fade')).toBeNull();
+    expect(panel().querySelector('.scroll-mask')).toBeNull();
   });
 
   it('a titled dialog gets an h2 and a close button', () => {
@@ -85,19 +85,20 @@ describe('Dialog shell', () => {
     expect(css).toMatch(/\.dialog-header::after,\s*\[data-session-files-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });
 
-  it('only titled scrolling bodies mask content at both edges, leaving untitled bodies unchanged', () => {
+  it('every body, titled or not, scrolls under the app\'s one fade', () => {
     const { rerender } = render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
-    expect(panel().querySelector('.dialog-scroll')).toBeInTheDocument();
+    const titled = panel().querySelector('.dialog-scroll');
+    expect(titled).toBeInTheDocument();
+    expect(titled!.className).toContain('scroll-mask');
+    // The look lives in scroll-mask.css only — Dialog.css no longer carries a private copy.
     const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
-    expect(css).toMatch(/\.dialog-scroll,\s*\[data-session-files-scroll\]\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom, transparent 0px,[^}]*transparent 100%\);/);
+    expect(css).not.toMatch(/mask-image/);
     // The fade is even across the width: no side strip left unfaded, which lit every card's
     // edges as two bright stripes under the fade (project-switcher-2 P2-5, Backup & sync).
-    expect(css).not.toMatch(/linear-gradient\(to right, #000 0%, transparent 4%/);
-    expect(css).toMatch(/\.dialog-scroll\[data-fade-top="true"\],\s*\[data-session-files-scroll\]\[data-fade-top="true"\]\s*\{\s*--dialog-fade-top:\s*42px;/);
-    expect(css).toMatch(/\.dialog-scroll\[data-fade-bottom="true"\],\s*\[data-session-files-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--dialog-fade-bottom:\s*42px;/);
-    expect(css).toMatch(/\.dialog-scroll::before,\s*\.dialog-scroll::after,\s*\[data-session-files-scroll\]::before,\s*\[data-session-files-scroll\]::after\s*\{\s*display:\s*none;/);
+    const mask = readSource(join(__dirname, '..', 'src', 'renderer', 'styles', 'scroll-mask.css'));
+    expect(mask).not.toMatch(/transparent 4%/);
     rerender(<Dialog open onClose={() => {}}>untitled</Dialog>);
-    expect(panel().querySelector('.scroll-fade')).toBeInTheDocument();
+    expect(panel().querySelector('.scroll-mask')).toBeInTheDocument();
     expect(panel().querySelector('.dialog-scroll')).toBeNull();
   });
 

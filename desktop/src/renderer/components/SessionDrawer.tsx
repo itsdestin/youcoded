@@ -776,7 +776,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           )}
         </SearchFilterPill>
       </div>
-      <div ref={listScrollRef} data-session-files-scroll className="flex-1 overflow-y-auto scroll-fade min-h-0">
+      <div ref={listScrollRef} data-session-files-scroll className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
         {/* A pill click that couldn't resolve — shown INSTEAD of letting the
             generic empty state contradict the file the user just clicked. */}
         {/* break-words on both notes: a long unbroken file name otherwise forces

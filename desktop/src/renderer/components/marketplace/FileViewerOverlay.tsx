@@ -88,7 +88,7 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
               windows and a bordered ✕ only on narrow ones. */}
           <CloseButton onClick={onClose} label="Close file viewer" className="shrink-0" />
         </header>
-        <div ref={scrollRef} data-file-viewer-scroll className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollRef} data-file-viewer-scroll className="scroll-mask flex-1 overflow-y-auto p-3 sm:p-6">
           {state.status === "loading" && (
             <LoadingState what="file" />
           )}

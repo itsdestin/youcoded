@@ -583,25 +583,13 @@ describe('marketplace small fixes', () => {
 
   // 2 — rails clip with no affordance at phone width (P-17 / audit #26).
   it('the rail says there is more to scroll in each direction', async () => {
+    // The rail takes the app's one fade (.scroll-mask): the browser fades whichever end has
+    // more, from the rail's own scroll position — no script, no per-rail resize listener.
+    // jsdom has no layout or scroll timelines; the fade itself is checked in the screenshots.
     render(<MarketplaceRail title="Featured"><div>a</div><div>b</div></MarketplaceRail>);
     const list = screen.getByRole('list');
-    // jsdom has no layout, so nothing overflows on mount → no fade.
-    expect(list.getAttribute('data-fade')).toBe('none');
-
-    // Fake the metrics of a rail whose content is wider than its box.
-    Object.defineProperty(list, 'scrollWidth', { value: 1000, configurable: true });
-    Object.defineProperty(list, 'clientWidth', { value: 300, configurable: true });
-    list.scrollLeft = 0;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('right');
-
-    list.scrollLeft = 350;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('both');
-
-    list.scrollLeft = 700;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('left');
+    expect(list.className).toContain('scroll-mask');
+    expect(list.getAttribute('style') ?? '').not.toContain('mask');
   });
 
   // 3 — longDescription printed its markdown source instead of rendering it.

@@ -161,7 +161,7 @@ export function ProjectSwitcher({
 
         <div
           ref={listRef}
-          className="scroll-mask p-2 max-h-[50vh] flex flex-col gap-0.5"
+          className="scroll-mask overflow-y-auto scrollbar-none p-2 max-h-[50vh] flex flex-col gap-0.5"
           onMouseLeave={() => { setHighlightIndex(restIndex); setMoved(false); }}
         >
           {filtered.length === 0 && (

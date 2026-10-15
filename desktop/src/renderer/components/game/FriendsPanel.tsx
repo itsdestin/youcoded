@@ -234,7 +234,7 @@ function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boo
     <div className="relative">
       <ul
         ref={listRef}
-        className="scroll-mask max-h-72 overscroll-contain pb-14 flex flex-col gap-2"
+        className="scroll-mask overflow-y-auto scrollbar-none max-h-72 overscroll-contain pb-14 flex flex-col gap-2"
         // 52 = the button zone's top edge (8px gap + a ~36px button or box + 8px).
         style={{ ['--scroll-mask-under' as string]: '52px' }}
         aria-label="Your friends"

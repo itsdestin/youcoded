@@ -74,7 +74,7 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
         )}
 
         {/* Scrollable body slot */}
-        <div ref={scrollRef} className="project-detail-scroll flex-1 overflow-auto min-h-0">{children}</div>
+        <div ref={scrollRef} className="project-detail-scroll scroll-mask flex-1 overflow-auto min-h-0">{children}</div>
       </OverlayPanel>
     </>
   );

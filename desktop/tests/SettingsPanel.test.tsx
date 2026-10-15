@@ -18,10 +18,8 @@ describe('SettingsPanel — drawer edges', () => {
   const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const panel = read('../src/renderer/components/SettingsPanel.tsx');
   const css = read('../src/renderer/components/SettingsDrawer.css');
-  const globalFade = read('../src/renderer/styles/globals.css');
   // WHY: the scoped stylesheet must ship with the drawer, not just exist on disk.
   expect(panel).toMatch(/import '\.\/SettingsDrawer\.css';/);
-  expect(globalFade).toMatch(/\.scroll-fade::before,\s*\.scroll-fade::after\s*\{/);
 
   it('uses the selected title and a tapered divider without a full-width border', () => {
     // WHY: the component class and CSS pseudo-element must agree; a CSS-only guard
@@ -43,15 +41,12 @@ describe('SettingsPanel — drawer edges', () => {
     expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-scroll::before,[\s\S]*?\.settings-drawer-scroll::after\s*\{[^}]*display:\s*block/);
   });
 
-  it('fades scroll content against the real drawer background at both ends', () => {
-    // WHY: the global painted fade must remain untouched for other scrolling surfaces.
-    expect(panel).toMatch(/ref=\{outerScrollRef\} className="scroll-fade settings-drawer-scroll/);
-    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom,[^}]*mask-composite:\s*add;/);
-    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*transparent 0px,[^}]*#000 var\(--settings-fade-top\)/);
-    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*transparent 4%, transparent 96%, #000 100%/);
-    expect(css).toMatch(/\.settings-drawer-scroll\[data-fade-top="true"\]\s*\{\s*--settings-fade-top:\s*42px;/);
-    expect(css).toMatch(/\.settings-drawer-scroll\[data-fade-bottom="true"\]\s*\{\s*--settings-fade-bottom:\s*42px;/);
-    expect(css).toMatch(/\.settings-drawer-scroll::before,\s*\.settings-drawer-scroll::after\s*\{\s*display:\s*none;/);
+  it('fades scroll content with the app\'s one fade, evenly across the width', () => {
+    // WHY: the drawer's body is a .scroll-mask like every other scroll area — the content
+    // itself fades, so the real drawer background shows through; no private copy, and no
+    // unfaded strip at the sides (Destin removed that from dialogs: "looks really strange").
+    expect(panel).toMatch(/ref=\{outerScrollRef\} className="scroll-mask [^"]*settings-drawer-scroll/);
+    expect(css).not.toMatch(/mask-image/);
   });
 });
 

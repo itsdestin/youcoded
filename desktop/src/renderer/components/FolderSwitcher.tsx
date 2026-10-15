@@ -284,7 +284,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
           {/* Saved folders list — min-h-0 lets flexbox shrink the list first
               when the viewport-clamped panel height is tight. */}
           {folders.length > 0 && (
-            <div ref={listRef} className="scroll-fade max-h-48 min-h-0">
+            <div ref={listRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none max-h-48">
               <div className="py-1">
               {folders.map((f) => {
                 const isSelected = f.path === value;

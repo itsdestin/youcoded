@@ -232,7 +232,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
     return (
       <div className="flex flex-col h-full">
         <WizardHeader title="Add a backup" onClose={onClose} />
-        <div ref={typeStepRef} className="scroll-fade flex-1">
+        <div ref={typeStepRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="px-4 py-4 space-y-3">
           {/* WHY the round-2 cards again, with logos (small-fixes-3#SF3-1 "this is worse" about
               setting rows; #SF3-6 pick "logos"): each choice is its own first-level card — mark,
@@ -413,7 +413,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           onBack={() => setStep(backendType === 'icloud' ? 'prereqs' : 'auth')}
           onClose={onClose}
         />
-        <div ref={configureStepRef} className="scroll-fade flex-1">
+        <div ref={configureStepRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="px-4 py-4 space-y-4">
           {/* WHY one labelled card (small-fixes-3): the fields, the switch and the duplicate note sat
               bare on the popup at their own spacing. The guide: nothing bare on the popup — a group
@@ -676,7 +676,7 @@ function PrereqCheckStep({
   return (
     <div className="flex flex-col h-full">
       <WizardHeader title="Checking setup" onBack={onBack} onClose={onClose} />
-      <div ref={bodyRef} className="scroll-fade flex-1">
+      <div ref={bodyRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
         <div className="px-4 py-4 space-y-4">
 
         {/* WHY one labelled card of rows (small-fixes-3): each requirement was a card of its own

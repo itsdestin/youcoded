@@ -179,10 +179,9 @@ describe('the approved float look', () => {
     const css = floatCSS();
     // See-through only while frosted (theme engine); otherwise the normal overlay.
     expect(readSource(join(RENDERER, 'themes/theme-engine.ts'))).toMatch(/\[data-wallpaper\] \[data-chrome-style='float'\] \.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 24%/);
-    // The list's ends fade to clear (a mask), not under a painted panel band.
-    // Every chrome style, not just float (quick-fix batch, LB-5), so the rule
-    // lives with the other masked fade in scroll-mask.css.
-    expect(readSource(join(RENDERER, 'styles/scroll-mask.css'))).toMatch(/\.session-menu \.scroll-fade::after \{\s*display: none/);
+    // The list's ends fade to clear (a mask), not under a painted panel band —
+    // every chrome style (quick-fix batch, LB-5): the list is a .scroll-mask.
+    expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"');
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="session-menu glass-overlay');
     // WHY the fill is restated: Golden Sunbreak's custom_css paints its own gold thumb.
     expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--scrollbar-thumb\)/);

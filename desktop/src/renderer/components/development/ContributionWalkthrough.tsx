@@ -8,7 +8,7 @@ export function ContributionWalkthrough() {
         cutting step 4 in half and pushing the only button off the bottom — the design
         guide's own rule is that a scrolling surface must be reviewed at a height where
         it actually overflows, and this one never was. */}
-    <div id="contribution-walkthrough" className="space-y-3 pl-1 pr-2 text-sm text-fg-2 max-h-[46vh] overflow-y-auto scroll-fade">
+    <div id="contribution-walkthrough" className="space-y-3 pl-1 pr-2 text-sm text-fg-2 max-h-[46vh] scroll-mask relative overflow-y-auto overflow-x-hidden scrollbar-none">
       <p>You don’t need to know how to code. Start with an idea, like clearer wording or an easier-to-use screen.</p>
       <ol className="list-decimal ml-5 space-y-3">
         <li><strong className="font-medium text-fg">Describe your idea</strong><p>The assistant reads the project’s shared guidance and checks the roadmap with you.</p></li>

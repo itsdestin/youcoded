@@ -21,7 +21,7 @@ export function ResumeShellDemo({ treatment }: { treatment: 'today' | 'proposed'
       if (!panel.hasAttribute('data-resume-review-panel')) panel.setAttribute('data-resume-review-panel', '');
       const header = heading?.parentElement?.parentElement;
       if (header && !header.hasAttribute('data-resume-review-header')) header.setAttribute('data-resume-review-header', '');
-      const list = panel.querySelector<HTMLElement>('.scroll-fade');
+      const list = panel.querySelector<HTMLElement>('[data-resume-list]');
       if (list && !list.hasAttribute('data-resume-review-list')) list.setAttribute('data-resume-review-list', '');
       // WHY: the first expanded button in a stress card is its Organize icon,
       // not the conversation trigger. Skip unsynced/inert rows as well.
