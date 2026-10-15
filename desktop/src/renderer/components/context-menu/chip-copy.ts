@@ -8,7 +8,7 @@
 //   - right-click → Copy with a selection → selectionTextWithChipPaths
 //   - right-click → Copy on a whole message → chipPathOf (inside readableText)
 
-export const CHIP_PATH_ATTR = 'data-copy-path';
+const CHIP_PATH_ATTR = 'data-copy-path';
 const CHIP_SELECTOR = `[${CHIP_PATH_ATTR}]`;
 
 /** The chip `node` sits inside, if any. */
