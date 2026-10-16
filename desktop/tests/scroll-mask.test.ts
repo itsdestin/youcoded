@@ -29,7 +29,8 @@ import { describe, it, expect } from 'vitest';
 //   • The message box (InputBar.tsx) sets its textarea's overflow by script; its fade is on the
 //     text's wrapper, following the textarea (`scroll-mask--follow`).
 //   • The terminal (xterm): draws its own viewport; out of scope by Destin's brief.
-//   • Pages (components/pages/page-kit.ts): a page's own scroll areas get the kit's automatic fade.
+//   • Pages (components/pages/page-kit.ts): a page's own scroll areas get the kit's automatic fade,
+//     and the page document itself fades on its frame (`.scroll-mask-frame`, PageHost.tsx).
 
 const SRC = join(__dirname, '..', 'src', 'renderer');
 

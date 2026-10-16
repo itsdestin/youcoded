@@ -524,6 +524,7 @@ const NAMESPACES = [
 import { createNamingPreview } from './naming-preview';
 import { createBrowserMock } from './browser-mock';
 import { seedPages } from './fixtures/pages';
+import { kitPiecesPage } from './fixtures/kit-pieces-page';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
@@ -4085,6 +4086,11 @@ function createPagesMock(empty: boolean): PagesBridge {
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
   let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
+  // `?pagesKit=1`: the Pages kit's showcase page is listed too (fixtures/kit-pieces-page.ts), so every
+  // kit piece can be photographed; any other value opens that section first at phone width
+  // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.
+  const pagesKit = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesKit') : null;
+  if (pagesKit) pages = [...pages, kitPiecesPage(pagesKit === '1' ? null : pagesKit)];
   // `?pagesMenu=kind`: the week planner opens its add form with the Kind dropdown open, so the
   // page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open.
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesMenu') === 'kind') {

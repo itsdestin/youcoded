@@ -21,6 +21,14 @@ export const PAGES: readonly ScreenEntry[] = [
   // the kit took the app's slider look (submit-ticket-6#ST6-Q1).
   pg('pages/page/page-paint', 'view'),
   pg('pages/focus/page-focus-timer', 'view'),
+  // The Pages style kit's own pieces on one showcase page (fixtures/kit-pieces-page.ts): status pills,
+  // notices with Details, loading, the full-screen error, switches, search + filter chips, fold rows,
+  // the inner box, the chip row, the scroll fade. At phone width its sections fold, the first open;
+  // the two `#phone-…` states open another section first.
+  { ...pg('pages/page/page-kit-pieces', 'view', 'kit'), params: { pagesKit: '1' } },
+  { ...pg('pages/focus/page-kit-pieces#phone', 'view', 'kit', 'narrow'), params: { pagesKit: '1' }, viewport: PHONE },
+  { ...pg('pages/focus/page-kit-pieces#phone-controls', 'view', 'kit', 'narrow'), params: { pagesKit: 'controls' }, viewport: PHONE },
+  { ...pg('pages/focus/page-kit-pieces#phone-layout', 'view', 'kit', 'narrow'), params: { pagesKit: 'layout' }, viewport: PHONE },
   // Finance dashboard mockup (design stage, 2026-10-05).
   pg('pages/page/page-money', 'view', 'money'),
   // The theme's wallpaper through a page in the newer 'float' chrome style (shoot with a wallpaper theme: --themes halftone-dimension).

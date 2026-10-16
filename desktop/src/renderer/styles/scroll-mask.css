@@ -44,7 +44,7 @@
    GLASS: a mask makes the element a "backdrop root" — a frosted (backdrop-filter) element
    INSIDE it can no longer see the wallpaper. So the chat transcript and the bubble feeds,
    whose bubbles are frosted, are exempt (their WHY is at each site and in the guard's list). */
-.scroll-mask, .scroll-mask-x, .scroll-mask-y {
+.scroll-mask, .scroll-mask-x, .scroll-mask-y, .scroll-mask-frame {
   --scroll-mask-size: 40px;
   --scroll-mask-under: 0px;
   --scroll-mask-over: 0px;
@@ -146,3 +146,12 @@
   .scroll-mask[data-fade-left="true"] { --scroll-mask-l: 1; }
   .scroll-mask[data-fade-right="true"] { --scroll-mask-r: 1; }
 }
+
+/* A FRAME whose document scrolls inside it: a Page (components/pages/PageHost.tsx). Neither the
+   app nor CSS can read a framed document's scroll, and a mask inside the page cannot follow its own
+   document (a mask on the root scrolls away with it), so the page's kit script reports which edges
+   hide more (page-kit.ts PAGE_EDGES_MESSAGE) and the host sets these flags on the <iframe>. The
+   same fade, the same size; no flag, no mask. */
+.scroll-mask-frame[data-fade-top="true"], .scroll-mask-frame[data-fade-bottom="true"] { --scroll-mask-on-y: 0px; }
+.scroll-mask-frame[data-fade-top="true"] { --scroll-mask-t: 1; }
+.scroll-mask-frame[data-fade-bottom="true"] { --scroll-mask-b: 1; }

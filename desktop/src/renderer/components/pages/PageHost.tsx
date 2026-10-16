@@ -54,7 +54,7 @@ import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { usePageSockets } from './use-page-sockets';
-import { PAGE_KIT_CSS } from './page-kit';
+import { PAGE_EDGES_MESSAGE, PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
@@ -258,8 +258,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown; top?: unknown; bottom?: unknown } | null;
       if (!d) return;
+      // WHY the frame carries the page document's scroll fade (pages-kit-questions #7: every scrolling
+      // area in a Page uses the app's one fade, the page itself included): the page's kit reports which
+      // edges hide more, and the frame fades there (scroll-mask.css .scroll-mask-frame). Written straight
+      // onto the element — a flag flip per edge reached, never a React render.
+      if (d.type === PAGE_EDGES_MESSAGE) {
+        const f = frameRef.current;
+        if (f) { f.dataset.fadeTop = String(d.top === true); f.dataset.fadeBottom = String(d.bottom === true); }
+        return;
+      }
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
@@ -531,7 +540,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               ref={frameRef}
               srcDoc={load.doc}
               sandbox="allow-scripts allow-popups allow-forms"
-              className={`absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
+              className={`scroll-mask-frame absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
               title={title}
             />
           )}
