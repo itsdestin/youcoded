@@ -167,3 +167,83 @@ describe('a page that may open a new conversation', () => {
     expect(parseConnections([session, { ...session, id: 'again' }])).toHaveLength(1);
   });
 });
+
+// Pages read and change chats, and run programs (spec 2026-10-16). Two things are pinned: a line the parser
+// cannot vouch for is DROPPED (never widened — a typo in a scope must not read as "every chat"), and the
+// fingerprint moves exactly when what the person approved would change.
+describe('a page that reads chats', () => {
+  const chats = { id: 'chats', kind: 'chats' };
+
+  it('takes every chat by default and reads look-up only', () => {
+    expect(parseConnections([chats])).toEqual([{ id: 'chats', kind: 'chats', access: 'lookup', scope: { all: true } }]);
+    expect(parseConnections([{ ...chats, scope: 'all', access: 'full' }])).toEqual([{ id: 'chats', kind: 'chats', access: 'full', scope: { all: true } }]);
+  });
+
+  it('keeps a named list of projects or one tag', () => {
+    expect(parseConnections([{ ...chats, scope: { projects: ['Lab', ' Notes ', 'Lab'] } }])[0]).toMatchObject({ scope: { projects: ['Lab', 'Notes'] } });
+    expect(parseConnections([{ ...chats, scope: { tag: ' Work ' } }])[0]).toMatchObject({ scope: { tag: 'Work' } });
+  });
+
+  it('drops a scope it cannot vouch for rather than widening it to every chat', () => {
+    for (const scope of ['everything', 7, {}, { projects: [] }, { projects: [3] }, { projects: ['x'.repeat(81)] }, { tag: '' }, { tag: 4 }, { projects: Array.from({ length: 11 }, (_, i) => `p${i}`) }]) {
+      expect(parseConnections([{ ...chats, scope }]), JSON.stringify(scope)).toEqual([]);
+    }
+  });
+
+  it('is one line per page', () => {
+    expect(parseConnections([chats, { ...chats, id: 'again', scope: { tag: 'x' } }])).toHaveLength(1);
+  });
+
+  it('is private like a sign-in: the whole list is dropped when it also asks for the whole internet', () => {
+    expect(parseConnections([chats, { id: 'o', kind: 'open' }])).toEqual([]);
+    expect(parseConnections([{ id: 'o', kind: 'open' }, chats])).toEqual([]);
+  });
+
+  it('is asked again when the access or the scope widens, not when the id or the order changes', () => {
+    const fp = (o: object) => fingerprint(parseConnections([{ ...chats, ...o }])[0]);
+    expect(fp({ access: 'full' })).not.toBe(fp({ access: 'lookup' }));
+    expect(fp({ scope: { tag: 'a' } })).not.toBe(fp({ scope: { tag: 'b' } }));
+    expect(fp({ scope: { projects: ['A'] } })).not.toBe(fp({ scope: { projects: ['A', 'B'] } }));
+    expect(fp({ scope: { projects: ['A', 'B'] } })).toBe(fp({ scope: { projects: ['B', 'A'] } }));
+    expect(fp({ id: 'renamed' })).toBe(fp({}));
+  });
+
+  it('reaches no address and sends no request', () => {
+    const c = parseConnections([chats])[0];
+    expect(covers(c, 'api.github.com')).toBe(false);
+    expect(methodAllowed(c, 'GET')).toBe(false);
+  });
+});
+
+describe('a page that runs a program', () => {
+  const program = { id: 'work', kind: 'program', file: 'work-items.mjs' };
+
+  it('names one file in its own folder', () => {
+    expect(parseConnections([program])).toEqual([{ id: 'work', kind: 'program', file: 'work-items.mjs' }]);
+    expect(parseConnections([{ ...program, file: 'sync_all-2.py' }])).toHaveLength(1);
+  });
+
+  it('refuses folders, parent paths, hidden files, the page\'s own files and nothing', () => {
+    for (const file of ['sub/run.mjs', '../run.mjs', '..', '.hidden.mjs', '', ' ', 'a b.mjs', 'page.html', 'PAGE.JSON', 'data.json', 'x'.repeat(81), 7, null, 'a\\b.sh', '/etc/passwd']) {
+      expect(parseConnections([{ ...program, file }]), String(file)).toEqual([]);
+    }
+  });
+
+  it('allows several different programs but not the same one twice', () => {
+    expect(parseConnections([program, { ...program, id: 'b', file: 'other.sh' }])).toHaveLength(2);
+    expect(parseConnections([program, { ...program, id: 'b' }])).toHaveLength(1);
+  });
+
+  it('is asked again for a different file, not for a renamed id', () => {
+    const fp = (o: object) => fingerprint(parseConnections([{ ...program, ...o }])[0]);
+    expect(fp({ file: 'other.mjs' })).not.toBe(fp({}));
+    expect(fp({ id: 'renamed' })).toBe(fp({}));
+  });
+
+  it('reaches no address and may combine with the whole internet (it holds nothing private)', () => {
+    const c = parseConnections([program])[0];
+    expect(covers(c, 'example.com')).toBe(false);
+    expect(methodAllowed(c, 'POST')).toBe(false);
+    expect(parseConnections([program, { id: 'o', kind: 'open' }])).toHaveLength(2);
+  });
+});

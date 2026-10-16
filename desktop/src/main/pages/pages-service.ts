@@ -16,15 +16,16 @@ import { cleanDeviceAddress } from '../../shared/page-device-address';
 import { setPersonalPagesRoot } from '../claude-code-pages-mcp';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
+import { PageProgramRunner, hashProgramFile } from './page-program';
 import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
 import { PageLiveSockets, type LiveWsLike } from './page-live-socket';
 import { PageLiveVideos } from './page-live-video';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageFetchRequest, PageFetchResult,
-  PageRefreshState, PageSummary, PlaidResult, SavedPageKey,
+  PageProgramResult, PageRefreshState, PageSummary, PlaidResult, SavedPageKey,
 } from '../../shared/pages-types';
-import { PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
+import { MAX_PAGE_PROGRAM_INPUT, PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
 
 const DEBOUNCE_MS = 300;
 
@@ -53,6 +54,8 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   plaidItems?: PlaidItemsStore;
   /** Test injection: opening Plaid's sign-in page (production: openPlaidLink). */
   openExternal?: (url: string) => Promise<void> | void;
+  /** Test injection: the time limit on a page's program (production: 120 s, page-program.ts). */
+  programTimeoutMs?: number;
 }
 
 class PagesService {
@@ -72,6 +75,8 @@ class PagesService {
   /** Camera video played by the app (page-live-video.ts): main's own socket per
    *  video, same owners, same access chain, counted apart from `sockets`. */
   readonly videos: PageLiveVideos;
+  /** Programs a page is running (page-program.ts): tracked per page and per window so closing either stops them. */
+  readonly programs: PageProgramRunner;
   /** What each page looked like last listing (code stamp + connections), so a
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
@@ -80,6 +85,7 @@ class PagesService {
   private readonly plaidItems: PlaidItemsStore | undefined;
 
   constructor(private readonly deps: PagesServiceDeps) {
+    this.programs = new PageProgramRunner(deps.programTimeoutMs);
     this.store = new PagesStore({ ...deps, refreshState: (id) => this.freshness.get(id) });
     this.plaidItems = deps.plaidItems ?? (deps.connections ? new PlaidItemsStore(deps.connections.userDataDir, deps.connections.secrets) : undefined);
     this.sockets = new PageLiveSockets({
@@ -100,12 +106,17 @@ class PagesService {
   private closeLiveFor(pageId: string, connectionId?: string, why?: string): void {
     this.sockets.closeFor(pageId, connectionId, why);
     this.videos.closeFor(pageId, connectionId, why);
+    // WHY programs too: a program was allowed for one version of the page. A changed page, a withdrawn line
+    // or a fresh approval stops what is running; the page's frame reloads or asks again anyway. A removed
+    // connection that was not the program's own does not need this, but it is the rarer, cheaper mistake.
+    this.programs.stopPage(pageId, 'The page changed or an approval changed, so the program was stopped.');
   }
 
   /** A window or remote client went away: its sockets and videos go with it. */
   closeOwner(ownerKey: string): void {
     this.sockets.closeOwner(ownerKey);
     this.videos.closeOwner(ownerKey);
+    this.programs.stopOwner(ownerKey);
   }
 
   /** Start (or re-point) the Personal watcher. Safe to call again: the
@@ -243,8 +254,22 @@ class PagesService {
     // (home-device deck, Q-address), re-checked here because the card's check
     // is only a courtesy: a crafted message must not record a website.
     const waiting: PageConnection[] = [];
+    // The program file's hash NOW, per program line: a line stays approved only while its file still
+    // hashes to what was recorded, so a changed file is waiting again (spec 2026-10-16).
+    const programHashes = new Map<string, string | null>();
     for (const c of info.connections) {
-      if (recorded[c.id]?.fingerprint === fingerprint(c)) continue;
+      if (c.kind !== 'program') continue;
+      const target = await this.store.programTarget(id, c.file);
+      programHashes.set(c.id, target ? await hashProgramFile(target.dir, c.file) : null);
+    }
+    for (const c of info.connections) {
+      const current = recorded[c.id]?.fingerprint === fingerprint(c)
+        && (c.kind !== 'program' || (programHashes.get(c.id) != null && recorded[c.id]?.programHash === programHashes.get(c.id)));
+      if (current) continue;
+      // A program that cannot be read cannot be allowed: the person would be approving nothing.
+      if (c.kind === 'program' && programHashes.get(c.id) == null) {
+        return { ok: false, message: `The program file ${c.file} is missing or cannot be read, so it cannot be allowed.` };
+      }
       if (c.kind !== 'device') { waiting.push(c); continue; }
       const raw = opts.addresses?.[c.id];
       const address = raw === undefined ? c.address : cleanDeviceAddress(raw);
@@ -262,7 +287,7 @@ class PagesService {
         const r = recorded[c.id];
         // A session line keeps no code hash (spec 2026-10-14, §3), so dismissing
         // the note never gives it one — else the next rebuild would show the note.
-        if (c.kind === 'session') continue;
+        if (c.kind === 'session' || c.kind === 'program') continue;
         if (r && r.htmlHash !== htmlHash) restamped[c.id] = { ...r, htmlHash };
       }
       if (Object.keys(restamped).length > 0) {
@@ -301,7 +326,12 @@ class PagesService {
       // WHY '' for a session line: its approval is keyed to the manifest line,
       // not the page's code (spec 2026-10-14, §3, Q-7). An empty hash is what
       // the "code changed" check already skips (pages-store codeMovedSince).
-      fresh[c.id] = { fingerprint: fingerprint(c), approvedAt: at, htmlHash: c.kind === 'session' ? '' : htmlHash, ...(c.kind === 'device' ? { address: c.address } : {}) };
+      // A program line is keyed to its FILE, like a session line to its declaration: no code hash either.
+      fresh[c.id] = {
+        fingerprint: fingerprint(c), approvedAt: at, htmlHash: c.kind === 'session' || c.kind === 'program' ? '' : htmlHash,
+        ...(c.kind === 'device' ? { address: c.address } : {}),
+        ...(c.kind === 'program' ? { programHash: programHashes.get(c.id) ?? '' } : {}),
+      };
     }
     try { await store.recordApprovals(pageKey, fresh); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
@@ -404,6 +434,34 @@ class PagesService {
     } finally {
       this.gate.release(id);
     }
+  }
+
+  /** `pages:run-program` — the page asked to run a program kept in its folder. Allowed only when the page
+   *  lists that file, holds an APPROVED line for it, and the file on disk is the one that was approved (its
+   *  SHA-256 equals the hash recorded when the person pressed Allow). The check reads the file fresh each time,
+   *  so a program edited after the page opened is refused, not run. `owner` is the calling window or phone. */
+  async runProgram(owner: string, id: string, file: string, input: string): Promise<PageProgramResult> {
+    if (typeof file !== 'string' || typeof input !== 'string') return { ok: false, reason: 'The program name or its input was not valid.' };
+    if (Buffer.byteLength(input, 'utf8') > MAX_PAGE_PROGRAM_INPUT) return { ok: false, reason: 'The input is larger than 1 MB, which is more than a program may be given.' };
+    const store = this.deps.connections;
+    const pageKey = await this.store.approvalKeyFor(id);
+    const target = await this.store.programTarget(id, file);
+    const notAllowed: PageProgramResult = { ok: false, reason: 'This page has not been allowed to run that program.' };
+    if (!store || !pageKey || !target) return notAllowed;
+    let records: Record<string, PageApproval>;
+    try { records = await store.approvalsFor(pageKey); } catch (e) { return { ok: false, reason: messageOf(e) }; }
+    const record = records[target.line.id];
+    if (record?.fingerprint !== fingerprint(target.line)) return notAllowed;
+    const hash = await hashProgramFile(target.dir, file);
+    if (hash === null) return { ok: false, reason: 'The program file is missing, so it was not run.' };
+    if (record.programHash !== hash) return { ok: false, reason: 'The program file has changed since it was allowed, so this page has to ask again before it can run it.' };
+    return this.programs.run(id, owner, target.dir, file, input);
+  }
+
+  /** The page was closed or switched: stop what that window started for it. */
+  stopPrograms(owner: string, id: string): { ok: true } {
+    this.programs.stopPageOf(id, owner);
+    return { ok: true };
   }
 
   /** Pages that are mid-way through a bank sign-in, so a second press of
@@ -543,12 +601,12 @@ class PagesService {
     const store = this.deps.connections;
     switch (c.kind) {
       // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
-      // Opening a conversation window (session) holds no credential at all.
+      // Opening a conversation window (session), reading chats and running a program hold no credential at all:
+      // they are app abilities, never a fetch destination (covers() refuses them first).
       case 'public':
       case 'open':
       case 'plaid':
       case 'session':
-      // App abilities, never a fetch destination (covers() refuses them first).
       case 'chats':
       case 'program':
         return null;
@@ -602,6 +660,7 @@ class PagesService {
   }
 
   stop(): void {
+    this.programs.stopAll();
     this.sockets.closeAll();
     this.videos.closeAll();
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }

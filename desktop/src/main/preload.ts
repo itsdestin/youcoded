@@ -366,6 +366,8 @@ const IPC = {
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
   PAGES_PLAID: 'pages:plaid',
+  PAGES_RUN_PROGRAM: 'pages:run-program',
+  PAGES_STOP_PROGRAMS: 'pages:stop-programs',
   PAGES_SOCKET_OPEN: 'pages:socket-open',
   PAGES_SOCKET_SEND: 'pages:socket-send',
   PAGES_SOCKET_CLOSE: 'pages:socket-close',
@@ -1119,8 +1121,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.send(IPC.TERMINAL_REPAINT, { sessionId }),
     respondToPermission: (requestId: string, decision: object) =>
       ipcRenderer.invoke(IPC.PERMISSION_RESPOND, { requestId, decision }),
-    browse: (): Promise<any[]> =>
-      ipcRenderer.invoke(IPC.SESSION_BROWSE),
+    // includeOpen: also list the chats open right now, marked `open` (a page's chat list; the Resume list leaves them out).
+    browse: (opts?: { includeOpen?: boolean }): Promise<any[]> =>
+      ipcRenderer.invoke(IPC.SESSION_BROWSE, opts?.includeOpen ? { includeOpen: true } : undefined),
     loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean): Promise<any[]> =>
       ipcRenderer.invoke(IPC.SESSION_HISTORY, { sessionId, projectSlug, count: count || 10, all: all || false }),
     switch: (sessionId: string) =>
@@ -2480,6 +2483,9 @@ contextBridge.exposeInMainWorld('claude', {
     // Both parts: a key is identified by service AND address.
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, { service, address }),
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, { id, request: req }), plaid: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_PLAID, { id, request: req }),
+    // Programs a page runs from its own folder (spec 2026-10-16). Main checks the page's approved `program` line AND the file's hash.
+    runProgram: (id: string, file: string, input: string) => ipcRenderer.invoke(IPC.PAGES_RUN_PROGRAM, { id, file, input }),
+    stopPrograms: (id: string) => ipcRenderer.invoke(IPC.PAGES_STOP_PROGRAMS, { id }),
     // Live sockets + camera video a page holds through main: ONE object each, main knows the calling window itself.
     socketOpen: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_OPEN, req), socketSend: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_SEND, req),
     socketClose: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_CLOSE, req), socketPing: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_PING, req),

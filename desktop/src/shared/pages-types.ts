@@ -185,6 +185,67 @@ export const PAGE_SESSION_REFUSED = {
   closed: 'The page was closed or changed before the window could open.',
 } as const;
 
+/** One chat as a page sees it (spec 2026-10-16, pages read and change chats).
+ *  Names, dates and the person's own marks only — NEVER what was said in the chat.
+ *  `id` is what `chats.resume(id)` and the change calls take. */
+export interface PageChat {
+  id: string;
+  name: string;
+  /** ISO time of the last message. */
+  lastActive: string;
+  /** ISO time the chat began, or null when the app does not know. */
+  created: string | null;
+  /** The tags on it, resolved from the app's tag list (a deleted tag is left out).
+   *  `color` is the app's tag colour name (`tag-amber`); the page kit paints it as `var(--tag-amber)`. */
+  tags: { id: string; name: string; color: string }[];
+  note: string;
+  /** The project folder, named as the app names it. Null when the chat has none. */
+  project: { name: string; path: string } | null;
+  /** The model it last used, as the Resume list shows it. Null when none is recorded. */
+  model: string | null;
+  /** The app's Priority mark ("pins to top"). */
+  pinned: boolean;
+  complete: boolean;
+  /** The git branch the chat's folder was on at its last message. Null when not recorded. */
+  branch: string | null;
+  /** True while the chat is open in the app right now (on any window). */
+  open: boolean;
+}
+
+/** What `youcoded.chats.*` answers. A refusal is a normal answer, never a throw. */
+export type PageChatsAnswer<T = object> = ({ ok: true } & T) | { ok: false; reason: string };
+
+/** The plain reasons a page hears when a chats call answers { ok: false }. */
+export const PAGE_CHATS_REFUSED = {
+  notAllowed: 'This page has not been allowed to see your chats.',
+  notAllowedToChange: 'This page may look at your chats but has not been allowed to change them.',
+  noClick: 'A chat can only be opened right after the person clicks on the page.',
+  outOfScope: 'That chat is not one of the chats this page was allowed to use.',
+  badRequest: 'The request was not understood.',
+  unknownTag: 'That tag does not exist in the app.',
+  noteTooLong: 'A note can be at most 8,000 characters.',
+  unavailable: 'The list of chats could not be read.',
+  closed: 'The page was closed or changed before the request finished.',
+  cannotResume: 'That chat cannot be opened on this computer.',
+} as const;
+
+/** The most a page may hand a program on its input, in bytes (spec 2026-10-16, program card). */
+export const MAX_PAGE_PROGRAM_INPUT = 1_000_000;
+
+/** What `youcoded.program.run` answers. A program that ran and failed is `ok: true` with a non-zero
+ *  `exitCode` (and the tail of what it complained about in `stderr`); `ok: false` is "it did not run to the end". */
+export type PageProgramResult =
+  | { ok: true; output: string; exitCode: number; stderr?: string }
+  | { ok: false; reason: string };
+
+/** The plain reasons for a program call the page itself refuses before asking main. */
+export const PAGE_PROGRAM_REFUSED = {
+  notAllowed: 'This page has not been allowed to run that program.',
+  badRequest: 'The program name or its input was not valid.',
+  unsupported: 'This window cannot run programs for a page.',
+  closed: 'The page was closed or changed before the program finished.',
+} as const;
+
 export type PlaidEnvironment = 'sandbox' | 'production';
 /** The saved-key address for a Plaid environment. */
 export function plaidAddress(env: PlaidEnvironment): string { return `${env}.plaid.com`; }
@@ -456,6 +517,11 @@ export interface PagesBridge {
   fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
   /** Plaid on the page's behalf (main/pages/plaid.ts). Desktop only. */
   plaid?: (id: string, req: PlaidRequest) => Promise<PlaidResult>;
+  /** Run a program kept in the page's own folder (spec 2026-10-16). Main checks the page holds an approved
+   *  `program` line for `file` AND that the file is the one that was approved. Desktop only. */
+  runProgram?: (id: string, file: string, input: string) => Promise<PageProgramResult>;
+  /** Stop every program this window started for the page (closing or switching the page). */
+  stopPrograms?: (id: string) => Promise<{ ok: true }>;
   /** The live socket (platform tooling). Absent where a window cannot hold one. */
   socketOpen?: (req: PageSocketCall & { url: string }) => Promise<PageSocketOpenResult>;
   socketSend?: (req: PageSocketCall & { socket: string; text: string }) => Promise<PageSocketCallResult>;

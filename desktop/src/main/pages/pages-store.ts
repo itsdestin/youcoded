@@ -20,6 +20,7 @@ import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { fingerprint, parseConnections, withApprovedAddress } from './page-connections';
 import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore, hashHtml } from './connections-store';
+import { hashProgramFileCached } from './page-program';
 import type {
   PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
   PageLoadFailure, PageRefreshState, PageSummary,
@@ -117,12 +118,26 @@ export class PagesStore {
         const updated = Math.max(htmlStat.mtimeMs, jsonStat?.mtimeMs ?? 0);
         next.set(id, { id, dir, slug: e.name, home: h.home });
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
-        const allApproved = manifest.connections.length > 0
-          && manifest.connections.every((c) => approvals[c.id]?.fingerprint === fingerprint(c));
-        const sessionIds = new Set(manifest.connections.filter((c) => c.kind === 'session').map((c) => c.id));
-        const reachesNetwork = manifest.connections.some((c) => c.kind !== 'session');
+        // WHY a program line is approved only while its FILE still hashes to what was allowed (spec
+        // 2026-10-16, program card: "If the file changes, the page asks again"). A missing file is not
+        // approved either. Read once per program line per listing, and the file itself only when it moved.
+        const isApproved = new Map<string, boolean>();
+        for (const m of manifest.connections) {
+          let ok = approvals[m.id]?.fingerprint === fingerprint(m);
+          if (ok && m.kind === 'program') {
+            const hash = await hashProgramFileCached(dir, m.file);
+            ok = hash !== null && approvals[m.id]?.programHash === hash;
+          }
+          isApproved.set(m.id, ok);
+        }
+        const allApproved = manifest.connections.length > 0 && manifest.connections.every((c) => isApproved.get(c.id));
+        // Session and program lines say nothing about the page's code (their approval follows the
+        // declaration / the program file), so they stay out of the "code changed" comparison.
+        const notCodeIds = new Set(manifest.connections.filter((c) => c.kind === 'session' || c.kind === 'program').map((c) => c.id));
+        // Session, chats and program lines fetch nothing, so they alone give the page no "last updated" band.
+        const reachesNetwork = manifest.connections.some((c) => c.kind !== 'session' && c.kind !== 'chats' && c.kind !== 'program');
         const connections: PageConnectionStatus[] = manifest.connections.map((m) => {
-          const approved = approvals[m.id]?.fingerprint === fingerprint(m);
+          const approved = isApproved.get(m.id) === true;
           // An approved device is shown at the address the person allowed; one
           // still waiting shows the page's suggestion, for the card to edit.
           const c = approved ? withApprovedAddress(m, approvals[m.id]?.address) : m;
@@ -154,7 +169,7 @@ export class PagesStore {
           // is already showing its approval card, which says more. A session
           // line's approval is not about the code (spec 2026-10-14, §3), so it
           // is left out of the comparison even if a record carries a hash.
-          ...(allApproved && await this.codeMovedSince(dir, htmlStat.mtimeMs, Object.entries(approvals).filter(([cid]) => !sessionIds.has(cid)).map(([, a]) => a.htmlHash))
+          ...(allApproved && await this.codeMovedSince(dir, htmlStat.mtimeMs, Object.entries(approvals).filter(([cid]) => !notCodeIds.has(cid)).map(([, a]) => a.htmlHash))
             ? { codeChanged: true }
             : {}),
         });
@@ -219,6 +234,16 @@ export class PagesStore {
     if (!manifest) return null;
     const html = await fs.readFile(path.join(loc.dir, 'page.html'), 'utf8').catch(() => '');
     return { connections: manifest.connections, html };
+  }
+
+  /** The folder of a page and its `program` line for `file`, or null when the page is gone or does not list
+   *  that program. What `pages:run-program` checks against the approvals on disk. */
+  async programTarget(id: string, file: string): Promise<{ dir: string; line: Extract<PageConnection, { kind: 'program' }> } | null> {
+    const loc = await this.locate(id);
+    if (!loc) return null;
+    const manifest = await this.readManifest(loc.dir);
+    const line = manifest?.connections.find((c): c is Extract<PageConnection, { kind: 'program' }> => c.kind === 'program' && c.file === file);
+    return line ? { dir: loc.dir, line } : null;
   }
 
   // ── One page ─────────────────────────────────────────────────────────────

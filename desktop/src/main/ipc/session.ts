@@ -276,7 +276,7 @@ const sessionEntries: MainChannelDef[] = [
   // ── Browsing and history ─────────────────────────────────────────────────────
   defineChannel({
     name: IPC.SESSION_BROWSE, kind: 'handle',
-    handler: () => {
+    handler: (payload) => {
       const { sessionIdMap, sessionManager, nativeHost } = ops();
       // Collect the conversation ids of the sessions open right now so the Resume list leaves them out.
       // A live session's desktop id is a separate UUID from its Claude transcript id, so it is mapped
@@ -295,6 +295,18 @@ const sessionEntries: MainChannelDef[] = [
       }
       // Native rows join the SAME enrichment pass Claude Code rows get (flags/tags/note/device/title
       // precedence, lastUsedModel); NativeSessionHost stays the one source of truth for what exists.
+      // WHY includeOpen (spec 2026-10-16, a page's chat list): the Resume list leaves open chats out, but a page
+      // that shows "Working" needs them, with the same names, tags and notes. They come from the same scan with
+      // nothing excluded and the ones open right now marked `open` — the app's own id map is the only thing that
+      // knows which transcript belongs to which open tab, so the mapping cannot be done by the page. New row
+      // objects, never a change to the shared in-flight answer another caller may be holding.
+      if (payload?.includeOpen === true) {
+        return browseOnce(`all:${[...activeIds].sort().join(',')}`, async () => {
+          const nativeEntries = await nativeHost.listAsync();
+          const rows = await listPastSessions(undefined, nativeEntries);
+          return rows.map((r) => (activeIds.has(r.sessionId) ? { ...r, open: true } : r));
+        });
+      }
       return browseOnce([...activeIds].sort().join(','), async () => {
         perfMark('bg:browse:native-list:start');
         const nativeEntries = await nativeHost.listAsync();

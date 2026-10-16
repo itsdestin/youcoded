@@ -15,7 +15,7 @@
 // plus the radius and font scale, i.e. what the style kit is written against.
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
-import { MAX_PAGE_SESSION_PROMPT, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
+import { MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
@@ -28,6 +28,9 @@ const PAGE_THEME_TOKENS: readonly string[] = [
   // clears contrast on pale themes too). Pages that warn — a card near its limit,
   // a late bill — would otherwise hand-pick an amber that vanishes on Meadow Mist.
   'warning-fg',
+  // WHY: a chat's tags (youcoded.chats.list) name the app's tag colour slot, e.g. `tag-amber`; the page paints it
+  // as var(--tag-amber), which is the theme's own legible shade of that colour on every theme.
+  'tag-red', 'tag-orange', 'tag-amber', 'tag-green', 'tag-teal', 'tag-blue', 'tag-indigo', 'tag-purple', 'tag-pink', 'tag-gray',
   'radius', 'radius-sm', 'radius-md', 'radius-lg', 'radius-xl', 'radius-full',
   'font-sans', 'font-mono',
 ];
@@ -73,6 +76,13 @@ export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
  *  open (not "a conversation started" — the person still presses Start). */
 export const PAGE_SESSION_START_MESSAGE = 'youcoded:session:start';
 export const PAGE_SESSION_START_RESULT_MESSAGE = 'youcoded:session:start:result';
+/** Page chats (spec 2026-10-16). Page → host: `{ id, request: { op, … } }`; host → page: `{ id, result }`
+ *  where `result` is `{ ok: true, … }` or `{ ok: false, reason }`. */
+export const PAGE_CHATS_MESSAGE = 'youcoded:chats';
+export const PAGE_CHATS_RESULT_MESSAGE = 'youcoded:chats:result';
+/** Page programs (spec 2026-10-16). Page → host: `{ id, file, input }`; host → page: `{ id, result }`. */
+export const PAGE_PROGRAM_MESSAGE = 'youcoded:program';
+export const PAGE_PROGRAM_RESULT_MESSAGE = 'youcoded:program:result';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** True when the app's page pane is glass: the theme has a wallpaper/gradient
@@ -135,7 +145,7 @@ export function readThemeCss(root: HTMLElement = document.documentElement, seeTh
  *  it. `e.source !== parent` drops anything that did not come from the host,
  *  and every answer is matched against this bootstrap's own request map, so a
  *  forged `youcoded:fetch:result` resolves nothing (design review 1, finding 8). */
-function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false): string {
+function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false, chatsAccess: 'none' | 'lookup' | 'full' = 'none', programFiles: readonly string[] = []): string {
   return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
@@ -160,6 +170,14 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   var MAX_PROMPT = ${MAX_PAGE_SESSION_PROMPT};
   var HIDDEN = new RegExp(${JSON.stringify(PAGE_SESSION_HIDDEN_CHARS.source)}, 'u');
   var REFUSED = ${JSON.stringify(PAGE_SESSION_REFUSED)};
+  var CHATS = ${JSON.stringify(PAGE_CHATS_MESSAGE)};
+  var CHATS_RESULT = ${JSON.stringify(PAGE_CHATS_RESULT_MESSAGE)};
+  var CHATS_REFUSED = ${JSON.stringify(PAGE_CHATS_REFUSED)};
+  var PROGRAM = ${JSON.stringify(PAGE_PROGRAM_MESSAGE)};
+  var PROGRAM_RESULT = ${JSON.stringify(PAGE_PROGRAM_RESULT_MESSAGE)};
+  var PROGRAM_REFUSED = ${JSON.stringify(PAGE_PROGRAM_REFUSED)};
+  var PROGRAM_FILES = ${JSON.stringify(programFiles)};
+  var MAX_PROGRAM_INPUT = ${MAX_PAGE_PROGRAM_INPUT};
   var videos = {};
   var videoSeq = 0;
   var sockets = {};
@@ -292,6 +310,53 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       });
     };
   }
+  // Page chats (spec 2026-10-16). WHY only when approved: a page feature-detects it (youcoded.chats) and keeps its
+  // own fallback on an app or a manifest without it. Always resolves { ok, ... }; the host checks the approval,
+  // the scope and the click again, because page code can post on its own. Reading and opening need a lookup
+  // line; setTag / setNote / setMark exist only with access "full".
+  if (${chatsAccess === 'none' ? 'false' : 'true'}) {
+    var chatCall = function (request, needsClick) {
+      return new Promise(function (resolve) {
+        var no = function (reason) { resolve({ ok: false, reason: reason }); };
+        if (needsClick) {
+          // WHY a real click: a page cannot open a chat on a timer (the same rule as startSession).
+          var ua = window.navigator && window.navigator.userActivation;
+          if (!ua || !ua.isActive) { no(CHATS_REFUSED.noClick); return; }
+        }
+        var id = 'c' + (++seq);
+        waiting[id] = { resolve: resolve, reject: resolve, chats: true };
+        try { parent.postMessage({ type: CHATS, id: id, request: request }, '*'); }
+        catch (e) { delete waiting[id]; no(CHATS_REFUSED.closed); }
+      });
+    };
+    window.youcoded.chats = {
+      list: function () { return chatCall({ op: 'list' }, false); },
+      resume: function (chat) { return chatCall({ op: 'resume', chat: String(chat) }, true); }
+    };
+    if (${chatsAccess === 'full' ? 'true' : 'false'}) {
+      window.youcoded.chats.setTag = function (chat, tag, on) { return chatCall({ op: 'setTag', chat: String(chat), tag: String(tag), on: !!on }, false); };
+      window.youcoded.chats.setNote = function (chat, text) { return chatCall({ op: 'setNote', chat: String(chat), text: String(text) }, false); };
+      window.youcoded.chats.setMark = function (chat, mark, on) { return chatCall({ op: 'setMark', chat: String(chat), mark: String(mark), on: !!on }, false); };
+    }
+  }
+  // Page programs (spec 2026-10-16): only the files with an approved line. The host and main check again, and
+  // main also checks that the file is still the one that was approved.
+  if (PROGRAM_FILES.length) {
+    window.youcoded.program = {
+      run: function (file, input) {
+        return new Promise(function (resolve) {
+          var no = function (reason) { resolve({ ok: false, reason: reason }); };
+          if (typeof file !== 'string' || PROGRAM_FILES.indexOf(file) < 0) { no(PROGRAM_REFUSED.notAllowed); return; }
+          var text = input === undefined ? '' : input;
+          if (typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_PROGRAM_INPUT) { no(PROGRAM_REFUSED.badRequest); return; }
+          var id = 'g' + (++seq);
+          waiting[id] = { resolve: resolve, reject: resolve, program: true };
+          try { parent.postMessage({ type: PROGRAM, id: id, file: file, input: text }, '*'); }
+          catch (e) { delete waiting[id]; no(PROGRAM_REFUSED.closed); }
+        });
+      }
+    };
+  }
   window.addEventListener('message', function (e) {
     if (e.source !== parent) return;
     var d = e && e.data;
@@ -345,6 +410,14 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       sp.resolve(ok ? { ok: true } : { ok: false, reason: d.result && typeof d.result.reason === 'string' ? d.result.reason : REFUSED.closed });
       return;
     }
+    if (d.type === CHATS_RESULT || d.type === PROGRAM_RESULT) {
+      // Matched by this page's own id AND by kind, so a forged answer cannot settle a different call.
+      var cw = waiting[d.id];
+      if (!cw || !(d.type === CHATS_RESULT ? cw.chats : cw.program)) return;
+      delete waiting[d.id];
+      cw.resolve(d.result && typeof d.result === 'object' && typeof d.result.ok === 'boolean' ? d.result : { ok: false, reason: CHATS_REFUSED.badRequest });
+      return;
+    }
     if (d.type === PLAID_RESULT) {
       var pp = waiting[d.id];
       if (!pp || !pp.plaid) return;
@@ -355,7 +428,7 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
     if (d.type === RESULT) {
       var p = waiting[d.id];
       // A fetch answer never settles a startSession call (it would resolve with a fetch's shape).
-      if (!p || p.session) return;
+      if (!p || p.session || p.chats || p.program) return;
       delete waiting[d.id];
       var r = d.result;
       if (r && r.ok) p.resolve({ status: r.status, headers: r.headers, body: r.body });
@@ -540,7 +613,7 @@ export function prepareHostedDocument(
   themeCss: string,
   kitCss: string,
   data: unknown = null,
-  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean }[] = [],
+  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean; access?: string; file?: string }[] = [],
   seeThrough = false,
 ): string {
   // `</script>` inside the data would end the script early; escape the one
@@ -551,6 +624,10 @@ export function prepareHostedDocument(
   const devices: Record<string, string> = {};
   for (const c of connections) if (c.kind === 'device' && c.approved && c.id && c.address) devices[c.id] = `http://${c.address}`;
   const devicesJson = JSON.stringify(devices).replace(/<\//g, '<\\/');
+  // Chats and programs: only an APPROVED line gives the page its call, and only the access it was approved for.
+  const chatsLine = connections.find((c) => c.kind === 'chats' && c.approved);
+  const chatsAccess: 'none' | 'lookup' | 'full' = !chatsLine ? 'none' : chatsLine.access === 'full' ? 'full' : 'lookup';
+  const programFiles = connections.flatMap((c) => (c.kind === 'program' && c.approved && typeof c.file === 'string' ? [c.file] : []));
   const ours =
     `<meta http-equiv="Content-Security-Policy" content="${pageCsp(connections)}">` +
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
@@ -558,7 +635,7 @@ export function prepareHostedDocument(
     `<style id="youcoded-kit">${kitCss}</style>` +
     // Only an APPROVED session line gives the page startSession. A page waiting
     // for a yes is never framed anyway; this keeps the bootstrap honest alone.
-    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved))}</script>`;
+    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved), chatsAccess, programFiles)}</script>`;
   const a = splitAuthorDocument(html);
   // WHY the attribute is baked in: set from first paint, the page never flashes
   // an opaque canvas before the host's first message arrives.

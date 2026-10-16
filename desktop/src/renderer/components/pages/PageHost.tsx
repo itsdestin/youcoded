@@ -45,8 +45,8 @@ import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
-import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
-import { MAX_PAGE_DATA_BYTES, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
+import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
@@ -57,11 +57,13 @@ import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { usePageSockets } from './use-page-sockets';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
+import { answerPageChats } from './page-chats';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
 import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
+  PAGE_CHATS_MESSAGE, PAGE_CHATS_RESULT_MESSAGE, PAGE_PROGRAM_MESSAGE, PAGE_PROGRAM_RESULT_MESSAGE,
   PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE,
   PAGE_REFRESH_MESSAGE, PAGE_SESSION_START_MESSAGE, PAGE_SESSION_START_RESULT_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
@@ -341,6 +343,51 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         });
         return;
       }
+      if (d.type === PAGE_CHATS_MESSAGE) {
+        // Page chats (spec 2026-10-16). Checked HERE, not trusted from the bootstrap: page code can post this
+        // itself. page-chats.ts reads the approval from the LOADED document, filters to the chats the line
+        // names, refuses changes unless the line says "full", and turns Resume down unless the person just
+        // clicked in THIS page — the same two-part test as startSession (window activation AND the frame
+        // holding focus), so neither a timer nor a reopen right after a dialog gets through.
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const answer = (result: unknown) => {
+          try { source.postMessage({ type: PAGE_CHATS_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+        };
+        void answerPageChats(d.request, {
+          page: () => loadedPageRef.current,
+          clicked: () => {
+            const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+            return !!ua?.isActive && document.activeElement === frameRef.current;
+          },
+        }).then(answer, () => answer({ ok: false, reason: PAGE_CHATS_REFUSED.unavailable }));
+        return;
+      }
+      if (d.type === PAGE_PROGRAM_MESSAGE) {
+        // Page programs (spec 2026-10-16). Needs an approved `program` line for THIS file on the loaded page;
+        // main then checks the approval on disk AND that the file is still the one that was approved.
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const answer = (result: PageProgramResult) => {
+          try { source.postMessage({ type: PAGE_PROGRAM_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+        };
+        const file = (d as { file?: unknown }).file;
+        const input = (d as { input?: unknown }).input;
+        const approvedFor = (p: PageDocument | null) => !!p?.connections?.some((c) => c.kind === 'program' && c.approved && c.file === file);
+        const page = loadedPageRef.current;
+        if (typeof file !== 'string' || !page || !approvedFor(page)) { answer({ ok: false, reason: PAGE_PROGRAM_REFUSED.notAllowed }); return; }
+        // Character count is a cheap first cut; main measures the bytes.
+        if (typeof input !== 'string' || input.length > MAX_PAGE_PROGRAM_INPUT) { answer({ ok: false, reason: PAGE_PROGRAM_REFUSED.badRequest }); return; }
+        const bridge = pagesBridge();
+        if (!bridge?.runProgram) { answer({ ok: false, reason: PAGE_PROGRAM_REFUSED.unsupported }); return; }
+        bridge.runProgram(pageId, file, input).then((r) => {
+          // The page may have been closed or changed while it ran (stopPrograms ends the program itself).
+          answer(loadedPageRef.current?.id === page.id && approvedFor(loadedPageRef.current) ? r : { ok: false, reason: PAGE_PROGRAM_REFUSED.closed });
+        }, () => answer({ ok: false, reason: 'The program could not be run.' }));
+        return;
+      }
       if (d.type === PAGE_PLAID_MESSAGE) {
         // Plaid on the page's behalf: the request is passed through as-is and
         // main keeps only the shapes it knows (plaid.ts cleanPlaidRequest).
@@ -442,6 +489,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // arrived" flag (first-run landing, merged from master 2026-09-23).
   const loadedPage = load.state === 'ready' ? load.page : null;
   const awaitingApproval = needsApproval(loadedPage ?? summary);
+  // "Closing the page stops it running" (the approved program card): a page with an approved program line
+  // asks the app to stop what it started whenever its frame goes away — closed, switched to another page, or
+  // rebuilt after an edit. Nothing is registered for a page without one, so ordinary pages cost nothing here.
+  const runsPrograms = open && load.state === 'ready' && !awaitingApproval && !!loadedPage?.connections?.some((c) => c.kind === 'program' && c.approved);
+  const programFrame = load.state === 'ready' ? load.doc : null;
+  useEffect(() => {
+    if (!runsPrograms || pageId === null) return;
+    const stopFor = pageId;
+    return () => { void pagesBridge()?.stopPrograms?.(stopFor)?.catch?.(() => { /* the program ends with its window anyway */ }); };
+  }, [runsPrograms, pageId, programFrame]);
   // The page's live sockets live only as long as ITS frame: not while the view is
   // closed, awaiting approval or loading, and a new document is a new frame.
   usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge);
