@@ -4091,10 +4091,11 @@ function createPagesMock(empty: boolean): PagesBridge {
   // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.
   const pagesKit = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesKit') : null;
   if (pagesKit) pages = [...pages, kitPiecesPage(pagesKit === '1' ? null : pagesKit)];
-  // `?pagesMenu=kind`: the week planner opens its add form with the Kind dropdown open, so the
-  // page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open.
+  // `?pagesMenu=kind` (with `?pagesKit=1`): the Kit pieces page opens with its Meal dropdown open, so
+  // the page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open. WHY the kit
+  // page: the Week planner sample that used to show it was removed (2026-10-16).
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesMenu') === 'kind') {
-    pages = pages.map((p) => (p.id !== 'page-week-planner' ? p : { ...p, data: { demoMenu: 'f-kind' } }));
+    pages = pages.map((p) => (p.id !== 'page-kit-pieces' ? p : { ...p, data: { ...((p.data as Record<string, unknown> | null) ?? {}), demoMenu: 'k-meal' } }));
   }
   // `?pagesHome=connected` opens the Home page already allowed at the
   // Tailscale address, so its running state is a screen of its own rather

@@ -12,27 +12,28 @@ export const PAGES: readonly ScreenEntry[] = [
   // The list couldn't be read: the full-screen error (gt-r1#B-3).
   { ...pg('pages/library#load-failed', 'view', 'error-state'), params: { fail: 'pages.list' } },
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
-  pg('pages/page/page-week-planner', 'view'),
-  // The page kit's dropdown OPEN (page-kit.ts PAGE_KIT_JS): the app's own menu look instead of the
-  // browser's white list, with its foot action ("Add another kind…") behind the tapered line.
-  { ...pg('pages/page/page-week-planner#menu-open', 'view'), params: { pagesMenu: 'kind' },
-    escapeStepsBack: 'the first Escape closes the open dropdown list inside the page (as the browser list did), so the app stays on the page' },
   // The paint studio sample: the Pages kit's slider (`.yc-range`, Brush size/Opacity) — shown when
   // the kit took the app's slider look (submit-ticket-6#ST6-Q1).
   pg('pages/page/page-paint', 'view'),
-  pg('pages/focus/page-focus-timer', 'view'),
+  // The focused view a pinned button opens (the paint studio is pinned).
+  pg('pages/focus/page-paint', 'view'),
   // The Pages style kit's own pieces on one showcase page (fixtures/kit-pieces-page.ts): status pills,
   // notices with Details, loading, the full-screen error, switches, search + filter chips, fold rows,
   // the inner box, the chip row, the scroll fade. At phone width its sections fold, the first open;
   // the two `#phone-…` states open another section first.
   { ...pg('pages/page/page-kit-pieces', 'view', 'kit'), params: { pagesKit: '1' } },
+  // The page kit's dropdown OPEN (page-kit.ts PAGE_KIT_JS): the app's own menu look instead of the
+  // browser's white list, with its foot action ("Add another meal…") behind the tapered line.
+  // WHY on the kit page: it moved here when the Week planner sample was removed (2026-10-16).
+  { ...pg('pages/page/page-kit-pieces#menu-open', 'view', 'kit'), params: { pagesKit: '1', pagesMenu: 'kind' },
+    escapeStepsBack: 'the first Escape closes the open dropdown list inside the page (as the browser list did), so the app stays on the page' },
   { ...pg('pages/focus/page-kit-pieces#phone', 'view', 'kit', 'narrow'), params: { pagesKit: '1' }, viewport: PHONE },
   { ...pg('pages/focus/page-kit-pieces#phone-controls', 'view', 'kit', 'narrow'), params: { pagesKit: 'controls' }, viewport: PHONE },
   { ...pg('pages/focus/page-kit-pieces#phone-layout', 'view', 'kit', 'narrow'), params: { pagesKit: 'layout' }, viewport: PHONE },
   // Finance dashboard mockup (design stage, 2026-10-05).
   pg('pages/page/page-money', 'view', 'money'),
   // The theme's wallpaper through a page in the newer 'float' chrome style (shoot with a wallpaper theme: --themes halftone-dimension).
-  { ...pg('pages/page/page-week-planner#float', 'view'), params: { chrome: 'float' } },
+  { ...pg('pages/page/page-kit-pieces#float', 'view', 'kit'), params: { chrome: 'float', pagesKit: '1' } },
   // Approval states, one fixture page each.
   pg('pages/page/page-weather', 'view', 'approval'),
   pg('pages/page/page-task-board', 'view', 'approval'),
@@ -108,5 +109,4 @@ export const PAGES: readonly ScreenEntry[] = [
   // At phone size.
   { ...pg('pages#phone', 'view', 'narrow'), viewport: PHONE },
   { ...pg('pages/library#phone', 'view', 'narrow'), viewport: PHONE },
-  { ...pg('pages/focus/page-focus-timer#phone', 'view', 'narrow'), viewport: PHONE },
 ];

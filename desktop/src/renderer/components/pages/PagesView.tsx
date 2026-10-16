@@ -45,7 +45,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
   // Photo-only build: `shoot` opens a page's connections, or its editor (fixture pages).
   useScreenOpen('pages/library/connections', () => setConnectionsFor('page-headlines'));
-  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-week-planner') ?? pages[0]; if (p) onEditPage(p); });
+  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-paint') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });

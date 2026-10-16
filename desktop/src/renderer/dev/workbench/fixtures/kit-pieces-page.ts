@@ -2,7 +2,8 @@
 // pages-kit-questions (2026-10-16) — the status pill, the notice box with its Details fold, the
 // loading line, the full-screen error, the switch, the search box beside filter chips, the fold
 // row, the inner box, the one-line chip row, the outlined button, the tapered divider, the raised
-// card and the scroll fade — so the kit can be photographed in every theme and at phone width.
+// card, the scroll fade, and the dropdown with its "Add another…" foot action (moved here from the
+// removed Week planner sample, 2026-10-16) — so the kit can be photographed in every theme and at phone width.
 //
 // WHY its own page, listed only with `?pagesKit=` (mock-shim.ts): the sample Pages stay exactly as
 // they are (K-5 "leave"), and the Pages list on every other screen keeps its cards.
@@ -85,6 +86,7 @@ const KIT_PIECES_HTML = `<!doctype html>
             <div class="set"><div><b>Share with family</b><span>Needs a family group first.</span></div>
               <button class="yc-switch" role="switch" aria-checked="false" aria-label="Share with family" disabled></button></div>
           </div>
+          <div><label class="yc-label" for="k-meal">Meal</label><select class="yc-select" id="k-meal"><option value="breakfast">Breakfast</option><option value="lunch">Lunch</option><option value="dinner" selected>Dinner</option><option value="snacks">Snacks</option><option value="__new" data-yc-action>Add another meal…</option></select><input class="yc-input" id="k-newmeal" placeholder="New meal, then Enter" aria-label="New meal" hidden></div>
           <div class="yc-row yc-row--end"><button class="yc-button">Duplicate</button><button class="yc-button yc-button--ghost">Cancel</button><button class="yc-button yc-button--primary">Add recipe</button></div>
         </div>
       </details>
@@ -133,6 +135,31 @@ const KIT_PIECES_HTML = `<!doctype html>
   if (saved && saved.open) {
     var want = document.getElementById('s-' + saved.open);
     if (want) { document.getElementById('s-status').open = false; want.open = true; }
+  }
+  // The kit dropdown's foot action (page-kit.ts PAGE_KIT_JS, \`data-yc-action\`): choosing
+  // "Add another meal…" fires change like any option, so the page puts the meal back and asks for
+  // the new name in a box; Enter adds it to the list and picks it.
+  var meal = document.getElementById('k-meal'), newMeal = document.getElementById('k-newmeal'), lastMeal = meal.value;
+  meal.onchange = function () {
+    if (meal.value !== '__new') { lastMeal = meal.value; return; }
+    meal.value = lastMeal; newMeal.hidden = false; newMeal.focus();
+  };
+  newMeal.onkeydown = function (ev) {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    var name = newMeal.value.trim(); newMeal.value = ''; newMeal.hidden = true;
+    if (!name) return;
+    var o = document.createElement('option'); o.value = name.toLowerCase(); o.textContent = name;
+    meal.insertBefore(o, meal.querySelector('[data-yc-action]'));
+    meal.value = lastMeal = o.value;
+  };
+  // Workbench only: \`?pagesMenu=kind\` (mock-shim.ts) opens the Meal list, so the open kit dropdown
+  // is a screen of its own (screens/pages.ts, #menu-open). WHY a press on the select: that is
+  // exactly what opens it for a person; the page frame is out of reach of the screenshot tool's
+  // clicks. Its section opens first so the list also shows at phone width.
+  if (saved && saved.demoMenu) {
+    document.getElementById('s-controls').open = true;
+    setTimeout(function () { document.getElementById(saved.demoMenu).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })); }, 300);
   }
   // The filter chips are the page's own: one meal at a time, as an author would write them.
   document.querySelectorAll('.yc-filter').forEach(function (b) {
