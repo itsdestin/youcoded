@@ -462,6 +462,30 @@ function connectedPages(): PageDocument[] {
       html: WEEKLY_BRIEFING_HTML,
       connections: [{ id: 'start-session', kind: 'session', approved: false }],
     },
+    {
+      // Pages read and change chats, and run a program (spec 2026-10-16): the
+      // shape of Destin's management page — every chat with change, its own
+      // program, and Start a chat. Opens on its approval card.
+      ...base, id: 'page-work-board', name: 'Work board', icon: 'list',
+      description: 'Every piece of work, the chats on each, and buttons to start, resume or merge.',
+      updatedAt: '2026-10-16T09:00:00.000Z', htmlStamp: 1792141200000,
+      html: simplePage('youcoded-dev', 'Work board', [['#75 Choose skills per project', 'Agentic buildout'], ['#1 Rebuild the Android app', 'Agentic buildout']]),
+      connections: [
+        { id: 'chats', kind: 'chats', access: 'full', scope: { all: true }, approved: false },
+        { id: 'helper', kind: 'program', file: 'work-items.mjs', approved: false },
+        { id: 'start-session', kind: 'session', approved: false },
+      ],
+    },
+    {
+      // The narrow case: look only, one project, nothing else — so no
+      // "could send your chat list" line.
+      ...base, id: 'page-project-chats', name: 'Project chats', icon: 'notes',
+      home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
+      description: 'This project\'s chats, newest first, with a Resume button on each.',
+      updatedAt: '2026-10-16T09:00:00.000Z', htmlStamp: 1792141200000,
+      html: simplePage('youcoded', 'Project chats', [['Status bar names the repo', 'today'], ['Android rebuild wrap-up', 'yesterday']]),
+      connections: [{ id: 'chats', kind: 'chats', access: 'lookup', scope: { projects: ['youcoded'] }, approved: false }],
+    },
   ];
 }
 

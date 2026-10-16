@@ -24,6 +24,9 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('pages/page/page-link-reader', 'view', 'approval'),
   // Page start session (spec 2026-10-14): the new-conversation line on the card.
   pg('pages/page/page-weekly-briefing', 'view', 'approval'),
+  // Pages read chats and run a program (spec 2026-10-16).
+  pg('pages/page/page-work-board', 'view', 'approval'),
+  pg('pages/page/page-project-chats', 'view', 'approval'),
   // Home-device deck (2026-10-01): a device line, with its address box.
   pg('pages/page/page-home', 'view', 'approval'),
   { ...pg('pages/page/page-home#key', 'view', 'approval'), params: { pagesStep: 'keys' } },

@@ -138,7 +138,25 @@ export type PageConnection =
    *  settings. WHY its approval ignores the page's code: nothing is sent until
    *  the person reads the message and presses Start, so a rebuilt page.html
    *  (Frontier Lab bakes its data in weekly) must never re-ask. */
-  | { id: string; kind: 'session' };
+  | { id: string; kind: 'session' }
+  /** The person's chat list (spec 2026-10-16, pages read and change chats).
+   *  `lookup` reads names, dates, tags, notes, projects, models, branch and
+   *  whether a chat is open, and offers Resume after a click; `full` may also
+   *  set tags, notes and the pinned/complete marks (Destin, deck Q-2: "also
+   *  change tags and notes", a separate approval — so the access rides the
+   *  fingerprint and widening it re-asks). Never what was said in a chat.
+   *  `scope` is what the page names (deck Q-1): every chat, chats in named
+   *  projects, or chats with one tag; the card says exactly that. */
+  | { id: string; kind: 'chats'; access: PageAccess; scope: PageChatScope }
+  /** A program kept in the page's own folder, run on this computer with the
+   *  person's full account access (Pages scope §9, spec 2026-10-16). WHY its
+   *  approval follows the program file, not page.html: what runs is the
+   *  program, so an edited program must ask again and an edited page need not.
+   *  `file` is relative to the page's folder and never leaves it. */
+  | { id: string; kind: 'program'; file: string };
+
+/** Which chats a `chats` connection covers. */
+export type PageChatScope = { all: true } | { projects: string[] } | { tag: string };
 
 /** The longest message a page may put in the new-conversation window. A guard
  *  against a broken page, not a content rule: the whole message is shown to

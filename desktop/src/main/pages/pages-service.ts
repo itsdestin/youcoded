@@ -548,6 +548,9 @@ class PagesService {
       case 'open':
       case 'plaid':
       case 'session':
+      // App abilities, never a fetch destination (covers() refuses them first).
+      case 'chats':
+      case 'program':
         return null;
       case 'device':
       case 'key': {
