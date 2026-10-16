@@ -17,10 +17,7 @@
 // vocabulary ContextTab uses (Always / Always · everywhere / When editing… /
 // On recall / Index).
 import React, { useState } from 'react';
-import { Scrim, OverlayPanel } from '../overlays/Overlay';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { CloseButton } from '../ui';
-import { ScreenMark } from '../../shoot-mode';
+import { Dialog, SectionLabel } from '../ui';
 
 // The five teaching topics. `overview` is the broad→specific stack; the other
 // four are per-kind deep dives.
@@ -117,13 +114,10 @@ const INFO_TABS: { id: InfoTabId; label: string; Icon: React.ComponentType<IconP
 
 // ── Reusable sub-components for the topic pages ─────────────────────────────
 
-// Small uppercase micro-label (the prototype's `.lbl`).
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Was the prototype's `.lbl`.
 function MicroLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-      {children}
-    </div>
-  );
+  return <SectionLabel>{children}</SectionLabel>;
 }
 
 // Topic page: icon header + facts strip + What/When sections + example block.
@@ -146,13 +140,16 @@ function TopicPage({ data }: { data: TopicPageData }) {
           <Icon size={20} />
         </span>
         <div className="min-w-0">
-          <h3 className="text-lg font-semibold text-fg leading-tight font-mono">{data.heading}</h3>
+          {/* WHY 16px medium (the heading ladder's Large; final review F16): it was 18px semibold,
+              bigger than the popup's own 16px title. */}
+          <h3 className="text-base font-medium text-fg leading-tight font-mono">{data.heading}</h3>
           <p className="text-xs text-fg-muted mt-0.5">{data.tag}</p>
         </div>
       </div>
 
       {/* Facts strip: Scope · When it loads · Lives at */}
-      <div className="flex flex-wrap gap-x-6 gap-y-2 mb-4 pb-4 border-b border-edge-dim">
+      {/* WHY no line under it (guide "Card levels": no line crosses a popup) — spacing separates. */}
+      <div className="flex flex-wrap gap-x-6 gap-y-2 mb-5">
         {data.facts.map(([label, value]) => (
           <div key={label}>
             <MicroLabel>{label}</MicroLabel>
@@ -173,9 +170,13 @@ function TopicPage({ data }: { data: TopicPageData }) {
       {data.example && (
         <>
           <MicroLabel>Example</MicroLabel>
-          <pre className="bg-inset border border-edge-dim rounded-lg p-3 text-xs font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mt-1.5 mb-0">
-            {data.example}
-          </pre>
+          {/* WHY a frame around the <pre> (2026-10-15, the one scroll fade): the fade is a mask,
+              so on the box itself it would fade the border and fill too; only the text fades. */}
+          <div className="bg-inset border border-edge-dim rounded-lg overflow-hidden mt-1.5">
+            <pre className="scroll-mask-x p-3 text-xs font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mb-0">
+              {data.example}
+            </pre>
+          </div>
         </>
       )}
     </div>
@@ -293,7 +294,7 @@ interface OverviewLayer {
   path: string;
   timing: string;
 }
-// WHY the labels: renamed with the tab ("Instructions & Memories") so the
+// WHY the labels: renamed with the tab ("Instructions & memories") so the
 // overview's vocabulary matches what the user just clicked.
 const OVERVIEW_LAYERS: OverviewLayer[] = [
   { Icon: GlobeIcon, label: 'Global instructions', path: '~/.claude/CLAUDE.md', timing: 'Always · every project' },
@@ -305,8 +306,9 @@ const OVERVIEW_LAYERS: OverviewLayer[] = [
 function OverviewPage() {
   return (
     <div>
-      <h3 className="text-lg font-semibold text-fg leading-tight">How context works</h3>
-      <p className="text-xs text-fg-muted mt-0.5 mb-4">
+      {/* WHY no second "How context works" heading: the popup's own title already says it
+          (final review F16 — it was an 18px heading repeating the title). */}
+      <p className="text-xs text-fg-muted mb-4">
         Everything Claude reads before it starts — and which wins when they disagree.
       </p>
       <p className="text-sm-tight text-fg-2 leading-relaxed mb-3.5">
@@ -379,34 +381,34 @@ function renderPage(tab: InfoTabId): React.ReactNode {
 export function HowContextWorksPopup({ initialTab, onClose }: HowContextWorksPopupProps) {
   const [activeTab, setActiveTab] = useState<InfoTabId>(initialTab);
 
-  // ESC closes via the centralized LIFO stack (same approach as
-  // ProjectDetailOverlay / the other project-view overlays).
-  useEscClose(true, onClose);
-
+  // WHY the shared popup (final review F16; decisions "Popup and side-panel titles", "Closing
+  // popups"): this was hand-built — its own header with a full-width line under it and its own
+  // Esc handling. The shared Dialog draws the 16px title, the ✕ and the tapered line, and owns
+  // Esc. Its two-pane body (a page list beside the page) is the `wide` size Assistant settings
+  // uses, with the body laid out here (scrollBody off), like that window.
   return (
-    <>
-      <Scrim layer={2} onClick={onClose} />
-      <OverlayPanel
-        layer={2}
-        role="dialog"
-        aria-modal
-        aria-label="How context works"
-        className="fixed left-1/2 top-[8%] -translate-x-1/2 w-[min(820px,94vw)] max-h-[84vh] flex flex-col"
-      >
-        <ScreenMark name="projects/context/how" />
-        {/* Header */}
-        <header className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
-          <span className="text-base font-semibold text-fg">How context works</span>
-          <CloseButton onClick={onClose} title="Close" />
-        </header>
-
+    <Dialog
+      open
+      onClose={onClose}
+      title="How context works"
+      size="wide"
+      fill
+      scrollBody={false}
+      screen="projects/context/how"
+    >
         {/* Body: left nav + scrollable content */}
         {/* Stacks below 640px: a shrink-0 190px nav beside content in a 367px
             panel left ~176px for the column, ~136px after its own padding.
             Narrow turns the nav into a horizontal scroll strip on top. */}
-        <div className="flex-1 flex flex-col sm:flex-row min-h-0">
+        <div className="flex-1 flex flex-col sm:flex-row min-h-0 gap-2 sm:gap-0">
           {/* Left nav column */}
-          <aside className="w-full sm:w-[190px] shrink-0 border-b sm:border-b-0 sm:border-r border-edge-dim p-2 flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible overflow-y-auto no-scrollbar sm:[scrollbar-width:auto]">
+          {/* WHY no border-b on narrow: a line across the popup (guide "Card levels"). */}
+          {/* WHY scroll-mask on an inner box (2026-10-15, the one scroll fade): it fades whichever
+              way this nav scrolls — sideways as the phone strip, down as the desktop column. The
+              divider stays on the outer box, because the fade is a mask and would otherwise fade
+              the divider line at its ends too. */}
+          <div className="w-full sm:w-[190px] shrink-0 sm:border-r border-edge-dim flex min-h-0">
+          <aside className="scroll-mask flex-1 min-w-0 min-h-0 p-2 flex flex-row sm:flex-col gap-1 overflow-x-auto sm:overflow-x-visible overflow-y-auto no-scrollbar sm:[scrollbar-width:auto]">
             {INFO_TABS.map((t) => {
               const active = t.id === activeTab;
               const { Icon } = t;
@@ -431,13 +433,13 @@ export function HowContextWorksPopup({ initialTab, onClose }: HowContextWorksPop
               );
             })}
           </aside>
+          </div>
 
           {/* Scrollable content column */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 min-w-0">
+          <div className="scroll-mask flex-1 overflow-y-auto px-3 py-4 sm:px-5 sm:py-5 min-w-0">
             {renderPage(activeTab)}
           </div>
         </div>
-      </OverlayPanel>
-    </>
+    </Dialog>
   );
 }

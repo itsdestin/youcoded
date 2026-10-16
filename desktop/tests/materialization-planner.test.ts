@@ -5,7 +5,9 @@ import { PROJECT_REGISTRY_SCHEMA, type ProjectRegistryEntry } from '../src/main/
 import type { SyncSpace } from '../src/main/sync-spaces/types';
 
 const E = (name: string, state: 'active' | 'stopped' = 'active'): ProjectRegistryEntry =>
-  ({ schemaVersion: PROJECT_REGISTRY_SCHEMA, name, repoName: `r-${name}`, displayName: name, state, updatedAt: 1 });
+  ({ schemaVersion: PROJECT_REGISTRY_SCHEMA, name, repoName: `r-${name}`, displayName: name, state, updatedAt: 1,
+    // description fields are required on the entry type; the planner never reads them.
+    description: null, descriptionUpdatedAt: 0 });
 const projSpace = (name: string): SyncSpace => ({ id: `project:${name}`, kind: 'project', root: `/p/${name}` });
 const personalSpace: SyncSpace = { id: 'personal', kind: 'personal', root: '/personal' };
 

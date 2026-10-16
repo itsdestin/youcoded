@@ -10,17 +10,20 @@ import { RENDERER, readStripped, relPath, lineAt, assertPatternMatches } from '.
 // the design guide records it (SettingRow row). On 2026-09-16 a session built one
 // anyway — a native <details> with the browser's left-hand triangle — and he
 // rejected it twice before it became a Callout with a right-aligned chevron.
-// The guide sentence did not stop it; this test does. Use `SettingRow`
-// (`expanded`) or `<Callout collapsible>`, which hide the marker themselves.
+// The guide sentence did not stop it; this test does. Use `<FoldRow>` (the
+// shared fold-out row), `SettingRow` (`expanded`) or `<Callout collapsible>`,
+// which hide the marker themselves.
 //
 // A <summary> passes when its className hides the marker (`list-none`).
 
 // Existing ones, left alone on purpose: restyling them is Destin's call
 // (roadmap: user-interface.md). Keyed by file → count, so a NEW one in the same
 // file still fails.
-const KNOWN: Record<string, number> = {
-  'components/SyncPanel.tsx': 2,
-};
+// Empty since fix batch 2 (2026-09-26): SyncPanel's two ("Show details" on the
+// sync error and on a warning) became buttons inside their notice box, and its
+// "Sync log" toggle became a FoldRow (decisions.md P-1/P-2). Kept as a table so
+// a future known exception has somewhere visible to go.
+const KNOWN: Record<string, number> = {};
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -54,6 +57,6 @@ describe('no bare disclosure triangles', () => {
         offenders.push(...hits.map((m) => `${rel}:${lineAt(src, m.index ?? 0)}`));
       }
     }
-    expect(offenders, 'use SettingRow (expanded) or <Callout collapsible> — Destin hates bare dropdowns').toEqual([]);
+    expect(offenders, 'use <FoldRow>, SettingRow (expanded) or <Callout collapsible> — Destin hates bare dropdowns').toEqual([]);
   });
 });

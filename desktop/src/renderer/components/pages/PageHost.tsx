@@ -21,7 +21,7 @@
 // toggle, file browser, or games panel). the old page icon page will now only
 // be accessible via manage pages."
 //
-//   ┌ [⚙][▤][▢]              ◷ Page name                    [Back to chat Esc] [– □ ×] ┐
+//   ┌ [⚙][▤][▢]              ◷ Page name                    [Esc · Back to chat] [– □ ×] ┐
 //   │╭─────────────────────╮ ╭──────────────────────────────────────────────────╮│
 //   ││ every page, grouped, │ │  the page — or "No page selected"                ││
 //   ││ pin beside each      │ │                                                  ││
@@ -43,7 +43,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
-import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
+import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
@@ -55,7 +55,7 @@ import { PagesEmptyCard } from './PagesEmptyCard';
 import type { PageStartSessionRequest } from './PageCreateDialog';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { usePageSockets } from './use-page-sockets';
-import { PAGE_KIT_CSS } from './page-kit';
+import { PAGE_EDGES_MESSAGE, PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
@@ -295,8 +295,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown; top?: unknown; bottom?: unknown } | null;
       if (!d) return;
+      // WHY the frame carries the page document's scroll fade (pages-kit-questions #7: every scrolling
+      // area in a Page uses the app's one fade, the page itself included): the page's kit reports which
+      // edges hide more, and the frame fades there (scroll-mask.css .scroll-mask-frame). Written straight
+      // onto the element — a flag flip per edge reached, never a React render.
+      if (d.type === PAGE_EDGES_MESSAGE) {
+        const f = frameRef.current;
+        if (f) { f.dataset.fadeTop = String(d.top === true); f.dataset.fadeBottom = String(d.bottom === true); }
+        return;
+      }
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
@@ -498,8 +507,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         settingsDangerBadge={settingsDangerBadge}
         active={pageFocus ? null : 'pages'}
         onBack={backToChat}
+        // WHY icon for Pages home too (decisions "Full-screen titles", H-1: every full
+        // screen's title carries its icon): an open page shows its own glyph; the
+        // page list showed none.
+        icon={summary ? <PageGlyph icon={summary.icon} className="w-4 h-4" /> : <PagesIcon className="w-4 h-4" />}
         title={<>
-          {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
           <span className="truncate">{title || 'Pages'}</span>
           {/* Freshness belongs to the app, not the page (deck Q-last-updated):
               same place on every connected page, and true because the app made
@@ -519,7 +531,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
         <aside className={`screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
-          <div className="flex-1 overflow-y-auto p-2">
+          <div className="scroll-mask flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
               <RailGroup label="Built in">
                 {builtin.map((p) => (
@@ -578,7 +590,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
           {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}
           {emptyPages && (
-            <div className="absolute inset-0 overflow-y-auto flex flex-col">
+            <div className="scroll-mask absolute inset-0 overflow-y-auto flex flex-col">
               <PagesEmptyCard onMake={onCreatePage} />
             </div>
           )}
@@ -606,7 +618,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               ref={frameRef}
               srcDoc={load.doc}
               sandbox="allow-scripts allow-popups allow-forms"
-              className={`absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
+              className={`scroll-mask-frame absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
               title={title}
             />
           )}
@@ -618,10 +630,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function RailGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="pb-2">
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1">{label}</div>
+      {/* Padding on a wrapper — SectionLabel owns only margin/layout
+          (design lint no-restyle). */}
+      <div className="px-2 pt-2 pb-1">
+        <SectionLabel>{label}</SectionLabel>
+      </div>
       {children}
     </div>
   );

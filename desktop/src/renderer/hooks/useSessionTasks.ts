@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSessionToolCalls } from '../state/chat-context';
+import { useSessionPreClearToolIds, useSessionToolCalls } from '../state/chat-context';
 import { buildTasksById, TaskState } from '../state/task-state';
 
 export const INACTIVE_STORAGE_KEY = 'youcoded-tasks-inactive-v1';
@@ -47,6 +47,8 @@ export function useSessionTasks(sessionId: string) {
   // the entire shell on every streamed word. Only the toolCalls Map is read,
   // and its identity survives text deltas.
   const toolCalls = useSessionToolCalls(sessionId);
+  // Tool calls from before the last /clear no longer belong to the conversation (final review F6).
+  const beforeClear = useSessionPreClearToolIds(sessionId);
   const [inactiveMap, setInactiveMap] = useState<InactiveMap>(() => readInactive());
 
   const sessionInactive = useMemo(
@@ -55,7 +57,7 @@ export function useSessionTasks(sessionId: string) {
   );
 
   // Derive tasks from the session's toolCalls (memoized on the Map ref).
-  const derived = useMemo(() => buildTasksById(toolCalls), [toolCalls]);
+  const derived = useMemo(() => buildTasksById(toolCalls, beforeClear), [toolCalls, beforeClear]);
 
   // Overlay markedInactive and sort by orderIndex ascending.
   const tasks = useMemo<TaskState[]>(() => {
@@ -76,6 +78,15 @@ export function useSessionTasks(sessionId: string) {
     const toClear = tasks
       .filter(t => t.markedInactive && t.status === 'completed')
       .map(t => t.id);
+    // WHY also flags for to-do items that left the list (final review F37): TodoWrite ids are built
+    // from the item's words, so a reworded or dropped item left its "marked inactive" flag in
+    // localStorage forever. Only once a to-do list is showing — while a resumed conversation's tool
+    // calls are still loading there is no list, and its flags must survive that.
+    const liveTodo = tasks.filter(t => t.id.startsWith('todo:'));
+    if (liveTodo.length > 0) {
+      const live = new Set(liveTodo.map(t => t.id));
+      for (const id of sessionInactive) if (id.startsWith('todo:') && !live.has(id)) toClear.push(id);
+    }
     if (toClear.length === 0) return;
     setInactiveMap(prev => {
       const curr = new Set(prev[sessionId] ?? []);
@@ -88,7 +99,7 @@ export function useSessionTasks(sessionId: string) {
       writeInactive(next);
       return next;
     });
-  }, [tasks, sessionId]);
+  }, [tasks, sessionId, sessionInactive]);
 
   const counts = useMemo<Counts>(() => {
     let running = 0, pending = 0, completed = 0, inactive = 0;

@@ -95,7 +95,8 @@ function WindowRow({ label, win }: { label: string; win: PlanWindow }) {
     <div>
       <div className="flex justify-between text-xs mb-1">
         <span className="text-fg-muted">{label} · {formatResetsAt(win.resets_at)}</span>
-        <span className="tabular-nums" style={{ color }}>{Math.round(win.utilization)}%</span>
+        {/* The bar under it carries the colour; the number is the text colour (small-fixes-3#SF3-10). */}
+        <span className="tabular-nums text-fg-2">{Math.round(win.utilization)}%</span>
       </div>
       <ProgressBar percent={win.utilization} color={color} className="w-full" aria-label={label} />
     </div>

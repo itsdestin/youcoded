@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { HookRelay } from '../src/main/hook-relay';
 import { randomUUID } from 'crypto';
 
@@ -355,8 +355,7 @@ describe('HookRelay — hooks from a nested claude', () => {
     relay.on('hook-event', (e) => events.push(e));
     // Our own claude (pid 1000) announces itself first.
     await send({ hook_event_name: 'SessionStart', session_id: 'ours', source: 'startup', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(events).toHaveLength(1);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
     // A nested `claude` (pid 2000) inherits desk-1 and asks for permission.
     const { closedWithoutReply } = await send({
       hook_event_name: 'PermissionRequest', session_id: 'nested', tool_name: 'Bash',
@@ -367,8 +366,7 @@ describe('HookRelay — hooks from a nested claude', () => {
     expect(relay.hasPendingPermission('desk-1')).toBe(false);
     // Our own process is still heard.
     await send({ hook_event_name: 'PostToolUse', session_id: 'ours', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(events.map((e) => e.payload.session_id)).toEqual(['ours', 'ours']);
+    await vi.waitFor(() => expect(events.map((e) => e.payload.session_id)).toEqual(['ours', 'ours']));
   });
 
   // WHY: the owner gate (bugfix-integrations) and the unowned-ask pass-through
@@ -390,8 +388,7 @@ describe('HookRelay — hooks from a nested claude', () => {
     expect((relay as any).holdTimers.size).toBe(0);
 
     await send({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', _desktop_session_id: 'desk-1', _claude_pid: '1000' }, true);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(events.filter((e) => e.type === 'PermissionRequest')).toHaveLength(1);
+    await vi.waitFor(() => expect(events.filter((e) => e.type === 'PermissionRequest')).toHaveLength(1));
     expect(relay.hasPendingPermission('desk-1')).toBe(true);
     expect((relay as any).holdTimers.size).toBe(1);
   });

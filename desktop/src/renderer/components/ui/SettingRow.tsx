@@ -82,7 +82,19 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // cannot express open/closed. Taking the string by reference keeps one
 // definition; copying it is what the setting-row guards (the
 // no-hand-rolled-setting-row ast-grep rules) exist to stop.
-export const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/50 text-left transition-colors stepped-hover';
+// Card-levels sweep: this background+radius pair equals `CARD_LEVEL_1`
+// (cardLevels.ts) — kept as a plain string literal, not a template import,
+// because the ast-grep invariant that guards `stepped-hover` on this exact
+// constant only matches a plain string node (setting-row-base-is-stepped-hover.yml).
+// No longer exported (knip, 2026-09-27): PermissionsSection's FOLDER_HEADER
+// was the one external reader, and the card-levels sweep gave it its own
+// definition instead (a level-2 nested card no longer wants level-1's tint).
+// WHY border-edge-dim (round 4, 2026-09-28): kept equal to CARD_LEVEL_1 by
+// hand (a plain string literal, not an import — see the ast-grep guard below)
+// after Destin restored the level-1 border app-wide.
+// WHY surface-1 + border-edge-card (2026-09-28): same level marker and outline as
+// CARD_LEVEL_1, so a row nested inside a card re-levels itself (globals.css).
+const SETTING_ROW_BASE = 'surface-1 w-full flex items-center gap-3 px-3 py-2 bg-inset/50 border border-edge-card rounded-lg text-left transition-colors stepped-hover';
 
 /**
  * `items-center`, always — deviating from the spec's `items-start`.
@@ -108,7 +120,7 @@ export type SettingRowProps = {
   control?: React.ReactNode;
   /** Right-aligned read-only value. Shorthand for the value control slot. */
   value?: React.ReactNode;
-  /** Sits between the text column and the control — e.g. Backup & Sync's badge. */
+  /** Sits between the text column and the control — e.g. Backup & sync's badge. */
   accessory?: React.ReactNode;
   /**
    * Whole-row click. Renders a <button> with a chevron, so the row must not
@@ -144,6 +156,12 @@ export type SettingRowProps = {
   expanded?: boolean;
   /** Overrides the muted description color — e.g. Android's green "Connected". */
   descriptionClassName?: string;
+  /**
+   * The row IS its card's header, not a thing nested inside it (Destin,
+   * 2026-09-28: a boxed header inside the "Additional backups" card read as a
+   * card-in-card). Drops the row's own tint, outline and side padding.
+   */
+  header?: boolean;
   className?: string;
 };
 
@@ -164,6 +182,7 @@ export function SettingRow({
   expanded,
   disabled,
   descriptionClassName,
+  header = false,
   className = '',
 }: SettingRowProps) {
   const d = DENSITY[variant];
@@ -174,7 +193,11 @@ export function SettingRow({
   // that also takes a whole-row click is just as clickable as a nav row, and
   // gating this on `isButton` would have left those two rows looking inert.
   const clickable = !!onClick || !!onSelect;
-  const hover = clickable && !disabled ? ' hover:bg-inset cursor-pointer' : '';
+  // WHY a clickable HEADER row takes no tint of its own (Destin, submit-ticket-4#ST4-2: "i don't
+  // like when hover cuts off like this in an expanded card. the hard divider line at the bottom
+  // is bad"): it sits inside its card, so its own tint stopped in a hard line across the card
+  // where the opened content began. The card it heads lights up instead (FoldRow).
+  const hover = clickable && !disabled ? (header ? ' cursor-pointer' : ' hover:bg-inset cursor-pointer') : '';
 
   const label = typeof title === 'string' ? title : undefined;
 
@@ -221,7 +244,7 @@ export function SettingRow({
       {control &&
         (onClick ? (
           // A control row can still take a whole-row click — that is what the
-          // <label> wrappers around the Remote Access toggles used to buy. The
+          // <label> wrappers around the Remote access toggles used to buy. The
           // control must not let its own click bubble back up to the row, or
           // clicking the toggle would fire the handler twice and land back where
           // it started.
@@ -245,7 +268,9 @@ export function SettingRow({
     </>
   );
 
-  const cls = `${SETTING_ROW_BASE}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
+  // `header` swaps only the box, never the layout: same text column and control slot.
+  const base = header ? SETTING_ROW_BASE.replace('surface-1 ', '').replace(' px-3 py-2 bg-inset/50 border border-edge-card rounded-lg', ' py-1') : SETTING_ROW_BASE;
+  const cls = `${base}${hover} ${disabled ? 'opacity-50' : ''} ${className}`.trim();
 
   if (isButton) {
     return (

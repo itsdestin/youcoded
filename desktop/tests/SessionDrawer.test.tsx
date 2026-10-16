@@ -37,11 +37,45 @@ import { previewPage } from './helpers/preview-page';
 // each started with a fresh useMissingArtifacts cache; resetting it keeps one
 // section's checks from leaking into the next.
 afterEach(() => { cleanup(); __resetMissingArtifactsCache(); });
+// WHY: previews observe visibility in browsers, while jsdom has no
+// IntersectionObserver. Structure tests keep thumbnails below the fetch gate.
+beforeAll(() => {
+  (window as any).IntersectionObserver = class {
+    observe() {}
+    disconnect() {}
+    unobserve() {}
+    takeRecords() { return []; }
+  };
+});
 
 // A file whose only version in THIS session is 'delivered' is labelled
 // "delivered" in the Session Drawer — not "viewed" (it is more than a view)
 // and not "created" (it was not modified). Spec 2026-08-25 §4.2.
 describe('SessionDrawer — delivered label', () => {
+  it('centers filename and status beside an 84×48 preview without hiding the remove action', async () => {
+    const artifact: ArtifactRecord = {
+      id: 'preview', path: 'out/chart.png', kind: 'internal', absolutePath: null,
+      lastModified: new Date().toISOString(), status: 'active',
+      versions: [{ id: 'v1', ts: new Date().toISOString(), sessionId: 'sess', type: 'delivered', author: 'agent' }],
+      comments: [], tags: [],
+    };
+    const state = { ...initialArtifactState, sessionArtifacts: { sess: [artifact] }, drawerOpenBySession: { sess: true }, activeArtifactBySession: {} };
+    (window as any).claude = { artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) } };
+    const { container } = render(<ArtifactContext.Provider value={{ state, dispatch: vi.fn() }}>
+      <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
+    </ArtifactContext.Provider>);
+    const row = await screen.findByRole('button', { name: /^chart\.png/ });
+    const preview = row.querySelector('.w-21');
+    expect(preview).toBeTruthy();
+    expect(preview?.className).toContain('h-12');
+    expect(row.querySelector('.justify-center.gap-1')).toBeTruthy();
+    expect(container.querySelector('[data-session-files-scroll].scroll-mask')).toBeTruthy();
+    expect(container.querySelector('[data-session-files-header]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Remove chart\.png from this list/ })).toBeInTheDocument();
+    // A clipped card would shrink the remove button's coarse-pointer hit target.
+    expect(row.closest('.group')?.className).not.toContain('overflow-hidden');
+  });
+
   it('labels a delivered-only file "delivered"', async () => {
     const artifact: ArtifactRecord = {
       id: 'a1', path: 'out/chart.png', kind: 'internal', absolutePath: null,
@@ -470,9 +504,9 @@ describe('SessionDrawer previewing a past conversation', () => {
   // preview, which carries the Resume browser's own action card). The top bar
   // keeps the tag button and gains Complete; it no longer carries Resume.
   describe('Resume card at the foot of the preview (spec A2 reasons)', () => {
-    const resumeButton = () => screen.queryByRole('button', { name: 'Resume Session' });
+    const resumeButton = () => screen.queryByRole('button', { name: 'Resume session' });
 
-    it('offers the model picker and Resume Session when the conversation resolves resumable, and nothing in the top bar', async () => {
+    it('offers the model picker and Resume session when the conversation resolves resumable, and nothing in the top bar', async () => {
       mockWindowClaudeFor(okRow());
       renderDrawerWithPreview();
       await waitFor(() => expect(resumeButton()).toBeTruthy());
@@ -480,7 +514,7 @@ describe('SessionDrawer previewing a past conversation', () => {
       expect(screen.getByText('Model')).toBeTruthy();
       // A resume from here always opens a tab (chat search's path), so there is
       // no new-window switch.
-      expect(screen.queryByRole('switch', { name: 'Launch in New Window' })).toBeNull();
+      expect(screen.queryByRole('switch', { name: 'Launch in new window' })).toBeNull();
       // The old top-bar button is gone.
       expect(screen.queryByRole('button', { name: COPY.resume })).toBeNull();
     });
@@ -504,11 +538,11 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview({ ...PREVIEW, provider: 'native' });
       await waitFor(() => expect(resumeButton()).toBeTruthy());
       expect(resumeButton()).toBeDisabled();
-      // Skip Permissions is Claude-Code-only.
-      expect(screen.queryByRole('switch', { name: 'Skip Permissions' })).toBeNull();
+      // Skip permissions is Claude-Code-only.
+      expect(screen.queryByRole('switch', { name: 'Skip permissions' })).toBeNull();
     });
 
-    it('Resume Session dispatches youcoded:resume-session with the conversation and the picked options', async () => {
+    it('Resume session dispatches youcoded:resume-session with the conversation and the picked options', async () => {
       mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
       renderDrawerWithPreview();
       await waitFor(() => expect(resumeButton()).toBeTruthy());
@@ -554,8 +588,10 @@ describe('SessionDrawer previewing a past conversation', () => {
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
 
       expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('a note');
+      // An applied tag's pill carries ×, an unapplied one + (the Tags card, pick-menus-15).
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument();
+      // Session details shows the note as quoted words; clicking them edits it (session-details-2).
+      expect(screen.getByText('“a note”')).toBeInTheDocument();
     });
 
     it('applies a tag optimistically and keeps it applied once session:set-tag confirms', async () => {
@@ -564,13 +600,10 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const tagBtn = await screen.findByRole('button', { name: 'work' });
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'false');
-
-      fireEvent.click(tagBtn);
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // optimistic, before the write resolves
+      fireEvent.click(await screen.findByRole('button', { name: 'Add work' }));
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // optimistic, before the write resolves
       await waitFor(() => expect(setTag).toHaveBeenCalledWith(PREVIEW.id, 'tag_work', true));
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // still applied — the write succeeded
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // still applied — the write succeeded
     });
 
     it('rolls back an optimistic tag apply when session:set-tag reports {ok:false} — negative case for the test above', async () => {
@@ -579,13 +612,11 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const tagBtn = await screen.findByRole('button', { name: 'work' });
-
-      fireEvent.click(tagBtn);
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // optimistic
+      fireEvent.click(await screen.findByRole('button', { name: 'Add work' }));
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // optimistic
       // A failed write must not look like it succeeded (spec risk note) — the
       // chip un-applies once the refusal comes back.
-      await waitFor(() => expect(tagBtn).toHaveAttribute('aria-pressed', 'false'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add work' })).toBeInTheDocument());
     });
 
     it('rolls back a note edit when session:set-note reports {ok:false}', async () => {
@@ -597,14 +628,15 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All Sessions');
+      fireEvent.click(await screen.findByTitle('Edit note'));
+      const noteField = screen.getByRole('textbox', { name: 'Note' });
       expect(noteField).toHaveValue('original');
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
       // The UI must not keep a change the backend rejected.
-      await waitFor(() => expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('original'));
+      await waitFor(() => expect(screen.getByText('“original”')).toBeInTheDocument());
     });
 
     it('keeps a note edit once session:set-note confirms it — positive control for the rollback test above', async () => {
@@ -616,12 +648,13 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All Sessions');
+      fireEvent.click(await screen.findByTitle('Edit note'));
+      const noteField = screen.getByRole('textbox', { name: 'Note' });
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
-      expect(screen.getByPlaceholderText('A note for later — shows under All Sessions')).toHaveValue('edited');
+      await waitFor(() => expect(screen.getByText('“edited”')).toBeInTheDocument());
     });
   });
 });

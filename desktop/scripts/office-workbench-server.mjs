@@ -25,7 +25,9 @@ const DESKTOP = path.resolve(HERE, '..');
 const ROOT = path.join(DESKTOP, 'office-addon');
 const EDITORS = path.join(ROOT, 'editors');
 const FIXTURES = path.join(DESKTOP, 'src/renderer/dev/workbench/fixtures/office');
-const PORT = 4717;
+// YC_OFFICE_PORT: shoot starts this on a free port when another worktree's editor holds 4717
+// (scripts/shoot/office-editor.mjs in the workspace); the practice app follows `?officePort=`.
+const PORT = Number(process.env.YC_OFFICE_PORT) || 4717;
 
 const require = createRequire(import.meta.url);
 let x2t, protocolModule, themeFonts;
@@ -110,9 +112,11 @@ const server = createServer(async (req, res) => {
   try {
     const u = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
     const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
-    // Which checkout this server belongs to — shoot (scripts/shoot/office-editor.mjs) reuses a
-    // server only when it serves the same checkout it is photographing.
-    if (rel === 'yc-workbench-info') return send(200, JSON.stringify({ desktop: DESKTOP }), 'application/json');
+    // Which checkout this server belongs to, and which process it is — shoot
+    // (scripts/shoot/office-editor.mjs) uses a server only when it is the child shoot itself
+    // started. WHY the pid (final review F23): two runs starting together both saw the port free;
+    // the loser's child died, and the checkout alone made the winner's server look like its own.
+    if (rel === 'yc-workbench-info') return send(200, JSON.stringify({ desktop: DESKTOP, pid: process.pid }), 'application/json');
     if (rel === 'yc-fonts/css') {
       const css = await fonts.fetchFontCss(u.searchParams.get('u') ?? '');
       return css === null ? send(404, 'not found') : send(200, css, 'text/css');

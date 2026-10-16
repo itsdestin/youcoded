@@ -1,33 +1,66 @@
 // @vitest-environment jsdom
-// Settings → Browser: the two plain questions (which browser, show a window),
-// the things a person may want to undo, and the confirm before signing out.
+// Assistant settings → Browser: where the page lives, the two plain questions (which
+// browser, show a window), the things a person may want to undo, and the confirm
+// before signing out.
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import BrowserSettingsButton, { BrowserSettingsDialog, browserSettingsSummary } from '../src/renderer/components/browser/BrowserSettingsButton';
+import BrowserSettings from '../src/renderer/components/browser/BrowserSettings';
+import AssistantSettingsRow from '../src/renderer/components/assistant-settings/AssistantSettings';
 import { browserInfo, installBrowserBridge } from './helpers/browser-bridge';
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); delete (window as any).claude; });
+
+// Just enough of window.claude for Assistant settings to open (its General page).
+function stubAssistantSettings() {
+  // The General page reads two preferences from localStorage, which this test environment lacks.
+  const store = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) });
+  (window as any).claude = {
+    native: { supported: false },
+    providers: { list: async () => [], catalog: async () => [] },
+    models: { installed: async () => [], curated: async () => [], onDownloadProgress: () => () => {} },
+    firstRun: { getState: async () => ({ authMode: 'oauth', currentStep: 'COMPLETE' }) },
+    search: { list: async () => [] },
+    syncSpaces: { onEvent: () => () => {} },
+    on: { statusData: () => () => {} },
+    off: () => {},
+    folders: { list: async () => [] },
+    shell: { openExternal: () => {} },
+  };
+}
+const openAssistantSettings = () => {
+  render(<AssistantSettingsRow defaults={{ skipPermissions: false, model: 'sonnet', projectFolder: '' }} onDefaultsChange={() => {}} />);
+  fireEvent.click(screen.getByText('Assistant settings'));
+};
 
 describe('Settings → Browser', () => {
-  it('the row never starts the Browser\'s worker just by being drawn', () => {
+  // Destin, 2026-10-15 (browser-fit-1#N-1): the Browser is a page of Assistant settings,
+  // not its own row in Settings.
+  it('is a page of Assistant settings, and opening the panel never starts the Browser\'s worker', async () => {
+    stubAssistantSettings();
     const b = installBrowserBridge();
-    render(<BrowserSettingsButton />);
-    expect(screen.getByText('Browser')).toBeInTheDocument();
+    openAssistantSettings();
+    const page = await screen.findByRole('button', { name: 'Browser' });
     expect(b.bridge.info).not.toHaveBeenCalled();
+    fireEvent.click(page);
+    expect(await screen.findByText('Which browser')).toBeInTheDocument();
+    expect(b.bridge.info).toHaveBeenCalled();
   });
 
-  it('is absent where the Browser is not supported', () => {
+  it('has no page where the Browser is not supported', async () => {
+    stubAssistantSettings();
     installBrowserBridge();
     (window as any).claude.capabilities = { assistantBrowser: false };
-    const { container } = render(<BrowserSettingsButton />);
-    expect(container).toBeEmptyDOMElement();
+    openAssistantSettings();
+    expect(await screen.findByRole('button', { name: 'General' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
   });
 
   it('switches the window on and off, and between the assistant\'s browser and My Chrome', async () => {
     const b = installBrowserBridge();
-    render(<BrowserSettingsDialog onClose={() => {}} />);
+    render(<BrowserSettings />);
     fireEvent.click(await screen.findByRole('switch', { name: 'Show a browser window' }));
     await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(true));
     fireEvent.click(screen.getByText('My Chrome (Experimental)'));
@@ -39,7 +72,7 @@ describe('Settings → Browser', () => {
 
   it('asks first when switching would restart the browser for chats with pages open', async () => {
     const b = installBrowserBridge(browserInfo({ sessionsWithTabs: 2 }));
-    render(<BrowserSettingsDialog onClose={() => {}} />);
+    render(<BrowserSettings />);
     fireEvent.click(await screen.findByRole('switch', { name: 'Show a browser window' }));
     expect(screen.getByText(/This restarts the browser for 2 chats using it/)).toBeInTheDocument();
     expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
@@ -49,7 +82,7 @@ describe('Settings → Browser', () => {
 
   it('lists the always-allowed sites, each removable', async () => {
     const b = installBrowserBridge(browserInfo({ settings: { ...browserInfo().settings, alwaysAllowedSites: ['github.com'] } }));
-    render(<BrowserSettingsDialog onClose={() => {}} />);
+    render(<BrowserSettings />);
     expect(await screen.findByText('github.com')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(b.bridge.removeSite).toHaveBeenCalledWith('github.com'));
@@ -57,7 +90,7 @@ describe('Settings → Browser', () => {
 
   it('signing out of every site asks first', async () => {
     const b = installBrowserBridge();
-    render(<BrowserSettingsDialog onClose={() => {}} />);
+    render(<BrowserSettings />);
     fireEvent.click(await screen.findByRole('button', { name: 'Clear' }));
     expect(screen.getByText(/The assistant's browser closes and forgets every sign-in/)).toBeInTheDocument();
     expect(b.bridge.clearSignins).not.toHaveBeenCalled();
@@ -67,16 +100,15 @@ describe('Settings → Browser', () => {
 
   it('with no browser installed it offers the download, and shows a failed one\'s real reason', async () => {
     const b = installBrowserBridge(browserInfo({ browsers: [], chosen: null, install: { phase: 'failed', error: 'ENOSPC: no space left on device' } }));
-    render(<BrowserSettingsDialog onClose={() => {}} />);
+    render(<BrowserSettings />);
     expect(await screen.findByText(/No Chrome, Edge, Chromium or Brave was found/)).toBeInTheDocument();
-    expect(screen.getByText("The download didn't finish: ENOSPC: no space left on device")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    // One plain sentence; the installer's own words wait under Details inside the box (guide "Status
+    // and notices": machine words never in the sentence).
+    expect(screen.getByText("The download didn't finish.")).toBeInTheDocument();
+    expect(screen.queryByText(/ENOSPC/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText(/ENOSPC: no space left on device/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' })); // every retry reads "Try again" (error-notices-1#EN-Q1)
     await waitFor(() => expect(b.bridge.download).toHaveBeenCalled());
-  });
-
-  it('summarises the choice on the row', () => {
-    expect(browserSettingsSummary(browserInfo())).toBe('Google Chrome · hidden');
-    expect(browserSettingsSummary(browserInfo({ settings: { ...browserInfo().settings, useMyChrome: true } }))).toBe('My Chrome (Experimental)');
-    expect(browserSettingsSummary(browserInfo({ chosen: null, install: { phase: 'downloading', percent: 12 } }))).toBe('Downloading… 12%');
   });
 });

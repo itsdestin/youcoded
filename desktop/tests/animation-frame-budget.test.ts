@@ -116,7 +116,7 @@ describe('motion vocabulary', () => {
     expect(globals).not.toMatch(/session-pill--veiled[^}]*animation/);
   });
 
-  it('gates the arrival animation on reduced motion AND Reduce Visual Effects', () => {
+  it('gates the arrival animation on reduced motion AND Reduce visual effects', () => {
     expect(globals).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*\.switch-arrival[^}]*\}/);
     expect(globals).toMatch(/\[data-reduced-effects\] \.switch-arrival/);
     // The veil is a plain class, not an animation — nothing to gate.

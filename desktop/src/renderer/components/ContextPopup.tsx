@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Dialog, Textarea } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, SectionLabel, SegmentedTabs, Textarea } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
@@ -14,12 +14,8 @@ function hintFor(pct: number): string {
   return 'Very low — compact now or your assistant may start forgetting earlier context.';
 }
 
-// Match the color function in StatusBar.tsx exactly so the popup number tracks the chip.
-function contextColor(pct: number): string {
-  if (pct < 20) return 'text-[#DD4444]';
-  if (pct < 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
-}
+// (The red/amber/green number colour went with small-fixes-3#SF3-10: status colour never colours
+// words or numbers. The hint line under the number already says what the level means.)
 
 // Explainer content — plain language for non-developer users.
 // Uses curly apostrophes and em-dashes intentionally; do not replace with straight quotes or hyphens.
@@ -126,10 +122,15 @@ export default function ContextPopup({
           <SettingsExplainer intro={INFO_INTRO} sections={INFO_SECTIONS} />
         ) : (
           <>
-            {/* Current state */}
-            <div className="px-4 py-4 space-y-3">
-              <div className="text-center">
-                <div className={`text-3xl font-bold ${contextColor(pct)}`}>
+            {/* WHY three labelled cards (final-review#ST-21/#PR-7, the one popup rule — group like
+                About): the reading, the status-bar choice and the two actions with their line sat
+                bare on the popup, split by a full-width line (guide: no line crosses a popup). The
+                reading is the card about the popup's subject, so it is unlabelled; the actions get
+                the label "This conversation", since both act on it. Same words and controls. */}
+            <div className="px-4 py-4 space-y-4">
+              {/* Current state */}
+              <div className={`${CARD_LEVEL_1} p-3 text-center`}>
+                <div className="text-3xl font-bold text-fg">
                   {contextPercent != null ? `${contextPercent}%` : '--'}
                 </div>
                 {contextTokens != null && (
@@ -157,40 +158,46 @@ export default function ContextPopup({
                   Preferences popup because this is where the user is already
                   thinking about the number the pill shows. Presentation only —
                   the color band is driven by the percentage in BOTH modes. */}
-              <div className="pt-1">
-                <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1.5">
+              <section>
+                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+                <SectionLabel className="mb-2">
                   Status bar shows
-                </div>
-                <div role="radiogroup" aria-label="Context pill display" className="flex w-full rounded-lg overflow-hidden border border-edge-dim">
-                  {(['percent', 'tokens'] as const).map((mode, i) => (
-                    <button
-                      key={mode}
-                      role="radio"
-                      aria-checked={contextDisplay === mode}
-                      onClick={() => setContextDisplay(mode)}
-                      className={`flex-1 py-1.5 px-2 text-xs transition-colors ${i === 1 ? 'border-l border-edge-dim' : ''} ${
-                        contextDisplay === mode
-                          ? 'bg-accent text-on-accent font-medium'
-                          : 'bg-panel text-fg-2 hover:bg-inset'
-                      }`}
-                    >
-                      {mode === 'percent' ? 'Percentage' : 'Token counts'}
-                    </button>
-                  ))}
-                </div>
+                </SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3`}>
+                {/* WHY the shared tab strip (guide: "2–4 short choices / a view switch →
+                    SegmentedTabs"): this was a hand-built two-button switch with its own
+                    border, divider line and fixed corner — the only view switch in the app not
+                    on the shared piece. `nested` because it sits inside a first-level card,
+                    the same look Context and Session naming use in Assistant settings. Same
+                    two choices, same stored value. */}
+                <SegmentedTabs
+                  variant="nested"
+                  aria-label="Context pill display"
+                  value={contextDisplay}
+                  onChange={(id) => setContextDisplay(id as 'percent' | 'tokens')}
+                  tabs={[
+                    { id: 'percent', label: 'Percentage' },
+                    { id: 'tokens', label: 'Token counts' },
+                  ]}
+                />
                 <p className="text-2xs text-fg-muted mt-1 leading-snug">
                   {contextDisplay === 'percent'
                     ? 'Pill reads “Context: 45% Remaining”.'
                     : 'Pill reads “Context: 35.2k / 64k” — tokens used out of the window.'}
                 </p>
-              </div>
-            </div>
+                </div>
+              </section>
 
             {/* Actions: default view shows split Compact + Clear; customizing shows the editor. */}
-            <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
+            <section>
+            <SectionLabel className="mb-2">This conversation</SectionLabel>
+            <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
               {customizing ? (
                 <div className="space-y-2">
-                  <label htmlFor="compact-instructions" className="block text-3xs font-medium text-fg-muted tracking-wider uppercase">
+                  {/* WHY: field caption drops the spaced-caps eyebrow (labels
+                      batch, guide: no spaced capitals). */}
+                  <label htmlFor="compact-instructions" className="block text-xs font-medium text-fg-muted">
                     Keep these priorities (optional)
                   </label>
                   {/* Change 42: this was the `border-edge rounded-sm focus:ring-1`
@@ -298,6 +305,8 @@ export default function ContextPopup({
                   </div>
                 </>
               )}
+            </div>
+            </section>
             </div>
           </>
         )}

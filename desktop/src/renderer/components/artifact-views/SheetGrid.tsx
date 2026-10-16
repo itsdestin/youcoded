@@ -77,6 +77,8 @@ const gutterBase: CSSProperties = {
   background: GUTTER_BG, color: GUTTER_FG, fontWeight: 500, textAlign: 'center',
   border: `1px solid ${GRID}`, userSelect: 'none', padding: 0, lineHeight: '16px',
 };
+// Stable (module-level) so the scroller's style object is not rebuilt per render.
+const SCROLLER_STYLE = { position: 'relative', outline: 'none', '--scroll-mask-over': `${HEADER_H}px`, '--scroll-mask-start': `${GUTTER_W}px` } as CSSProperties;
 const gutterTopStyle: CSSProperties = { ...gutterBase, position: 'sticky', top: 0, zIndex: 3, height: HEADER_H };
 const gutterCornerStyle: CSSProperties = { ...gutterBase, position: 'sticky', top: 0, left: 0, zIndex: 4, width: GUTTER_W, minWidth: GUTTER_W, height: HEADER_H };
 const gutterLeftStyle: CSSProperties = { ...gutterBase, position: 'sticky', left: 0, zIndex: 2, width: GUTTER_W, minWidth: GUTTER_W };
@@ -385,8 +387,12 @@ export const SheetGrid = forwardRef<SheetGridHandle, Props>(function SheetGrid(
 
   return (
     <div
-      className="flex-1 overflow-auto" ref={scrollerRef} onScroll={recompute} tabIndex={0}
-      onKeyDown={onKeyDown} onCopy={copy} style={{ position: 'relative', outline: 'none' }} {...scrollerProps}
+      // WHY the over/start insets (2026-10-15, the one scroll fade): the column letters and row
+      // numbers STICK to the top and left edges, so a plain edge fade would fade the headers
+      // themselves. The insets keep them solid and start the fade just past them, where the
+      // cells actually slide out of view.
+      className="scroll-mask flex-1 overflow-auto" ref={scrollerRef} onScroll={recompute} tabIndex={0}
+      onKeyDown={onKeyDown} onCopy={copy} style={SCROLLER_STYLE} {...scrollerProps}
     >
       <table
         style={{ borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 13, width: totalW }}

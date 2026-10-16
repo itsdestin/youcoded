@@ -21,6 +21,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
+import { ProjectsIcon } from '../screen-icons';
 import { workbenchScreenFrame } from '../../workbench-mode';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
@@ -40,6 +41,7 @@ import type { ResumeHandler } from '../ResumeOptions';
 import { ProjectHero, formatFileCount } from './ProjectHero';
 import { ProjectsEmptyCard } from './ProjectsEmptyCard';
 import { ProjectSwitcher } from './ProjectSwitcher';
+import { RemoveProjectDialog } from './RemoveProjectDialog';
 import { syncDotFor, findSpaceFor, lastSyncedLabel, type SyncStatusData } from '../sync-dot-state';
 import AddProjectModal from './AddProjectModal';
 import ImportProjectModal from '../ImportProjectModal';
@@ -84,7 +86,7 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, Checkbox, SearchFilterPill } from '../ui';
+import { Button, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { getCapabilities } from '../../platform';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
@@ -130,6 +132,40 @@ const baseName = (p: string): string => p.replace(/\\/g, '/').split('/').pop() |
 // same "/home/d/proj/.claude was NOT imported" three times, naming a directory
 // nobody tried to import. The destination is still reported (it's the real,
 // verified detail), it just isn't the subject of the sentence.
+/** What Remove does after the confirm, in order — pulled out of the component so each failure can
+ *  be tested without drawing Project View (final review F8).
+ *  - A synced project is removed everywhere first; its failure keeps the confirm open with the
+ *    service's own words, and nothing else runs.
+ *  - Then the saved-folder entry goes. For a plain folder that IS the removal, so its failure keeps
+ *    the confirm open. For a synced one the project is already gone, so a failure here is not shown.
+ *  - The refreshed project list is best effort: `projects: null` means "drop the removed one from
+ *    what is shown" — the dialog must close either way.
+ *  WHY: after a successful remove, a rejected folders.remove() or list refresh left the dialog stuck
+ *  open with an empty error line, though the project was already gone. */
+export async function runProjectRemove<P>(steps: {
+  removeSynced: (() => Promise<{ ok: boolean; error?: string } | undefined>) | null;
+  removeFolder: () => Promise<unknown>;
+  deleteSidecar: (() => Promise<unknown>) | null;
+  listProjects: () => Promise<{ ok: boolean; projects?: P[] } | undefined>;
+}): Promise<{ error: string; projects?: undefined } | { error: null; projects: P[] | null }> {
+  if (steps.removeSynced) {
+    const res = await steps.removeSynced().catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) }));
+    if (!res?.ok) return { error: res?.error || "This project couldn't be removed." };
+  }
+  try {
+    await steps.removeFolder();
+  } catch {
+    if (!steps.removeSynced) return { error: "This project couldn't be removed." };
+  }
+  if (steps.deleteSidecar) await steps.deleteSidecar().catch(() => {});
+  try {
+    const res = await steps.listProjects();
+    return { error: null, projects: res?.ok && res.projects ? res.projects : null };
+  } catch {
+    return { error: null, projects: null };
+  }
+}
+
 export function describeImportFailure(r: { error: string; detail?: string }, source?: string): string {
   const who = source ? baseName(source) : 'That file';
   if (r.error === 'needs-confirm') {
@@ -294,7 +330,8 @@ export function ProjectView(props: ProjectViewProps) {
 
   // Project deletion modal state.
   const [deletingProject, setDeletingProject] = useState<CentralIndexProject | null>(null);
-  const [alsoDeleteSidecar, setAlsoDeleteSidecar] = useState(false);
+  // Why the last Remove failed, in the service's own words (shown on the confirm).
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // Per-project sync state (spec §4) — feeds the hero sync line + switcher dots.
   const [syncStatus, setSyncStatus] = useState<SyncStatusData | null>(null);
@@ -316,15 +353,21 @@ export function ProjectView(props: ProjectViewProps) {
   useScreenOpen('projects/switcher', () => setSwitcherOpen(true));
   useScreenOpen('projects/add', () => { setSwitcherOpen(false); setAddOpen(true); });
   // Same modal the hero's "Turn on sync" button opens, seeded from the active project.
+  // The Remove confirm, one name per wording (backlog row 10): a plain folder, a synced
+  // project, a project whose folder is missing (that one needs `?projects=many`).
+  useScreenOpen('projects/remove', (sub) => {
+    const pick = projects.find((p) => sub === 'missing' ? p.missing
+      : sub === 'synced' ? !p.missing && !!findSpaceFor(p.path, syncStatus)
+      : !p.missing && !findSpaceFor(p.path, syncStatus));
+    if (pick) setDeletingProject(pick);
+  }, ['synced', 'missing']);
   useScreenOpen('projects/turn-on-sync', () => { if (activeProject) setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name }); });
 
   // ESC closes the browser via the shared LIFO stack — the header says
   // "Esc · Back to chat", so the key must actually work. Child overlays
   // (detail, switcher, editor, delete modal) register later → they pop first.
   useEscClose(projectViewOpen, () => dispatch({ type: 'PROJECT_VIEW_CLOSED' }));
-  // The delete-confirm modal takes Esc priority while open (registered after
-  // the browser's own handler because it mounts later — LIFO).
-  useEscClose(!!deletingProject, () => { setDeletingProject(null); setAlsoDeleteSidecar(false); });
+  // (The Remove confirm is the shared Dialog now, which registers its own Esc.)
   // The import-result modal likewise needs its own Esc handler now that it's
   // a real dialog instead of a Toast (a Toast never listened for Esc at all).
   useEscClose(!!importResult, () => setImportResult(null));
@@ -616,26 +659,33 @@ export function ProjectView(props: ProjectViewProps) {
     }
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = async (alsoDeleteSidecar: boolean) => {
     if (!deletingProject) return;
-    // The project list IS the saved-folders store now, so "Remove" removes the
-    // folder from that store (which also drops it from the new-session folder
-    // picker). Optionally wipe the artifact-history sidecar + any index entry.
-    await (window.claude as any).folders.remove(deletingProject.path);
-    if (alsoDeleteSidecar) {
-      await (window.claude as any).artifacts.deleteProject(deletingProject.id, true).catch(() => {});
-    }
-    // Refresh project list after removal.
-    const res = await (window.claude as any).artifacts.listProjectsIndex({ withCounts: true });
-    if (res && res.ok) {
-      setProjects(res.projects);
-      // If we removed the active project, select the first remaining one.
-      setActiveProject((prev) =>
-        prev?.path === deletingProject.path ? (res.projects[0] ?? null) : prev
-      );
-    }
+    // A synced project (a folder in ~/YouCoded/Projects) is removed EVERYWHERE first: sync
+    // stops on every device and it leaves every device's lists (Destin, project-switcher-1
+    // PQ-1). Files stay on every device; GitHub is untouched. A failure keeps the confirm
+    // open with the service's own words — nothing else is changed then.
+    const space = findSpaceFor(deletingProject.path, syncStatus);
+    const synced = !!space && !deletingProject.missing && space.id.startsWith('project:');
+    const removing = deletingProject;
+    // The project list IS the saved-folders store for plain folders, so "Remove" removes the
+    // folder from that store (which also drops it from the new-session folder picker); for a
+    // synced one this drops any saved entry the import flow wrote. Optionally wipe the
+    // artifact-history sidecar + any index entry. Order and failures: runProjectRemove above.
+    const out = await runProjectRemove<CentralIndexProject>({
+      removeSynced: synced ? () => (window.claude as any).syncSpaces.removeProject?.(space!.id.slice('project:'.length)) : null,
+      removeFolder: () => (window.claude as any).folders.remove(removing.path),
+      deleteSidecar: alsoDeleteSidecar ? () => (window.claude as any).artifacts.deleteProject(removing.id, true) : null,
+      listProjects: () => (window.claude as any).artifacts.listProjectsIndex({ withCounts: true }),
+    });
+    if (out.error !== null) { setRemoveError(out.error); return; }
+    // Refresh the project list; if the refresh failed, at least the removed one leaves the screen.
+    const next = out.projects ?? projects.filter((p) => p.path !== removing.path);
+    setProjects(next);
+    // If we removed the active project, select the first remaining one.
+    setActiveProject((prev) => (prev?.path === removing.path ? (next[0] ?? null) : prev));
     setDeletingProject(null);
-    setAlsoDeleteSidecar(false);
+    setRemoveError(null);
   };
 
   // Join the project root with the folder FilesTab is currently showing.
@@ -736,11 +786,11 @@ export function ProjectView(props: ProjectViewProps) {
   const SEGMENTS: { id: TabId; label: string; icon: React.ReactNode; count: string }[] = [
     { id: 'files', label: 'Files', icon: <FolderIcon />, count: formatFileCount(heroStats.files, heroStats.filesTruncated) },
     { id: 'conversations', label: 'Conversations', icon: <ChatIcon />, count: String(heroStats.conversations) },
-    // WHY "Instructions & Memories" (not "Context", which it was built as): the
+    // WHY "Instructions & memories" (not "Context", which it was built as): the
     // tab surfaces the files that tell the assistant HOW to behave — instructions
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
-    { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    { id: 'context', label: 'Instructions & memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
@@ -776,6 +826,8 @@ export function ProjectView(props: ProjectViewProps) {
         settingsBadge={props.settingsBadge}
         settingsDangerBadge={props.settingsDangerBadge}
         active="projects"
+        // WHY: every full screen's title carries its icon (decisions "Full-screen titles", H-1).
+        icon={<ProjectsIcon />}
         title="Projects"
         onBack={() => dispatch({ type: 'PROJECT_VIEW_CLOSED' })}
       />
@@ -792,7 +844,12 @@ export function ProjectView(props: ProjectViewProps) {
             ~200px slot under a hero that never moves. sm+ keeps the fixed-chrome
             layout (hero pinned, body scrolls independently) — there's vertical
             room for it there, and it's the design the view was built around. */}
-        <main className="screen-pane screen-pane--frame flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0 rounded-xl bg-canvas">
+        {/* WHY the phone scroll moved to an inner box (2026-10-15, the one scroll fade): the page
+            fades at its scrolled edges, and the fade is a mask — on <main> itself it would fade
+            the pane's own fill, rounded corners and frosted glass too. <main> stays the pane;
+            the inner box scrolls on phones and is a plain column at sm+, as <main> was. */}
+        <main className="screen-pane screen-pane--frame flex-1 flex flex-col overflow-hidden min-w-0 rounded-xl bg-canvas">
+        <div className="scroll-mask flex-1 min-h-0 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden">
           {/* No projects at all (first-run guide, spec §1 item 5): the
               explainer card replaces BOTH the hero and the seg-row + tab body —
               three tabs with "0" badges over nothing is a dashboard for nothing.
@@ -847,7 +904,11 @@ export function ProjectView(props: ProjectViewProps) {
                     console.warn('post-rename project list refresh failed', err);
                   }
                 }}
-                canRemove={!heroSpace}
+                // WHY every project now (backlog row 10: "there's no way to delete some
+                // projects currently"): a synced project can be removed from this
+                // computer's list too — folders-service keeps it off the list; its
+                // folder and sync are untouched.
+                canRemove
                 onRemove={() => setDeletingProject(activeProject)}
               />
             ) : (
@@ -868,10 +929,13 @@ export function ProjectView(props: ProjectViewProps) {
                   ("Conversations" alone is ~168px), which used to put the last
                   segment out of reach entirely. Two ~35px icons plus one
                   labelled segment fits inside ~374px with room to spare.
-                  overflow-x-auto stays as a backstop for a very long label at a
-                  very small width; it should not normally engage. */}
+                  No overflow-x-auto backstop (removed 2026-10-15, the one-fade pass):
+                  .layer-surface's unlayered `overflow: hidden` always beat it, so it
+                  never scrolled — it only marked the row as a scroll area. */}
               <div
-                className="flex items-center gap-1 p-1 layer-surface !rounded-full max-sm:w-full max-w-full overflow-x-auto no-scrollbar"
+                // WHY rounded-control-group / rounded-control (decisions "Control shape follows the
+                // theme"): the switcher takes the theme's control corner, not a fixed pill.
+                className="flex items-center gap-1 p-1 layer-surface !rounded-control-group max-sm:w-full max-w-full"
                 style={{ boxShadow: 'none' }}
               >
                 {SEGMENTS.map((s) => {
@@ -884,7 +948,7 @@ export function ProjectView(props: ProjectViewProps) {
                       // the pill spans the screen exactly; inactive ones stay
                       // at their icon width. title= carries the label for the
                       // icon-only state (aria-label does the same for AT).
-                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-full text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
+                      className={`shrink-0 ${active ? 'max-sm:flex-1 max-sm:min-w-0' : ''} px-2.5 sm:px-3.5 py-1.5 rounded-control text-sm-tight font-medium inline-flex items-center justify-center gap-1.5 sm:gap-2 transition-colors ${
                         active
                           ? 'bg-accent text-on-accent'
                           : 'text-fg-2 hover:text-fg hover:bg-inset'
@@ -1047,6 +1111,7 @@ export function ProjectView(props: ProjectViewProps) {
           </div>
           </>
           )}
+        </div>
         </main>
       </div>
 
@@ -1063,65 +1128,24 @@ export function ProjectView(props: ProjectViewProps) {
         />
       )}
 
-      {/* Project deletion confirmation modal — L3 (destructive confirmation)
-          via the shared overlay primitives so scrim/surface/z-index come from
-          theme tokens; Esc is handled by the useEscClose above. */}
-      {deletingProject && (
-        <>
-          <Scrim layer={3} onClick={() => { setDeletingProject(null); setAlsoDeleteSidecar(false); }} />
-          <OverlayPanel
-            layer={3}
-            destructive
-            role="dialog"
-            aria-modal={true}
-            aria-label="Remove project"
-            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-6 max-w-md w-[calc(100%-2rem)]"
-          >
-            <h3 className="text-lg font-semibold mb-2 text-fg">Remove project</h3>
-            <p className="mb-3 text-sm text-fg">
-              Remove "<span className="font-medium">{deletingProject.name}</span>" from YouCoded?
-            </p>
-            <p className="text-sm text-fg-muted mb-3">
-              The folder and its files are NOT deleted — this only removes it from your
-              YouCoded folders, so it also disappears from the new-session folder picker.
-              You can add it back anytime with "Add a project" in the project switcher.
-            </p>
-            {/* Change 39/§1.4: the consent Checkbox primitive (its one intended
-                site). Row is a clickable div (a <label> can't associate with a
-                button), so the whole row toggles like the old label did. The
-                Checkbox is wrapped in a stopPropagation span so its OWN click
-                fires exactly one toggle instead of double-firing via the row. */}
-            <div
-              className="flex items-center gap-2 mb-4 text-sm cursor-pointer text-fg"
-              onClick={() => setAlsoDeleteSidecar((v) => !v)}
-            >
-              <span onClick={(e) => e.stopPropagation()}>
-                <Checkbox
-                  checked={alsoDeleteSidecar}
-                  onChange={setAlsoDeleteSidecar}
-                  aria-label="Also delete .youcoded/artifacts.json (artifact history)"
-                />
-              </span>
-              Also delete <code className="font-mono text-xs bg-inset px-1 rounded">.youcoded/artifacts.json</code> (artifact history)
-            </div>
-            <div className="flex gap-2 justify-end">
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => { setDeletingProject(null); setAlsoDeleteSidecar(false); }}
-              >
-                Cancel
-              </Button>
-              {/* Was a raw Tailwind bg-red-600. Spec decision 59: that stock red
-                  isn't the app's destructive colour and doesn't follow themes —
-                  the `danger` variant uses the theme's own destructive token. */}
-              <Button variant="danger" size="lg" onClick={confirmDelete}>
-                Remove
-              </Button>
-            </div>
-          </OverlayPanel>
-        </>
-      )}
+      {/* Remove confirm — the shared Dialog (backlog row 10). It says what removing does for
+          this kind of project; it never deletes the folder or the user's files. */}
+      {deletingProject && (() => {
+        const space = findSpaceFor(deletingProject.path, syncStatus);
+        const kind = deletingProject.missing ? 'missing' : space ? 'synced' : 'folder';
+        const shown = (space as { displayName?: string } | null)?.displayName || deletingProject.name;
+        return (
+          <RemoveProjectDialog
+            name={shown}
+            kind={kind}
+            // The GitHub page of this project's backup, from this device's sync remote.
+            githubUrl={space?.remote && /^https:\/\/github\.com\//.test(space.remote) ? space.remote.replace(/\.git$/, '') : null}
+            error={removeError}
+            onConfirm={(alsoDelete) => void confirmDelete(alsoDelete)}
+            onCancel={() => { setDeletingProject(null); setRemoveError(null); }}
+          />
+        );
+      })()}
 
       {/* Unified add-project flow (spec §3). Routes create-new / keep-in-place /
           move+sync itself; handleAdded refreshes + selects on any success. */}

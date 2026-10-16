@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
-import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SettingRow } from './ui';
+import { Button, Callout, Dialog, FieldError, TextInput, Toggle, LoadingState, OneJobCard, OneJobText, SegmentedTabs, SettingRow } from './ui';
+import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
-import { useScreenOpen } from '../shoot-mode';
+import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -167,6 +167,23 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
   // Enabling fast mode is a paid action (API billing, not Pro/Max subscription) —
   // gate behind an explicit confirmation popup so it can't be flipped accidentally.
   const [fastConfirmOpen, setFastConfirmOpen] = useState(false);
+  // Trial B: the menu closes on a press outside it, like the sessions menu —
+  // except on the chip that opened it (its own click toggles), inside the
+  // filter popover (portaled out of the menu), or in a dialog this menu opened
+  // (the Fast mode confirmation, the switch question).
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: Event) => {
+      const t = e.target as Element | null;
+      if (!t || menuRef.current?.contains(t)) return;
+      if (t.closest?.('[data-model-chip],[data-model-picker-portal],[role=dialog],[role=alertdialog]')) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('touchstart', onDown); };
+  }, [open, onClose]);
 
   // Native-runtime picker state. For native sessions the popup shows a
   // provider-scoped model catalog (grouped by provider) instead of the Claude
@@ -434,28 +451,39 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     return { runtime: 'native', providerId, modelId };
   })();
 
+  // Trial B: sit just above the status bar's model chip, left edges aligned;
+  // bottom-left of the window if the chip isn't on screen (e.g. /model typed
+  // with the status bar hidden). Measured once per open.
+  const chip = typeof document !== 'undefined' ? document.querySelector('[data-model-chip]')?.getBoundingClientRect() : undefined;
+  const menuPos: React.CSSProperties = chip
+    ? { left: Math.max(8, Math.min(chip.left, window.innerWidth - 392)), bottom: window.innerHeight - chip.top + 6, maxHeight: chip.top - 16 }
+    : { left: 12, bottom: 40 };
+
   // "max" effort is top-tier-only (Opus 1M + Fable); disable the button otherwise.
   const maxAllowed = currentModel != null && MAX_EFFORT_MODELS.includes(currentModel);
 
   return createPortal(
     // Overlay layer L2 — theme-driven scrim/surface via Scrim/OverlayPanel.
     <>
-      <Dialog screen="chat/model-picker" open onClose={onClose} title={isNative ? "Model" : "Model & Effort"} size="panel" scrollBody={false}>
-
+      {/* Trial B (model picker redesign; LB-7: "a lot of wasted space"): a menu
+          anchored just above the status bar's model chip, like the sessions menu
+          hangs from its pill — not a centred popup. An outside press closes it
+          (effect above); nothing dims. */}
+      <OverlayPanel
+        ref={menuRef}
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        aria-label={isNative ? 'Model' : 'Model and effort'}
+        className="fixed flex flex-col rounded-lg"
+        style={{ ...menuPos, width: 'min(24rem, 92vw)' }}
+      >
+        <ScreenMark name="chat/model-picker" />
         {!loaded ? (
           <LoadingState what="models" />
         ) : (
-          <div className="p-5 space-y-5">
-            {/* Model — the SHARED picker, scoped to this session's runtime. A
-                live session cannot move between runtimes (a CC session has a PTY
-                and no binding; a native one has a binding and no PTY), so the
-                other runtime's models are filtered out rather than offered and
-                then refused. */}
-            {/* No section label here — the dialog's own title ("Model" or
-                "Model & Effort") already says it, and repeating it as a
-                sub-header directly under a modal titled "Model" read as
-                duplicated text once the picker opens straight into view. */}
-            <section>
+          <>
+            <div className="p-3 pb-2">
               <ModelPicker
                 key={pickerEpoch}
                 value={isNative ? nativeValue : (currentModel ? { runtime: 'claude', alias: currentModel } : null)}
@@ -463,88 +491,53 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
                 includeClaude={!isNative}
                 includeNative={isNative}
                 runsOn="host" // the conversation lives on the computer; a phone switching its model is executed there
-                // This dialog's whole job is "change the model" — the picker IS
-                // the surface, so open straight to the favourites+search list
-                // instead of making the status-bar chip cost two clicks.
-                // 'inline' because the list must push Effort/Fast down rather
-                // than the shared component's default float-over-everything
-                // behaviour (built for a picker that's normally closed).
                 defaultOpen
-                layout="inline"
-                // Lead with what's actually running, not just favourites — the
-                // dialog opens with no click to get here, so a model you picked
-                // once but never starred should still be the first thing you see.
+                layout="flat"
                 pinSelectedToTop
+                hideSearch={!isNative}
                 onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
               />
-              {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
+              {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+              {nativeError && <FieldError as="p" className="mt-2">{nativeError}</FieldError>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}
-            </section>
+            </div>
 
-            {/* Effort */}
-            {/* Effort and Fast are Claude Code concepts — the native harness
-                implements neither, so for a native session they are not
-                rendered at all rather than shown inert. A control that does
-                nothing is worse than a control that isn't there. */}
-            {!isNative && (<>
-              <section>
-                <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                  Effort Level
-                </h3>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {EFFORT_LEVELS.map((level) => {
-                    const disabled = level === 'max' && !maxAllowed;
-                    return (
-                      <button
-                        key={level}
-                        onClick={() => !disabled && updateEffort(level)}
-                        disabled={disabled}
-                        title={disabled ? 'Max effort requires Opus or Fable' : undefined}
-                        className={`py-1.5 text-xs rounded transition-colors capitalize ${
-                          effort === level
-                            ? 'bg-accent text-on-accent font-medium'
-                            : disabled
-                            ? 'bg-inset/50 text-fg-faint cursor-not-allowed'
-                            : 'bg-inset text-fg-2 hover:bg-well'
-                        }`}
-                      >
-                        {level}
-                      </button>
-                    );
-                  })}
+            {/* Effort and Fast: Claude Code only (see above). WHY plain, not
+                cards (ui-model-picker-3#MP3-1: "i liked effort being a bare
+                header"; no explanation line, no lightning bolt): each is a bare
+                heading straight on the menu, the same weight for both, like the
+                rows above them. Fast mode keeps the shared switch row (its plain
+                `header` form, no icon) so its switch sits where every switch does. */}
+            {!isNative && (
+              <div className="px-3 pt-1 pb-3 space-y-2">
+                <div className="space-y-1.5">
+                  <span className="block text-xs font-medium text-fg">Effort</span>
+                  <SegmentedTabs
+                    variant="nested"
+                    aria-label="Effort"
+                    value={effort}
+                    onChange={(id) => updateEffort(id as EffortLevel)}
+                    tabs={EFFORT_LEVELS.map((level) => ({
+                      id: level,
+                      label: level.charAt(0).toUpperCase() + level.slice(1),
+                      disabled: level === 'max' && !maxAllowed,
+                      title: level === 'max' && !maxAllowed ? 'Max effort requires Opus or Fable' : undefined,
+                    }))}
+                  />
                 </div>
-                <p className="text-2xs text-fg-muted mt-1.5">
-                  How hard Claude thinks before responding. Higher = slower but smarter.
-                </p>
-              </section>
-
-              {/* Fast mode toggle */}
-              <section>
-                {/* K2: the icon moves out of the title and into the icon slot,
-                    which is what that slot is for — inline, it was pushing the
-                    title text off the alignment every other row shares. */}
                 <SettingRow
+                  header
                   variant="item"
-                  icon={<FastIcon className="w-3.5 h-3.5 text-amber-700" />}
                   title="Fast mode"
-                  description="Same model, faster output streaming"
-                  control={
-                    // Was a fifth hand-rolled toggle geometry (32x16) with a
-                    // hardcoded green-600 on-state. One geometry now, and the
-                    // on-state is the theme's accent (changes 15/16). It already
-                    // had role="switch" but no accessible name.
-                    <Toggle
-                      checked={fast}
-                      onChange={handleFastToggle}
-                      aria-label="Fast mode"
-                    />
-                  }
+                  description="Same model, faster output"
+                  control={<Toggle checked={fast} onChange={handleFastToggle} aria-label="Fast mode" />}
                 />
-              </section>
-            </>)}
-          </div>
+              </div>
+            )}
+
+          </>
         )}
-      </Dialog>
+      </OverlayPanel>
 
       {switchPrompt && (
         <ModelSwitchPrompt
@@ -566,66 +559,38 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
             onClose={() => setFastConfirmOpen(false)}
             layer={3}
             destructive
-            size="prompt"
-            aria-label="Enable Fast mode?"
-            scrollBody={false}
+            size="panel"
+            // WHY the shared title, and one card for everything it says (final-review#ST-21/#PR-7
+            // sweep): a hand-made 14px heading with no ✕, and three blocks of words bare on the
+            // popup. The warning box sits inside the card (a notice about the thing it is in).
+            title="Turn on Fast mode?"
             screen="chat/model-picker/fast-mode"
           >
-            <div className="p-5 space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="shrink-0 w-9 h-9 rounded-full bg-amber-700/15 border border-amber-700/40 flex items-center justify-center text-amber-700">
-                  <FastIcon className="w-5 h-5" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-fg">Enable Fast mode?</h3>
-                  <p className="text-xs text-fg-muted mt-0.5">This costs extra money on top of your plan.</p>
-                </div>
-              </div>
-
-              <div className="rounded border border-amber-700/40 bg-amber-700/10 p-3 space-y-1.5">
-                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider">⚠ Billed Per Token</div>
-                <div className="text-xs text-fg">
-                  Fast mode routes requests through a priority tier with per-token billing:
-                </div>
-                <div className="text-xs text-fg font-mono">
-                  <span className="text-fg-2">Input:</span> $30 / million tokens<br />
-                  <span className="text-fg-2">Output:</span> $150 / million tokens
-                </div>
-                <div className="text-2xs text-fg-muted pt-1 border-t border-amber-700/25">
-                  Your Claude Pro/Max subscription does not cover these charges. They bill directly against API credits on your Anthropic account.
-                </div>
-              </div>
-
-              <div className="text-xs text-fg-muted">
-                You get the same model with faster streaming output. Turn off anytime from the status bar or this menu.
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
-                {/* Spec change 60: the filled-grey family (bg-inset/hover:bg-well)
-                    collapses into the outline `secondary` — it's a genuine peer of
-                    the confirm beside it, which ghost would under-weight. */}
-                <Button variant="secondary" onClick={() => setFastConfirmOpen(false)}>
-                  Cancel
-                </Button>
-                {/* Spec change 66: KEEPS #FF9800 + text-black. This is a billing-
-                    consent warning colour (same family as the permission triad), not
-                    a theme surface, so it must NOT become `primary` — the accent
-                    would erase the "you are agreeing to charges" signal. Left
-                    hand-rolled because the primitive's variants would fight the
-                    custom fill; only radius (rounded → rounded-lg, the one control
-                    radius) and the shared focus ring are normalized. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    applyFast(true);
-                    setFastConfirmOpen(false);
-                  }}
-                  className={`px-3 py-1.5 text-xs rounded-lg bg-amber-700 text-black font-medium hover:bg-amber-700/90 transition-colors ${FOCUS_RING}`}
-                >
-                  Enable & Accept Charges
-                </button>
-              </div>
-            </div>
+            {/* WHY the shared one-job layout (final-fixes#PR-7a, Destin: "fast mode is a bit wierd";
+                popup-cards-2/-3: every one-job popup is OneJobCard): it was the one popup with a
+                hand-made orange button, side-by-side buttons in a narrow popup, prices in a code
+                font with a rule inside the warning box, and three blocks that each said "it costs
+                extra". Now: what it does, the one warning box with the prices, how to turn it off,
+                then the two stacked buttons, main on top. No bolt badge (fix-batch3#FB-4) and no
+                glyph in the box (final-review#ST-30). The words keep every fact the old ones had. */}
+            <OneJobCard actions={<>
+              {/* The fixed orange "charge" button (popup-cards-5#F-1: "Keep the orange"). */}
+              <Button variant="charge" onClick={() => { applyFast(true); setFastConfirmOpen(false); }}>
+                Turn on and accept charges
+              </Button>
+              <Button variant="secondary" onClick={() => setFastConfirmOpen(false)}>Cancel</Button>
+            </>}>
+              <OneJobText>
+                <p>The same model, with faster replies. It costs extra money on top of your plan.</p>
+              </OneJobText>
+              <Callout tone="warning" title="Billed per token">
+                Input costs $30 and output $150 per million tokens. Your Claude Pro or Max plan doesn’t
+                cover this: it’s charged to the API credits on your Anthropic account.
+              </Callout>
+              <OneJobText>
+                <p>Turn it off any time from the status bar or this menu.</p>
+              </OneJobText>
+            </OneJobCard>
           </Dialog>
         </>
       )}

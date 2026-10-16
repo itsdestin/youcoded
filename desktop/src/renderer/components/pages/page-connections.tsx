@@ -17,7 +17,7 @@ import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } f
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, ErrorState, TextInput } from '../ui';
+import { Button, CARD_LEVEL_1, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
@@ -295,7 +295,10 @@ function DeviceAddressField({ c, value, onChange }: { c: PageConnectionStatus & 
         aria-invalid={!ok}
         className="select-text"
       />
-      {!ok && <div className="text-xs text-fg-2" role="alert" data-device-address-problem>{deviceAddressProblem(value)}</div>}
+      {/* WHY FieldError (final review; guide "Status and notices": a short error line under a
+          field is the notice box in miniature): this was plain grey text, unlike every other
+          field's error line. FieldError keeps the words grey and puts the red in the box. */}
+      {!ok && <FieldError as="div" size="2xs">{deviceAddressProblem(value)}</FieldError>}
       <div className="text-xs text-fg-muted leading-relaxed" data-device-not-encrypted>{DEVICE_NOT_ENCRYPTED}</div>
     </div>
   );
@@ -392,7 +395,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   );
 
   const shell = (children: React.ReactNode) => (
-    <div className="absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
+    <div className="scroll-mask absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
       <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col gap-4">{children}</div>
     </div>
   );
@@ -402,7 +405,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
         <PageGlyph icon={page.icon} className="w-5 h-5" />
       </span>
       <div className="min-w-0">
-        <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">{eyebrow}</div>
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel>{eyebrow}</SectionLabel>
         <h3 className="text-base font-semibold text-fg leading-snug">{title}</h3>
       </div>
     </div>
@@ -475,7 +480,11 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
       {/* Two boxes on a re-ask, one under each label (review round 3, E-2):
           the new permissions, then what was already allowed. A first ask has
           only the one box and no labels. */}
-      {isChange && <div className="text-2xs font-medium text-fg tracking-wider uppercase" data-new-label>New</div>}
+      {/* WHY: kept a plain div, not SectionLabel — this "New" marker needs
+          text-fg (not SectionLabel's fixed text-fg-muted) to stand out
+          against "Already allowed" below it. Just drops the spaced-caps
+          eyebrow (labels batch, guide: no spaced capitals). */}
+      {isChange && <div className="text-xs font-medium text-fg" data-new-label>New</div>}
       <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
         {shown.map((c) => (
           <ConnectionLine key={c.id} c={c}>
@@ -505,7 +514,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
       </div>
       {isChange && (
         <div className="flex flex-col gap-2 pt-1" data-already-allowed>
-          <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Already allowed</div>
+          <SectionLabel>Already allowed</SectionLabel>
           <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
             {already.map((c) => <ConnectionLine key={c.id} c={c} small />)}
           </div>
@@ -550,11 +559,16 @@ export function PageConnectionsDialog({ page, onClose, onConnect }: { page: Page
   };
   const list = page?.connections ?? [];
   return (
-    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}>
+    // WHY the saved-keys line moved to the title's second line, and the cards are the shared
+    // first-level card (final-review#ST-21/#PR-7, the one popup rule): the line floated bare
+    // under the last card (guide: no loose lines between cards), and each card hand-typed a
+    // fainter look than every other popup's.
+    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}
+      subtitle={list.length > 0 ? 'Saved keys are kept under Settings › Account › Connected services.' : undefined}>
       <div className="flex flex-col gap-3">
         {list.length === 0 && <div className="text-sm text-fg-muted">This page reaches nothing outside itself.</div>}
         {list.map((c) => (
-          <div key={c.id} className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-2">
+          <div key={c.id} className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
             <ConnectionLine c={c} small />
             {confirming === c.id ? (
               <div className="flex flex-col gap-2">
@@ -579,7 +593,6 @@ export function PageConnectionsDialog({ page, onClose, onConnect }: { page: Page
             )}
           </div>
         ))}
-        {list.length > 0 && <div className="text-2xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected services.</div>}
       </div>
     </Dialog>
   );

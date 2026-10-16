@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
+import { Button, Dialog, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SectionLabel, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -24,14 +24,13 @@ import {
   type FlagName,
 } from './resume-browser-filters';
 import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
-import { TagPicker } from './tags/TagPicker';
-import { TagManagerPopup } from './tags/TagManagerPopup';
+import { SessionDetails } from './tags/SessionDetails';
+import { PinIcon } from './tags/PinIcon';
 import { TagChip } from './tags/TagChip';
 import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
-import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
-import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
+import './ResumeBrowser.css';
 import { resolveNativeBinding } from '../state/welcome-back';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
 
@@ -198,8 +197,8 @@ type ListItem =
 // CommonJS so we don't import it directly).
 //
 // The FLAG_ORDER / FLAG_LABEL pair that used to live here is gone: neither
-// reserved flag renders as a generic "flag" any more. Priority is a built-in
-// TAG (built-in-tags.ts) and Complete is the card's hide icon, so each carries
+// reserved flag renders as a generic "flag" any more. Priority is the Pin to top
+// switch and corner pin (pick-menus-2#PM2-3) and Complete is the card's hide icon, so each carries
 // its own label at its own call site and a shared ordered list had nothing to
 // order.
 
@@ -210,7 +209,7 @@ interface PastSession {
   projectPath: string;
   lastModified: number;
   size: number;
-  // Reserved flags — multiple allowed. `complete` hides unless Show Complete
+  // Reserved flags — multiple allowed. `complete` hides unless Show complete
   // is on; `priority` pins the session to the top of its project group.
   flags?: Partial<Record<FlagName, boolean>>;
   tags?: string[];   // applied custom-tag ids
@@ -598,10 +597,10 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
   const previewOn = !narrowViewport && !isAndroid();
-  // Model, Skip Permissions, new window and the in-flight resume — shared with
+  // Model, Skip permissions, new window and the in-flight resume — shared with
   // the Projects page's preview (ResumeOptions.tsx).
   const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);
-  // Show Complete: when off, sessions marked complete are hidden (default).
+  // Show complete: when off, sessions marked complete are hidden (default).
   // Deliberately NOT persisted — it resets to off on every open, same as the
   // project/tag filter pills below. Destin's ruling: a browser that reopens
   // still showing completed work hides the list he actually came for.
@@ -609,7 +608,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
 
   // Sessions the user flagged Complete during the current open. They stay
   // visible until the menu is closed and reopened, so the row doesn't vanish
-  // mid-interaction when Show Complete is off. Reset on every open.
+  // mid-interaction when Show complete is off. Reset on every open.
   const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
   /** Non-null when the last load FAILED. Empty string = it failed and said no reason. */
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -646,18 +645,11 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // conversation WITHOUT expanding it, including rows that can't be resumed on
   // this device at all.
   const [organizeId, setOrganizeId] = useState<string | null>(null);
-  const organizeTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const organizePopRef = useRef<HTMLDivElement>(null);
-  // The tag registry editor (rename/recolor/archive/delete). Opened from the
-  // "Manage tags…" footer of the Organize popover's TagPicker; the Tags filter
-  // menu's second route was removed at Destin's request (deck round 1, S-4), so
-  // there is ONE destination for tag management.
-  const [tagManagerOpen, setTagManagerOpen] = useState(false);
 
   // U1: whichever row just opened its Organize sheet or its resume-options
   // panel scrolls into view — see the rowElRefs comment above. Only Welcome
   // back's list shares its column with a footer tall enough to squeeze it;
-  // the everyday Resume Session screen has no such fixed footer to hide
+  // the everyday Resume session screen has no such fixed footer to hide
   // behind, so this is deliberately scoped to `wb` rather than changing that
   // screen's already-approved scroll behavior.
   useEffect(() => {
@@ -706,10 +698,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       setExpandedId(null);
       resumeOptions.resetFor(null);
       setOrganizeId(null);
-      setTagManagerOpen(false);
       // Reset the sticky-visible set each open — previously kept rows drop out.
       setStickyComplete(new Set());
-      // Show Complete resets to off each open — the component stays mounted
+      // Show complete resets to off each open — the component stays mounted
       // across opens, so the useState initializer alone would never re-run.
       setShowComplete(false);
       // Reset filter pills each open — current spec: no persistence.
@@ -722,17 +713,16 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
     }
   }, [open]);
 
-  // Layered ESC: close the tag manager, then an open Organize popover, then an
+  // Layered ESC: close an open Organize popover, then an
   // open filter dropdown, then collapse the expanded row, then close the
   // browser. Each ESC press peels one layer.
   const handleEscClose = useCallback(() => {
-    if (tagManagerOpen) setTagManagerOpen(false);
-    else if (organizeId) setOrganizeId(null);
+    if (organizeId) setOrganizeId(null);
     else if (openPill) setOpenPill(null);
     else if (expandedId) setExpandedId(null);
     // Welcome back is left only through its own buttons (Q-where).
     else if (!wb) onClose();
-  }, [tagManagerOpen, organizeId, openPill, expandedId, onClose, wb]);
+  }, [organizeId, openPill, expandedId, onClose, wb]);
   useEscClose(open && !renameSession, handleEscClose);
 
   // Close the active filter dropdown on outside click. Recognizes clicks
@@ -793,27 +783,10 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
     };
   }, [filtersOpen]);
 
-  // Same outside-click close for the Organize popover. It is portaled to
-  // document.body, so the card's own subtree can't see it — the popover ref is
-  // checked explicitly (the portal trap that already bit the model picker and
-  // the folder switcher). The trigger is checked too so a second click on the
-  // "⋯" toggles rather than close-then-reopen.
-  useEffect(() => {
-    if (!organizeId) return;
-    const handler = (e: Event) => {
-      const target = e.target as Node;
-      if (organizePopRef.current?.contains(target)) return;
-      if (organizeTriggerRef.current?.contains(target)) return;
-      setOrganizeId(null);
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('touchstart', handler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('touchstart', handler);
-    };
-  }, [organizeId]);
 
+
+  const organizeTarget = (organizeId ?? cloneOrganizeId) ? sessions.find((x) => x.sessionId === (organizeId ?? cloneOrganizeId)) ?? null : null;
+  useScreenOpen('chat/resume/organize', () => { const first = filteredRef.current[0]; if (first) setOrganizeId(first.sessionId); }, undefined, !welcomeBack);
 
   const filtered = useMemo(() => {
     // Welcome back shows exactly the conversations that were open — completed
@@ -821,7 +794,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
     // mid-choice — minus any already resumed from this screen.
     if (wb) return sessions.filter((s) => wb.ids.includes(s.sessionId) && !launched.has(s.sessionId));
     // Filter pipeline lives in resume-browser-filters.ts so it can be unit tested.
-    // Order: Show Complete + sticky → project → tag → search.
+    // Order: Show complete + sticky → project → tag → search.
     const state: FilterState = {
       search,
       showComplete,
@@ -988,7 +961,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
   // every known project, even when the user has narrowed the visible list.
-  // Counts and rows reflect what the list can actually show: with Show Complete
+  // Counts and rows reflect what the list can actually show: with Show complete
   // off, a finished conversation is not counted and a project with only finished
   // conversations is not offered (UX review U6: "youcoded 2" then showed one row).
   const countable = useMemo(
@@ -1007,7 +980,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
   // whole row on a phone.
   // A picked project that the menu no longer offers (all its conversations are
-  // finished and Show Complete is off) still names itself from its path.
+  // finished and Show complete is off) still names itself from its path.
   const projectsLabel = useMemo((): React.ReactNode => {
     const picked = [...selectedProjects].map((path) => availableProjects.find((p) => p.path === path)?.label ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path);
     return <PickLabel {...pickLabel('Projects', picked)} />;
@@ -1241,49 +1214,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // (globals.css:951), and an opacity modifier emits `bg-inset/50` — a
   // different class the cascade does not match, so it would have gone
   // translucent on wallpaper themes.
-  // Tags and note. There is no separate "Flags" section any more: Priority is
-  // listed as a built-in TAG (it reads as a label you apply, because that is
-  // what it is to the user — see built-in-tags.ts), and Complete moved out of
-  // this popover entirely onto the card's hide icon, since marking something
+  // Tags and note. There is no separate "Flags" section: Priority is the Pin to
+  // top switch, and Complete lives on the card's hide icon, since marking something
   // done is a one-click action that shouldn't cost opening a menu.
-  const renderOrganizeControls = (s: PastSession) => (
-    <>
-      {/* No "TAGS" / "NOTE" headers. A tag list and a text field do not need
-          naming — the search placeholder and the note placeholder already say
-          what each is, and the two labels were a third of the sheet's height.
-          Matched across all three tag/note surfaces (2026-07-31).
-          fieldClassName lifts the search box to `bg-well`: the sheet sits on
-          the card, which IS the FIELD surface (`bg-inset`), so without it the
-          field is the same colour as its background. Same override the close
-          prompt and the model picker make, for the same reason. */}
-      <div onClick={(e) => e.stopPropagation()}>
-        <TagPicker
-          appliedIds={new Set(s.tags ?? [])}
-          onToggle={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
-          registry={registry}
-          onManageTags={() => { setOrganizeId(null); setCloneOrganizeId(null); setTagManagerOpen(true); }}
-          fieldClassName="bg-well border-edge"
-          builtIns={[{
-            tag: PRIORITY_TAG,
-            hint: PRIORITY_HINT,
-            applied: !!s.flags?.priority,
-            // Stored as a flag, not a registry tag — the sort reads one known
-            // key rather than scanning a user-editable list.
-            onToggle: (next) => toggleFlag(s.sessionId, 'priority', next),
-          }]}
-        />
-      </div>
-
-      <div className="border-t border-edge-dim pt-2" onClick={(e) => e.stopPropagation()}>
-        <NoteEditor
-          value={s.note ?? ''}
-          onSave={(text) => saveNote(s.sessionId, text)}
-          fieldClassName="bg-well border-edge"
-        />
-      </div>
-    </>
-  );
-
   // The expanded panel answers ONE question: how do I relaunch this? Model,
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
@@ -1343,7 +1276,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
           own container is a plain `bg-panel` utility (CommandDrawer.tsx:195),
           which the wallpaper rule does not touch.
           `bg-inset` is what every other item nested in an overlay uses —
-          ModelPicker rows, OpenTasksPopup, TagPicker, ContextPopup — and the
+          ModelPicker rows, OpenTasksPopup, ContextPopup — and the
           protection cascade (`.layer-surface .bg-inset`, globals.css:951) keeps
           it opaque inside a glass panel.
           Bare `bg-inset` here rather than change 25's `bg-inset/50` in-panel ROW
@@ -1464,10 +1397,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
               conversation title right on every native row. The model chip on
               the line below says the same thing in the user's terms — a model
               name — and says it for Claude Code rows too. */}
-          {/* Tag chips after the name. Priority is FIRST and rendered with the
-              same TagChip as everything else — it is a built-in tag, not a
-              separate species of label (built-in-tags.ts). Complete has no chip:
-              its state is the hide icon on the right of this row. */}
+          {/* Tag chips after the name. Pinned (the Priority flag) is the pin in the
+              corner icons, not a chip. Complete has no chip: its state is the hide
+              icon on the right of this row. */}
           <SessionCardTags session={s} tagsById={registry.byId} className={ICON_GUTTER} />
           {/* Bottom line: one dotted trail of context on the left — project,
               model, size — then the timestamp on the right.
@@ -1499,6 +1431,11 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
           while the cluster's pr-2 puts the last icon's right edge 12px from the
           card edge, matching the trigger's p-3. */}
       <div className="absolute top-0 right-0 pt-1.5 pl-1.5 pr-2 flex items-start">
+      {/* Pinned: the pin sits with the card's corner icons, as it sits by the status
+          pill in the sessions menu (pick-menus-4#PM4-3) — no longer an amber tag. */}
+      {s.flags?.priority && (
+        <span className="px-1 py-2 flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+      )}
       {/* Tags and note. Always visible rather than hover-revealed — a
           hover-only affordance is invisible on touch and undiscoverable on
           desktop, and this is the ONLY route to tagging. Rendered for inert
@@ -1509,13 +1446,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (orgId === s.sessionId) { setOrg(null); return; }
-          organizeTriggerRef.current = e.currentTarget;
-          // The two panes are mutually exclusive: a card shows EITHER how to
-          // relaunch it or how to organize it, never both stacked. Without this
-          // an open card could grow two panels deep and the Resume button would
-          // slide down the screen as you tagged.
-          setExpandedId(null);
+          // Opens Session details as a popup over Resume (resume-sheet-4, Destin
+          // 2026-10-04: an inline sheet never fit the narrow card — "lets try 1").
           setOrg(s.sessionId);
         }}
         aria-label={`Organize ${s.name}`}
@@ -1542,18 +1474,9 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
         className="px-1 py-1.5"
       />
       </div>
-      {/* 'sheet' variant: the organize controls drop INTO the card rather than
-          floating. No positioning maths and nothing to clamp — the trade is
-          that the card grows and pushes the rest of the list down.
-          It shares organizePopRef with the floating variants: only one of the
-          two is ever mounted, and the outside-click handler checks that ref to
-          know "the click landed inside the open organize UI". */}
-      {orgId === s.sessionId && (
-        <div ref={clone ? undefined : organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
-          {renderOrganizeControls(s)}
-        </div>
-      )}
-      {isExpanded && renderExpandedOptions(s)}
+      {/* flush: no line across the card above the Model / Resume panel either (guide: no
+          full-width line in a card; resume-sheet-2). */}
+      {isExpanded && renderExpandedOptions(s, { flush: true })}
       </div>
     </div>
     );
@@ -1593,7 +1516,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // and INSIDE the phone popover below 640px (deck round 1 S-7, round 2 S-9 —
   // "project/tags should be dropdowns"), so both widths share one set of controls.
   const chipsRow = (
-        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-fade-x'}>
+        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-mask scroll-mask--chips relative overflow-x-auto overflow-y-hidden scrollbar-none'}>
           {/* Projects: pick-any menu over the distinct project paths in the loaded
               sessions. The menu is portaled to document.body so it escapes the
               OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
@@ -1626,7 +1549,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
             >
               {/* The list scrolls; the footer stays put, so Clear never leaves
                   the screen behind a long list of projects. */}
-              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="max-h-56 overflow-y-auto py-1">
+              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="scroll-mask max-h-56 overflow-y-auto py-1">
                 {availableProjects.map((p) => {
                   const checked = selectedProjects.has(p.path);
                   return (
@@ -1699,7 +1622,7 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                   <EmptyState variant="inline" message="No tags yet" />
                 </div>
               ) : (
-                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="max-h-64 overflow-y-auto py-1">
+                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="scroll-mask max-h-64 overflow-y-auto py-1">
                   {liveTags.map((t) => {
                     const checked = selectedTagIds.has(t.id);
                     return (
@@ -1762,6 +1685,25 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
 
   return (
     <>
+      {/* Session details for the conversation whose tag icon was pressed — the same popup as
+          the status bar's, over Resume (L2 over its L1). */}
+      {organizeTarget && (
+        <Dialog screen="chat/resume/organize" open onClose={() => { setOrganizeId(null); setCloneOrganizeId(null); }} title="Session details" size="panel">
+          <SessionDetails
+            name={organizeTarget.name || 'Untitled'}
+            onRename={() => setRenameSession(organizeTarget)}
+            appliedIds={new Set(organizeTarget.tags ?? [])}
+            onToggleTag={(tagId, next) => toggleTag(organizeTarget.sessionId, tagId, next)}
+            registry={registry}
+            note={organizeTarget.note ?? ''}
+            onNote={(text) => saveNote(organizeTarget.sessionId, text)}
+            // Stored as the `priority` flag, not a registry tag — the sort reads one known key.
+            pin={{ pinned: !!organizeTarget.flags?.priority, onPin: (next) => toggleFlag(organizeTarget.sessionId, 'priority', next) }}
+            // Resume's own toggle: a newly-completed row stays in view until the list changes (stickyComplete).
+            complete={{ done: !!organizeTarget.flags?.complete, onComplete: (next) => toggleFlag(organizeTarget.sessionId, 'complete', next) }}
+          />
+        </Dialog>
+      )}
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {resumeOptions.dialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
@@ -1790,13 +1732,11 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
           : 'contents'}>
           <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          {/* No `border-b`: Destin, 2026-09-10, "there should be gaps
-              on the left/right side of the divider line where it doesn't
-              connect to the outer container but tapers off". A border cannot
-              fade, so the rule is a 1px gradient row instead — the same idiom
-              SessionStrip already uses for the divider between Resume and
-              + New Session. */}
-          <div className="px-4 pt-4 pb-3 shrink-0 relative">
+          {/* WHY: the 2026-09-23 Resume choice kept Destin's 2026-09-10
+              tapered-line request, but matched the approved 16px medium title
+              and 8%-within-inset divider. CSS scopes it to this list column;
+              the transcript pane and its cards are separate. */}
+          <div data-resume-header className="px-4 pt-4 pb-3 shrink-0 relative">
             {wb ? (
               // Welcome back: a heading that says why this appeared, and none of
               // the search/filter row — the list is only what was open, a handful
@@ -1818,18 +1758,21 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
               </div>
             ) : (<>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold text-fg">Resume Session</h2>
-              {/* Show Complete — same toggle pattern as Skip Permissions
+              <h2 className="text-base font-medium text-fg">Resume session</h2>
+              {/* Show complete — same toggle pattern as Skip permissions
                   in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
               <div className="flex items-center gap-2">
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Show Complete</label>
+                {/* WHY: field caption drops the spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals). "Show complete" is in
+                    sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                <label className="text-xs font-medium text-fg-muted">Show complete</label>
                 {/* Shared Toggle (change 15). role="switch" + aria-checked comes
                     from the primitive, which is strictly better than the
                     aria-pressed this used to carry. */}
                 <Toggle
                   checked={showComplete}
                   onChange={setShowComplete}
-                  aria-label="Show Complete"
+                  aria-label="Show complete"
                 />
               </div>
             </div>
@@ -1882,25 +1825,18 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
             )}
             {!narrow && chipsRow}
             </>)}
-            {/* Inset both ends so the line stops short of the panel edge and
-                fades out rather than butting into it. */}
-            <div
-              aria-hidden
-              className="absolute inset-x-0 bottom-0 h-px"
-              style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
-            />
+            {/* WHY no divider element: ResumeBrowser.css draws the tapered line on [data-resume-header] (R-1, 2026-09-23). */}
           </div>
 
           {/* Session list */}
           {/* No flex-1: OverlayPanel only has max-h (indefinite height), which breaks
               flex-grow in Chromium. Using default flex: 0 1 auto lets flex-shrink
               clamp this div when content exceeds max-h so overflow-y: auto engages
-              and the scroll-fade hook sees a real scroll. */}
-          {/* Padding lives on an inner wrapper so the scroll-fade element itself has
-              no padding. Sticky fade pseudos then sit flush with the scroll-fade's
-              outer edge, and the `overflow: hidden` on .layer-surface clips them to
-              the OverlayPanel's rounded corners. */}
-          <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
+              and the list really scrolls (and fades). */}
+          {/* WHY: the app's one content fade (.scroll-mask), not a painted band on
+              glass. Keep the scroll container unpadded and the inner wrapper
+              padded so the fade meets the list edge. */}
+          <div ref={listRef} data-resume-list className={previewOn ? 'scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1' : 'scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none'}>
             <div className="py-2">
               {loading ? (
                 <div className="flex flex-col items-center">
@@ -1913,15 +1849,19 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                   {loadSlow && (
                     <div className="flex flex-col items-center gap-2 -mt-4 pb-6">
                       <span className="text-xs text-fg-muted">Still loading — this is taking longer than usual.</span>
-                      <Button variant="secondary" size="sm" onClick={loadSessions}>Try again</Button>
+                      {/* WHY filled (final review F51): the only action here — Try again is the main one. */}
+                      <Button variant="primary" size="sm" onClick={loadSessions}>Try again</Button>
                     </div>
                   )}
                 </div>
               ) : loadError !== null ? (
+                // WHY mx-4 (error-notices-1#EN-2, 2026-10-12: "spacing on left/right margins might
+                // be a bit odd"): the list has no side padding of its own, so the box ran edge to
+                // edge of the pane. It now lines up with the search box and filters above (px-4).
                 loadError ? (
-                  <ErrorState mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
+                  <ErrorState className="mx-4" mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
                 ) : (
-                  <ErrorState mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
+                  <ErrorState className="mx-4" mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
                 )
               ) : filtered.length === 0 ? (
                 <EmptyState
@@ -1943,9 +1883,11 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
                   {visibleItems.map((item) => (
                     item.kind === 'header' ? (
                       <div key={item.key} className={`px-4 py-1 ${item.first ? '' : 'mt-2'}`}>
-                        <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+                        {/* WHY SectionLabel, not the old spaced-caps eyebrow
+                            (labels batch, guide: no spaced capitals). */}
+                        <SectionLabel>
                           {item.label}
-                        </span>
+                        </SectionLabel>
                       </div>
                     ) : (
                       <RowMemo
@@ -1963,15 +1905,17 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
             </div>
           </div>
           {/* Welcome back's two ways out. Start fresh forgets the list (the
-              sessions stay in Resume Session as always); Resume opens every
+              sessions stay in Resume session as always); Resume opens every
               ticked row. The count is in the button so it says exactly what
               one press will do. */}
           {wb && (
             <div className="shrink-0 relative px-4 py-3 flex flex-col gap-2">
+              {/* WHY 16px insets + 8% taper: the same divider as this list's approved
+                  header line (ResumeBrowser.css, Resume R-1 2026-09-23). */}
               <div
                 aria-hidden
-                className="absolute inset-x-0 top-0 h-px"
-                style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+                className="absolute inset-x-4 top-0 h-px"
+                style={{ background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)' }}
               />
               {/* Stacked, full width, primary over secondary — the app's dialog
                   footer (review round 2, C-1: "stacked"). */}
@@ -2064,7 +2008,6 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
         </OverlayPanel>
       </div>
 
-      <TagManagerPopup open={tagManagerOpen} onClose={() => setTagManagerOpen(false)} registry={registry} />
     </>
   );
 }

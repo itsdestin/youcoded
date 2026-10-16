@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
+  runProjectRemove,
   describeImportFailure,
   importResultTitle,
   matchProjectByPath,
@@ -154,5 +155,52 @@ describe('importResultTitle', () => {
     expect(importResultTitle({ hardFailures: 1, partial: 1, alreadyInPlace: 1 })).toBe('Import failed');
     expect(importResultTitle({ hardFailures: 0, partial: 1, alreadyInPlace: 1 }))
       .toBe('Import partly finished');
+  });
+});
+
+// ── Remove: the confirm closes once the project is gone (final review F8) ────
+// After a successful remove, a rejected folders.remove() or list refresh used to leave the
+// dialog stuck open with an empty error line, though the project was already gone.
+describe('runProjectRemove', () => {
+  const steps = (over: Partial<Parameters<typeof runProjectRemove>[0]> = {}) => ({
+    removeSynced: null,
+    removeFolder: vi.fn(async () => true),
+    deleteSidecar: null,
+    listProjects: vi.fn(async () => ({ ok: true, projects: [{ path: '/b' }] })),
+    ...over,
+  });
+
+  it('a synced project already removed everywhere closes the confirm even if the follow-ups fail', async () => {
+    const out = await runProjectRemove(steps({
+      removeSynced: async () => ({ ok: true }),
+      removeFolder: async () => { throw new Error('ipc'); },
+      listProjects: async () => { throw new Error('ipc'); },
+    }));
+    expect(out).toEqual({ error: null, projects: null }); // null → the removed one leaves the screen
+  });
+
+  it('a failed list refresh after a plain folder was removed still closes the confirm', async () => {
+    expect(await runProjectRemove(steps({ listProjects: async () => { throw new Error('ipc'); } }))).toEqual({ error: null, projects: null });
+  });
+
+  it('a plain folder that could not be removed keeps the confirm open with a sentence, never an empty line', async () => {
+    const out = await runProjectRemove(steps({ removeFolder: async () => { throw new Error('ipc'); } }));
+    expect(out.error).toBe("This project couldn't be removed.");
+  });
+
+  it("a synced remove that fails shows the service's own words and changes nothing else", async () => {
+    const s = steps({ removeSynced: async () => ({ ok: false, error: 'Sync is still starting up — try again in a moment' }) });
+    const out = await runProjectRemove(s);
+    expect(out.error).toBe('Sync is still starting up — try again in a moment');
+    expect(s.removeFolder).not.toHaveBeenCalled();
+  });
+
+  it('a synced remove that rejects, or answers with no words, still shows a sentence', async () => {
+    expect((await runProjectRemove(steps({ removeSynced: async () => ({ ok: false, error: '' }) }))).error).toBe("This project couldn't be removed.");
+    expect((await runProjectRemove(steps({ removeSynced: async () => { throw new Error('boom'); } }))).error).toBe('boom');
+  });
+
+  it('the happy path hands back the fresh list', async () => {
+    expect(await runProjectRemove(steps())).toEqual({ error: null, projects: [{ path: '/b' }] });
   });
 });

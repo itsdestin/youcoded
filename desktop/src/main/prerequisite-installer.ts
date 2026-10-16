@@ -265,7 +265,7 @@ const LINUX_GIT_INSTALLERS: ReadonlyArray<{ test: string; args: string[]; manual
  */
 async function installGitLinux(): Promise<string | null> {
   const manualAll =
-    'Install Git with your distribution\'s package manager, then click Try Again:\n' +
+    'Install Git with your distribution\'s package manager, then click Try again:\n' +
     '  Debian / Ubuntu:  sudo apt install git\n' +
     '  Fedora / RHEL:    sudo dnf install git\n' +
     '  Arch:             sudo pacman -S git';
@@ -285,8 +285,8 @@ async function installGitLinux(): Promise<string | null> {
     const code = (err as { code?: unknown }).code;
     log('WARN', 'prereq', 'pkexec Git install did not complete', { code, error: String(err) });
     return code === 126
-      ? `Git wasn't installed because the password window was closed. Click Try Again, or run:\n  ${spec.manual}`
-      : `Git couldn't be installed automatically. Run this in a terminal, then click Try Again:\n  ${spec.manual}`;
+      ? `Git wasn't installed because the password window was closed. Click Try again, or run:\n  ${spec.manual}`
+      : `Git couldn't be installed automatically. Run this in a terminal, then click Try again:\n  ${spec.manual}`;
   }
 }
 
@@ -791,7 +791,7 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
           error:
             'This looks like a musl-libc Linux distro (e.g. Alpine), which the ' +
             'bundled Node.js installer does not support. Install Node with your ' +
-            'package manager, then click Try Again:\n' +
+            'package manager, then click Try again:\n' +
             '  Alpine:  sudo apk add nodejs npm',
         };
       }
@@ -949,7 +949,7 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
       // Agree / Install. Installation is asynchronous and driven by the user
       // clicking in that dialog — we cannot wait synchronously. If git is
       // still missing after the call returns, surface an actionable message
-      // so the user knows to accept the dialog and click Try Again.
+      // so the user knows to accept the dialog and click Try again.
       try {
         await runCommand('xcode-select', ['--install']);
       } catch {
@@ -966,7 +966,7 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
           success: false,
           error:
             'Git comes with Apple\'s developer tools, which didn\'t finish ' +
-            'installing. Click Try Again to bring back the macOS window, then ' +
+            'installing. Click Try again to bring back the macOS window, then ' +
             'click Install in it.',
         };
       }
@@ -1154,7 +1154,7 @@ async function runClaudeBootstrap(): Promise<void> {
             '{ if command -v curl >/dev/null 2>&1; then curl -fsSL "$url"; ' +
             'elif command -v wget >/dev/null 2>&1; then wget -qO- "$url"; ' +
             'else echo "Neither curl nor wget is installed. Install one with ' +
-            'your package manager, then click Try Again." >&2; exit 1; fi; } | bash'],
+            'your package manager, then click Try again." >&2; exit 1; fi; } | bash'],
           { timeout: 300000 },
         );
       } catch (err) {
@@ -1166,7 +1166,7 @@ async function runClaudeBootstrap(): Promise<void> {
           throw new Error(
             'bash was not found on PATH. Install bash with your package manager ' +
             '(Debian/Ubuntu: sudo apt install bash · Fedora/RHEL: sudo dnf install bash · ' +
-            'Arch: sudo pacman -S bash), then click Try Again.',
+            'Arch: sudo pacman -S bash), then click Try again.',
           );
         }
         throw err;
@@ -1235,7 +1235,7 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
       return {
         success: false,
         error:
-          'Another program (often antivirus, or a second install attempt) is holding the Claude Code download open. Close other YouCoded windows, wait a moment, and click Try Again. If it keeps happening, restart your PC and reopen YouCoded.',
+          'Another program (often antivirus, or a second install attempt) is holding the Claude Code download open. Close other YouCoded windows, wait a moment, and click Try again. If it keeps happening, restart your PC and reopen YouCoded.',
       };
     }
     return { success: false, error: msg };

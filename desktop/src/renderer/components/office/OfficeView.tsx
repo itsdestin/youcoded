@@ -15,7 +15,7 @@
 // roundness (Q-theme). The editors are Euro-Office (office-base#Q-base-final),
 // on their own sealed origin; only files and small messages cross.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } from '../ui';
+import { Button, CARD_LEVEL_1, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState, SectionLabel } from '../ui';
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
@@ -264,7 +264,7 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   const recent = load.state === 'ready' ? load.status.recent : null;
   const projectFiles = (project?.files ?? []).filter((f) => !recent?.some((r) => r.path === f.path));
   return (
-    <div className="absolute inset-0 overflow-y-auto">
+    <div className="scroll-mask absolute inset-0 overflow-y-auto">
       {/* Photo-only: a first run (nothing recent) is its own screen, named without '#' so a deck can link its picture. */}
       {recent && <ScreenMark name={recent.length === 0 ? 'office/first-run' : 'office/home'} />}
       <div className="w-full max-w-4xl mx-auto px-4 py-6 flex flex-col gap-7">
@@ -303,8 +303,10 @@ function OfficeHome({ load, project, actionError, onRetry, onCreate, onPick, onO
   );
 }
 
+// WHY the shared small label, not spaced capitals (decisions "Heading ladder", H-3/L-1…L-4:
+// small labels are 12px medium grey in normal case).
 function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-1">{children}</div>;
+  return <SectionLabel className="px-1">{children}</SectionLabel>;
 }
 
 const NEW_HINT: Record<OfficeKind, string> = {
@@ -320,7 +322,8 @@ function NewCard({ kind, onClick }: { kind: OfficeKind; onClick: () => void }) {
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
-      className="bg-panel border border-edge rounded-lg p-4 flex items-center gap-3 cursor-pointer card-interactive focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
+      // WHY card-raised: the Office card sits in the Pages grid, so it is the same raised card (K-6, F-3).
+      className="bg-panel border border-edge rounded-lg p-4 flex items-center gap-3 cursor-pointer card-interactive card-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
     >
       <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">
         <OfficeKindGlyph kind={kind} className="w-5 h-5" />
@@ -411,10 +414,15 @@ function VersionsDialog({ file, shown, onClose }: { file: OfficeFile | null; sho
     // busy while restoring (fix round 1): the window stays until the restore answers, so nothing
     // can be typed into the editor between its save and the restore.
     <Dialog open={file !== null && shown} onClose={onClose} busy={restoring !== null} title="Versions" subtitle={file?.name} size="panel" screen="office/versions">
-      <p className="text-xs text-fg-muted pb-3">
+      {/* WHY one card for the explanation and the list of copies (final-review#ST-21/#PR-7, the
+          one popup rule): both sat bare on the popup. One card, so no label — and none could be
+          "Versions", which is the title (guide: a label never repeats it). The copies are plain
+          rows inside it (guide: lists of short names are plain rows in one shared box). */}
+      {failed && <ErrorState message={failed.message} onRetry={() => void restore(failed.version)} />}
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+      <p className="text-xs text-fg-muted">
         Office saves as you work and keeps a copy every few minutes. Restoring one keeps your current version too.
       </p>
-      {failed && <ErrorState className="mb-3" message={failed.message} onRetry={() => void restore(failed.version)} />}
       {listFailed && <ErrorState message="Office couldn't load the versions of this file." onRetry={() => setAsked((n) => n + 1)} />}
       {versions === null && !listFailed && <LoadingState what="versions" />}
       {versions && versions.length === 0 && <EmptyState message="No earlier versions yet." />}
@@ -439,6 +447,7 @@ function VersionsDialog({ file, shown, onClose }: { file: OfficeFile | null; sho
           ))}
         </div>
       )}
+      </div>
     </Dialog>
   );
 }

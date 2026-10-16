@@ -1,0 +1,9 @@
+/* Design-guide review (2026-09-24): WARNING / INFO BOXES "PLAIN".
+   Every passive notice (the Callout: "This model may not fit…") drops today's
+   tinted box for no box and no bar: the colored title and the text sit directly on the page. Workbench-only: ?proposal=...,callout-plain. */
+@layer proposal {
+[class*="bg-amber-500/10"] { --callout-tone: rgb(245 158 11); }
+[class*="bg-accent/10"] { --callout-tone: var(--accent); }
+[class*="bg-destructive/10"] { --callout-tone: var(--destructive); }
+:is([class*="bg-amber-500/10"], [class*="bg-accent/10"][class*="border-accent/25"], [class*="bg-destructive/10"][class*="border-destructive/50"]) { background: transparent !important; border: 0 !important; border-radius: 0 !important; padding: 0 !important; }
+}

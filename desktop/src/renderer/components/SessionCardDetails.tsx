@@ -7,8 +7,7 @@
 // cards that agree today and drift the first time one is touched.
 import type { PastSession } from '../../shared/types';
 import type { TagRecord } from '../../shared/tags';
-import { TagChip } from './tags/TagChip';
-import { PRIORITY_TAG } from './tags/built-in-tags';
+import { TagChip, TagStack } from './tags/TagChip';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -31,7 +30,9 @@ export function formatRelativeTime(epochMs: number): string {
 // drift the first time one is touched. The BASE is split out because the Resume
 // card swaps its border colour (accent when selected, no hover when inert), so
 // it cannot take the resting border + hover pair; everything else it shares.
-export const SESSION_CARD_SURFACE_BASE = 'rounded-lg border bg-inset transition-colors';
+// WHY card-raised (decisions "Card look" K-4, "Card shadow" F-3): a conversation card (Resume,
+// Projects → Conversations) is a raised card with the one medium shadow.
+export const SESSION_CARD_SURFACE_BASE = 'rounded-lg border bg-inset card-raised transition-colors';
 export const SESSION_CARD_SURFACE = `${SESSION_CARD_SURFACE_BASE} border-edge-dim hover:border-edge`;
 
 /** The card's bold one-line title (Conversations tab). */
@@ -56,10 +57,9 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-/** Tag chips after the name. Priority is FIRST and rendered with the same
- *  TagChip as everything else — it is a built-in tag, not a separate species of
- *  label (built-in-tags.ts). Complete has no chip: its state is the hide icon
- *  on the Resume card. Renders nothing when there is nothing to show.
+/** Tag chips after the name. Pinned (the Priority flag) is not a chip — it is the pin
+ *  among the Resume card's corner icons (pick-menus-4#PM4-3). Complete has no chip:
+ *  its state is the hide icon on the Resume card. Renders nothing when there is nothing to show.
  *  `tagsById` is passed in, not read from useTagRegistry here: that hook loads
  *  the registry, and one load per card would be one per row. */
 export function SessionCardTags({ session: s, tagsById, className = '' }: {
@@ -67,14 +67,12 @@ export function SessionCardTags({ session: s, tagsById, className = '' }: {
   tagsById: ReadonlyMap<string, TagRecord>;
   className?: string;
 }) {
-  if (!(s.flags?.priority || (s.tags && s.tags.length > 0) || s.note)) return null;
+  if (!((s.tags && s.tags.length > 0) || s.note)) return null;
+  const tags = (s.tags ?? []).map((id) => tagsById.get(id)).filter((t): t is TagRecord => !!t);
   return (
     <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${className}`}>
-      {s.flags?.priority && <TagChip tag={PRIORITY_TAG} />}
-      {(s.tags ?? []).map((id) => {
-        const t = tagsById.get(id);
-        return t ? <TagChip key={id} tag={t} /> : null;
-      })}
+      {/* Three or more tags: one stacked-icons button that rolls out on hover (pick-menus-6#PM6-1). */}
+      {tags.length >= 3 ? <TagStack tags={tags} /> : tags.map((t) => <TagChip key={t.id} tag={t} />)}
       {s.note && <span className="text-4xs text-fg-muted" title={s.note}>📝 note</span>}
     </div>
   );
@@ -172,7 +170,7 @@ export function CompleteToggle({ done, name, onToggle, className = '', titles }:
       aria-pressed={done}
       title={titles
         ? (done ? titles.set : titles.unset)
-        : (done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?')}
+        : (done ? 'Marked complete — hidden unless Show complete is on. Click to undo.' : 'Mark this session complete?')}
       aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
       // cursor-pointer is explicit (Destin, dev instance: cursor
       // flicker/stutter sweeping the doc-comments Resolve/Edit/Delete row) —
@@ -185,7 +183,7 @@ export function CompleteToggle({ done, name, onToggle, className = '', titles }:
       } ${className}`}
     >
       {/* Check-in-a-circle: "done" is what the user is saying; hiding the row is
-          a consequence the Show Complete toggle already explains. Filled when
+          a consequence the Show complete toggle already explains. Filled when
           set so the state reads at a glance. */}
       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />

@@ -1,5 +1,6 @@
 import type { ToolCallState } from '../../../shared/types';
 import { useSecondsTick } from '../../hooks/useSecondsTick';
+import { RowStatus } from '../ui';
 
 /** "Working in the background · 2m 14s" / "Finished in 4m · 5 steps" — the
  *  one line that answers "is it done?" without opening anything. Rides the
@@ -22,11 +23,13 @@ export function RunStatusLine({ run, report, elapsedUnknown = false }: {
   // the preposition has to go too or the sentence dangles ("Finished in").
   const after = elapsedUnknown ? '' : ` after ${elapsed}`;
   let text: string;
-  let tone = 'text-fg-muted';
+  // WHY a dot, not coloured words (small-fixes-3#SF3-10): the line was amber when stuck and red when
+  // failed — status colour in words. The words stay grey; the state is the setting row's status dot.
+  let dot: string | null = null;
   if (run.status === 'running') {
     const working = run.background ? 'Working in the background' : 'Working';
     text = `${working}${elapsedUnknown ? '' : ` · ${elapsed}`}${run.stale ? ' · no activity for a while — may be stuck' : ''}`;
-    if (run.stale) tone = 'text-amber-500';
+    if (run.stale) dot = 'bg-amber-500';
   } else if (run.status === 'completed') {
     text = report?.status === 'failed'
       ? `Failed${after}${steps}`
@@ -34,14 +37,14 @@ export function RunStatusLine({ run, report, elapsedUnknown = false }: {
     // Fix: `danger` isn't a real token (no --color-danger in globals.css), so this
     // line rendered in plain body color instead of red on failure. `destructive-fg`
     // is the app's real error/destructive text token.
-    if (report?.status === 'failed') tone = 'text-destructive-fg';
+    if (report?.status === 'failed') dot = 'bg-destructive';
   } else if (run.status === 'failed') {
     text = `Failed${after}${steps}`;
-    tone = 'text-destructive-fg';
+    dot = 'bg-destructive';
   } else {
     text = `Stopped${after}${steps} — the assistant can pick this back up`;
   }
-  return <div className={`text-xs ${tone}`} data-testid="specialist-status-line">{text}</div>;
+  return <div className="text-xs text-fg-muted" data-testid="specialist-status-line">{dot ? <RowStatus dotClassName={dot}>{text}</RowStatus> : text}</div>;
 }
 
 export function formatElapsed(ms: number): string {

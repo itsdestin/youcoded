@@ -43,7 +43,7 @@ describe('SettingsExplainer', () => {
     expect(screen.queryByRole('heading', { level: 2 }), 'the header belongs to Dialog').toBeNull();
     expect(screen.queryByRole('button', { name: /close/i }), 'close belongs to Dialog').toBeNull();
     expect(screen.queryByRole('button', { name: /back/i }), 'back belongs to Dialog').toBeNull();
-    expect(document.querySelector('.scroll-fade'), 'the scroll body belongs to Dialog').toBeNull();
+    expect(document.querySelector('.scroll-mask'), 'the scroll body belongs to Dialog').toBeNull();
   });
 });
 

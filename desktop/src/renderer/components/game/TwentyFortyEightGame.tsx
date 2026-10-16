@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../../state/theme-context';
 import { isTypingTarget } from '../../utils/is-typing-target';
-import { Button } from '../ui';
+import { Button, Pill } from '../ui';
 import type { SoloGameProps } from './game-registry';
 import RunOverCard from './RunOverCard';
 import {
@@ -159,11 +159,9 @@ export default function TwentyFortyEightGame({ onEnd, best, onExit }: SoloGamePr
         <div className="flex-1" />
         {/* Reaching 2048 is worth saying out loud, but it does not stop the run
             — the score keeps climbing and the leaderboard wants the bigger one. */}
-        {game.won && (
-          <span className="text-2xs font-semibold px-2 py-1 rounded-md bg-accent text-on-accent">
-            2048 reached
-          </span>
-        )}
+        {/* WHY the shared Pill (decisions "Status labels"): a status is a small tinted pill,
+            not a solid accent block — the same piece as RunOverCard's "New best". */}
+        {game.won && <Pill tone="info">2048 reached</Pill>}
         <Button variant="secondary" size="sm" onClick={restart}>New game</Button>
       </div>
 
@@ -331,7 +329,9 @@ function TileFace({ value, boardPx, reducedEffects }: {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <span className="flex flex-col leading-tight">
-      <span className="text-2xs uppercase tracking-wide text-fg-muted">{label}</span>
+      {/* WHY no uppercase/tracking (decisions "Heading ladder": small labels in normal case,
+          no spaced-out capitals). */}
+      <span className="text-2xs text-fg-muted">{label}</span>
       <span className="text-sm font-semibold text-fg tabular-nums">{value}</span>
     </span>
   );

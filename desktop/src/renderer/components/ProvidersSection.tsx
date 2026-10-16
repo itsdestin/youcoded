@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Button, FieldError, InputGroup, Select, TextInput, Toggle } from './ui';
+import { Button, ErrorState, FieldError, InputGroup, Select, SectionLabel, TextInput, Toggle } from './ui';
 import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ProviderType } from '../../shared/provider-types';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 
@@ -181,8 +181,10 @@ export default function ProvidersSection({ embedded = false }: { embedded?: fals
 
   return (
     <section>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
       {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Providers</h3>
+        <SectionLabel className="mb-3">Providers</SectionLabel>
       )}
 
       {visibleRows === null ? (
@@ -194,17 +196,17 @@ export default function ProvidersSection({ embedded = false }: { embedded?: fals
               failure (including a HARD initial-load failure that leaves rows
               empty) doesn't strand the user: the Add-provider affordance below
               still renders, and Retry re-runs list(). */}
+          {/* WHY ErrorState, not a field-error line beside a loose button (error-notices-2,
+              2026-10-12): an error with something to press is the notice box with its
+              button inside at the right. Same words; the button now reads "Try again". */}
           {listError && (
-            <div className="flex items-center gap-2 px-1">
-              <FieldError as="p" size="2xs" className="flex-1">
-                {visibleRows.length === 0
-                  ? `Couldn't load providers — ${listError}`
-                  : `Couldn't refresh — ${listError}`}
-              </FieldError>
-              <Button variant="secondary" size="sm" onClick={() => void refresh()} className="shrink-0">
-                Retry
-              </Button>
-            </div>
+            <ErrorState
+              variant="inline"
+              message={visibleRows.length === 0
+                ? `Couldn't load providers — ${listError}`
+                : `Couldn't refresh — ${listError}`}
+              onRetry={() => void refresh()}
+            />
           )}
 
           {visibleRows.map((p) => (
@@ -394,18 +396,19 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
         </div>
       )}
 
-      {/* Inline result — green-ish tone for ok, destructive for a failure.
-          Plain words only. */}
+      {/* Inline result — WHY plain/FieldError, not green/red text (guide: no
+          coloured body text for messages): success drops its colour, failure
+          goes through the shared component. */}
       {note && (
-        <p className={`text-3xs mt-2 ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>
-          {note.text}
-        </p>
+        note.tone === 'ok'
+          ? <p className="text-3xs mt-2 text-fg-muted">{note.text}</p>
+          : <FieldError as="p" className="mt-2">{note.text}</FieldError>
       )}
 
       {/* Local engine install/status/restart controls moved to the Local Models
           section (Plan C) — the local row just points there now. */}
       {isLocal && (
-        <p className="text-3xs text-fg-muted mt-2">Managed in Local Models below.</p>
+        <p className="text-3xs text-fg-muted mt-2">Managed in Local models below.</p>
       )}
     </div>
   );
@@ -454,7 +457,7 @@ function AddProviderForm({ onDone, onCancel }: { onDone: () => Promise<void>; on
 
   return (
     <div className="space-y-2 rounded-lg bg-inset border border-edge-dim p-3">
-      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Add provider</h3>
+      <SectionLabel>Add provider</SectionLabel>
 
       {/* Type — change 21: the native <select> is gone. A native option list is
           drawn by the OS, so a themed app dropped an OS-blue menu out of it;

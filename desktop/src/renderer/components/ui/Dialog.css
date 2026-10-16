@@ -1,0 +1,21 @@
+/* WHY: Destin approved the Settings treatment on both a long About popup and
+   a shorter Development popup. Titled Dialog bodies own this treatment; the
+   separately reviewed Session files list opts into the same header/scroll
+   classes. Other custom headers keep their roles. */
+.dialog-header, [data-session-files-header] { position: relative; }
+.dialog-header::after, [data-session-files-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
+}
+/* The body's edge fade is the app's one fade now (`.scroll-mask` on the body, Dialog.tsx), not a
+   private copy (2026-10-15). It keeps what this file decided: no unfaded 4% side strip
+   (project-switcher-2#P2-5, Destin on Backup & sync: "the fade looks really strange in this
+   container" — the cards' left and right edges stayed bright under the fade). The old copy
+   eased in over 150ms through @property; the one fade snaps, as performance.md rule 6 asks. */
+

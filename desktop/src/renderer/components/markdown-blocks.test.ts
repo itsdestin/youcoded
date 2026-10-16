@@ -7,6 +7,7 @@ import {
   type MarkdownBlocks, type StreamView,
 } from './markdown-blocks';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from '../../../tests/helpers/cpu-budget';
 
 // Counts how much text is handed to the markdown parser, so the cost pin below
 // measures what the splitter really parses rather than what it claims to. Wraps
@@ -58,7 +59,11 @@ function stream(prefixes: string[], visit: (state: MarkdownBlocks, prefix: strin
 
 const everyCharacter = (md: string) => Array.from({ length: md.length }, (_, i) => md.slice(0, i + 1));
 
-describe('splitMarkdownBlocks while a reply streams', () => {
+// Pure CPU work (150 seeded documents re-parsed at every character): budgeted in CPU time, not
+// wall time — tests/helpers/cpu-budget.ts says why. (Alone ~3 s; a starved verify run passed
+// the old 90 s wall limit, raised twice before from the 30 s default.)
+describe('splitMarkdownBlocks while a reply streams', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
+  budgetCpuPerTest();
   for (const sample of MARKDOWN_STREAM_CORPUS) {
     it(`parses the pieces of "${sample.name}" exactly as the whole message, at every character`, () => {
       stream(everyCharacter(sample.md), (state, prefix) => {
@@ -141,12 +146,6 @@ describe('splitMarkdownBlocks while a reply streams', () => {
   // CRLF). This is what found the per-block cut wrong, then CRLF read as a blank
   // line, then indented code's context: 8,000+ documents passed at every
   // character when this landed; 150 here keep it quick.
-  // Measured budget, not guessed (test-suite-hygiene): 13.4s run alone, but
-  // this is pure CPU work (150 docs × every-character re-parsing, no I/O, no
-  // timers) that competes for cores with every other worker under the full
-  // suite — a real run there hit 66.2s and tripped the shared 30s default,
-  // unrelated to any correctness change. 90s leaves comfortable headroom
-  // above that measured worst case.
   it('parses random documents exactly as the whole message, at every character', () => {
     const FRAGS = ['para text', 'more *words*', '# h', '#', '##x', '===', '---', '-', '- item', '  - nested', '1. one', '3) three', '> quote', '>', 'lazy', '```', '```js', '~~~', '    indented', '\t tab', '| a | b |', '| - | - |', '|---|', '<details>', '<summary>s</summary>', '</details>', '<div>', '</div>', '<!--', '-->', '***', '* star', '+ plus', '[x]: http://a', '[x]', '[^1]', 'http://example.com', '/tmp/a.txt', '  ', '', '', '', 'a  ', 'b\\', '<pre>', '</pre>', '* * *', '1.', '10. ten', '- [ ] task', 'Setext', '===', '  ```', '```  ', '> ```', '> - x', '   - three', '    - four', '<b>x</b>', '', '', '', '', '    code', '> ', '1) x', '- ', '* ', '```py', 'x | y', '--- | ---', '<details><summary>t</summary>', '[a][x]', '![i](p.png)', '  1. y', '    ', '\t- tabbed', '> > deep', '#     spaced', 'Title\n---'];
     let seed = 20260923;
@@ -163,7 +162,7 @@ describe('splitMarkdownBlocks while a reply streams', () => {
         expect(pieceForest(state), `prefix ${JSON.stringify(prefix)}`).toEqual(whole);
       });
     }
-  }, 90_000);
+  });
 });
 
 describe('advanceStream: the groups a growing message is drawn as', () => {

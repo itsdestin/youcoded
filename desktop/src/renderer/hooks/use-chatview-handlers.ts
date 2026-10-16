@@ -26,12 +26,12 @@ export interface ChatViewHandlers {
   /** Provider-config error bubble → open Settings straight to the Model
    *  Providers section so the key can be fixed. */
   openProviderSettings: () => void;
-  /** Plan-limit card (review round 2, P-9): Switch Providers opens the same
+  /** Plan-limit card (review round 2, P-9): Switch providers opens the same
    *  picker the status-bar chip opens. */
   switchProviders: () => void;
   /** Plan-limit card: the Upgrade plan button opens OpenAI's own upgrade page
    *  (the URL the Codex CLI's limit error names) in the system browser, like
-   *  My Account does. */
+   *  My account does. */
   upgradePlan: () => void;
   /** OpenRouter's "not enough credit" card: there is no purchase API, so the
    *  fix is OpenRouter's own page. (Arrived on master as an inline arrow on

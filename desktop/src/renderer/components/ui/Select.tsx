@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { fieldClasses, FIELD_TRIGGER_STATES, type FieldSize } from './field';
+import { mergeClasses } from './Button';
 
 /**
  * The one dropdown (change 21, §1.3). NO native <select> anywhere.
@@ -12,9 +13,9 @@ import { fieldClasses, FIELD_TRIGGER_STATES, type FieldSize } from './field';
  * <select>'s option list stays OS-rendered, so you get the OS blue-highlight menu
  * dropping out of a themed app. This renders the list itself.
  *
- * Three product call sites: ThemeScreen particles, ProvidersSection
- * add-provider type, SkillEditor category (plus three in the dev workbench
- * toolbar). RuntimeBinding's provider + model pair used to be here too; both
+ * Product call sites include ProvidersSection's add-provider type (ThemeScreen's
+ * particles and the SkillEditor's category went with those screens, 2026-10-01;
+ * plus three in the dev workbench toolbar). RuntimeBinding's provider + model pair used to be here too; both
  * were replaced by model/ModelPicker.tsx's one merged list. (SessionDrawer's
  * sort select folds into FileFilterPopover instead — change 38.)
  */
@@ -33,6 +34,8 @@ export type SelectProps = {
   placeholder?: string;
   disabled?: boolean;
   'aria-label'?: string;
+  /** Classes for the trigger. It is full width by default; a width class (`w-32`) replaces
+   *  that, as do gap and display classes (the shared `mergeClasses` conflict groups). */
   className?: string;
   /** Tailwind class for the menu width. Defaults to matching the trigger. */
   menuClassName?: string;
@@ -217,7 +220,12 @@ export function Select({
         aria-label={ariaLabel}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onKeyDown}
-        className={fieldClasses(size, `flex items-center justify-between gap-2 w-full text-left ${FIELD_TRIGGER_STATES} ${className}`)}
+        // WHY mergeClasses here too (games-social friction, proposal 11): fieldClasses only
+        // merges the caller's string over the FIELD base, so the trigger's own `w-full` and a
+        // caller's `w-32` both survived and Tailwind's source order picked `w-full` — the
+        // dropdown silently filled its row. Merging the caller over the trigger's defaults
+        // first lets a width (or gap, display) replace them, as on Button.
+        className={fieldClasses(size, mergeClasses(`flex items-center justify-between gap-2 w-full text-left ${FIELD_TRIGGER_STATES}`, className))}
       >
         <span className={`truncate ${selected ? '' : 'text-fg-muted'}`}>
           {selected?.label ?? placeholder}
@@ -257,7 +265,7 @@ export function Select({
             <div
               role="listbox"
               aria-label={ariaLabel}
-              className="p-1 max-h-64 overflow-y-auto"
+              className="scroll-mask p-1 max-h-64 overflow-y-auto"
               onKeyDown={onKeyDown}
             >
               {options.map((opt, i) => {

@@ -269,7 +269,7 @@ describe('runHealthCheck — primary (GitHub sync spaces) vs additional backups'
 /**
  * Health-check-owned warnings must clear themselves when their cause goes away.
  *
- * Bug (reported by Destin 2026-08-11, from his live app): the Backup & Sync
+ * Bug (reported by Destin 2026-08-11, from his live app): the Backup & sync
  * popup showed a red "No internet · Can't reach the network" card directly
  * under a green "All synced · GitHub · 1m ago" header. runHealthCheck() ran
  * exactly once — at the end of SyncService.start() — so a launch that lost the
@@ -489,5 +489,28 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
 
     expect(fs.statSync(warningsPath).mtimeMs).toBe(firstWrite);
     expect(fs.readFileSync(warningsPath, 'utf8')).toBe(firstBody);
+  });
+});
+
+// Final review F33: a cycle whose only backups are GitHub ones (which copy nothing on a computer)
+// must not stamp a fresh "last backup".
+describe('SyncService push with only GitHub backups', () => {
+  const tmpHome = path.join(os.tmpdir(), `sync-service-gh-${process.pid}-${Date.now()}`);
+  beforeEach(() => {
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'toolkit-state'), { recursive: true });
+    setClaudeDirForTests(tmpHome);
+  });
+  afterEach(() => { vi.restoreAllMocks(); try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch {} });
+
+  it('writes neither backup-meta.json nor the sync marker', async () => {
+    const svc = new SyncService(tmpHome);
+    vi.spyOn(svc as any, 'getBackendInstances').mockReturnValue([{ id: 'gh-1', type: 'github', syncEnabled: true, label: 'GitHub', config: {} }]);
+    const res = await svc.push({ force: true });
+    expect(res).toEqual({ success: true, errors: 0, backends: [] });
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'toolkit-state', '.sync-marker'))).toBe(false);
+    // ...and the same for "Upload now" on that one backup.
+    expect(await svc.push({ backendId: 'gh-1' })).toEqual({ success: true, errors: 0, backends: [] });
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'backup-meta.json'))).toBe(false);
   });
 });

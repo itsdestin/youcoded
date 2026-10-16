@@ -7,12 +7,9 @@
 // Step 1 asks the only question a new user can answer instantly (new or
 // existing?); step 2 makes the sync decision explicit with its consequence.
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Scrim, OverlayPanel } from '../overlays/Overlay';
-import { useEscClose } from '../../hooks/use-esc-close';
 import ImportProjectModal from '../ImportProjectModal';
 import { plainMessage } from '../../utils/ipc-error';
-import { Button, InputGroup } from '../ui';
-import { ScreenMark } from '../../shoot-mode';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, InputGroup } from '../ui';
 
 interface Props {
   onClose: () => void;
@@ -46,9 +43,8 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
   }, []);
 
   // The move step delegates entirely to ImportProjectModal (it owns the
-  // consent copy, name confirm, warnings). ESC/scrim for THIS modal only
-  // apply outside the move step (ImportProjectModal manages its own).
-  useEscClose(step.kind !== 'move' && !busy, onClose);
+  // consent copy, name confirm, warnings); this popup is not drawn then, so
+  // its Esc (the shared Dialog's) only applies outside the move step.
 
   const createNew = useCallback(async () => {
     const trimmed = name.trim();
@@ -101,12 +97,17 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
     }
   }, [step, onAdded]);
 
+  // WHY the shared notice box (guide "Status and notices": every info notice is Callout) —
+  // it was a hand-made inset box with its own border.
   const syncOffNote = syncEnabled === false && (
-    <div className="mt-3 rounded-md border border-edge bg-inset px-3 py-2 text-xs text-fg-dim" role="note">
-      <span className="text-fg-2 font-medium">Sync is currently turned off.</span>{' '}
-      This project will start syncing once you turn on Sync in Settings.
-    </div>
+    <Callout tone="info">
+      Sync is currently turned off. This project will start syncing once you turn on Sync in Settings.
+    </Callout>
   );
+
+  // One recipe for every choice: the first-level card Add a backup's choices use
+  // (SyncSetupWizard, small-fixes-3#SF3-1), lighting on hover.
+  const CHOICE = `w-full ${CARD_LEVEL_1} p-3 text-left transition-colors hover:bg-inset disabled:opacity-50`;
 
   if (step.kind === 'move') {
     return (
@@ -119,35 +120,39 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
     );
   }
 
+  // WHY the shared popup (decisions "Popup and side-panel titles", H-2, names "Add a project";
+  // "Closing popups", B-1): this was a hand-built panel — its own 14px title, no ✕, no tapered
+  // line, ghost Cancel / Back buttons and its own bordered choice boxes. Now the 16px title with
+  // the ✕; the second step is a page inside the popup, so "Back" is the popup's back arrow
+  // (guide "A page inside a popup"); the choices are first-level cards (CHOICE). The ✕ and Esc
+  // replace Cancel, and stay disabled while something is being added (busy).
+  const existing = step.kind === 'existing' ? step : null;
   return (
-    <>
-      <Scrim layer={2} onClick={busy ? undefined : onClose} />
-      <OverlayPanel
-        layer={2}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[26rem] max-w-[calc(100vw-2rem)] p-4"
-        role="dialog"
-        aria-modal
-        aria-labelledby="add-project-title"
-      >
-        <ScreenMark name="projects/add" />
-        {step.kind === 'choose' ? (
+    <Dialog
+      open
+      onClose={onClose}
+      title={existing ? `How should “${existing.baseName}” work?` : 'Add a project'}
+      onBack={existing ? () => { setError(null); setStep({ kind: 'choose' }); } : undefined}
+      size="panel"
+      busy={busy}
+      screen={existing ? undefined : 'projects/add'}
+      noScreen={existing ? 'Reached only after picking a folder in the system folder picker.' : undefined}
+    >
+      <div className="flex flex-col gap-2">
+        {!existing ? (
           <>
-            <div id="add-project-title" className="text-sm font-medium text-fg">Add a project</div>
-
             {/* Choice 1: start new (inline name + create) */}
-            <div className="mt-3 rounded-lg border border-edge p-3">
+            <div className={`${CARD_LEVEL_1} p-3`}>
               <div className="text-sm-tight font-semibold text-fg">Start something new</div>
               <div className="mt-0.5 text-xs text-fg-dim">Creates an empty project in YouCoded that syncs across your devices.</div>
-              {/* Change 77: Create submits this field, so it moves INSIDE the
-                  field rather than sitting alongside it. Cancel stays in the
-                  modal footer — only the submit goes inside. */}
+              {/* Change 77: Create submits this field, so it sits INSIDE the field. */}
               <InputGroup className="mt-2">
                 {/* No autoFocus (deliberate): the choose step presents two co-equal
                     choices — auto-focusing would bias toward create-new and pre-arm Enter. */}
                 <InputGroup.Field
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') void createNew(); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void createNew(); }}
                   placeholder="Project name…"
                   aria-label="Project name"
                 />
@@ -162,30 +167,14 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
             </div>
 
             {/* Choice 2: existing folder → step 2 */}
-            <button
-              onClick={() => void pickExisting()}
-              disabled={busy}
-              className="mt-2 w-full text-left rounded-lg border border-edge p-3 hover:border-accent hover:bg-inset transition-colors"
-            >
+            <button onClick={() => void pickExisting()} disabled={busy} className={CHOICE}>
               <div className="text-sm-tight font-semibold text-fg">Use a folder already on this computer</div>
               <div className="mt-0.5 text-xs text-fg-dim">Pick any folder — you'll choose whether it syncs next.</div>
             </button>
-
-            {error && <div className="mt-2 text-xs text-destructive-fg" role="alert">{error}</div>}
-            {syncOffNote}
-            <div className="mt-4 flex justify-end">
-              <Button variant="ghost" size="lg" className="py-1" onClick={onClose} disabled={busy}>Cancel</Button>
-            </div>
           </>
         ) : (
           <>
-            <div id="add-project-title" className="text-sm font-medium text-fg">How should “{step.baseName}” work?</div>
-
-            <button
-              onClick={() => void keepInPlace()}
-              disabled={busy}
-              className="mt-3 w-full text-left rounded-lg border border-edge p-3 hover:border-accent hover:bg-inset transition-colors"
-            >
+            <button onClick={() => void keepInPlace()} disabled={busy} className={CHOICE}>
               <div className="text-sm-tight font-semibold text-fg">Keep it where it is</div>
               <div className="mt-0.5 text-xs text-fg-dim">Only on this computer. The folder doesn't move and nothing changes.</div>
             </button>
@@ -193,23 +182,19 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
             <button
               // Clear any stale keep-in-place error so it doesn't reappear after
               // Cancel-ing back from ImportProjectModal.
-              onClick={() => { setError(null); setStep({ kind: 'move', path: step.path, baseName: step.baseName }); }}
+              onClick={() => { setError(null); setStep({ kind: 'move', path: existing.path, baseName: existing.baseName }); }}
               disabled={busy}
-              className="mt-2 w-full text-left rounded-lg border border-edge p-3 hover:border-accent hover:bg-inset transition-colors"
+              className={CHOICE}
             >
               <div className="text-sm-tight font-semibold text-fg">Move it into YouCoded so it syncs</div>
               <div className="mt-0.5 text-xs text-fg-dim">The folder moves to ~/YouCoded/Projects/ and syncs across your devices. Anything pointing at the old location (shortcuts, open terminals) will need the new path.</div>
             </button>
-
-            {error && <div className="mt-2 text-xs text-destructive-fg" role="alert">{error}</div>}
-            {syncOffNote}
-            <div className="mt-4 flex justify-between">
-              <Button variant="ghost" size="lg" className="py-1" onClick={() => { setError(null); setStep({ kind: 'choose' }); }} disabled={busy}>Back</Button>
-              <Button variant="ghost" size="lg" className="py-1" onClick={onClose} disabled={busy}>Cancel</Button>
-            </div>
           </>
         )}
-      </OverlayPanel>
-    </>
+        {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+        {error && <FieldError as="div">{error}</FieldError>}
+        {syncOffNote}
+      </div>
+    </Dialog>
   );
 }

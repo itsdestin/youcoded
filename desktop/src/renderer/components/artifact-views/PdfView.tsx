@@ -130,7 +130,7 @@ function PdfPages({ bytes, findBarOpen }: { bytes: Uint8Array; findBarOpen?: boo
   // the window corner is (Project View, a resized drawer, a narrow window).
   return (
     <div data-zoomable className="relative h-full">
-      <div ref={rootRef} className="absolute inset-0 overflow-auto p-4">
+      <div ref={rootRef} className="scroll-mask absolute inset-0 overflow-auto p-4">
         {Array.from({ length: numPages }, (_, i) => (
           <PdfPage key={i} doc={docRef} index={i + 1} scale={BASE_SCALE * zoom} fitWidth={zoom <= 1 + 1e-6} />
         ))}

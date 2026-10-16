@@ -5,12 +5,12 @@ import { render, screen, act, cleanup, fireEvent, waitFor, within } from '@testi
 import '@testing-library/jest-dom/vitest';
 import SyncSection from '../src/renderer/components/SyncPanel';
 
-// Every section renders the real Backup & Sync panel (SyncPanel's default export,
+// Every section renders the real Backup & sync panel (SyncPanel's default export,
 // SyncSection) against a hand-built `window.claude`; each section keeps its own fake
 // inside its describe, because the fakes answer differently on purpose.
 
 /**
- * Backup & Sync must never report a success the backend did not confirm.
+ * Backup & sync must never report a success the backend did not confirm.
  *
  * Error inventory 2026-09-10, the first two of the seventeen false messages
  * (youcoded-dev docs/active/investigations/2026-09-10-error-inventory/README.md):
@@ -35,11 +35,11 @@ const ICLOUD = { id: 'icloud-1', type: 'icloud', label: 'My iCloud', syncEnabled
 const RETRY_WARNING = {
   code: 'PUSH_FAILED', level: 'danger', backendId: 'drive-1',
   title: 'Backup failed', body: 'The last upload did not finish.',
-  fixAction: { label: 'Retry', kind: 'retry', payload: { backendId: 'drive-1' } },
+  fixAction: { label: 'Try again', kind: 'retry', payload: { backendId: 'drive-1' } },
   dismissible: false, createdEpoch: 0,
 };
 // iCloud has no sign-in step, so "Fix it" lands on the prerequisite check and then
-// straight on the settings step with its Start Backup button.
+// straight on the settings step with its Start backup button.
 const SETUP_WARNING = {
   code: 'ICLOUD_MISSING', level: 'warn', backendId: 'icloud-1',
   title: 'iCloud needs attention', body: 'Set it up again.',
@@ -48,7 +48,7 @@ const SETUP_WARNING = {
 };
 
 function stub(sync: Record<string, unknown>, warnings: unknown[]) {
-  const status = {
+  const status: { backends: any[]; [k: string]: unknown } = {
     backends: [DRIVE, ICLOUD], lastSyncEpoch: null, backupMeta: null, warnings,
     syncInProgress: false, syncingBackendId: null, syncedCategories: [], lastSyncByDevice: {},
   };
@@ -57,7 +57,13 @@ function stub(sync: Record<string, unknown>, warnings: unknown[]) {
     getLog: vi.fn(async () => []),
     force: vi.fn(async () => ({ success: true, output: '', error: '' })),
     pushBackend: vi.fn(async () => ({ success: true, error: '' })),
-    addBackend: vi.fn(async (instance: any) => ({ ...instance, id: 'icloud-new' })),
+    // The saved backup joins the list, as the real backend's next status does — the wizard
+    // closes onto Backup & sync (small-fixes-3#SF3-5), where the new row is the outcome.
+    addBackend: vi.fn(async (instance: any) => {
+      const added = { ...instance, id: 'icloud-new', connected: true, lastPushEpoch: null, lastError: null };
+      status.backends.push(added);
+      return added;
+    }),
     dismissWarning: vi.fn(async () => {}),
     setup: { checkPrereqs: vi.fn(async () => ({ icloudPath: '/Users/me/iCloud Drive' })) },
     ...sync,
@@ -77,10 +83,10 @@ function stub(sync: Record<string, unknown>, warnings: unknown[]) {
 async function openSetup(): Promise<HTMLElement> {
   render(<SyncSection autoOpen />);
   fireEvent.click(await screen.findByRole('button', { name: 'Fix it' }));
-  return screen.findByRole('button', { name: 'Start Backup' });
+  return screen.findByRole('button', { name: 'Start backup' });
 }
 
-describe('Backup & Sync reports only what the backend confirmed', () => {
+describe('Backup & sync reports only what the backend confirmed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
   it('explains handoff limits without promising exclusive offline use or lossless merging', async () => {
@@ -99,7 +105,8 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
       [RETRY_WARNING],
     );
     render(<SyncSection autoOpen />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
 
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('drive-1'));
     await waitFor(() => expect(screen.getByText("Upload failed: Some files didn't upload.")).toBeInTheDocument());
@@ -112,7 +119,8 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
   async function retryAndFindAlert(pushBackend: ReturnType<typeof vi.fn>, text: RegExp) {
     const api = stub({ pushBackend }, [RETRY_WARNING]);
     render(<SyncSection autoOpen />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    // The warning's own fix button, labelled by the backend (RETRY_WARNING.fixAction).
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     const alert = await waitFor(() => {
       const hit = screen.getAllByRole('alert').find((a) => text.test(a.textContent ?? ''));
       if (!hit) throw new Error('no alert matching ' + text);
@@ -126,20 +134,21 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
       vi.fn(async () => ({ success: false, error: "Some files didn't upload." })),
       /Upload failed: Some files didn.t upload\./,
     );
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+    // settle (negative assertion): the alert must still be there after its old 2 s auto-clear.
     await new Promise((r) => setTimeout(r, 2300));
     expect(alert).toBeInTheDocument();
     expect(screen.queryByText('Error')).toBeNull();
 
     // Retry in the block runs the upload again.
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledTimes(2));
   });
 
   it('an upload that was skipped offers Retry only — nothing to report', async () => {
     const { alert } = await retryAndFindAlert(vi.fn(async () => ({ success: false, error: '' })), /upload hasn.t run yet/i);
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).queryByRole('button', { name: 'Report bug' })).toBeNull();
   });
 
@@ -148,12 +157,12 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
       vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }),
       /couldn.t confirm the upload finished/i,
     );
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
   });
 
   it('a backup that could not be saved keeps the wizard open and says why', async () => {
-    stub({
+    const api = stub({
       addBackend: vi.fn(async () => {
         throw new Error("Error invoking remote method 'sync:add-backend': Error: EACCES: permission denied, open '/home/me/.claude/toolkit-state/config.json'");
       }),
@@ -164,7 +173,11 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     // The transport wrapper is machinery, not part of the reason.
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
     expect(screen.queryByText("You're all set!")).toBeNull();
-    expect(screen.getByRole('button', { name: 'Start Backup' })).toBeInTheDocument();
+    // small-fixes-1: the failure takes Start backup's place, with Try again inside it (it used
+    // to be a box with nothing to press, above the button), and Try again saves again.
+    expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(api.addBackend).toHaveBeenCalledTimes(2));
   });
 
   it('a first backup that failed is reported as failed, for the new destination only', async () => {
@@ -175,8 +188,10 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup didn.t finish/i)).toBeInTheDocument();
-    expect(screen.getByText(/Some files didn.t upload/)).toBeInTheDocument();
+    // No Done page (small-fixes-3#SF3-5): the wizard closes onto Backup & sync, and the new
+    // backup's row carries the failed first upload in the same box a failed Upload now uses.
+    expect(await screen.findByText(/Upload failed: Some files didn.t upload/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull();
     expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
     expect(api.force).not.toHaveBeenCalled();
     expect(screen.queryByText("You're all set!")).toBeNull();
@@ -188,8 +203,8 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     stub({ pushBackend: vi.fn(async () => ({ success: false, error: '' })) }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup hasn.t run yet/i)).toBeInTheDocument();
-    expect(screen.queryByText(/didn.t finish/i)).toBeNull();
+    expect(await screen.findByText(/Upload hasn.t run yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Upload failed/i)).toBeNull();
   });
 
   it('a first backup whose outcome never came back says it could not confirm', async () => {
@@ -198,7 +213,7 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/couldn.t confirm/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn.t confirm the upload finished/i)).toBeInTheDocument();
     expect(screen.queryByText("You're all set!")).toBeNull();
   });
 
@@ -208,23 +223,25 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Back up automatically after changes' }));
     fireEvent.click(start);
 
-    expect(await screen.findByText(/automatic backup is off/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull());
+    expect(api.addBackend).toHaveBeenCalled();
     expect(api.pushBackend).not.toHaveBeenCalled();
     expect(api.force).not.toHaveBeenCalled();
-    expect(screen.queryByText(/syncing now/i)).toBeNull();
+    expect(screen.queryByText(/Upload failed|Couldn.t confirm|syncing now/i)).toBeNull();
   });
 
-  it('a first backup that finished says so, without the deleted 15-minute schedule', async () => {
+  it('a first backup that finished closes onto Backup & sync with no error, without the deleted 15-minute schedule', async () => {
     const api = stub({}, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
-    expect(await screen.findByText(/first backup finished/i)).toBeInTheDocument();
-    expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
+    await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('icloud-new'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start backup' })).toBeNull());
+    expect(screen.queryByText(/Upload failed|Couldn.t confirm/i)).toBeNull();
     expect(screen.queryByText(/15 minutes/)).toBeNull();
   });
 });
 
-// Regression test for "YouCoded failed to start" when opening Backup & Sync
+// Regression test for "YouCoded failed to start" when opening Backup & sync
 // (reported by Destin 2026-09-04, seen on the PUBLIC landing page's live demo).
 //
 // WHAT HAPPENED: the workbench mock shim answers an unimplemented channel with
@@ -243,7 +260,7 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
 // shape this renderer version doesn't know about (an older remote host over the
 // remote shim, a partial reply mid-migration), and "the panel renders without
 // that section" must always beat "the app dies".
-describe('Backup & Sync — a partial status must not crash the app', () => {
+describe('Backup & sync — a partial status must not crash the app', () => {
   function spacesStatus() {
     return {
       enabled: true,
@@ -299,7 +316,7 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
     const notice = screen.getByText(explanation);
     expect(notice.textContent).not.toMatch(/local|remote|canonical|resolving device|original filename/i);
     fireEvent.click(screen.getByRole('button', { name: 'What is this?' }));
-    await waitFor(() => expect(document.body.textContent).toContain('About Backup & Sync'));
+    await waitFor(() => expect(document.body.textContent).toContain('About Backup & sync'));
     expect(document.body.textContent).toContain(`${explanation} They appear in the same folder as the affected file.`);
   });
 
@@ -309,7 +326,7 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
     await renderOpen();
     // Reaching this line is the assertion — before the fix SyncPopup threw
     // during render, so 'Additional backups' never appeared at all.
-    expect(document.body.textContent).toContain('Backup & Sync');
+    expect(document.body.textContent).toContain('Backup & sync');
   });
 
   // The general case: a well-formed object that is simply missing fields this
@@ -323,12 +340,13 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
       syncingBackendId: null,
     });
     await renderOpen();
-    // The "Includes …" category strip is the section that used to throw — it
-    // must be absent, not fatal.
-    expect(document.body.textContent).not.toContain('Includes');
+    // The legacy category strip is the section that used to throw — it must be absent, not
+    // fatal. (small-fixes-3: it now reads "Also includes …" under Additional backups; the GitHub
+    // card's own "Includes Conversations · Personal folder · Projects" is fixed text.)
+    expect(document.body.textContent).not.toContain('Also includes');
   });
 
-  it('still renders the category strip when the field IS present', async () => {
+  it('shows no category strip on the cards even when the field IS present', async () => {
     installClaudeMock({
       backends: [],
       lastSyncEpoch: null,
@@ -339,14 +357,13 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
       syncedCategories: ['memory', 'conversations'],
     });
     await renderOpen();
-    await waitFor(() => {
-      expect(document.body.textContent).toContain('Memory');
-    }, { timeout: 3000 });
-    expect(document.body.textContent).toContain('Conversations');
+    // small-fixes-3#SF3-7 ("too much bare text … hidden behind the i popup"): the cards no longer
+    // list categories, even when the backend sends them; the (i) explainer says what is copied.
+    expect(document.body.textContent).not.toMatch(/Includes|Also includes/);
   });
 });
 
-// Regression test for the Settings → "Backup & Sync" row freezing on the
+// Regression test for the Settings → "Backup & sync" row freezing on the
 // warnings it read at APP LAUNCH (reported by Destin 2026-07-26).
 //
 // The row lives in SyncSection, which mounts with the app — DesktopSettings
@@ -357,14 +374,14 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
 // warnings and then never refetches: its status:data handler patched only the
 // recency fields, and the popup's refreshStatus only auto-fires when the LEGACY
 // .sync-marker epoch advances (a file that doesn't exist on a spaces-only
-// install). Result: red "Sync Failing · 2" for the whole app run while the
+// install). Result: red "Sync failing · 2" for the whole app run while the
 // popup two clicks away reads green "All synced" off a fresh fetch.
 //
 // The fix takes warnings from the same authoritative 10s status:data push that
 // App.tsx's gear danger-dot already uses (buildStatusData reads the warnings
 // file every cycle). These tests pin BOTH directions — a push must be able to
 // clear a stale warning AND raise a fresh one.
-describe('Settings row — Backup & Sync warnings freshness', () => {
+describe('Settings row — Backup & sync warnings freshness', () => {
   // Two danger warnings — the pair runHealthCheck leaves behind when a launch
   // finds no network and no legacy backend (OFFLINE + PERSONAL_NOT_CONFIGURED),
   // which is exactly what the reported row was showing.
@@ -434,7 +451,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
 
     // The mount fetches are deferred 350ms past the settings slide-in.
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
     expect(container.textContent).toContain('2');
   });
@@ -444,7 +461,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
     const { container } = render(<SyncSection />);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
 
     // runHealthCheck has since swept both codes and unlinked the file, so the
@@ -453,7 +470,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
       pushStatusData!({ syncWarnings: [], lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).not.toContain('Sync Failing');
+    expect(container.textContent).not.toContain('Sync failing');
     expect(container.textContent).toContain('Last synced');
   });
 
@@ -469,7 +486,7 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
       pushStatusData!({ syncWarnings: [STALE_WARNINGS[0]], lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).toContain('Sync Failing');
+    expect(container.textContent).toContain('Sync failing');
   });
 
   it('keeps the last-known warnings when a push omits the field entirely', async () => {
@@ -480,13 +497,43 @@ describe('Settings row — Backup & Sync warnings freshness', () => {
     const { container } = render(<SyncSection />);
 
     await waitFor(() => {
-      expect(container.textContent).toContain('Sync Failing');
+      expect(container.textContent).toContain('Sync failing');
     }, { timeout: 3000 });
 
     await act(async () => {
       pushStatusData!({ lastSyncEpoch: null, syncInProgress: false });
     });
 
-    expect(container.textContent).toContain('Sync Failing');
+    expect(container.textContent).toContain('Sync failing');
+  });
+});
+
+// small-fixes-2 (Destin "yes, proceed"): on a computer a GitHub backup copies nothing — its
+// backend was removed — so one set up earlier is shown as no longer supported, with Remove, and
+// its settings are left alone; the add-a-backup picker no longer offers it.
+describe('GitHub backups on a computer', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('an existing one says it is no longer supported and offers Remove, not "Backed up"', async () => {
+    const GITHUB = { id: 'github-1', type: 'github', label: 'GitHub', syncEnabled: true, config: { PERSONAL_SYNC_REPO: 'https://github.com/me/x' }, connected: true, lastPushEpoch: 1, lastError: null };
+    const api = stub({}, []);
+    (api as any).getStatus = vi.fn(async () => ({
+      backends: [DRIVE, GITHUB], lastSyncEpoch: null, backupMeta: null, warnings: [],
+      syncInProgress: false, syncingBackendId: null, syncedCategories: [], lastSyncByDevice: {},
+    }));
+    render(<SyncSection autoOpen />);
+    expect(await screen.findByText('No longer supported')).toBeInTheDocument();
+    expect(screen.getByText(/GitHub backups are no longer supported on computers/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    // The existing Remove confirm — nothing is removed until it is confirmed there.
+    expect(await screen.findByText(/This disconnects this backup destination/)).toBeInTheDocument();
+  });
+
+  it('the add-a-backup picker does not offer GitHub', async () => {
+    stub({}, []);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: /Add a backup/ }));
+    expect(await screen.findByRole('button', { name: /Google Drive/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /GitHub Stores your data/ })).toBeNull();
   });
 });

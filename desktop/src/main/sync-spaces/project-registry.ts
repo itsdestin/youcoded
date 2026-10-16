@@ -284,3 +284,49 @@ export function setProjectDescription(
     };
   });
 }
+
+// ── Removed projects (project switcher, redesign backlog row 10) ─────────────────────────────
+// Destin (project-switcher-1, PQ-1): removing a synced project = "stop syncing on all devices,
+// remove from list on all devices". The stop is the existing `stopped` tombstone above. The
+// "off every list" half is a SEPARATE marker, one file per project in ProjectSync/Removed/, for
+// three reasons:
+//  - Older builds must stay safe. They read only `*.json` files directly in ProjectSync/ and
+//    skip folders, so they never see this marker — they see a plain stopped project (still
+//    listed as "Sync stopped", files kept). A new `state` value would instead read as `active`
+//    on an older build (parseEntry maps anything but 'stopped' to active) and RESTART syncing.
+//  - It is monotonic like the stop: a marker file is only ever added, so two devices removing
+//    the same project at once can only produce a conflict copy that says the same thing.
+//  - It touches nothing on disk but this marker: every device keeps its copy of the folder,
+//    and the GitHub repository is never contacted.
+function removedDir(personalRoot: string): string {
+  return path.join(registryDir(personalRoot), 'Removed');
+}
+
+/** Mark a project removed from every device's lists. Idempotent. Async: the main process
+ *  never blocks on a click's path (performance rule 1). */
+export async function markProjectRemoved(personalRoot: string, name: string): Promise<void> {
+  if (!isSafeName(name)) throw new Error(`project-registry: invalid name '${name}'`);
+  const dir = removedDir(personalRoot);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${name}.json`);
+  if (await fs.promises.access(file).then(() => true, () => false)) return;
+  const tmp = `${file}.${process.pid}.${writeSeq++}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify({ schemaVersion: PROJECT_REGISTRY_SCHEMA, name, removedAt: Date.now() }, null, 2) + '\n');
+  await fs.promises.rename(tmp, file);
+}
+
+/** Every project name marked removed (conflict copies included — they carry the same name).
+ *  Async on purpose: it is read on list paths, and the main process never blocks there
+ *  (performance rule 1). Fail-soft: a missing folder or a bad file is just "not removed". */
+export async function readRemovedProjects(personalRoot: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  let names: string[];
+  try { names = await fs.promises.readdir(removedDir(personalRoot)); } catch { return out; }
+  await Promise.all(names.filter((n) => n.endsWith('.json')).map(async (n) => {
+    try {
+      const raw = JSON.parse(await fs.promises.readFile(path.join(removedDir(personalRoot), n), 'utf8'));
+      if (raw && typeof raw.name === 'string' && isSafeName(raw.name)) out.add(raw.name);
+    } catch { /* corrupt or vanished — skip */ }
+  }));
+  return out;
+}

@@ -11,6 +11,7 @@ import { SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS } from '../src/ma
 import { OWNER, RAW_REPORT_CAP_CHARS } from '../src/main/harness/specialists/delegation-ledger';
 import { computeReportBudget } from '../src/main/harness/specialists/report-budget';
 import { APPROX_CHARS_PER_TOKEN } from '../src/main/harness/message-size';
+import { looseData } from '../src/shared/transcript-event-types';
 
 /** Remove a temp root a live NativeSessionHost was writing into.
  *
@@ -94,6 +95,7 @@ describe('specialist foreground run', () => {
 
     const { childId, report } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task', // WHY: SpecialistSpawnOpts requires the Task tool's per-call description.
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -150,7 +152,7 @@ describe('specialist foreground run', () => {
     // record, which must stay a faithful record of the parent's own turns).
     await host.drain('root-1');
     const parentFile = store.readEvents('root-1', root);
-    expect(parentFile.filter((e) => e.data?.agentId && e.type !== 'subagent-usage')).toHaveLength(0);
+    expect(parentFile.filter((e) => looseData(e).agentId && e.type !== 'subagent-usage')).toHaveLength(0);
     // The ONE agentId-bearing event that DOES belong on the parent's disk: the
     // specialist's spend. It has to persist, or a resumed session would forget
     // every specialist it ever paid for (spec §2, consequence 3).
@@ -187,6 +189,7 @@ describe('specialist foreground run', () => {
 
     const { childId } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
 
@@ -241,6 +244,7 @@ describe('specialist foreground run', () => {
 
     const { childId } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
 
@@ -263,6 +267,7 @@ describe('specialist foreground run', () => {
 
     const { childId } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -287,6 +292,7 @@ describe('specialist foreground run', () => {
 
     const { childId } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -318,6 +324,7 @@ describe('specialist foreground run', () => {
     await withParent(TWO_TOOLS_THEN_REPORT);
     const { childId } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -358,6 +365,7 @@ describe('specialist foreground run', () => {
 
     await expect(host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     })).rejects.toThrow(/llama-server dropped the connection/);
 
@@ -396,6 +404,7 @@ describe('specialist foreground run', () => {
 
     const { childId, report } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -419,6 +428,7 @@ describe('specialist foreground run', () => {
 
     await expect(host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     })).rejects.toThrow(/no final message|without producing a report/i);
   });
@@ -433,6 +443,7 @@ describe('specialist foreground run', () => {
 
     const { report } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist now BINDS a reservation rather than
       // making one itself (tools/task.ts's execute() does that via
       // reserveSpecialist before ever calling spawn) — these tests exercise
@@ -474,6 +485,7 @@ describe('specialist foreground run', () => {
 
       const { childId, report } = await host.spawnSpecialist('root-1', {
         specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+        description: 'test task',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -497,6 +509,7 @@ describe('specialist foreground run', () => {
 
       const { childId, report } = await host.spawnSpecialist('root-1', {
         specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+        description: 'test task',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -518,6 +531,7 @@ describe('specialist foreground run', () => {
 
       const { report } = await host.spawnSpecialist('root-1', {
         specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+        description: 'test task',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -566,6 +580,7 @@ describe('specialist foreground run', () => {
 
       const { childId, report } = await host.spawnSpecialist('root-1', {
         specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+        description: 'test task',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -589,6 +604,7 @@ describe('specialist foreground run', () => {
 
       await expect(host.spawnSpecialist('root-1', {
         specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+        description: 'test task',
         token: { parentId: 'root-1', writer: false },
       })).rejects.toThrow(/simulated lock exhaustion/);
 
@@ -680,6 +696,7 @@ describe('compaction-finalize steer', () => {
 
     await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist BINDS a reservation the Task tool
       // made; these tests drive the run loop directly, so they hand it a
       // plain reader token instead of going through reserveSpecialist.
@@ -697,6 +714,7 @@ describe('compaction-finalize steer', () => {
 
     await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist BINDS a reservation the Task tool
       // made; these tests drive the run loop directly, so they hand it a
       // plain reader token instead of going through reserveSpecialist.
@@ -712,6 +730,7 @@ describe('compaction-finalize steer', () => {
 
     await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist BINDS a reservation the Task tool
       // made; these tests drive the run loop directly, so they hand it a
       // plain reader token instead of going through reserveSpecialist.
@@ -749,6 +768,7 @@ describe('compaction-finalize steer', () => {
 
     await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       // Task 1 (plan 1b): spawnSpecialist BINDS a reservation the Task tool
       // made; these tests drive the run loop directly, so they hand it a
       // plain reader token instead of going through reserveSpecialist.
@@ -916,6 +936,7 @@ describe('heartbeat staleness', () => {
 
     const runPromise = host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
     await started;
@@ -954,6 +975,7 @@ describe('heartbeat staleness', () => {
 
     const runPromise = host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
     await started;
@@ -995,6 +1017,7 @@ describe('heartbeat staleness', () => {
 
     const runPromise = host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
     // Waits for the REAL Glob execute() to actually start — at that point the
@@ -1029,6 +1052,7 @@ describe('heartbeat staleness', () => {
 
     const runPromise = host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
+      description: 'test task',
       token: { parentId: 'root-1', writer: false },
     });
     await toolStarted;
@@ -1846,7 +1870,7 @@ describe('a running child keeps its spawn-time definition', () => {
     const SPEC_V1: SpecialistDefinition = {
       id: 'custom-helper', displayName: 'Custom Helper', description: 'A file-defined helper.',
       systemPrompt: 'Help with reading files.', allowedTools: ['Read'], charter: 'read-only',
-      reportBudgetTokens: 500, source: 'personal',
+      reportBudgetTokens: 500, source: 'personal', grantScope: 'user',
     };
 
     let capturedTools: string[] = [];
@@ -1965,6 +1989,7 @@ describe('turn-start ensureFresh is root-only for real', () => {
     const { childId, report } = await host.spawnSpecialist('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives',
       workDir: childWorkDir, parentToolCallId: 'tc-1', token: { parentId: 'root-1', writer: false },
+      description: 'test task',
     });
     expect(report).toContain('REPORT: done');
     expect(childId).toBeDefined();

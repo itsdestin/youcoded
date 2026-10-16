@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
 import { RemoteGate } from './remote-gate';
+import { defaultThemeFor, guessThemeDefault } from '../shared/theme-default';
 import { installChipCopy } from './components/context-menu/chip-copy';
 
 // Perf lab startup mark (read over CDP by youcoded-dev/scripts/perf-lab). Free.
@@ -49,7 +50,11 @@ if (__liveTheme && __liveQuery.get('mode') === 'workbench' && __liveQuery.get('c
 }
 
 // Apply theme before React mounts to prevent FOUC (flash of unstyled content)
-const storedTheme = localStorage.getItem('youcoded-theme') || 'midnight';
+// The first paint matches what ThemeProvider will pick when no theme was ever chosen: the
+// YouCoded pair (by the computer's light/dark setting) on a new install, Midnight on an
+// install that was in use before it (final review F1 — shared/theme-default.ts).
+const storedTheme = localStorage.getItem('youcoded-theme')
+  || defaultThemeFor(guessThemeDefault(localStorage), !!window.matchMedia?.('(prefers-color-scheme: dark)').matches);
 document.documentElement.setAttribute('data-theme', storedTheme);
 
 // Mark buddy windows on <html> SYNCHRONOUSLY (before first paint) so the
@@ -145,6 +150,33 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
     // and the parent frame would otherwise fall through to Root's login path if
     // anything there ever reads the bridge.
     installMock();
+    // WHY: design-guide review (2026-09-24) compares whole screens under
+    // alternative style systems. `?proposal=<name>` (or VITE_STYLE_PROPOSAL for
+    // a whole screenshot sweep) layers dev/workbench/proposals/<name>.css over
+    // the real renderer. Workbench-only: this branch never ships in the app.
+    const __proposal = new URLSearchParams(location.search).get('proposal')
+      // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+      ?? (import.meta.env.VITE_STYLE_PROPOSAL as string | undefined);
+    if (__proposal) {
+      // @ts-ignore TS1343 — import.meta.glob is a Vite build-time transform
+      const sheets: Record<string, () => Promise<unknown>> = import.meta.glob('./dev/workbench/proposals/*.css', { query: '?inline', import: 'default' });
+      // Comma-separated so decided choices stack under the one being compared
+      // (e.g. `shape-round,cards-raised`): later names win within the layer.
+      const css: string[] = [];
+      for (const name of __proposal.split(',').map((n) => n.trim()).filter(Boolean)) {
+        const load = sheets[`./dev/workbench/proposals/${name}.css`];
+        if (load) css.push((await load()) as string);
+        else console.error(`[workbench] no style proposal named ${name}`);
+      }
+      if (css.length) {
+        const style = document.createElement('style');
+        style.dataset.proposal = __proposal;
+        style.textContent = css.join('\n');
+        // First in <head> so `@layer proposal` is the earliest layer and its
+        // !important rules outrank the app's layered !important utilities.
+        document.head.prepend(style);
+      }
+    }
     if (isChild) {
       // The tool gallery is a separate surface, not part of the app shell, so it
       // renders in place of <App/> rather than inside it. It DOES get a real
@@ -179,12 +211,16 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // view=compare documents: a candidate may borrow a real chat component and would
       // crash outside ChatProvider.
       if (__view === 'live') {
-        const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }] = await Promise.all([
+        // WHY: real popup candidates use the app's centralized Escape stack;
+        // without its provider the hook soft-fails and a live pane falsely
+        // reports that Escape cannot dismiss either popup.
+        const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }, { EscCloseProvider }] = await Promise.all([
           import('./dev/workbench/LiveCandidate'),
           import('./state/theme-context'),
           import('./state/chat-context'),
+          import('./hooks/use-esc-close'),
         ]);
-        __mount.render(<ThemeProvider><ChatProvider><LiveCandidate /></ChatProvider></ThemeProvider>);
+        __mount.render(<ThemeProvider><ChatProvider><EscCloseProvider><LiveCandidate /></EscCloseProvider></ChatProvider></ThemeProvider>);
         return;
       }
       // Attachment-chip page (dev/workbench/mockups/AttachmentChips.tsx) — the
@@ -213,7 +249,7 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         return;
       }
       // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
-      // — its New Session form and Resume list at the floater's real 320x480, so
+      // — its New session form and Resume list at the floater's real 320x480, so
       // both panes can be operated in every theme without launching a dev
       // Electron instance. ThemeProvider so the themes are the real ones; no
       // ChatProvider because nothing on that screen touches chat state.
@@ -229,11 +265,19 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // directly. `__SHOOT__` is false in every other build, so this import and the
       // screen list never ship in the app or the landing page's demo.
       if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
-        const [{ installScreenDriver }, { SCREENS }] = await Promise.all([
+        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }, { default: OpenTasksPractice }] = await Promise.all([
           import('./shoot-mode'),
           import('./dev/workbench/screens'),
+          // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
+          import('./dev/workbench/IconSheet'),
+          // So does the status-tag sheet (`dev/pills`, submit-ticket-5 tint check).
+          import('./dev/workbench/PillSheet'),
+          // And the Open tasks popup over practice tasks (`dev/open-tasks`, submit-ticket-5).
+          import('./dev/workbench/OpenTasksPractice'),
         ]);
         installScreenDriver(SCREENS);
+        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /></>);
+        return;
       }
       // App is already statically imported above (Root renders it).
       __mount.render(<App />);

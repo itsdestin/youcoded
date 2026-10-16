@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
 import {
   judgeRun, MIN_QUOTE_CHARS, MAX_QUOTE_SEGMENTS, JUDGE_SCALE_MAX,
-  type Grade, type JudgeResult,
+  type JudgeResult,
 } from '../src/main/harness/eval/judge';
 import { calledTool } from '../src/main/harness/eval/assertions';
 import type { CaseRun, CheckResult, RubricItem } from '../src/main/harness/eval/case-types';
@@ -35,7 +35,7 @@ const ANSWER = [
 ].join('\n');
 
 function toolUse(name: string, input: Record<string, unknown>): TranscriptEvent {
-  return { type: 'tool-use', sessionId: 's', uuid: `u${Math.random()}`, timestamp: 0, data: { toolName: name, toolInput: input } };
+  return { type: 'tool-use', sessionId: 's', uuid: `u${Math.random()}`, timestamp: 0, data: { toolUseId: `t${Math.random()}`, toolName: name, toolInput: input } };
 }
 
 function makeRun(over: Partial<CaseRun> = {}): CaseRun {
@@ -98,7 +98,9 @@ function promptOf(seen: any[]): string {
     .join('\n');
 }
 
-const g = (over: Partial<Grade> & Record<string, unknown> = {}) =>
+// WHY: some cases hand the judge a deliberately malformed grade (score: 'excellent'),
+// so the override is loosely typed instead of Partial<Grade>.
+const g = (over: Record<string, unknown> = {}) =>
   ({ id: 'tradeoffs', score: 4, quote: 'The trade-off is between a lock and a retry', ...over });
 
 // --- quote enforcement (the load-bearing group) ------------------------------

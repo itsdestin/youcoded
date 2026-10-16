@@ -357,10 +357,16 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
         {openComment && phone && createPortal(
           <>
             <Scrim layer={2} onClick={() => setOpenId(null)} />
-            <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-3/4 overflow-auto p-2 rounded-lg">
-              <div className="flex justify-end mb-1">
+            {/* WHY the scrolling moved to an inner box (2026-10-15, the one scroll fade): an
+                OverlayPanel is .layer-surface, whose unlayered `overflow: hidden` beats the
+                Tailwind overflow-auto that sat here — so a long thread was clipped, not scrolled
+                (the same trap Select.tsx documents). The inner box scrolls and fades its edges;
+                the close button stays put above it. */}
+            <OverlayPanel layer={2} className="fixed inset-x-3 bottom-3 max-h-3/4 p-2 rounded-lg flex flex-col">
+              <div className="flex justify-end mb-1 shrink-0">
                 <CloseButton onClick={() => setOpenId(null)} label="Close comment" />
               </div>
+              <div className="scroll-mask min-h-0 overflow-auto">
               <CommentCard
                 comment={openComment}
                 autoFocus={openComment.id === focusId}
@@ -375,6 +381,7 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId, proje
                 onEditReply={(replyId, t) => editReply(openComment.id, replyId, t)}
                 onDeleteReply={(replyId) => deleteReply(openComment.id, replyId)}
               />
+              </div>
             </OverlayPanel>
           </>,
           document.body,
@@ -471,8 +478,10 @@ function MarkerPopover({ anchor, onClose, children }: { anchor: DOMRect | null; 
   }, [onClose]);
   return (
     <div ref={ref} data-marker-popover className="fixed" style={{ left, top, width: POPOVER_W, zIndex: POPOVER_Z }}>
-      <OverlayPanel layer={4} className="p-2 max-h-3/4 overflow-auto" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
-        {children}
+      {/* Scrolls (and fades) on an inner box: the panel's .layer-surface `overflow: hidden`
+          beats a Tailwind overflow class on the panel itself (see the phone sheet above). */}
+      <OverlayPanel layer={4} className="p-2 max-h-3/4 flex flex-col" style={{ zIndex: 'auto', borderRadius: 'var(--radius-lg)' }}>
+        <div className="scroll-mask min-h-0 overflow-auto">{children}</div>
       </OverlayPanel>
     </div>
   );

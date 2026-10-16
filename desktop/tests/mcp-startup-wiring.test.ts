@@ -10,7 +10,7 @@
 // ~/.youcoded/mcp.json, captures the exact manager instance handed to
 // NativeSessionHost, and calls its real acquire() to confirm the configured
 // server comes back out the other end.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -151,7 +151,19 @@ function makeMockSkillProvider() {
   };
 }
 
+// WHY warmed here, not in the first test (test-suite-hygiene "Budgets are
+// measured"): ipc-handlers is the main process's biggest import. Alone it
+// loads in ~3s; under a loaded full-suite run (2026-09-28) the first test
+// timed out at 30s paying for it. Same budget as buddy-consent-gate.test.ts.
+const IPC_HANDLERS_FIRST_IMPORT_BUDGET_MS = 120_000;
+
 describe('McpManager startup wiring', () => {
+  beforeAll(async () => {
+    // The module reads the home folder as it loads, so it needs one to exist.
+    testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-mcp-wiring-'));
+    await import('../src/main/ipc-handlers');
+  }, IPC_HANDLERS_FIRST_IMPORT_BUDGET_MS);
+
   beforeEach(() => {
     // Deliberately NOT cleaned up in afterEach: ipc-handlers.ts also fires
     // ProviderRegistry.init() fire-and-forget (unrelated to MCP, pre-existing
@@ -181,7 +193,7 @@ describe('McpManager startup wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -225,7 +237,7 @@ describe('McpManager startup wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     // MCP construction alone must not write mcp.json (or create it fresh) —
@@ -280,7 +292,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
     expect(capturedCtorArgs).toBeDefined();
     return capturedCtorArgs![4] as (binding: { providerId: string; modelId: string }) => Promise<boolean | null>;
@@ -305,7 +317,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -392,7 +404,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -421,7 +433,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -444,7 +456,7 @@ describe('pricingFor', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
@@ -472,7 +484,7 @@ describe('pricingFor', () => {
 // the fix pass 2 report). This describe block now tests the collapsed
 // design: ONE closure (contextAndSlotsFor, the 3rd positional constructor
 // arg) returns both values, so there is no shared state left to race.
-const effectiveContextWindowSpy = vi.fn(async () => ({ contextLength: 999, totalSlots: 3 }));
+const effectiveContextWindowSpy = vi.fn<(modelId: string) => Promise<{ contextLength: number; totalSlots: number }>>(async () => ({ contextLength: 999, totalSlots: 3 }));
 vi.mock('../src/main/engine/engine-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/engine/engine-manager')>();
   class SpyEngineManager extends actual.EngineManager {
@@ -500,7 +512,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -522,7 +534,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();
@@ -559,7 +571,7 @@ describe('contextAndSlotsFor wiring', () => {
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
-      makeMockSkillProvider() as any,
+      makeMockSkillProvider() as any, undefined as any,
     );
 
     expect(capturedCtorArgs).toBeDefined();

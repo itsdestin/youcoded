@@ -13,7 +13,7 @@ import React from 'react';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent' | 'raised' | 'toggle';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'charge' | 'on-accent' | 'raised' | 'toggle';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
@@ -30,13 +30,17 @@ export const FOCUS_RING =
   'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas';
 
 /** Always applied.
- *  rounded-lg is the one control radius (12px built-in / 24px on big-radius
- *  packs, since --radius-lg is a theme token). Rejected: sm, md, full-everywhere.
+ *  rounded-control is the one control radius — WHY (decisions "Control shape follows
+ *  the theme", "Default roundness level"): every button, tab, filter and search box
+ *  takes --radius-control (14px on the built-in Round level), derived from the theme's
+ *  own medium corner, so it moves with a pack's shape and the Appearance roundness
+ *  choice. It was rounded-lg (the CARD corner, 18px at Round). Rejected: sm, md,
+ *  full-everywhere.
  *  Pills survive only as a documented exception (first-run hero CTAs), as the
  *  xl size — which is why a size may replace the base radius and weight (see
  *  buttonClasses). */
 const BUTTON_BASE =
-  'inline-flex items-center justify-center gap-1.5 font-medium rounded-lg transition-colors ' +
+  'inline-flex items-center justify-center gap-1.5 font-medium rounded-control transition-colors ' +
   'disabled:opacity-50 disabled:cursor-not-allowed ' +
   FOCUS_RING;
 
@@ -60,12 +64,29 @@ const BUTTON_BASE =
  *  panel as a fill, the label has to be readable text on that panel. On dark
  *  themes --destructive is too dark to read as text — no single red satisfies
  *  both roles at AA across our themes, which is why the token is split. */
+// WHY `border border-transparent` on the FILLED variants (primary, danger — Destin approved,
+// 2026-10-05): every outlined variant draws a 1px border, which made it 2px taller than a filled
+// button of the same size, so a filled button beside an outlined one never lined up (Connect 36px
+// beside Uninstall 38px — found by shoot's "parts agree" check). An invisible border gives the
+// filled ones the same box. Every filled button in the app grows by 2px, deliberately.
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
-  secondary: 'border border-edge-dim text-fg-2 hover:bg-inset active:bg-edge',
+  primary: 'border border-transparent bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
+  // WHY border-edge-strong, not border-edge (round 2, 2026-09-28, Destin's
+  // review found Meadow Mist's outline still nearly invisible after the prior
+  // border-edge fix — that theme's OWN --edge is a pastel that composites
+  // near 1:1 over its wallpaper): edge-strong (globals.css) mixes in --fg so
+  // the border is guaranteed visible on every theme, not just the 4 built-ins.
+  secondary: 'border border-edge-strong text-fg-2 hover:bg-inset active:bg-edge',
   ghost: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge',
-  danger: 'bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
+  danger: 'border border-transparent bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
   'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10 active:bg-destructive/20',
+  // The main button of an action that costs money (Fast mode's "Turn on and accept charges").
+  // WHY a variant (popup-cards-5#F-1, Destin picked "Keep the orange"): a fixed billing-warning
+  // orange, not the theme's accent, so it reads "you are agreeing to charges" on every theme — a
+  // status colour, theme-independent like the others. Before, Fast mode hand-rolled this button,
+  // and a colour passed in className cannot beat the primary fill (colours are not a conflict
+  // group), so it is a variant with the filled buttons' invisible border and the shared size.
+  charge: 'border border-transparent bg-amber-700 text-black hover:bg-amber-700/90 active:bg-amber-700/80',
   // ghost, but for a control sitting ON an accent-filled surface (ViewToggleHint's
   // ✕). Added 2026-09-04: ghost there was wrong twice over — its hover fill is
   // --inset, a panel colour that reads as a foreign patch on accent, and its
@@ -161,7 +182,7 @@ const CONFLICT_GROUPS: readonly RegExp[] = [
   // group treated px- and py- as interchangeable, so a caller passing
   // className="px-8" (wider horizontal padding) silently DROPPED the size's
   // py-2 — buttons rendered at text height with no vertical padding. Hit the
-  // welcome-screen CTAs (App.tsx "New Session"/"Resume Session") and
+  // welcome-screen CTAs (App.tsx "New session"/"Resume session") and
   // SyncPanel's Save button. Regression pinned by Button.test.tsx.
   /^px-/,
   /^py-/,

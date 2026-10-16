@@ -10,7 +10,7 @@
 // Only TYPES come from remote-shim. The caller loads the shim with a dynamic import, so the
 // desktop bundle never evaluates it (the same reason remote-events.ts exists).
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, TextInput } from './components/ui';
+import { Button, FieldError, TextInput } from './components/ui';
 import type { RemoteConnectionState, SavedKeySignInEvent, SignInFailure } from './remote-shim';
 
 /** The part of the shim this screen drives. */
@@ -77,7 +77,7 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
       setError(
         failure?.kind === 'refused'
           ? failure.reason === 'no-password-configured'
-            ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings → Remote Access.'
+            ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings → Remote access.'
             : failure.reason === 'invalid-credentials'
               ? 'Invalid password'
               : 'Your computer refused this sign-in.'
@@ -98,7 +98,7 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
           <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
           <p className="text-sm text-fg-2">This computer has no remote access password yet.</p>
           <p className="text-xs text-fg-muted">
-            On the computer itself, open Settings &rarr; Remote Access and set a password.
+            On the computer itself, open Settings &rarr; Remote access and set a password.
             Then reload this page.
           </p>
         </div>
@@ -132,9 +132,9 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
         <Button type="submit" disabled={loading} size="lg" className="justify-center">
           {loading ? 'Connecting...' : 'Connect'}
         </Button>
-        {/* The token, not `text-red-400`, is what community packs can restyle. */}
+        {/* WHY FieldError (guide: no red/coloured body text for messages) */}
         {error && (
-          <p className="text-destructive-fg text-xs text-center">{error}</p>
+          <FieldError as="p" size="2xs" className="text-center">{error}</FieldError>
         )}
       </form>
     </div>

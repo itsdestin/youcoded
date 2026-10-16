@@ -17,7 +17,7 @@ import { useSecondsTick } from '../hooks/useSecondsTick';
 //         with a moving highlight + "Preparing…" so it reads as still-working.
 //       – Indeterminate: no byte measurement (non-Linux / racing) — a sweep.
 //   • UNLOADED — the model SLEPT after use and no turn is in flight:
-//     "Model unloaded to save memory · [Reload Model]". Only shown once the model
+//     "Model unloaded to save memory · [Reload model]". Only shown once the model
 //     has actually been resident this session (everResident) so a fresh session's
 //     initial cold state shows the loading bar instead of a spurious Reload.
 // Renders nothing when the model is loaded (or state unknown). Positioned by the

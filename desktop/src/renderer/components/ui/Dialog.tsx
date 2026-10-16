@@ -1,10 +1,12 @@
+import './Dialog.css';
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { Scrim, OverlayPanel, CONTENT_Z, type OverlayLayer } from '../overlays/Overlay';
+import { Scrim, OverlayPanel, CONTENT_Z, stackLift, useOverlayDepth, type OverlayLayer } from '../overlays/Overlay';
 import { CloseButton } from './CloseButton';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { ScreenMark } from '../../shoot-mode';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useEnterToConfirm } from '../../hooks/use-enter-to-confirm';
 
 /**
  * D1 — the one dialog shell.
@@ -19,7 +21,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
  *
  * 1. THE SCROLL BODY. SettingsPopup set maxHeight but left the panel a plain
  *    block, so callers had to remember `className="flex flex-col"` AND wrap
- *    their own `.scroll-fade`. Two of its seven forgot (Sound, Session
+ *    their own scroll fade. Two of its seven forgot (Sound, Session
  *    Defaults); the symptom is a dialog that clips with no way to reach the
  *    bottom. Destin hit it in Sound on 2026-07-26. Pass `scrollBody={false}`
  *    only when the caller genuinely owns its whole surface.
@@ -49,8 +51,10 @@ import { useEscClose } from '../../hooks/use-esc-close';
  * and --font-mono are both Cascadia Mono, globals.css), so character advance is
  * a constant 0.6em and reading measure converts to exact pixels:
  *
- *     text-3xs 10px -> 6.0px/ch    text-xs 12px -> 7.2px/ch
+ *     text-3xs 11px -> 6.6px/ch    text-xs 12px -> 7.2px/ch
  *     text-2xs 11px -> 6.6px/ch    text-sm  14px -> 8.4px/ch
+ *     (3xs was 10px until 2026-09-26 — "smallest text 11px", decisions.md.
+ *     None of the widths below is derived from it, so none moves.)
  *
  * PROMPT 340 — floored by two action buttons side by side without wrapping.
  *   The widest real pair is "Close session" (13ch) + "Cancel": 13ch x 8.4 + 32px
@@ -155,7 +159,7 @@ export type DialogProps = {
   /**
    * Hold the full height instead of hugging content. For dialogs that host
    * sub-views and would otherwise resize as you navigate between them
-   * (Appearance, Remote Access). This is the honest version of the fixed height
+   * (Appearance, Remote access). This is the honest version of the fixed height
    * those two used to set: "always maximum", not an invented pixel count.
    *
    * There is no `height` or `maxHeight` prop. The cap comes from the size — a
@@ -168,7 +172,7 @@ export type DialogProps = {
   className?: string;
   /**
    * Set false when the caller owns its whole surface and supplies its own
-   * scroll region (Appearance hands the panel to ThemeScreen; Remote Access
+   * scroll region (Appearance hands the panel to ThemeScreen; Remote access
    * swaps in SettingsExplainer). Default true.
    */
   scrollBody?: boolean;
@@ -190,6 +194,22 @@ export type DialogProps = {
   /** While true the dialog cannot be dismissed: the ✕ is disabled, and Escape and outside
    *  clicks do nothing. For work that must finish with the dialog on screen (a restore). */
   busy?: boolean;
+  /**
+   * The popup's own buttons, pinned under the scrolling body — they never scroll away, and the
+   * body fades see-through where it meets them (guide: the content fades at the hidden edge).
+   * WHY a slot (close-session-friction proposal 1, approved 2026-10-12): four popups wired this
+   * themselves with `scrollBody={false}`, each a little differently — one had a hard cut under
+   * its footer, one a full-width line above it, one only scrolled its list. Needs the default
+   * `scrollBody`; ignored without it.
+   */
+  footer?: React.ReactNode;
+  /**
+   * What Enter does in this popup — its main action. Fires only when this popup is the top
+   * overlay and the keyboard is not on a control or in a text box (useEnterToConfirm has the
+   * rules and why). Never while `busy`. A caller must not ALSO register its own useEscClose for
+   * this popup: that entry would sit above the Dialog's and it would never be "on top".
+   */
+  onEnter?: () => void;
   children: React.ReactNode;
 };
 
@@ -209,6 +229,8 @@ export function Dialog({
   scrollBody = true,
   screen,
   busy = false,
+  footer,
+  onEnter,
   children,
   ...aria
 }: DialogProps) {
@@ -227,19 +249,23 @@ export function Dialog({
   // up (Donate, Assistant settings, Create a page…). A caller with its own
   // layered Escape keeps it: the caller renders this Dialog, so its entry
   // registers after this one and sits on top of the stack.
-  useEscClose(open, close);
+  const isTop = useEscClose(open, close);
+  useEnterToConfirm(open && !busy, isTop, onEnter);
+  // WHY a depth (final-review#CT-8): a popup opened over another popup lifts its scrim AND its
+  // panel above the one beneath, so the blur and dim cover that popup too (Overlay.tsx).
+  const depth = useOverlayDepth(open);
 
   if (!open) return null;
 
   return createPortal(
     <>
-      <Scrim layer={layer} onClick={close} />
+      <Scrim layer={layer} depth={depth} onClick={close} />
       {/* Outer wrapper centers and carries the stacking; the panel then runs at
           position:relative / z-index:auto. pointer-events-none lets clicks fall
           through to the Scrim beneath, which is what closes on outside-click. */}
       <div
         className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none"
-        style={{ zIndex: CONTENT_Z[layer] }}
+        style={{ zIndex: CONTENT_Z[layer] + stackLift(depth) }}
       >
         <OverlayPanel
           ref={panelRef}
@@ -259,10 +285,12 @@ export function Dialog({
         >
           {screen && <ScreenMark name={screen} />}
           {title && (
+            // WHY: the four reviewed dialog widths share a 56px one-line header;
+            // callers with informative subtitles may grow beyond that minimum.
             // h2, matching SettingsPopup. Section labels inside the body are h3
             // (K1), so an h3 title would announce them as its siblings rather
             // than its children.
-            <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+            <div className="dialog-header flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 {onBack && (
                   <button
@@ -276,7 +304,7 @@ export function Dialog({
                   </button>
                 )}
                 <div className="min-w-0">
-                  <h2 className="text-sm font-bold text-fg truncate">{title}</h2>
+                  <h2 className="text-base font-semibold text-fg truncate">{title}</h2>
                   {subtitle && <p className="text-3xs text-fg-muted mt-0.5">{subtitle}</p>}
                 </div>
               </div>
@@ -287,14 +315,22 @@ export function Dialog({
             </div>
           )}
           {scrollBody ? (
-            // Unpadded scroll region so the fade pseudo-elements sit flush with
-            // the panel edge; padding lives on the inner track.
-            <div ref={scrollRef} className="scroll-fade flex-1">
-              <div className="px-4 py-4 space-y-5">{children}</div>
+            // WHY .scroll-mask for every body, titled or not (2026-10-15, Destin: "scrollable
+            // areas should always have a scroll-fade applied that matches the fade used
+            // elsewhere in the app"): titleless bodies used to keep the old painted band.
+            // relative/overflow/min-h-0/scrollbar-none are what the retired .scroll-fade class
+            // carried; min-h-0 lets this flex-1 body shrink and scroll instead of growing.
+            // dialog-scroll stays as the titled-body marker other code and tests find.
+            <div ref={scrollRef} className={`scroll-mask${title ? ' dialog-scroll' : ''} relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-none`}>
+              {/* WHY space-y-4 (trial): the guide spaces groups 16px; the body used 20px. */}
+              <div className="px-4 py-4 space-y-4">{children}</div>
             </div>
           ) : (
             children
           )}
+          {/* No line above it (guide: no full-width line in a popup): the body's own fade
+              is the edge. The body's bottom padding is the gap, so the footer has none on top. */}
+          {scrollBody && footer && <div className="dialog-footer shrink-0 px-4 pb-4">{footer}</div>}
         </OverlayPanel>
       </div>
     </>,

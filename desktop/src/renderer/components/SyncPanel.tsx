@@ -10,14 +10,15 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus } from './ui';
+import { Badge, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, ErrorState, FieldError, FoldRow, OneJobCard, OneJobText, TextInput, Toggle, LoadingState, SettingRow, RowStatus, SectionLabel } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
-import SyncSetupWizard, { type FirstBackup } from './SyncSetupWizard';
+import { BackupLogo } from './BackupLogo';
+import SyncSetupWizard, { githubBackupWorks, WizardHeaderContext, type FirstBackup, type WizardHeaderInfo } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
@@ -25,30 +26,39 @@ import type { PastSession } from '../../shared/types';
 import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from './sync-dot-state';
 // relativeMs is co-located in the pure device-activity-label module (single
 // wording ladder, shared by the device recency label and the fallback below).
-import { deviceActivityLabel, relativeMs } from './device-activity-label';
+import { relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
 import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
 import { useScreenOpen } from '../shoot-mode';
+import { RemovedProjectsCard } from './RemovedProjectsCard';
+// WHY its own file (final review F53): SyncPanel grew past its line budget on this branch; the
+// devices list was a self-contained piece, moved unchanged.
+import { DevicesTab, type DeviceRow } from './SyncDevicesTab';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
+// WHY these words (small-fixes-1): "your conversations, projects, and files" read as everything on
+// the computer. Sync copies only ~/YouCoded's Personal + Projects (sync-spaces/managed-roots.ts);
+// memory, instructions, skills and settings ride only the Drive/iCloud daily copy (sync-service.ts).
 const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "YouCoded keeps your work safe in two layers. Cross-device sync is the main one: your conversations, projects, and files live in your own private GitHub, so they're backed up AND kept up to date on every device you use. Extra cloud backups (Google Drive, iCloud) are an optional second copy on top of that.",
+    "YouCoded can keep two kinds of copy. Sync across devices is the main one: it copies the YouCoded folder in your home folder — your Personal folder, which holds your conversations, and each project in its Projects folder — to your own private GitHub, and keeps them the same on every device you use. Extra backups (Google Drive, iCloud) keep a daily copy on top of that. Folders anywhere else on your computer are not copied.",
   sections: [
     {
-      heading: 'Cross-Device Backup & Sync (the main one)',
+      heading: 'Cross-device backup & sync (the main one)',
       paragraphs: [
-        "Turn this on and YouCoded stores your conversations, project folders, and personal files in private GitHub repositories — one per space. That's your primary backup and the way your work follows you from computer to computer.",
+        "Turn this on and YouCoded copies your Personal folder and each project in YouCoded's Projects folder to private GitHub repositories — one per folder. That's your primary backup and the way your work follows you from computer to computer.",
+        "Your assistant's memory, instructions, skills and settings are not part of this sync. Extra backups (below) copy those.",
         "It needs a GitHub connection (a one-time sign-in). Changes sync automatically in the background, usually within seconds.",
       ],
     },
     {
       heading: 'Spaces',
       bullets: [
-        { term: 'Personal', text: 'Your conversations, memory, skills, and anything in your Personal folder — carried to every device.' },
-        { term: 'Projects', text: 'Each folder you turn sync on for becomes its own space, kept in step across your devices.' },
+        { term: 'Personal', text: 'Your conversations with their names and tags, your list of devices, your Pages, and any file you put in your Personal folder — carried to every device.' },
+        { term: 'Projects', text: "Each project in YouCoded's Projects folder is its own space, kept in step across your devices. A project folder somewhere else on your computer is not copied." },
+        { term: 'Never copied', text: 'Secret files (such as .env files and keys) and the folders programs rebuild themselves (such as node_modules).' },
         { term: 'Instant sync', text: '"Connected" means changes cross devices almost immediately. If it\'s reconnecting, changes still sync every couple of minutes.' },
       ],
     },
@@ -56,6 +66,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'Additional backups (optional)',
       paragraphs: [
         "You can add Google Drive or iCloud as a second, independent copy on top of GitHub — belt and suspenders. These don't replace GitHub; cross-device sync still needs it as the primary.",
+        "Once a day each one copies the same YouCoded folders, plus your assistant's memory, instructions, your own skills and its settings, into a dated folder. They are copies to keep: nothing is brought back from them automatically.",
       ],
       bullets: [
         { term: 'Google Drive', text: 'Keeps a copy in a Drive folder. You can connect multiple Google accounts, each backing up independently.' },
@@ -86,7 +97,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
         // WHY: give a filename cue without promising a deleted file remains.
         { term: 'A conflict note appeared', text: 'Conflicting changes were saved in separate files. Look for “(from …)” in their names. They appear in the same folder as the affected file.' },
-        { term: 'Something seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
+        { term: 'Something seems stuck', text: 'Open Sync log and look for ERROR or WARN lines.' },
       ],
     },
   ],
@@ -134,19 +145,6 @@ function timeAgo(epoch: number): string {
   return `${days}d ago`;
 }
 
-// Map process.platform to a plain, human word. Empty string (unknown platform)
-// falls through to '' so the caller can omit it rather than print a raw code.
-function platformLabel(p: string): string {
-  switch (p) {
-    case 'win32': return 'Windows';
-    case 'darwin': return 'macOS';
-    case 'linux': return 'Linux';
-    // Android phones join the same device registry; without this the row read a
-    // bare lowercase "android" next to "Linux" and "macOS".
-    case 'android': return 'Android';
-    default: return p || '';
-  }
-}
 
 // Map the derived sync display state to a status-dot tailwind class.
 // All three helpers keep the dot, label, and badge in lock-step — the old
@@ -175,7 +173,7 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
   switch (state.kind) {
     case 'unconfigured': return 'Not configured';
     case 'syncing':      return 'Syncing...';
-    case 'failing':      return 'Sync Failing';
+    case 'failing':      return 'Sync failing';
     case 'attention':    return state.lastSyncEpoch ? `Last synced ${timeAgo(state.lastSyncEpoch)}` : 'Never synced';
     case 'synced':       return `Last synced ${timeAgo(state.lastSyncEpoch)}`;
     case 'stale':        return state.lastSyncEpoch ? `Last synced ${timeAgo(state.lastSyncEpoch)}` : 'Never synced';
@@ -191,14 +189,15 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
 function badgeForState(state: SyncDisplayState): React.ReactNode {
   if (state.kind === 'failing') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-red-400/15 text-red-400 text-4xs font-medium shrink-0">
+      // The count's words in the text colour, the state in the tint and outline (small-fixes-3#SF3-10).
+      <span className="px-1.5 py-0.5 rounded-full border border-red-400/40 bg-red-400/15 text-fg-2 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
   }
   if (state.kind === 'attention') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-amber-700/15 text-amber-700 text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/15 text-fg-2 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
@@ -225,38 +224,17 @@ const BACKEND_LABELS: Record<string, string> = {
   icloud: 'iCloud',
 };
 
-// Backend type icon + tint color for the circle background
-const BACKEND_STYLE: Record<string, { icon: string; tint: string }> = {
-  drive: { icon: '\u2601', tint: 'bg-blue-500/10 text-blue-400' },
-  github: { icon: '\u2302', tint: 'bg-purple-500/10 text-purple-400' },
-  icloud: { icon: '\u2B21', tint: 'bg-sky-500/10 text-sky-400' },
-};
+// (The emoji marks ☁ ⌂ ⬡ in coloured circles went with small-fixes-3#SF3-6: every place that names a
+// backup's service — these rows, the first-time buttons, the wizard's choices — shows its logo.)
 
-const CATEGORY_LABELS: Record<string, string> = {
-  memory: 'Memory',
-  conversations: 'Conversations',
-  encyclopedia: 'Encyclopedia',
-  skills: 'Skills',
-  'system-config': 'System Config',
-  plans: 'Plans',
-  specs: 'Specs',
-};
-
-// Hover descriptions — shown via title attribute on each inline category label
-const CATEGORY_DESCRIPTIONS: Record<string, string> = {
-  memory: 'Your Claude memory files and preferences',
-  conversations: 'Chat history and conversation logs',
-  encyclopedia: 'Your personal encyclopedia entries',
-  skills: 'Custom skills you\'ve created or installed',
-  'system-config': 'App settings and preferences (not passwords or API keys)',
-  plans: 'Implementation plans and design documents',
-  specs: 'Technical specifications and reference docs',
-};
+// WHY no "Includes …" lines on the cards (small-fixes-3#SF3-7, Destin: "no, this is too much bare
+// text. should all just be hidden behind the i popup i think. too much nuance/confusion"): what each
+// copy includes is said once, in the (i) explainer (SYNC_EXPLAINER above).
 
 // --- Config display fields per backend type (read-only in edit form) ---
 const BACKEND_CONFIG_DISPLAY: Record<string, { key: string; label: string }[]> = {
   drive: [
-    { key: 'DRIVE_ROOT', label: 'Drive Folder' },
+    { key: 'DRIVE_ROOT', label: 'Drive folder' },
     { key: 'rcloneRemote', label: 'Connected via' },
   ],
   github: [
@@ -321,7 +299,7 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
           // Keep per-device recency live between full refetches (same pattern as
           // lastSyncEpoch). Absent on the push → keep the last-known map.
           lastSyncByDevice: data.lastSyncByDevice ?? prev.lastSyncByDevice,
-          // Fix (2026-07-26): warnings drive the row's red "Sync Failing" dot +
+          // Fix (2026-07-26): warnings drive the row's red "Sync failing" dot +
           // badge, and used to be frozen at the ONE mount-time getSyncStatus().
           // This component mounts with the APP (DesktopSettings renders
           // unconditionally inside the always-mounted settings drawer), so that
@@ -431,7 +409,7 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
             <path d="M8 17l4-4 4 4" />
           </svg>
         }
-        title="Backup & Sync"
+        title="Backup & sync"
         description={
           <RowStatus dotClassName={dotColor}>
             {counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
@@ -471,6 +449,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  // "Show details" on the sync error box (fix batch 2): a button inside the
+  // box now, not a native <details>, so its open state lives here.
+  const [showSyncDetails, setShowSyncDetails] = useState(false);
+  // Same for a warning's raw error output, keyed by warning code.
+  const [openWarningDetails, setOpenWarningDetails] = useState<Record<string, boolean>>({});
   const [showInfo, setShowInfo] = useState(false);
   // View stack: 'main' | 'add-type' | 'add-config' | 'edit'
   const [view, setView] = useState<'main' | 'add-type' | 'add-config' | 'edit'>('main');
@@ -480,6 +463,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // Derived once, so the Dialog header and the body below cannot disagree about
   // which view is showing.
   const isWizard = view === 'add-type' || view === 'add-config';
+  // The wizard step's title and back, shown in THIS popup's shared header (small-fixes-3).
+  const [wizardHeader, setWizardHeader] = useState<WizardHeaderInfo | null>(null);
+  const closeWizard = () => { setView('main'); setAddType(null); setWizardPreselect(undefined); };
   const isEdit = view === 'edit' && !!editingId;
   // Looked up ONCE and shared by the header and the form, so the title cannot
   // name a different backend from the one being edited.
@@ -956,7 +942,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         <Dialog
           open
           onClose={onClose}
-          aria-label="Backup & Sync"
+          aria-label="Backup & sync"
           size="panel"
           fill
           scrollBody={false}
@@ -986,22 +972,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         onClose={onClose}
         panelRef={popupRef}
         title={
-          showInfo ? 'About Backup & Sync'
-            : isWizard ? undefined
+          showInfo ? 'About Backup & sync'
+            : isWizard ? (wizardHeader?.title ?? 'Add a backup')
               : isEdit ? `Edit ${editingBackend?.label ?? 'backup'}`
-                : 'Backup & Sync'
+                : 'Backup & sync'
         }
         onBack={
           showInfo ? () => setShowInfo(false)
             : isEdit ? () => { setView('main'); setEditingId(null); }
+              // A wizard step's own back; the first step goes back to Backup & sync.
+              : isWizard ? (wizardHeader?.onBack ?? closeWizard)
               : undefined
         }
         headerActions={!showInfo && !isWizard && !isEdit ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
-        aria-label="Backup & Sync"
+        aria-label="Backup & sync"
         size="panel"
         fill
-        // The wizard still owns its whole surface — it is the one view whose
-        // header text changes per STEP, and its step state lives inside it.
+        // The wizard still owns its body — each step has its own scroll area — but since
+        // small-fixes-3 its title and back are this popup's shared header.
         scrollBody={!isWizard}
       >
         {showInfo ? (
@@ -1011,6 +999,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           />
         ) : (view === 'add-type' || view === 'add-config') ? (
           // Guided setup wizard handles type selection, prereq check, OAuth, and config
+          <WizardHeaderContext.Provider value={setWizardHeader}>
           <SyncSetupWizard
             initialType={addType ?? undefined}
             existingBackends={(status?.backends ?? []).map(b => ({ type: b.type, config: b.config }))}
@@ -1043,12 +1032,26 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 }
               }
               await refreshStatus();
+              // WHY (small-fixes-3#SF3-5, Destin: "we can probably just remove this page and dump
+              // them back on the main backup & sync page"): the wizard has no Done page now — it
+              // closes onto this list, where the new backup's row shows how its first upload went.
+              // A first upload that failed or went unconfirmed is the same error box under its row
+              // as a failed "Upload now" (handlePushBackend's three sentences).
+              if (typeof added?.id === 'string') {
+                const fail = first.kind === 'failed'
+                  ? (first.error
+                    ? { message: `Upload failed: ${plainMessage(first.error)}`, reportable: true }
+                    : { message: "Upload hasn't run yet — try again in a moment.", reportable: false })
+                  : first.kind === 'unknown' ? { message: "Couldn't confirm the upload finished.", reportable: true } : null;
+                if (fail) setUploadFailure(prev => ({ ...prev, [added.id]: fail }));
+              }
               return first;
             }}
-            onClose={() => { setView('main'); setAddType(null); setWizardPreselect(undefined); }}
+            onClose={closeWizard}
             preselectedBackendId={wizardPreselect?.id}
             preselectedBackendType={wizardPreselect?.type}
           />
+          </WizardHeaderContext.Provider>
         ) : view === 'edit' && editingId ? (
           <EditBackendForm
             backend={editingBackend}
@@ -1063,12 +1066,12 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           />
         ) : (
         // D1: header, close and scroll body all come from the shell now.
-        // `space-y-6` rather than Dialog's default `space-y-5`, so this panel's
-        // section rhythm is unchanged.
-        <div className="space-y-6">
+        // WHY space-y-4 (fix batch 1, 2026-09-24): design guide Settings
+        // spacing, 16px between groups — was space-y-6 (24px).
+        <div className="space-y-4">
 
             {/* ============================================================
-                PRIMARY — Cross-Device Backup & Sync box (redesign 2026-07-15).
+                PRIMARY — Cross-device backup & sync box (redesign 2026-07-15).
                 One bordered "sync box": a unified status header (dot · title · sub ·
                 toggle), then — only when enabled & healthy — Devices/Projects/
                 Conversations count tabs with a switchable list, plus the conflict /
@@ -1147,23 +1150,29 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 hk === 'setup' ? 'Creating your private repositories — a few seconds.' :
                 hk === 'off' ? 'Turn on to back up and sync across your devices' :
                 hk === 'waiting-github' ? 'Connect your account to start syncing' :
-                hk === 'error' ? (errorSummary?.summary ?? 'Sync hit an unexpected problem.') :
+                // WHY the account line, not the error (fix batch 2, 2026-09-26 —
+                // decisions.md P-2): the header stays an ordinary setting row;
+                // the problem itself moves into the danger box below, in normal
+                // grey text. It used to be this sub-line, painted red.
+                hk === 'error' ? syncingSub :
                 // First sync: repos exist but this device hasn't finished its
                 // first pull. Named honestly — "Setting up… a few seconds" over
                 // a multi-minute download read as a stall (2026-07-20 report).
                 hk === 'hydrating' ? 'This can take a few minutes on first sync.' :
                 hk === 'syncing' ? syncingSub :
                 syncedSub;
-              const subWarn = hk === 'error';
 
               // Not-enabled + error + GitHub-authed collapses to the plain 'off'
               // header (only error + UNauthed gets 'waiting-github'), which used to
               // hide the failure entirely — e.g. an enable attempt that failed for a
-              // non-GitHub reason looked like nothing happened. Surface the error as
-              // its own red line under the off sub, mirroring how the enabled+error
-              // state shows the failure in red — using the same plain-language
-              // summary (raw text stays in the "Show details" disclosure below).
+              // non-GitHub reason looked like nothing happened. Surface the error in
+              // the same danger box the enabled+error state uses — the same
+              // plain-language summary, raw text behind "Show details".
               const offError = hk === 'off' && errorSummary ? errorSummary.summary : null;
+              // The one problem sentence the danger box shows, if any.
+              const problem = hk === 'error'
+                ? (errorSummary?.summary ?? 'Sync hit an unexpected problem.')
+                : offError;
 
               // Toggle reflects the pending direction when a toggle is in flight
               // (so a disable click flips it off immediately instead of holding
@@ -1181,31 +1190,49 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 { key: 'conv' as const, count: convCount, word: convCount === 1 ? 'Conversation' : 'Conversations' },
               ];
 
-              // CTA row — tucked directly under the sub (aligned past the dot, no divider).
+              // CTA row — tucked directly under the sub (aligned past the dot, no
+              // divider). Only the not-yet-connected state has one now: the error
+              // state's buttons live INSIDE its danger box (errorActions below).
               const cta =
                 hk === 'waiting-github' ? (
                   <Button size="sm" onClick={() => setShowConnectGithub(true)}>
                     Connect GitHub…
                   </Button>
-                ) : hk === 'error' ? (
-                  <>
-                    {/* Offered only when the failure IS a GitHub sign-in problem (the
-                        coded 'github-auth' error). "GitHub reads signed out" alone was
-                        not proof — sync can run on the system's own gh login — so the
-                        button appeared beside unrelated failures (Destin, 2026-09-16).
-                        Secondary (outline) and to the LEFT of the primary action. */}
-                    {authError && (
-                      <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
-                        Connect GitHub…
-                      </Button>
-                    )}
-                    {/* Try again reuses syncNow() with the existing .catch error routing;
-                        the primary action sits at the far right. */}
+                ) : null;
+
+              // WHY inside the box, at the right (fix batch 2, 2026-09-26 —
+              // decisions.md "Errors and warnings in a setting", settings-
+              // pieces#P-2): Show details, Connect GitHub and Try again are the
+              // problem's own actions, so they sit in the problem's box. Order is
+              // outlined first, the one filled main action (Try again) last, so it
+              // lands at the far right like every button pair in the app.
+              const errorActions = problem ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-expanded={showSyncDetails}
+                    onClick={() => setShowSyncDetails((v) => !v)}
+                  >
+                    {showSyncDetails ? 'Hide details' : 'Show details'}
+                  </Button>
+                  {/* Offered only when the failure IS a GitHub sign-in problem (the
+                      coded 'github-auth' error). "GitHub reads signed out" alone was
+                      not proof — sync can run on the system's own gh login — so the
+                      button appeared beside unrelated failures (Destin, 2026-09-16). */}
+                  {hk === 'error' && authError && (
+                    <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
+                      Connect GitHub…
+                    </Button>
+                  )}
+                  {/* Try again reuses syncNow() with the existing .catch error routing. */}
+                  {hk === 'error' && (
                     <Button size="sm" onClick={runSpacesSyncNow}>
                       Try again
                     </Button>
-                  </>
-                ) : null;
+                  )}
+                </>
+              ) : null;
 
               const conflict = enabled && visibleSpaceEvents.some((e: any) => e.type === 'conflict');
               const notice = enabled ? [...visibleSpaceEvents].reverse().find((e: any) => e.type === 'notice') : null;
@@ -1219,18 +1246,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   return conversations?.find(c => c.sessionId === id)?.name ?? f;
                 });
 
-              return (
-                <div className="rounded-lg border border-edge bg-well overflow-hidden">
-                  {/* Unified header: dot · title/sub · toggle. Identical anatomy every state. */}
-                  <div className="px-3 py-3">
+              // Card-levels trial: the old "well card" is now LEVEL-1 like every
+              // other top-level box here; `p-3 space-y-2.5` replaces `border-t` dividers.
+              return (<div>
+                <SectionLabel className="mb-2">Main backup</SectionLabel>{/* WHY: a label, never a card, first under the title (nothing-bare NB-3) */}
+                <div className={`${CARD_LEVEL_1} overflow-hidden`}>
+                  <div className="p-3 space-y-2.5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex items-start gap-2.5">
                         <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${dot}`} />
                         <div className="min-w-0">
                           <div className="text-sm font-semibold text-fg">{title}</div>
-                          <div className={`text-2xs mt-0.5 leading-relaxed ${subWarn ? 'text-destructive-fg' : 'text-fg-muted'}`}>{sub}</div>
-                          {/* Off-but-errored: keep the normal off sub AND show why the last attempt failed. */}
-                          {offError && <div className="text-2xs mt-0.5 leading-relaxed text-destructive-fg">{offError}</div>}
+                          <div className="text-2xs mt-0.5 leading-relaxed text-fg-muted">{sub}</div>
                         </div>
                       </div>
                       {/* Enable toggle — migrated to the shared Toggle (spec changes
@@ -1250,122 +1277,140 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       />
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
-                    {/* Raw git error stays behind "Show details" (error-message-standards.md).
-                        One row under the message (Destin, 2026-09-16): "Show details" on
-                        the left, the actions on the right. The details text opens below
-                        the row's left side, so the buttons never move. */}
-                    {(cta || (errorMsg && (hk === 'error' || offError))) && (
-                      <div className="mt-2 pl-[18px] flex items-start justify-between gap-2">
-                        {errorMsg && (hk === 'error' || offError) ? (
-                          <details className="min-w-0 flex-1 pt-1">
-                            <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
-                            <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
-                          </details>
-                        ) : <div />}
-                        {cta && <div className="flex items-center gap-2 shrink-0">{cta}</div>}
-                      </div>
+                    {cta && (
+                      <div className="flex items-center justify-end gap-2">{cta}</div>
                     )}
-                  </div>
-
-                  {/* Count tabs + switchable list (only when enabled & healthy). */}
-                  {showTabs && (
-                    <>
-                      <div
-                        role="tablist"
-                        aria-label="Synced content"
-                        className="flex gap-2 px-3 pb-3"
-                        onKeyDown={(e) => {
-                          // Left/Right arrow roving between the three pills.
-                          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-                          e.preventDefault();
-                          const order = ['dev', 'proj', 'conv'] as const;
-                          const i = order.indexOf(countTab);
-                          const ni = e.key === 'ArrowRight' ? (i + 1) % 3 : (i + 2) % 3;
-                          setCountTab(order[ni]);
-                          (e.currentTarget.children[ni] as HTMLElement)?.focus();
-                        }}
-                      >
-                        {tabDefs.map(t => {
-                          const active = countTab === t.key;
-                          return (
-                            <button
-                              key={t.key}
-                              role="tab"
-                              aria-selected={active}
-                              tabIndex={active ? 0 : -1}
-                              onClick={() => setCountTab(t.key)}
-                              className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 text-2xs transition-colors ${active ? 'bg-accent text-on-accent border border-accent' : 'bg-inset border border-edge-dim text-fg-dim hover:text-fg-2'}`}
-                            >
-                              <span className="font-bold text-xs">{t.count}</span> {t.word}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div role="tabpanel" className="border-t border-edge-dim px-3 py-2.5">
-                        {countTab === 'dev' && <DevicesTab devices={devices} onRename={handleRenameDevice} onRemove={handleRemoveDevice} syncInProgress={status?.syncInProgress ?? false} lastSyncByDevice={status?.lastSyncByDevice} lastSyncEpoch={status?.lastSyncEpoch ?? null} />}
-                        {countTab === 'proj' && (() => {
-                          const projects = ((spacesStatus?.spaces ?? []) as any[]).filter(s => s.kind === 'project');
-                          if (projects.length === 0) return <p className="text-2xs text-fg-muted">Turn on sync for a project folder to add it here.</p>;
-                          return (
-                            <ul className="space-y-1">
-                              {projects.map((s: any) => (
-                                <li key={s.id} className="flex items-center justify-between gap-2">
-                                  <span className="text-xs text-fg-2 truncate">{s.displayName || s.id.replace('project:', '')}</span>
-                                  <span className="text-3xs text-fg-muted shrink-0">{s.remote ? 'connected' : 'local only'}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          );
-                        })()}
-                        {countTab === 'conv' && (() => {
-                          // Most-recent first; show up to 4 with a "+ N more" muted tail.
-                          const sorted = [...(conversations ?? [])].sort((a, b) => b.lastModified - a.lastModified);
-                          if (sorted.length === 0) return <p className="text-2xs text-fg-muted">No conversations yet.</p>;
-                          const shown = sorted.slice(0, 4);
-                          return (
-                            <>
-                              <ul className="space-y-1">
-                                {shown.map(c => (
-                                  <li key={c.sessionId} className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-fg-2 truncate">{c.name}</span>
-                                    <span className="text-3xs text-fg-muted shrink-0">{relativeMs(c.lastModified)}</span>
+                    {/* WHY a danger Callout SUB-BOX here (fix batch 2, 2026-09-26 —
+                        decisions.md P-2): the problem is the same tinted box as every
+                        warning in the app (the "too big to sync" box below is the
+                        reference), sitting inside the sync setting's own container,
+                        text in normal grey, its buttons inside it at the right.
+                        Before: a red sub-line under the title, a bare "▸ Show
+                        details" on the left and Try again floating on the right —
+                        Destin: "sync errors and show details dropdown are not
+                        styled properly" (fix batch 1, B1-6).
+                        The raw git text stays behind Show details
+                        (error-message-standards.md); it opens under the sentence, so
+                        the buttons never move. */}
+                    {problem && (
+                      <Callout tone="danger" actions={errorActions}>
+                        {problem}
+                        {showSyncDetails && errorMsg && (
+                          <pre className="mt-1.5 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto scroll-mask">{errorMsg as string}</pre>
+                        )}
+                      </Callout>
+                    )}
+                    {/* Count tabs + list (enabled & healthy only). No `border-t` —
+                        the wrapper's own `space-y-2.5` separates sections. */}
+                    {showTabs && (
+                      <div className="space-y-2">
+                        <div
+                          role="tablist"
+                          aria-label="Synced content"
+                          className="flex gap-2"
+                          onKeyDown={(e) => {
+                            // Left/Right arrow roving between the three pills.
+                            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                            e.preventDefault();
+                            const order = ['dev', 'proj', 'conv'] as const;
+                            const i = order.indexOf(countTab);
+                            const ni = e.key === 'ArrowRight' ? (i + 1) % 3 : (i + 2) % 3;
+                            setCountTab(order[ni]);
+                            (e.currentTarget.children[ni] as HTMLElement)?.focus();
+                          }}
+                        >
+                          {tabDefs.map(t => {
+                            const active = countTab === t.key;
+                            return (
+                              <button
+                                key={t.key}
+                                role="tab"
+                                aria-selected={active}
+                                tabIndex={active ? 0 : -1}
+                                onClick={() => setCountTab(t.key)}
+                                className={`inline-flex items-baseline gap-1.5 rounded-full px-3 py-1 text-2xs transition-colors ${active ? 'bg-accent text-on-accent border border-accent' : 'bg-inset border border-edge-dim text-fg-dim hover:text-fg-2'}`}
+                              >
+                                <span className="font-bold text-xs">{t.count}</span> {t.word}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div role="tabpanel">
+                          {countTab === 'dev' && <DevicesTab devices={devices} onRename={handleRenameDevice} onRemove={handleRemoveDevice} syncInProgress={status?.syncInProgress ?? false} lastSyncByDevice={status?.lastSyncByDevice} lastSyncEpoch={status?.lastSyncEpoch ?? null} />}
+                          {countTab === 'proj' && (() => {
+                            const projects = ((spacesStatus?.spaces ?? []) as any[]).filter(s => s.kind === 'project');
+                            if (projects.length === 0) return <p className="text-2xs text-fg-muted">Turn on sync for a project folder to add it here.</p>;
+                            // One shared level-2 list, bare rows — matches Devices above.
+                            return (
+                              <ul className={`${CARD_LEVEL_2} p-1.5 space-y-0.5`}>
+                                {projects.map((s: any) => (
+                                  <li key={s.id} className="flex items-center justify-between gap-2 px-1 py-1">
+                                    <span className="text-xs text-fg-2 truncate">{s.displayName || s.id.replace('project:', '')}</span>
+                                    <span className="text-3xs text-fg-muted shrink-0">{s.remote ? 'connected' : 'local only'}</span>
                                   </li>
                                 ))}
                               </ul>
-                              {sorted.length > shown.length && (
-                                <p className="text-3xs text-fg-muted mt-1.5">+ {sorted.length - shown.length} more, all backed up</p>
-                              )}
-                            </>
-                          );
-                        })()}
+                            );
+                          })()}
+                          {countTab === 'conv' && (() => {
+                            // Most-recent first; show up to 4 with a "+ N more" muted tail.
+                            const sorted = [...(conversations ?? [])].sort((a, b) => b.lastModified - a.lastModified);
+                            if (sorted.length === 0) return <p className="text-2xs text-fg-muted">No conversations yet.</p>;
+                            const shown = sorted.slice(0, 4);
+                            return (
+                              <>
+                                <ul className={`${CARD_LEVEL_2} p-1.5 space-y-0.5`}>
+                                  {shown.map(c => (
+                                    <li key={c.sessionId} className="flex items-center justify-between gap-2 px-1 py-1">
+                                      <span className="text-xs text-fg-2 truncate">{c.name}</span>
+                                      <span className="text-3xs text-fg-muted shrink-0">{relativeMs(c.lastModified)}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                {sorted.length > shown.length && (
+                                  <p className="text-3xs text-fg-muted mt-1.5">+ {sorted.length - shown.length} more, all backed up</p>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
                       </div>
-                    </>
-                  )}
-
-                  {/* Conflict / large-history notice / Sync now — only when enabled & not errored. */}
-                  {enabled && !errorMsg && (
-                    <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
-                      {conflict && (
-                        <p className="text-xs text-amber-700">
-                          Conflicting changes were saved in separate files. Look for “(from …)” in their names.
-                        </p>
-                      )}
-                      {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
-                      {/* The app's warning card, collapsed to one informative line
-                          (review, 2026-09-16); it opens to the reason and the names. */}
-                      {oversizeLine && (
-                        <Callout tone="warning" collapsible title={oversizeLine.header}>
-                          {oversizeLine.body}
-                          <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
-                            {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
-                          </ul>
-                        </Callout>
-                      )}
-                      {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the red note slot. */}
-                      <button onClick={runSpacesSyncNow} className="text-xs underline text-fg-muted hover:text-fg-2">Sync now</button>
-                    </div>
-                  )}
-                </div>
+                    )}
+                    {/* Conflict / oversize notice / Sync now — enabled & not errored only. */}
+                    {enabled && !errorMsg && (
+                      <div className="space-y-2">
+                        {/* WHY a warning Callout, not amber text (fix batch 2 — design
+                            guide "Status and notices": never coloured body text; every
+                            warning is the one tinted box). Same words. */}
+                        {conflict && (
+                          <Callout tone="warning">
+                            Conflicting changes were saved in separate files. Look for “(from …)” in their names.
+                          </Callout>
+                        )}
+                        {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
+                        {/* The app's warning card, collapsed to one informative line
+                            (review, 2026-09-16); it opens to the reason and the names.
+                            WHY bare names, not each its own box (round 4 — Destin:
+                            "bare names like they were before, inside ONE shared
+                            container, not 3 separate boxes"): the Callout itself is
+                            that one shared container — a name is a plain line in it. */}
+                        {oversizeLine && (
+                          <Callout tone="warning" collapsible title={oversizeLine.header}>
+                            {oversizeLine.body}
+                            <div className="mt-1.5 space-y-0.5">
+                              {oversizeNames.map((n, i) => <div key={i} className="text-xs truncate">{n}</div>)}
+                            </div>
+                          </Callout>
+                        )}
+                        {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the error box.
+                            WHY a full-width outlined Button (fix batch 2 — decisions.md
+                            "Follow-up actions", settings-pieces#P-3): an action under a
+                            group is never underlined text. */}
+                        <Button variant="secondary" onClick={runSpacesSyncNow} className="w-full">Sync now</Button>
+                      </div>
+                    )}
+                  </div>
+                </div></div>
               );
             })()}
 
@@ -1388,34 +1433,40 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 list.length > 0 ? `${pausedCount} destination${pausedCount === 1 ? '' : 's'} paused` :
                 'A second copy on top of GitHub — Drive or iCloud';
 
-              return (
-                <div className="rounded-lg border border-dashed border-edge px-3 py-3">
-                  {/* Header: title + optional pill + master toggle (always present). */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-fg">Additional backups</span>
-                        <span className="text-4xs font-medium text-fg-muted tracking-wider uppercase px-1.5 py-0.5 rounded-full bg-inset">optional</span>
-                      </div>
-                      <p className="text-2xs text-fg-muted mt-1 leading-relaxed">{sub}</p>
-                    </div>
-                    {/* Master toggle: pause-all / resume-all / reveal picker (handleAdditionalToggle). */}
-                    {/* Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
-                        on-state is the theme accent instead of hardcoded green-600.
-                        handleAdditionalToggle derives the direction itself from the
-                        backend list, so the `next` value it's handed is ignored. */}
-                    <Toggle
-                      checked={masterOn}
-                      onChange={() => void handleAdditionalToggle()}
-                      className="mt-0.5"
-                      title={masterOn ? 'Additional backups on — click to pause all' : 'Additional backups off — click to turn on'}
-                    />
-                  </div>
+              // Card-levels trial: fix batch 1 went flat here to kill a box-
+              // inside-box bug, leaving no first-level card at all, unlike every
+              // sibling here. Now ONE level-1 card; destinations are level-2.
+              // WHY its own label (nothing-bare-2#N2-5, Destin: "additional backups now
+              // appear to be under main backups"): once the first card has a label,
+              // every card on the page needs one, or the next reads as filed under it.
+              return (<div>
+                <SectionLabel className="mb-2">Additional backups</SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+                  {/* WHY `header` (Destin, 2026-09-28): this row IS the card's header —
+                      a boxed row here read as a card inside the card. */}
+                  <SettingRow
+                    variant="item"
+                    header
+                    title={<span className="flex items-center gap-2">Keep a second copy<Badge>Optional</Badge></span>}
+                    description={sub}
+                    control={
+                      // Shared Toggle (spec changes 15/16) — same 36x20 geometry, but the
+                      // on-state is the theme accent instead of hardcoded green-600.
+                      // handleAdditionalToggle derives the direction itself from the
+                      // backend list, so the `next` value it's handed is ignored.
+                      <Toggle
+                        checked={masterOn}
+                        onChange={() => void handleAdditionalToggle()}
+                        title={masterOn ? 'Additional backups on — click to pause all' : 'Additional backups off — click to turn on'}
+                      />
+                    }
+                  />
 
-                  {/* Backend rows — shown whenever any exist (kept visible even when paused,
-                      so turning the master off doesn't hide/lose destinations). */}
+                  {/* Backend rows — shown whenever any exist (paused ones kept visible).
+                      Each is a LEVEL-2 box; red/green is a status TINT on that shape,
+                      not a fourth card. space-y-1.5: the guide's 6px between rows. */}
                   {list.length > 0 && (
-                    <div className="mt-3 space-y-2">
+                    <div className="space-y-1.5">
                       {list.map(b => {
                         // Pending = sync-enabled backend that can't currently push (offline or errored).
                         const isPending = b.syncEnabled && (b.lastError != null || isOffline);
@@ -1426,43 +1477,52 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           : (b.syncEnabled && b.connected) ? 'bg-green-400 ring-2 ring-green-400/25'
                           : 'bg-fg-muted/40';
                         const failure = uploadFailure[b.id];
+                        // A GitHub backup set up before it was removed on computers (small-fixes-2):
+                        // kept and shown honestly — its settings and the files on GitHub are never
+                        // touched — with Remove inside a notice ("Problem on a list item").
+                        const unsupported = b.type === 'github' && !githubBackupWorks();
                         return (
                           <React.Fragment key={b.id}>
-                          <div
-                            className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
-                              b.lastError ? 'border-red-500/20 bg-red-500/5' :
-                              b.syncEnabled && b.connected ? 'border-green-400/20 bg-green-400/5' :
-                              'border-edge bg-inset/30'
-                            }`}
-                          >
+                          {/* WHY always the plain nested box (nothing-bare-3#N3-2, Destin: "styled more
+                              like typical second level cards"): the status light already carries
+                              green/red; a tinted box per state made it a one-off look. */}
+                          {/* The row's box holds its own notice (guide "A notice about one thing sits
+                              inside that thing" — Local models' interrupted download), so it is a column. */}
+                          <div className={CARD_LEVEL_2}>
+                          <div className="flex items-center gap-3 px-3 py-2.5">
                             {/* Type icon */}
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0 ${BACKEND_STYLE[b.type]?.tint ?? ''}`}>
-                              {BACKEND_STYLE[b.type]?.icon ?? '?'}
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-inset text-fg">
+                              <BackupLogo type={b.type} size={16} />
                             </div>
                             {/* Name + detail */}
                             <div className="flex-1 min-w-0">
                               <div className="text-xs text-fg font-medium truncate">{b.label}</div>
                               <div className="text-3xs text-fg-muted truncate">
-                                {b.lastError ? b.lastError :
+                                {unsupported ? 'No longer supported' :
+                                 b.lastError ? b.lastError :
                                  b.lastPushEpoch ? `Backed up ${timeAgo(b.lastPushEpoch)}` :
                                  !b.syncEnabled ? 'Auto-backup paused' :
                                  'Never backed up'}
                               </div>
+                              {/* WHY plain text, not amber/blue/green (guide:
+                                  no coloured body text for messages; matches
+                                  the status light above, which already
+                                  carries the state). */}
                               {isPending && !actionFeedback[b.id] && (
-                                <span className="text-4xs font-medium text-amber-700">Changes pending upload</span>
+                                <span className="text-4xs font-medium text-fg-muted">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
-                                <span className={`text-4xs font-medium ${
-                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' : 'text-green-400'
-                                }`}>
+                                <span className="text-4xs font-medium text-fg-muted">
                                   {actionFeedback[b.id] === 'uploading' ? 'Uploading...' : 'Uploaded!'}
                                 </span>
                               )}
                             </div>
                             {/* Status light (state at a glance) — controls moved into the cog menu. */}
-                            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${lightClass}`} />
-                            {/* Cog menu (replaces the old ⋯ kebab + per-row on/off toggle). */}
-                            <div className="relative shrink-0">
+                            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${unsupported ? 'bg-fg-muted/40' : lightClass}`} />
+                            {/* Cog menu (replaces the old ⋯ kebab + per-row on/off toggle). Not on an
+                                unsupported GitHub backup: Upload now and the rest would do nothing;
+                                its Remove sits in its notice below. */}
+                            {!unsupported && <div className="relative shrink-0">
                               <button
                                 onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
                                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted"
@@ -1487,7 +1547,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                   <MenuButton danger onClick={() => { setConfirmRemoveId(b.id); setMenuOpenId(null); }}>Remove</MenuButton>
                                 </div>
                               )}
+                            </div>}
+                          </div>
+                          {unsupported && (
+                            <div className="px-3 pb-2.5">
+                              <Callout tone="warning" compact actions={
+                                <Button size="sm" variant="secondary" onClick={() => setConfirmRemoveId(b.id)}>Remove</Button>
+                              }>
+                                GitHub backups are no longer supported on computers, so nothing is copied here. What's already on GitHub stays there.
+                              </Callout>
                             </div>
+                          )}
                           </div>
                           {failure && (
                             <ErrorState
@@ -1495,7 +1565,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               message={failure.message}
                               onRetry={() => handlePushBackend(b.id)}
                               onReportBug={failure.reportable
-                                ? () => setReportContext({ surface: `Backup & Sync → ${b.label}`, error: failure.message })
+                                ? () => setReportContext({ surface: `Backup & sync → ${b.label}`, error: failure.message })
                                 : undefined}
                             />
                           )}
@@ -1505,88 +1575,91 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     </div>
                   )}
 
-                  {/* Inline picker — master on but nothing connected yet. Opens the wizard
-                      straight into per-type config (initialType skips the type picker). */}
+                  {/* Inline picker — master on but nothing connected yet (initialType
+                      skips the type picker). Real Button now (card-levels trial). */}
                   {masterOn && list.length === 0 && (
-                    <div className="mt-3 flex gap-2">
-                      <button
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
                         onClick={() => { setAddType('drive'); setView('add-config'); }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-edge bg-well hover:bg-inset text-xs text-fg-2 transition-colors"
+                        className="flex-1"
                       >
-                        <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-blue-500/10 text-blue-400">{'☁'}</span>
+                        <BackupLogo type="drive" size={14} />
                         Google Drive
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        variant="secondary"
                         onClick={() => { setAddType('icloud'); setView('add-config'); }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-edge bg-well hover:bg-inset text-xs text-fg-2 transition-colors"
+                        className="flex-1"
                       >
-                        <span className="w-5 h-5 rounded-full flex items-center justify-center text-2xs bg-sky-500/10 text-sky-400">{'⬡'}</span>
+                        <BackupLogo type="icloud" size={14} />
                         iCloud
-                      </button>
+                      </Button>
                     </div>
                   )}
 
                   {/* Add-a-backup + compact "Back up all now" (replaces the standalone Back
                       up now row; keeps handleForceSync's syncing state + label behavior). */}
                   {list.length > 0 && (
-                    <div className="mt-2 space-y-2">
-                      {/* Dashed border is a documented exception (spec decision 64): the dash
-                          is what marks this as an "add" affordance rather than a real action,
-                          so it rides on top of `secondary` as a className override. The label
-                          also lifts from fg-muted to the variant's fg-2. */}
+                    <div className="space-y-1.5">
+                      {/* WHY a plain outlined button, not dashed (fix batch 1,
+                          2026-09-24): design guide "Groups are flat … no
+                          dashed 'add' boxes — use a normal outlined full-width
+                          button." Was a `border-dashed` override on `secondary`
+                          (spec decision 64) — that exception is retired. */}
                       <Button
                         variant="secondary"
                         onClick={() => setView('add-type')}
-                        className="w-full border-dashed py-2.5"
+                        // w-full only (fix batch 2): the same height as "Back up all
+                        // now" under it — two stacked follow-up buttons, one size.
+                        className="w-full"
                       >
                         ＋ Add a backup
                       </Button>
+                      {/* WHY a full-width outlined Button (fix batch 2 — decisions.md
+                          "Follow-up actions", settings-pieces#P-3; Destin named "back up
+                          all now button" in B1-6): never underlined text. */}
                       {anyActive && (
-                        <button
+                        <Button
+                          variant="secondary"
                           onClick={handleForceSync}
                           disabled={syncing}
-                          className="text-2xs underline text-fg-muted hover:text-fg-2 disabled:opacity-50 disabled:cursor-wait"
+                          className="w-full"
                         >
                           {syncing || status?.syncInProgress ? 'Backing up…' : 'Back up all now'}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   )}
-                </div>
+                </div></div>
               );
             })()}
 
             {/* 3. Warnings — typed SyncWarning objects with title/body/fix-action/stderr */}
             {status?.warnings && status.warnings.length > 0 && (
               <div>
-                <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Warnings</h3>
-                <div className="space-y-2">
-                  {status.warnings.map((w) => (
-                    <div
-                      key={`${w.code}:${w.backendId ?? ''}`}
-                      className={`rounded-lg border px-3 py-2 ${
-                        w.level === 'danger'
-                          ? 'border-red-500/30 bg-red-500/5'
-                          : 'border-amber-700/30 bg-amber-700/5'
-                      }`}
-                    >
-                      <div className="text-xs font-medium text-fg">{w.title}</div>
-                      <div className="text-2xs text-fg-muted mt-0.5">{w.body}</div>
-                      {/* Collapsible stderr for UNKNOWN-code warnings where raw output helps diagnose */}
-                      {w.code === 'UNKNOWN' && w.stderr && (
-                        <details className="mt-1">
-                          <summary className="text-3xs text-fg-muted cursor-pointer">
-                            Show error details
-                          </summary>
-                          <pre className="mt-1 p-2 bg-inset rounded text-3xs whitespace-pre-wrap font-mono">
-                            {w.stderr}
-                          </pre>
-                        </details>
-                      )}
-                      <div className="flex gap-2 mt-2">
-                        {w.fixAction && (
-                          <Button size="sm" onClick={() => handleFixAction(w)}>
-                            {w.fixAction.label}
+                <SectionLabel className="mb-2">Warnings</SectionLabel>
+                {/* WHY Callout with actions (fix batch 2, 2026-09-26 — design guide
+                    "Status and notices", decisions.md P-2): each warning is the one
+                    tinted notice box, title in its colour, text grey, and its buttons
+                    INSIDE it at the right. It was a hand-rolled tinted card with a
+                    bare "Show error details" triangle and Fix/Dismiss at the LEFT.
+                    Order: outlined buttons first, the filled fix last (far right). */}
+                <div className="space-y-1.5">
+                  {status.warnings.map((w) => {
+                    const detailsKey = `${w.code}:${w.backendId ?? ''}`;
+                    const detailsOpen = !!openWarningDetails[detailsKey];
+                    const hasDetails = w.code === 'UNKNOWN' && !!w.stderr;
+                    const actions = (hasDetails || w.dismissible || w.fixAction) ? (
+                      <>
+                        {hasDetails && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            aria-expanded={detailsOpen}
+                            onClick={() => setOpenWarningDetails((m) => ({ ...m, [detailsKey]: !detailsOpen }))}
+                          >
+                            {detailsOpen ? 'Hide details' : 'Show details'}
                           </Button>
                         )}
                         {w.dismissible && (
@@ -1594,72 +1667,77 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             Dismiss
                           </Button>
                         )}
-                      </div>
-                    </div>
-                  ))}
+                        {w.fixAction && (
+                          <Button size="sm" onClick={() => handleFixAction(w)}>
+                            {w.fixAction.label}
+                          </Button>
+                        )}
+                      </>
+                    ) : undefined;
+                    return (
+                      <Callout
+                        key={detailsKey}
+                        tone={w.level === 'danger' ? 'danger' : 'warning'}
+                        title={w.title}
+                        actions={actions}
+                      >
+                        {w.body}
+                        {/* Raw stderr for UNKNOWN-code warnings, where it helps diagnose. */}
+                        {hasDetails && detailsOpen && (
+                          <pre className="mt-1.5 p-2 bg-inset rounded text-3xs whitespace-pre-wrap font-mono text-fg-dim">
+                            {w.stderr}
+                          </pre>
+                        )}
+                      </Callout>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* 4. Synced Data Categories — read-only inline list.
-                Tiles used to look like buttons (border + cursor-help) but did nothing.
-                Now passive text with per-item hover tooltips on the default cursor. */}
-            {/* Fix: `status &&` alone wasn't enough — a status object missing
-                syncedCategories made `.length` throw, and because this renders
-                inside the always-mounted settings drawer the RootErrorBoundary
-                took the WHOLE APP down ("YouCoded failed to start") rather than
-                just this panel. Optional-chain every field the main process
-                could omit. */}
-            {status && (status.syncedCategories?.length ?? 0) > 0 && (
-              <div>
-                <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Includes </span>
-                <span className="text-2xs text-fg-dim">
-                  {(status.syncedCategories ?? []).flatMap((cat, i) => {
-                    const label = (
-                      <span key={cat} title={CATEGORY_DESCRIPTIONS[cat] || ''}>
-                        {CATEGORY_LABELS[cat] || cat}
-                      </span>
-                    );
-                    return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
-                  })}
-                </span>
-              </div>
-            )}
+            {/* Removed projects and their GitHub backups (backlog row 10) — RemovedProjectsCard. */}
+            <RemovedProjectsCard removed={spacesStatus?.removed} />
 
-            {/* 5. Sync Log (collapsible) */}
+            {/* 5. Sync log — WHY a FoldRow (fix batch 2, 2026-09-26 — decisions.md
+                "Fold-out sections", settings-pieces#P-1): a boxed row like a
+                setting, arrow on the right. It was a bare "› Sync log" text toggle
+                with the arrow on the left (Destin, B1-6: "sync log dropdown …
+                all wrong"). The lines are fetched when it opens, as before. */}
+            {/* WHY a label (nothing-bare-2#N2-5): every card on this page has one. */}
             <div>
-              <button
-                onClick={async () => {
-                  setShowLog(!showLog);
-                  if (!showLog) {
-                    try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
-                  }
-                }}
-                className="flex items-center gap-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase hover:text-fg-2 transition-colors"
-              >
-                <svg className={`w-3 h-3 transition-transform ${showLog ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                Sync Log
-              </button>
-
-              {showLog && (
-                <div className="mt-2">
+            <SectionLabel className="mb-2">History</SectionLabel>
+            <FoldRow
+              title="Sync log"
+              open={showLog}
+              onToggle={async (next) => {
+                setShowLog(next);
+                if (next) {
+                  try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
+                }
+              }}
+            >
+                <div>
                   {logLines.length === 0 ? (
                     <div className="text-2xs text-fg-muted px-2 py-3">No sync log entries yet.</div>
                   ) : (
-                    <div ref={logScrollRef} className="scroll-fade max-h-48 rounded-lg bg-inset/40 border border-edge-dim">
+                    // WHY two boxes (2026-10-15, the one scroll fade): the fade is a mask, so on the
+                    // bordered box it would fade the border and fill too. The outer box frames;
+                    // the inner one scrolls and fades the log lines only.
+                    <div className="rounded-lg bg-inset/40 border border-edge-dim overflow-hidden">
+                    <div ref={logScrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none max-h-48">
                       <pre className="text-3xs text-fg-dim font-mono px-2 py-2 whitespace-pre-wrap break-all leading-relaxed">
                         {logLines.map((line, i) => {
                           try {
                             const entry = JSON.parse(line);
-                            const levelColor = entry.level === 'ERROR' ? 'text-red-400'
-                              : entry.level === 'WARN' ? 'text-amber-700'
-                              : 'text-fg-dim';
+                            // The level in the text colour with a status dot (small-fixes-3#SF3-10):
+                            // "[ERROR]" / "[WARN]" were red / amber words.
+                            const levelDot = entry.level === 'ERROR' ? 'bg-red-400'
+                              : entry.level === 'WARN' ? 'bg-amber-500'
+                              : null;
                             return (
                               <div key={i} className="py-0.5">
                                 <span className="text-fg-muted">{entry.ts?.slice(11) || ''} </span>
-                                <span className={levelColor}>[{entry.level}]</span>{' '}
+                                <span className="text-fg-2">{levelDot ? <RowStatus dotClassName={levelDot}>[{entry.level}]</RowStatus> : `[${entry.level}]`}</span>{' '}
                                 <span className="text-fg-dim">{entry.msg}</span>
                               </div>
                             );
@@ -1669,15 +1747,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         })}
                       </pre>
                     </div>
+                    </div>
                   )}
-                  <button
+                  {/* Outlined, full width (fix batch 2): a follow-up action under a
+                      group is never bare text. */}
+                  <Button
+                    variant="secondary"
                     onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
-                    className="mt-1.5 text-3xs text-fg-muted hover:text-fg-2 transition-colors"
+                    className="w-full mt-1.5"
                   >
                     Refresh
-                  </button>
+                  </Button>
                 </div>
-              )}
+            </FoldRow>
             </div>
 
             {/* Empty state before the first sync status arrives. Copy fix: this
@@ -1685,7 +1767,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 deprecated and the app owns sync natively now. */}
             {!status && !loading && (
               <div className="text-center py-6">
-                <div className="text-fg-muted text-sm mb-1">No Sync Data</div>
+                <div className="text-fg-muted text-sm mb-1">No sync data</div>
                 <div className="text-fg-muted text-2xs">Sync hasn't run yet. Configure a backup destination to get started.</div>
               </div>
             )}
@@ -1752,9 +1834,8 @@ function ConfirmDialog({
         onClose={onCancel}
         layer={3}
         destructive
-        size="prompt"
+        size="panel"
         title={title}
-        scrollBody={false}
         // Only call site is SyncPanel's "Remove backup?" — a literal name is
         // correct here rather than a prop, since nothing else renders this.
         screen="settings/sync/remove-backend"
@@ -1765,205 +1846,17 @@ function ConfirmDialog({
             `title` prop and was only passing it as an aria-label while drawing
             the visible heading itself. Dialog's `destructive` already tints the
             panel, so the header tint was saying the same thing twice. */}
-        <div className="px-4 py-3 space-y-3">
-          <p className="text-2xs text-fg-dim leading-relaxed">{message}</p>
-          <div className="flex gap-2 pt-1">
-            {/* Was a filled-grey button (bg-inset/hover:bg-edge). Spec decision 60 folds
-                that whole family into `secondary` (outline) — it sits beside a real
-                confirm button as a peer, which the lighter `ghost` would under-weight. */}
-            <Button variant="secondary" onClick={onCancel} className="flex-1">
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={onConfirm} className="flex-1">
-              {confirmLabel}
-            </Button>
-          </div>
-        </div>
+        {/* WHY the shared one-job card (popup-cards-8#Q-2, Destin picked "Box them all": every small popup is the shared one-job card, the short ones too): the words and the stacked buttons, red
+            on top (guide "Destructive confirm"), in one card at the other popups' width. */}
+        <OneJobCard actions={<>
+          <Button variant="danger" onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+        </>}>
+          <OneJobText><p>{message}</p></OneJobText>
+        </OneJobCard>
       </Dialog>
     </>,
     document.body,
-  );
-}
-
-// --- DeviceRow + Devices count-tab (Plan 2b spec §10a) ---
-// The synced device registry, rendered as the "Devices" tab body inside the sync
-// box. PLAIN TEXT only — no status dots/glyphs (spec'd plain; owner dislikes
-// glyphs). The current machine is marked "(this device)" and each name is an
-// inline-editable nickname. Fetching + rename now live in SyncPopup (so the
-// "Devices" count and this list share one source); this component keeps only the
-// local editing draft state.
-
-interface DeviceRow {
-  schemaVersion: number;
-  id: string;
-  name: string;
-  platform: string;
-  lastSeen: number;
-  updatedAt: number;
-  // Marks THIS machine — matched by machineId (per-MACHINE) in the main handler.
-  // NOT the per-install deviceId: that's the lease id and matches no registry row.
-  self: boolean;
-}
-
-function DevicesTab({ devices, onRename, onRemove, syncInProgress, lastSyncByDevice, lastSyncEpoch }: { devices: DeviceRow[] | null; onRename: (id: string, name: string) => void; onRemove: (id: string) => Promise<string | null>; syncInProgress: boolean; lastSyncByDevice?: Record<string, number>; lastSyncEpoch: number | null }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  // Two-step confirm: the id awaiting confirmation, if any. Removal is recoverable
-  // (a live device re-registers), so this is a plain inline confirm rather than the
-  // typed-confirm gate reserved for irreversible edits.
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  // Per-row failure note from the last remove attempt (ProvidersSection idiom).
-  const [removeNote, setRemoveNote] = useState<{ id: string; text: string } | null>(null);
-
-  const confirmRemove = useCallback(async (id: string) => {
-    setConfirmingId(null);
-    setRemoveNote(null);
-    const failure = await onRemove(id);
-    // On success the row simply disappears on the refetch — no note needed.
-    if (failure) setRemoveNote({ id, text: failure });
-  }, [onRemove]);
-
-  // Commit a rename: reject empty/whitespace and skip a no-op rename so we don't
-  // fire a pointless invoke + refetch. The parent (SyncPopup) owns the IPC call.
-  const commitRename = useCallback((id: string) => {
-    const name = draft.trim();
-    setEditingId(null);
-    if (!name) return;
-    const current = devices?.find(d => d.id === id);
-    if (current && current.name === name) return;
-    onRename(id, name);
-  }, [draft, devices, onRename]);
-
-  // null = not loaded yet; [] = loaded-but-empty (sync off / no personal root).
-  if (devices !== null && devices.length === 0) {
-    return <p className="text-2xs text-fg-muted">No devices yet — they appear here once sync has run.</p>;
-  }
-
-  return (
-    <ul className="space-y-1">
-      {(devices ?? []).map(d => {
-        const plat = platformLabel(d.platform);
-        // Real sync recency instead of the frozen launch-time "last seen":
-        // "Synced just now" (<5 min), "Last synced 12 minutes ago" (older), or —
-        // when there's no sync record (older main process / never-synced peer) —
-        // the launch-time fallback. Self shows a live "Syncing…" mid-sync.
-        // lastSyncByDevice is keyed by machineId, which is exactly `d.id`.
-        // Self's recency comes from the LOCAL live marker (lastSyncEpoch, in
-        // SECONDS → ms), not the DO map: the SyncHub never echoes a device's own
-        // signal back to it, so self's own map entry only refreshes on reconnect
-        // and would otherwise drift stale (row saying "20 min ago" while the panel
-        // header says "just now"). Peers use the map, updated live from relayed signals.
-        const lastSyncAt = d.self
-          ? (lastSyncEpoch != null ? lastSyncEpoch * 1000 : null)
-          : (lastSyncByDevice?.[d.id] ?? null);
-        const activity = deviceActivityLabel({
-          isSelf: d.self,
-          syncInProgress,
-          lastSyncAt,
-          gitLastSeen: d.lastSeen,
-        }, Date.now());
-        const right = plat ? `${plat} · ${activity}` : activity;
-        return (
-          <li key={d.id}>
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0 flex items-center gap-1.5">
-                {editingId === d.id ? (
-                  /* Shared FIELD surface (spec change 20) — `sm` because this is an
-                     inline edit inside a compact list row. min-w-0 stays: it lets the
-                     input shrink inside the flex row instead of forcing overflow.
-                     aria-label added — the input replaces the name button on click,
-                     so there was nothing naming it for a screen reader. */
-                  <TextInput
-                    size="sm"
-                    value={draft}
-                    autoFocus
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitRename(d.id);
-                      if (e.key === 'Escape') setEditingId(null); // cancel — no rename
-                    }}
-                    onBlur={() => commitRename(d.id)}
-                    aria-label={`Rename ${d.name}`}
-                    className="min-w-0"
-                  />
-                ) : (
-                  // Click the name to edit — it's just a nickname, so no confirm gate.
-                  <button
-                    type="button"
-                    onClick={() => { setEditingId(d.id); setDraft(d.name); }}
-                    className="text-xs text-fg-2 hover:text-fg truncate text-left"
-                    title="Click to rename this device"
-                  >
-                    {d.name}
-                  </button>
-                )}
-                {d.self && <span className="text-3xs text-fg-muted shrink-0">(this device)</span>}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-3xs text-fg-muted">{right}</span>
-                {/* No Remove for self: upsertSelf re-creates this row on the next
-                    launch, so offering it would read as a button that does nothing.
-                    Hidden while confirming — the confirm block below replaces it. */}
-                {!d.self && confirmingId !== d.id && (
-                  <button
-                    type="button"
-                    onClick={() => { setConfirmingId(d.id); setRemoveNote(null); }}
-                    aria-label={`Remove ${d.name}`}
-                    className="text-3xs text-fg-muted hover:text-fg"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
-            {/* Confirm block. The consequence lives HERE, at the point of decision —
-                it used to be a title= tooltip on the trigger, which unmounts the
-                moment this renders (and never shows on touch or to a screen reader). */}
-            {confirmingId === d.id && (
-              <div
-                className="mt-1.5 space-y-2 rounded-lg bg-inset border border-edge-dim p-2.5"
-                onKeyDown={(e) => { if (e.key === 'Escape') setConfirmingId(null); }} // matches the rename input's Escape
-              >
-                <p className="text-2xs text-fg-dim leading-relaxed">
-                  Remove {d.name}? It stops being listed here. If this device syncs again, it comes back.
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    onClick={() => setConfirmingId(null)}
-                    aria-label={`Keep ${d.name}`}
-                    className="flex-1"
-                  >
-                    Cancel
-                  </Button>
-                  {/* autoFocus: the trigger just unmounted, so without this the focus
-                      falls to <body> and a keyboard user re-tabs from the top.
-                      danger-outline replaces the hand-rolled border-red-500/50 pair, so the
-                      red comes from the theme's --destructive token rather than stock red
-                      (spec decision 68 — "Remove" reads the same everywhere). */}
-                  <Button
-                    variant="danger-outline"
-                    type="button"
-                    autoFocus
-                    onClick={() => void confirmRemove(d.id)}
-                    aria-label={`Confirm removing ${d.name}`}
-                    className="flex-1"
-                  >
-                    Remove
-                  </Button>
-                </div>
-              </div>
-            )}
-            {/* Why the remove didn't take. Never invents a cause: the handler's own
-                reason when it gave one, otherwise non-committal. */}
-            {removeNote?.id === d.id && (
-              <FieldError as="p" className="mt-1">{removeNote.text}</FieldError>
-            )}
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 

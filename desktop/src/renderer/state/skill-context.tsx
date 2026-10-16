@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
-import type { SkillEntry, ChipConfig, MetadataOverride, CommandEntry } from '../../shared/types';
+import type { SkillEntry, ChipConfig, CommandEntry } from '../../shared/types';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { plainMessage } from '../utils/ipc-error';
 
@@ -24,7 +24,6 @@ interface SkillActions {
   retryLoad: () => void;
   setFavorite: (id: string, favorited: boolean) => Promise<void>;
   setChips: (chips: ChipConfig[]) => Promise<void>;
-  setOverride: (id: string, override: MetadataOverride) => Promise<void>;
   getShareLink: (id: string) => Promise<string>;
   publish: (id: string) => Promise<{ prUrl: string }>;
 }
@@ -133,10 +132,6 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     setChipsState(newChips);
   }, []);
 
-  const setOverrideAction = useCallback(async (id: string, override: MetadataOverride) => {
-    await window.claude.skills.setOverride(id, override);
-    await refreshInstalled();
-  }, [refreshInstalled]);
 
   // Drawer shows ALL installed skills. Sorting (favorites first) happens in
   // CommandDrawer itself so callers can apply category/search filters first.
@@ -151,9 +146,9 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SkillContextValue>(() => ({
     installed, favorites, chips, loadError, loading, drawerSkills, drawerCommands,
     refreshInstalled, retryLoad, setFavorite: setFavoriteAction, setChips: setChipsAction,
-    setOverride: setOverrideAction, getShareLink, publish,
+    getShareLink, publish,
   }), [installed, favorites, chips, loadError, loading, drawerSkills, drawerCommands,
-       refreshInstalled, retryLoad, setFavoriteAction, setChipsAction, setOverrideAction,
+       refreshInstalled, retryLoad, setFavoriteAction, setChipsAction,
        getShareLink, publish]);
 
   return <SkillContext.Provider value={value}>{children}</SkillContext.Provider>;

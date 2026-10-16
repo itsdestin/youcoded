@@ -8,10 +8,10 @@ const CONFIG_PATH = path.join(os.homedir(), '.claude', 'youcoded-skills.json');
 // Per-writer counter for save()'s temp filename — see the comment there.
 let tmpSeq = 0;
 
-// Four built-in theme slugs, seeded as favorites on first-read so a new user
+// The built-in theme slugs (YouCoded pair first), seeded as favorites on first-read so a new user
 // sees a populated Appearance panel. Mirrors the skill-favorites seeding in
 // createDefaultConfig. Must stay in sync with BUILTIN_THEMES in theme-context.tsx.
-const DEFAULT_THEME_FAVORITES = ['light', 'dark', 'midnight', 'creme'];
+const DEFAULT_THEME_FAVORITES = ['youcoded', 'youcoded-night', 'light', 'dark', 'midnight', 'creme'];
 
 const DEFAULT_CHIPS: ChipConfig[] = [
   { skillId: 'journaling-assistant', label: 'Journal', prompt: "let's journal" },

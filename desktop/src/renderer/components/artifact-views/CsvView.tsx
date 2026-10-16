@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
 import type { ArtifactViewProps } from './types';
 import { detectDelimiter, parseDelimited } from './csv-parse';
+import { CenterLoading } from './BinaryContent';
 import { PAPER, GRID, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 import { SheetGrid, type GridCell, type Selection, type SheetGridHandle, type SheetGridModel } from './SheetGrid';
 import { ROW_H } from './sheet-window';
@@ -112,7 +113,9 @@ export function CsvView({ path, content }: ArtifactViewProps) {
     return off;
   }, [grid]);
 
-  if (!grid) return <div className="flex items-center justify-center h-full text-fg-muted text-sm p-4">Loading…</div>;
+  // WHY CenterLoading, not a bare "Loading…": the shared LoadingState names what is loading
+  // (guide "File viewers" known deviation, 2026-10-13).
+  if (!grid) return <CenterLoading what="spreadsheet" />;
 
   return (
     <div className="flex flex-col h-full" style={{ background: PAPER, color: '#1d1d1d' }}>

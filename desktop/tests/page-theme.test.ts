@@ -85,7 +85,8 @@ describe('the framed page document', () => {
   it('carries the page data into the frame, escaped so it cannot end the script', () => {
     const out = prepareHostedDocument('<p>hi</p>', THEME, KIT, { note: '</script><img>' });
     expect(out).toContain('<\\/script>');
-    expect(out.match(/<\/script>/g) ?? []).toHaveLength(1);
+    // Two real ends: the bootstrap's and the kit dropdown's (page-kit.ts PAGE_KIT_JS); the data adds none.
+    expect(out.match(/<\/script>/g) ?? []).toHaveLength(2);
   });
 });
 

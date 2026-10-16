@@ -2,10 +2,10 @@ declare const __APP_VERSION__: string;
 // Baked in by Vite from YOUCODED_BUILD_CHANNEL. '' for release builds, 'BETA'
 // for desktop-test-build.yml artifacts. See src/shared/version-line.ts.
 declare const __BUILD_CHANNEL__: string;
+import './SettingsDrawer.css';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
-
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid, useCurrentPlatform } from '../platform';
 import ThemeScreen from './ThemeScreen';
@@ -17,17 +17,16 @@ import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import AboutPopup from './AboutPopup';
-import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { workbenchReportContext } from '../ticket-practice';
 import { memoWhileClosed } from './memo-while-closed';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
 import { DonateConfirm } from './DonateConfirm';
 import AssistantSettingsRow from './assistant-settings/AssistantSettings';
-import BrowserSettingsButton from './browser/BrowserSettingsButton';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
@@ -37,7 +36,8 @@ import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
 import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { Button, CARD_LEVEL_1, CloseButton, Slider, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
+import { plainMessage } from '../utils/ipc-error';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -45,17 +45,17 @@ import { useGuideReset } from './guide/guide-events';
 const desktopVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '';
 const desktopChannel = typeof __BUILD_CHANNEL__ !== 'undefined' ? __BUILD_CHANNEL__ : '';
 
-// Plain-language explainer for the Remote Access popup. Shown when the user
+// Plain-language explainer for the Remote access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
 const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Remote Access lets you use YouCoded from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
+    "Remote access lets you use YouCoded from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
   sections: [
     {
       heading: 'What is Tailscale?',
       paragraphs: [
         "Tailscale is a free, secure tunnel that connects your devices like they're on the same WiFi, even when they're far apart. We use it because it's much safer than opening your computer to the open internet.",
-        'You install it once on your main computer (that\'s what the "Set Up Remote Access" button does), then sign in with Google or GitHub. After that, you can scan a QR code on your phone to connect.',
+        'You install it once on your main computer (that\'s what the "Set up remote access" button does), then sign in with Google or GitHub. After that, you can scan a QR code on your phone to connect.',
       ],
     },
     {
@@ -69,12 +69,12 @@ const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } =
     {
       heading: 'Common issues',
       bullets: [
-        { term: '"Tailscale not installed"', text: 'Click "Set Up Remote Access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
-        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote Access panel has a button that fixes whichever one it is.' },
+        { term: '"Tailscale not installed"', text: 'Click "Set up remote access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
+        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote access panel has a button that fixes whichever one it is.' },
         { term: "Phone can't connect", text: 'Make sure Tailscale is also installed on your phone and signed in to the same account. Both devices need it running at the same time.' },
         { term: "QR code won't scan", text: 'Tap "Copy link" instead, send the link to your phone (text it to yourself), and open it in your phone\'s browser.' },
         { term: 'Forgot the password', text: 'Just type a new one into the password box and hit "Set". The old one is replaced — there\'s nothing to recover.' },
-        { term: 'Connected device should be removed', text: 'Use the Disconnect button next to a device under "Connected Devices". They\'ll need the password again to reconnect.' },
+        { term: 'Connected device should be removed', text: 'Use the Disconnect button next to a device under "Connected devices". They\'ll need the password again to reconnect.' },
       ],
     },
   ],
@@ -97,24 +97,8 @@ interface RemoteConfig {
 // from main). 2026-09-10 security review, #5.
 const MIN_REMOTE_PASSWORD_LENGTH = 8;
 
-// Make a memorable, easy-to-type passphrase like `abcd-efgh-jkmn`: three groups
-// of four letters, drawn from an alphabet with the visually ambiguous characters
-// (i, l, o) removed. Uses the browser CSPRNG. Well over the 8-char minimum.
-function generateRemotePassphrase(): string {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // 23 chars, no i/l/o
-  // Rejection sampling (draw fresh bytes, discard those in the biased tail) so
-  // every letter is equally likely — a plain `byte % 23` slightly favours the
-  // first few letters. The bias is tiny here, but a password generator should
-  // not have one at all.
-  const max = 256 - (256 % alphabet.length); // 253 → bytes 253..255 discarded
-  const chars: string[] = [];
-  const buf = new Uint8Array(1);
-  while (chars.length < 12) {
-    crypto.getRandomValues(buf);
-    if (buf[0] < max) chars.push(alphabet[buf[0] % alphabet.length]);
-  }
-  return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8, 12).join('')}`;
-}
+// generateRemotePassphrase() was deleted with the Generate button it served
+// (Destin, fix batch 1 B1-5: "the generate button should just be removed").
 
 const KEEP_AWAKE_OPTIONS = [
   { label: 'Off', value: 0 },
@@ -195,7 +179,7 @@ interface Props {
   syncAutoOpen?: boolean;
   onSyncAutoOpenHandled?: () => void;
   // Deep-link the Model Providers popup open on panel mount — used by the
-  // provider-error bubble's "Open Settings" jump. Desktop-only (the Model
+  // provider-error bubble's "Open settings" jump. Desktop-only (the Model
   // Providers section isn't mounted in AndroidSettings).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
@@ -219,20 +203,30 @@ function timeAgo(timestamp: number): string {
 
 // ─── Keyboard Shortcuts reference popup ──────────────────────────────────────
 
-const SHORTCUTS: { keys: string; description: string }[] = [
-  { keys: 'Ctrl + `', description: 'Toggle between chat and terminal' },   // P-7: 'view' trimmed so the label holds one line at 420px
-  { keys: 'Ctrl + O', description: 'Expand / collapse all tool cards' },
-  { keys: 'Shift (hold)', description: 'Open session switcher' },
-  { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
-  { keys: 'Shift (release)', description: 'Switch to highlighted session' },
-  { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
-  { keys: 'Shift + Tab', description: 'Cycle permission mode' },
-  { keys: 'Shift + Space', description: 'Cycle model' },
-  { keys: 'Shift + Enter', description: 'Insert newline in input' },
-  { keys: 'Enter', description: 'Send message' },
-  { keys: '/', description: 'Open skill/command drawer' },
-  { keys: 'Escape', description: 'Close drawer or modal' },
-  { keys: 'Arrow Left/Right', description: 'Cycle permission prompt buttons' },
+// WHY groups (nothing-bare#NB-3/NB-4): a label above every card, never a card straight
+// under the popup title, and the table split into small labelled groups.
+const SHORTCUT_GROUPS: { label: string; rows: { keys: string; description: string }[] }[] = [
+  { label: 'Views', rows: [
+    { keys: 'Ctrl + `', description: 'Toggle between chat and terminal' },   // P-7: 'view' trimmed so the label holds one line at 420px
+    { keys: 'Ctrl + O', description: 'Expand / collapse all tool cards' },
+    { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
+  ] },
+  { label: 'Sessions', rows: [
+    { keys: 'Shift (hold)', description: 'Open session switcher' },
+    { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
+    { keys: 'Shift (release)', description: 'Switch to highlighted session' },
+  ] },
+  { label: 'Writing messages', rows: [
+    { keys: 'Enter', description: 'Send message' },
+    { keys: 'Shift + Enter', description: 'Insert newline in input' },
+    { keys: '/', description: 'Open skill/command drawer' },
+    { keys: 'Escape', description: 'Close drawer or modal' },
+  ] },
+  { label: 'Modes and prompts', rows: [
+    { keys: 'Shift + Tab', description: 'Cycle permission mode' },
+    { keys: 'Shift + Space', description: 'Cycle model' },
+    { keys: 'Arrow Left/Right', description: 'Cycle permission prompt buttons' },
+  ] },
 ];
 
 function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -247,15 +241,20 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
           header + scrolling body (scrollBody defaults true) fixes the reachability;
           "panel" (420px) stops the wrapping. The grid keeps the key chips in their
           own column so a long label can never push one out of line. */}
-      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard Shortcuts">
-        <div className="grid grid-cols-[1fr_auto] gap-x-4 items-center">
-          {SHORTCUTS.map(({ keys, description }) => (
-            <React.Fragment key={keys}>
-              <span className="text-2xs text-fg-dim py-1.5">{description}</span>
-              <kbd className="justify-self-end text-3xs font-mono text-fg-2 bg-inset border border-edge-dim rounded px-1.5 py-0.5">{keys}</kbd>
-            </React.Fragment>
-          ))}
-        </div>
+      <Dialog screen="settings/shortcuts" open onClose={onClose} size="panel" title="Keyboard shortcuts">
+        {SHORTCUT_GROUPS.map((g) => (
+          <section key={g.label}>
+            <SectionLabel className="mb-2">{g.label}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} px-3 py-1.5 grid grid-cols-[1fr_auto] gap-x-3 items-center`}>
+              {g.rows.map(({ keys, description }) => (
+                <React.Fragment key={keys}>
+                  <span className="text-2xs text-fg-dim py-1.5">{description}</span>
+                  <kbd className="justify-self-end text-3xs font-mono text-fg-2 bg-inset border border-edge-dim rounded px-1.5 py-0.5">{keys}</kbd>
+                </React.Fragment>
+              ))}
+            </div>
+          </section>
+        ))}
       </Dialog>
     </>,
     document.body
@@ -344,8 +343,8 @@ function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSess
               because every other closer in the app went through that component in
               tranche 2 (change 76). It also gains a focus ring and an accessible
               name — the old one announced as just "✕". */}
-          <div className="settings-drawer-header shrink-0 flex items-center justify-between px-4 py-3 border-b border-edge">
-            <h2 className="text-sm font-bold text-fg">Settings</h2>
+          <div className="settings-drawer-header shrink-0 flex items-center justify-between px-4 py-3">
+            <h2 className="text-base font-medium text-fg">Settings</h2>
             <CloseButton
               onClick={onClose}
               label="Close settings"
@@ -354,7 +353,7 @@ function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSess
           </div>
           <ScreenMark name="settings" />
 
-          <div ref={outerScrollRef} className="scroll-fade flex-1 min-h-0">
+          <div ref={outerScrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none settings-drawer-scroll flex-1">
             {isAndroid() ? (
               <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} syncAutoOpen={syncAutoOpen} onSyncAutoOpenHandled={onSyncAutoOpenHandled} />
             ) : (
@@ -451,7 +450,7 @@ function PresetSelector({ selectedId, onSelect, customName }: {
       value={selectedId}
       onChange={onSelect}
       aria-label="Notification sound"
-      className="space-y-1"
+      className="space-y-2" /* WHY 8px: one gap between neighbouring boxes app-wide (popup-spacing SP-5) */
     >
       {STOCK_PRESETS.map((p) => (
         <SettingRow
@@ -591,12 +590,12 @@ function SoundCategorySection({ category, label, description, dotColor }: {
  *  description and the status dot can never drift apart. */
 const SOUND_CATEGORY_META: Record<SoundCategory, { label: string; description: string; dotColor: string }> = {
   attention: {
-    label: 'Needs Attention',
+    label: 'Needs attention',
     description: 'Plays when a session needs approval',
     dotColor: 'bg-red-400',
   },
   ready: {
-    label: 'Response Ready',
+    label: 'Response ready',
     description: 'Plays when a background session has a new response',
     dotColor: 'bg-blue-400',
   },
@@ -637,8 +636,8 @@ function SoundButton() {
     });
   }, []);
 
-  const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseFloat(e.target.value);
+  // Takes the number itself: the shared Slider hands its value over, not an input event.
+  const setVolumeValue = useCallback((v: number) => {
     setVolume(v);
     try { localStorage.setItem(SOUND_VOLUME_KEY, String(v)); } catch {}
   }, []);
@@ -676,14 +675,15 @@ function SoundButton() {
       <Dialog screen="settings/sound"
         open={open}
         onClose={() => setOpen(false)}
-        title="Sound & Notifications"
+        title="Sound & notifications"
         size="panel"
         panelRef={popupRef}
       >
                 {/* Master volume */}
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Volume</h3>
-                  <div className="flex items-center gap-3">
+                  {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
+                  <SectionLabel className="mb-2">Volume</SectionLabel>
+                  <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex items-center gap-3`}>{/* WHY a card: nothing bare on the popup (popup-spacing SP-1; Remote access) */}
                     {/* Mute toggle */}
                     <button onClick={handleToggleMute} className="text-fg-muted hover:text-fg shrink-0">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -701,15 +701,9 @@ function SoundButton() {
                         )}
                       </svg>
                     </button>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={volume}
-                      onChange={handleVolumeChange}
-                      className="flex-1 h-1 accent-accent"
-                    />
+                    {/* WHY the shared Slider (Destin, submit-ticket-5#ST5-5: "use for volume too"). */}
+                    <Slider min={0} max={1} step={0.05} value={volume} aria-label="Volume"
+                      aria-valuetext={`${Math.round(volume * 100)}%`} onChange={setVolumeValue} />
                     <span className="text-3xs text-fg-muted w-8 text-right">{Math.round(volume * 100)}%</span>
                   </div>
                 </section>
@@ -719,15 +713,16 @@ function SoundButton() {
                     of each other. `key` remounts the section on switch so its
                     useState initializers re-read that category's saved values. */}
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Notification</h3>
+                  {/* WHY SectionLabel (fix batch 2): the guide's small label — normal case, no spaced-out capitals. */}
+                  <SectionLabel className="mb-2">Notification</SectionLabel><div className={`${CARD_LEVEL_1} p-3`}>{/* WHY: tabs, switch and sound list are one idea, so one card (SP-1) */}
                   <SegmentedTabs
                     variant="contained"
                     aria-label="Notification type"
                     value={soundCategory}
                     onChange={(id) => setSoundCategory(id as SoundCategory)}
                     tabs={[
-                      { id: 'attention', label: 'Needs Attention' },
-                      { id: 'ready', label: 'Response Ready' },
+                      { id: 'attention', label: 'Needs attention' },
+                      { id: 'ready', label: 'Response ready' },
                     ]}
                     className="mb-3"
                   />
@@ -737,7 +732,7 @@ function SoundButton() {
                     label={SOUND_CATEGORY_META[soundCategory].label}
                     description={SOUND_CATEGORY_META[soundCategory].description}
                     dotColor={SOUND_CATEGORY_META[soundCategory].dotColor}
-                  />
+                  /></div>
                 </section>
       </Dialog>
     </>
@@ -750,20 +745,17 @@ function SoundButton() {
 
 /** Compact "Appearance" row — opens ThemeScreen in a centered popup modal */
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
-  const { activeTheme, allThemes } = useTheme();
+  const { activeTheme } = useTheme();
   const [open, setOpen] = useState(false);
   useScreenOpen('settings/appearance', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // The first-run tour moving on closes this dialog (guide-events.ts).
   useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
   // shell's header. Both view flags live here and drive title/onBack; the
-  // component gets them back as props. Same lift K12 did for `showInfo`,
-  // extended to the theme editor so its header can go too.
+  // component gets it back as a prop (K12). The theme editor view that used to share
+  // this header was removed (appearance-questions AQ-1, 2026-10-01).
   const [showInfo, setShowInfo] = useState(false);
-  const [editingSlug, setEditingSlug] = useState<string | null>(null);
   useScreenOpen('settings/appearance/about', () => setShowInfo(true));
-  useScreenOpen('settings/appearance/edit', () => setEditingSlug('halftone-dimension')); // a fixture community theme
-  const editingTheme = editingSlug ? (allThemes.find((t) => t.slug === editingSlug) ?? null) : null;
   const popupRef = useRef<HTMLDivElement>(null);
 
   const { canvas, panel, inset, accent } = activeTheme.tokens;
@@ -803,15 +795,10 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         onClose={() => setOpen(false)}
         title={
           showInfo ? 'About Appearance'
-            : editingTheme ? `Edit: ${editingTheme.name}`
-              : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
+            : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
         }
-        onBack={
-          showInfo ? () => setShowInfo(false)
-            : editingTheme ? () => setEditingSlug(null)
-              : undefined
-        }
-        headerActions={!showInfo && !editingTheme ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
+        onBack={showInfo ? () => setShowInfo(false) : undefined}
+        headerActions={!showInfo ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
         aria-label="Appearance"
         // A panel, not a document. Its theme cards are a 6px gradient strip and
         // a truncated name -- there is no canvas to size for, so the grid sets
@@ -823,7 +810,6 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         panelRef={popupRef}
       >
         {showInfo && <ScreenMark name="settings/appearance/about" />}
-        {editingTheme && <ScreenMark name="settings/appearance/edit" />}
         <ThemeScreen
           onClose={() => setOpen(false)}
           onSendInput={onSendInput}
@@ -831,8 +817,6 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
           onOpenMarketplace={onOpenMarketplace}
           onPublishTheme={(slug) => { setOpen(false); onPublishTheme?.(slug); }}
           showInfo={showInfo}
-          editingSlug={editingSlug}
-          onEditSlug={setEditingSlug}
         />
       </Dialog>
     </>
@@ -844,7 +828,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
 // via localStorage['youcoded-buddy-enabled'] (matches theme/font persistence
 // pattern). Toggling fires window.claude.buddy.show/hide; App.tsx also reads
 // the flag on mount to auto-show if previously enabled. Follows the same
-// row-opens-popup pattern as Sound/Appearance/Remote Access instead of being
+// row-opens-popup pattern as Sound/Appearance/Remote access instead of being
 // a bare checkbox — see docs/active/specs/2026-07-15-settings-panel-card-redesign-design.md.
 function BuddyIcon() {
   // Simplified outline mascot silhouette (rounded head + dot eyes + arm/leg
@@ -1184,7 +1168,7 @@ export function BuddyButton() {
     <>
       <SettingRow
         icon={<BuddyIcon />}
-        title="Buddy Floater"
+        title="Buddy floater"
         description={status}
         // The failure line is cleared on the way IN, so a warning from an earlier
         // attempt is never the first thing in a freshly-opened popup. This row is
@@ -1202,7 +1186,7 @@ export function BuddyButton() {
       <Dialog screen="settings/buddy"
         open={open}
         onClose={() => setOpen(false)}
-        title="Buddy Floater"
+        title="Buddy floater"
         size="prompt"
         scrollBody={false}
         panelRef={popupRef}
@@ -1244,6 +1228,7 @@ export function BuddyButton() {
               </div>
             ) : (
             <div className="px-4 py-4 space-y-2">
+              {/* No label: a small popup with a single card needs none (Destin, 2026-09-28, amending NB-3). */}
               {/* Deck Q-2R: on a Linux desktop the helper cannot run on, this is
                   not a switch the user should be invited to flip — the buddy
                   cannot be positioned there at all. Row goes read-only and says
@@ -1265,8 +1250,11 @@ export function BuddyButton() {
                       {enabled && dismissed && (
                         <>
                           <br />
-                          Hidden until restart{' \u00b7 '}
-                          <button onClick={showNow} className="text-accent hover:underline">Show now</button>
+                          <span className="inline-flex items-center gap-1.5 mt-1">
+                            Hidden until restart
+                            {/* WHY outlined, not bare text (guide: secondary actions are outlined) */}
+                            <Button variant="secondary" size="sm" onClick={showNow}>Show now</Button>
+                          </span>
                         </>
                       )}
                     </>
@@ -1297,11 +1285,11 @@ export function BuddyButton() {
               {canRemoveHelper && (
                 <>
                   {removeError && <Callout tone="warning">{removeError}</Callout>}
-                  <div className="flex justify-end">
-                    <Button variant="ghost" size="sm" onClick={removeHelper} disabled={removing}>
-                      {removing ? 'Removing\u2026' : 'Remove helper'}
-                    </Button>
-                  </div>
+                  {/* WHY a full-width outlined button (nothing-bare-2#N2-7; guide: a follow-up
+                      action under a group is never bare text; a lone button is full width; "KDE": say which helper, N3-3). */}
+                  <Button variant="secondary" onClick={removeHelper} disabled={removing} className="w-full">
+                    {removing ? 'Removing\u2026' : 'Remove KDE helper'}
+                  </Button>
                 </>
               )}
             </div>
@@ -1628,13 +1616,13 @@ function RemoteButton(props: RemoteButtonProps) {
   // sub-screen opened from the bottom of a long panel started scrolled past its own first
   // sentence. Navigating within a dialog should start at the top, like opening a page.
   useEffect(() => {
-    const region = popupRef.current?.querySelector('.scroll-fade');
+    const region = popupRef.current?.querySelector('.dialog-scroll');
     if (region) region.scrollTop = 0;
   }, [showEncryption, showInfo]);
   // No scroll ref here any more — Dialog owns the scroll region and its edge
   // fades for both views.
 
-  // WHY Add Device scrolls itself into view: it is appended at the BOTTOM of a panel
+  // WHY Add device scrolls itself into view: it is appended at the BOTTOM of a panel
   // taller than the dialog, so on a normal window pressing it changed nothing you could
   // see. A tester pressed it, saw no result, and only found the QR code by scrolling.
   const addDeviceRef = useRef<HTMLElement>(null);
@@ -1694,7 +1682,7 @@ function RemoteButton(props: RemoteButtonProps) {
         : previewView.prerequisite === 'sign-in-required' ? 'signed-out'
           : 'running',
       // No address until the network is actually up, and ONE address throughout: the mock
-      // used to answer a bare IP here and a different tailnet hostname in Add Device, with
+      // used to answer a bare IP here and a different tailnet hostname in Add device, with
       // nothing saying they were the same machine.
       ip: ready ? '100.82.14.7' : null,
       hostname: ready ? 'home-laptop' : null,
@@ -1773,7 +1761,7 @@ function RemoteButton(props: RemoteButtonProps) {
             <path d="M19.5 5a7 7 0 0 1 0 10" />
           </svg>
         }
-        title="Remote Access"
+        title="Remote access"
         // Status dot — green when remote + Tailscale VPN fully active, gray otherwise
         description={
           <RowStatus dotClassName={isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}>
@@ -1785,14 +1773,13 @@ function RemoteButton(props: RemoteButtonProps) {
 
       {/* D1, finished: BOTH views use the shell's header and scroll body now.
           The main view used to paint its own — an h2, a CloseButton, and a
-          `.scroll-fade flex-1` wrapper — which is the exact set of things D1
+          scroll-fade wrapper — which is the exact set of things D1
           exists to own, and the exact set two of SettingsPopup's seven callers
-          got wrong. `space-y-6` rather than Dialog's default `space-y-5`, so
-          the section rhythm here is unchanged. */}
+          got wrong. The body keeps the Dialog's own 16px group gap. */}
       <Dialog screen="settings/remote"
         open={open}
         onClose={() => setOpen(false)}
-        title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
+        title={showInfo ? 'About Remote access' : showEncryption ? 'Browser encryption' : 'Remote access'}
         onBack={showInfo ? () => setShowInfo(false) : showEncryption ? () => setShowEncryption(false) : undefined}
         // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
         headerActions={showInfo || showEncryption ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
@@ -1810,7 +1797,10 @@ function RemoteButton(props: RemoteButtonProps) {
                   between your devices.
                 </p>
                 <div>
-                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">What this adds</h4>
+                  {/* WHY SectionLabel, not an h4 eyebrow (fix batch 1, 2026-09-24):
+                      design guide small label — normal case, no letter-spacing;
+                      also retires the app's one non-canonical h4-as-label. */}
+                  <SectionLabel className="mb-2">What this adds</SectionLabel>
                   <p className="text-fg-2 text-xs">
                     A certificate, so your phone&apos;s browser can verify the connection. Browsers only
                     allow the microphone, copy buttons and the font picker on a connection they can
@@ -1823,7 +1813,7 @@ function RemoteButton(props: RemoteButtonProps) {
                     : 'This computer\u2019s name is added to a public list of issued certificates. The list is permanent: turning this off later does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'}
                 </Callout>
                 <div>
-                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">You will also need</h4>
+                  <SectionLabel className="mb-2">You will also need</SectionLabel>
                   <p className="text-fg-2 text-xs">
                     To turn on certificates for your Tailscale account, on their website. YouCoded cannot
                     do that part for you.
@@ -1847,7 +1837,7 @@ function RemoteButton(props: RemoteButtonProps) {
                   </Button>
                 )}
               </div>
-            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add Device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
+            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
@@ -1858,13 +1848,19 @@ function RemoteButton(props: RemoteButtonProps) {
                   <LoadingState what="remote access" />
                 ) : (
                   <>
-                    {/* Setup banner — shown when no clients connected */}
+                    {/* Setup banner — shown when no clients connected. WHY a
+                        headed level-1 card (card-levels sweep, round 2 — this
+                        replaces the fix-batch-2 "no outer box" provisional,
+                        now decided): the intro text sat loose on the popup
+                        background with the status strip below it and nothing
+                        tying them together. One card, headed like "Server",
+                        settles it — the status strip's own bg-inset already
+                        reads as level-2 nested inside. */}
                     {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
-                      // Info callouts are accent-tinted, warnings are amber. The
-                      // amber "setup required" boxes below stay amber — they're a
-                      // true warning status, not information.
-                      <div className="bg-accent/10 border border-accent/25 rounded-lg p-3">
-                        <p className="text-xs text-fg-2 mb-2">
+                      <section>
+                        <SectionLabel className="mb-2">Status</SectionLabel>
+                        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+                        <p className="text-xs text-fg-2">
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
@@ -1899,126 +1895,132 @@ function RemoteButton(props: RemoteButtonProps) {
                                   label inherited the theme fg — near-black on blue
                                   on Creme. Button primary carries text-on-accent. */}
                               <Button onClick={() => onSetShowSetupQR(true)} className="w-full">
-                                Set Up Remote Access
+                                Set up remote access
                               </Button>
                             </div>
                           )
                         ) : renderPrerequisite(tailscale, !!config?.hasPassword, onRunSetup, onConfirmSetup)}
-                      </div>
+                        </div>
+                      </section>
                     )}
 
                     {/* Server settings */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Server</h3>
+                      {/* WHY SectionLabel + space-y-2 (fix batch 1, 2026-09-24; 8px since popup-spacing#SP-5):
+                          design guide small label (normal case) and Settings
+                          spacing (6px between rows) — was a hand-typed uppercase
+                          eyebrow (mb-3) over rows separated by py-2 wrappers. */}
+                      <SectionLabel className="mb-2">Server</SectionLabel>
 
-                      {/* onClick keeps the whole-row hit target the <label> used
-                          to give this; SettingRow stops the toggle's own click
-                          from bubbling back into it. */}
-                      <SettingRow
-                        variant="item"
-                        title="Enabled"
-                        onClick={hostOnly ? undefined : onToggleEnabled}
-                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
-                      />
-                      {hostOnly && (
-                        <p className="text-2xs text-fg-muted pb-2">Change these on the computer itself.</p>
-                      )}
-                      {/* The server is started from the toggle now, so it can fail
-                          (port already bound, permission denied). Show the real
-                          reason here — the toggle has already snapped back off. */}
-                      {enableError && (
-                        <FieldError as="p" size="2xs" className="pb-2">{plainReason(enableError)}</FieldError>
-                      )}
-                      {/* A bind failure was logged and nowhere else. Specific and accurate
-                          when the OS gave us a reason; never a guess. */}
-                      {!enableError && status?.state === 'failed' && (
-                        <FieldError as="p" size="2xs" className="pb-2">
-                          {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
-                        </FieldError>
-                      )}
-
-                      <div className="py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-fg-2">Password</span>
-                          {/* "Saved", not "Set": the button beside this one also says Set,
-                              so the row read as two identical controls, one of which did
-                              nothing when clicked. */}
-                          {config?.hasPassword && (
-                            <span className="text-3xs text-green-400">Saved</span>
-                          )}
-                        </div>
-                        {/* The Set button moves INSIDE the field (change 77): this is a
-                            field with a single submit action, which is exactly the
-                            InputGroup shape. The field also loses its bg-well surface,
-                            rounded-sm radius, and gray focus:border-fg-muted. */}
-                        <InputGroup size="sm">
-                          <InputGroup.Field
-                            type="password"
-                            placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
-                            value={newPassword}
-                            onChange={(e) => onSetNewPassword(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
-                            aria-label="Remote access password"
-                            disabled={hostOnly}
-                          />
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={onSetPassword}
-                            disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
-                          >
-                            {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
-                          </Button>
-                        </InputGroup>
-                        {/* Length rule + a one-tap generator + the disconnect warning
-                            (2026-09-10 security review, #5). The hint turns into the
-                            error when a too-short password is submitted. */}
-                        <div className="flex items-center justify-between mt-1.5">
-                          <span className={`text-3xs ${passwordStatus === 'too-short' ? 'text-red-400' : 'text-fg-muted'}`}>
-                            {passwordStatus === 'too-short'
-                              ? `Use at least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`
-                              : `At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={hostOnly}
-                            onClick={() => onSetNewPassword(generateRemotePassphrase())}
-                          >
-                            Generate
-                          </Button>
-                        </div>
-                        <p className="text-3xs text-fg-muted mt-1">
-                          Changing the password disconnects every device; each reconnects with the new one.
-                        </p>
-                        {config?.weakPassword && passwordStatus !== 'too-short' && (
-                          <p className="text-3xs text-amber-700 mt-1">
-                            Your current password is short. Consider setting a longer one.
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-fg-2">Keep awake</span>
-                        </div>
-                        {/* K3: four short options -> segmented. SegmentedTabs keys
-                            on string ids and keepAwakeHours is a number, so both
-                            directions convert at the boundary. */}
-                        <SegmentedTabs
-                          variant="contained"
-                          aria-label="Keep awake"
-                          value={String(config?.keepAwakeHours ?? 0)}
-                          onChange={(id) => onSetKeepAwake(Number(id))}
-                          tabs={KEEP_AWAKE_OPTIONS.map((opt) => ({
-                            id: String(opt.value),
-                            label: opt.label,
-                          }))}
+                      <div className="space-y-2">
+                        {/* onClick keeps the whole-row hit target the <label> used
+                            to give this; SettingRow stops the toggle's own click
+                            from bubbling back into it. */}
+                        <SettingRow
+                          variant="item"
+                          title="Enabled"
+                          onClick={hostOnly ? undefined : onToggleEnabled}
+                          control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
                         />
+                        {hostOnly && (
+                          <p className="text-2xs text-fg-muted">Change these on the computer itself.</p>
+                        )}
+                        {/* The server is started from the toggle now, so it can fail
+                            (port already bound, permission denied). Show the real
+                            reason here — the toggle has already snapped back off. */}
+                        {enableError && (
+                          <FieldError as="p" size="2xs">{plainReason(enableError)}</FieldError>
+                        )}
+                        {/* A bind failure was logged and nowhere else. Specific and accurate
+                            when the OS gave us a reason; never a guess. */}
+                        {!enableError && status?.state === 'failed' && (
+                          <FieldError as="p" size="2xs">
+                            {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
+                          </FieldError>
+                        )}
+
+                        {/* WHY FieldRow, hint above the control (fix batch 1,
+                            2026-09-24 — design guide "Settings" → wide controls
+                            go below the title+hint; decisions.md settings-screens
+                            audit named this row's old shape — hint BELOW the
+                            field — as the exact anti-pattern K2 retired
+                            everywhere else. The Set button stays INSIDE the field
+                            (rule: a text box with its own action). "Saved" and
+                            Generate move to one row under the field instead of
+                            beside the title and below-right of it. */}
+                        <FieldRow title="Password" hint={`At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}>
+                          <InputGroup size="sm">
+                            <InputGroup.Field
+                              type="password"
+                              placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
+                              value={newPassword}
+                              onChange={(e) => onSetNewPassword(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && onSetPassword() /* not while an IME word is being confirmed (F39) */}
+                              aria-label="Remote access password"
+                              disabled={hostOnly}
+                            />
+                            {/* WHY a small FILLED button (fix batch 2, 2026-09-26 —
+                                decisions.md "Button inside a text box", settings-
+                                pieces#P-5): a text box's own action is a small filled
+                                button inside the box at the right, like the message
+                                box. It was an outlined button — Destin: "that 'set'
+                                button doesn't match any existing style" (B1-5). */}
+                            <Button
+                              size="sm"
+                              onClick={onSetPassword}
+                              disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
+                            >
+                              {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
+                            </Button>
+                          </InputGroup>
+                          {/* Generate is GONE (Destin, fix batch 1 B1-5: "the generate
+                              button should just be removed").
+                              "Saved", not "Set": the button inside the field already
+                              says Set. Grey, not green (fix batch 2): the guide keeps
+                              status colours out of text. */}
+                          {config?.hasPassword && (
+                            <p className="text-3xs text-fg-muted">Saved</p>
+                          )}
+                          {/* Too-short is a real validation error, not the passive
+                              hint above — FieldError, matching every other field. */}
+                          {passwordStatus === 'too-short' && (
+                            <FieldError as="p">Use at least {MIN_REMOTE_PASSWORD_LENGTH} characters.</FieldError>
+                          )}
+                          {/* The disconnect warning (2026-09-10 security review, #5). */}
+                          <p className="text-3xs text-fg-muted">
+                            Changing the password disconnects every device; each reconnects with the new one.
+                          </p>
+                          {/* A warning is the tinted notice box, not amber text (fix
+                              batch 2 — design guide "Status and notices"). Same words. */}
+                          {config?.weakPassword && passwordStatus !== 'too-short' && (
+                            <Callout tone="warning">
+                              Your current password is short. Consider setting a longer one.
+                            </Callout>
+                          )}
+                        </FieldRow>
+
+                        {/* Keep awake — level-1 card: was a bare div sitting loose
+                            between Password's card and the background ("sits loose").
+                            variant="nested" matches every other nested track. */}
+                        <div className={`${CARD_LEVEL_1} px-3 py-2`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-fg-2">Keep awake</span>
+                          </div>
+                          <SegmentedTabs
+                            variant="nested"
+                            aria-label="Keep awake"
+                            value={String(config?.keepAwakeHours ?? 0)}
+                            onChange={(id) => onSetKeepAwake(Number(id))}
+                            tabs={KEEP_AWAKE_OPTIONS.map((opt) => ({
+                              id: String(opt.value),
+                              label: opt.label,
+                            }))}
+                          />
+                        </div>
                       </div>
                     </section>
 
-                    {/* Add Device — requires Tailscale running, otherwise tailscale.url is null.
+                    {/* Add device — requires Tailscale running, otherwise tailscale.url is null.
                         Was a soft-blue tinted outline (bg-blue-500/10 + text-blue-400) that matched
                         no variant. Destin's call (spec §11.8 A): plain `secondary`. Unlike the
                         orange billing button, nothing here is a warning — the blue was decorative,
@@ -2039,16 +2041,16 @@ function RemoteButton(props: RemoteButtonProps) {
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
                         </svg>
-                        Add Device
+                        Add device
                       </Button>
                     )}
 
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Devices</h3>
+                        <SectionLabel className="mb-2">Devices</SectionLabel>
 
-                        <div className="space-y-1">
+                        <div className="space-y-2">
                           {deviceRows.map(row => (
                             // K6: an item list is a K2 row with a status dot in the icon
                             // slot. One shape for the mockup and the real panel — a preview
@@ -2080,15 +2082,15 @@ function RemoteButton(props: RemoteButtonProps) {
                       </section>
                     )}
 
-                    {/* Add Device overlay */}
+                    {/* Add device overlay — LEVEL-1 (card-levels sweep). */}
                     {showAddDevice && tailscale?.url && (
-                      <section ref={addDeviceRef} className="bg-inset/50 rounded-lg p-3">
+                      <section ref={addDeviceRef} className={`${CARD_LEVEL_1} p-3`}>
                         <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
+                          <h3 className="text-xs font-medium text-fg-2">Add device</h3>
                           {/* NOT a K6 action — this dismisses the whole
                               sub-panel, so it is a CloseButton, which already
                               carries a label and a focus ring. */}
-                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close Add Device" />
+                          <CloseButton onClick={() => onSetShowAddDevice(false)} label="Close add device" />
                         </div>
                         {/* Remind users that Tailscale must be installed + running on the receiving device too */}
                         <Callout tone="warning" title="Before scanning:" className="mb-2">
@@ -2100,7 +2102,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         </div>
                         <p className="text-3xs text-fg-muted mt-2 text-center font-mono">{tailscale.url}</p>
                         <Button variant="secondary" onClick={onCopyLink} className="w-full mt-2">
-                          {copied ? 'Copied!' : 'Copy Link'}
+                          {copied ? 'Copied!' : 'Copy link'}
                         </Button>
                       </section>
                     )}
@@ -2110,7 +2112,7 @@ function RemoteButton(props: RemoteButtonProps) {
                         an upgrade, not an unfinished step (Destin, 2026-09-10). */}
                     {previewView && preview && (previewView.stage === 'ready' || previewView.stage === 'consent') && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Advanced</h3>
+                        <SectionLabel className="mb-2">Advanced</SectionLabel>
                         <SettingRow
                           variant="item"
                           title="Browser encryption"
@@ -2122,37 +2124,31 @@ function RemoteButton(props: RemoteButtonProps) {
 
                     {/* Tailscale section */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Tailscale</h3>
+                      <SectionLabel className="mb-2">Tailscale</SectionLabel>
 
                       {tailscale?.installed ? (
-                        // space-y-1 replaces the py-2 each bare row used to carry
-                        // its own spacing with — the rows are carded now, so the
-                        // gap belongs between them, not inside them.
-                        <div className="space-y-1">
+                        // space-y-2 (8px between neighbouring boxes, popup-spacing#SP-5) replaces the
+                        // py-2 each bare row used to carry its own spacing with —
+                        // the rows are carded now, so the gap belongs between
+                        // them, not inside them.
+                        <div className="space-y-2">
                           {/* Distinguish "installed and connected" from "installed but VPN off" —
                               previously detection conflated the two and forced the not-installed branch. */}
-                          {/* K2 value rows. Status keeps its green/muted colour —
-                              that is state, not chrome — but takes the value
-                              slot's size so it lines up with the IP below it
-                              instead of sitting a step smaller. */}
+                          {/* K2 value rows. WHY RowStatus, not a coloured word (guide: status colour lives in the dot, never the word — matches Remote access above). */}
                           <SettingRow
                             variant="item"
                             title="Status"
                             value={
-                              tailscale.connected ? (
-                                <span className="text-green-400">
-                                  Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
-                                </span>
-                              ) : (
-                                <span className="text-fg-muted">{
-                                  tailscale.state === 'signed-out' ? 'Not signed in'
+                              <RowStatus dotClassName={tailscale.connected ? 'bg-green-400' : 'bg-fg-muted/40'}>
+                                {tailscale.connected
+                                  ? `Connected${tailscale.hostname ? ` · ${tailscale.hostname}` : ''}`
+                                  : tailscale.state === 'signed-out' ? 'Not signed in'
                                     : tailscale.state === 'stopped' ? 'Switched off'
-                                      : 'Not connected'
-                                }</span>
-                              )
+                                      : 'Not connected'}
+                              </RowStatus>
                             }
                           />
-                          {/* WHY the address lives here and not only behind Add Device: it
+                          {/* WHY the address lives here and not only behind Add device: it
                               appeared during setup and then disappeared the moment setup
                               finished, so at the one point a user wants to type it into a
                               phone there was nowhere to look it up. An IP on its own is not
@@ -2172,15 +2168,21 @@ function RemoteButton(props: RemoteButtonProps) {
                           />
                         </div>
                       ) : (
-                        <div className="py-2">
+                        // Level-1 card (round 4): was a bare div, the one row
+                        // under this heading with no card, unlike Status/Address.
+                        <div className={`${CARD_LEVEL_1} p-3`}>
                           <p className="text-xs text-fg-muted mb-2">
                             Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>
                           {/* WHY hidden in the preview: the setup banner above already offers
                               Install, and two identical actions in one dialog is the duplicate
                               this review is meant to remove, not reproduce. */}
+                          {/* WHY w-full (fix batch 1, 2026-09-24): the one action
+                              alone on its own row — design guide "a lone action
+                              is full width". */}
                           {!previewView && <Button
                             variant="secondary"
+                            className="w-full"
                             onClick={onRunSetup}
                             disabled={setupStatus === 'installing' || setupStatus === 'authenticating'}
                           >
@@ -2210,8 +2212,8 @@ export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessVi
 // installs, matching the native first-run TierPickerScreen labels.
 const TIER_OPTIONS = [
   { id: 'CORE', name: 'Core', desc: 'Everything needed for basic Claude Code functionality' },
-  { id: 'DEVELOPER', name: 'Developer Essentials', desc: 'fd, fzf, jq, bat, tmux, nano, micro' },
-  { id: 'FULL_DEV', name: 'Full Dev Environment', desc: 'neovim, vim, make, cmake, sqlite' },
+  { id: 'DEVELOPER', name: 'Developer essentials', desc: 'fd, fzf, jq, bat, tmux, nano, micro' },
+  { id: 'FULL_DEV', name: 'Full dev environment', desc: 'neovim, vim, make, cmake, sqlite' },
 ];
 
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {
@@ -2235,13 +2237,13 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
 
   return (
     <>
-      {/* Current tier row — title is the static "Package Tier" label, subtitle
+      {/* Current tier row — title is the static "Package tier" label, subtitle
           is the current tier's name (was reversed: the tier name used to be
           the title with no static label, the one anti-pattern this component
-          shared with pre-redesign Appearance/Remote Access/Buddy Floater). */}
+          shared with pre-redesign Appearance/Remote access/Buddy floater). */}
       <SettingRow
         icon={<span className="text-sm leading-none text-fg-dim">⬡</span>}
-        title="Package Tier"
+        title="Package tier"
         description={currentTier.name}
         onClick={() => setOpen(true)}
       />
@@ -2255,34 +2257,21 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title="Package Tier"
+        title="Package tier"
         size="prompt"
         panelRef={popupRef}
         screen="settings/android/tier"
       >
-              {TIER_OPTIONS.map(t => {
-                const isActive = tier === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => { onSetTier(t.id); setOpen(false); }}
-                    className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-colors ${
-                      isActive ? 'border-accent bg-accent/10' : 'border-edge-dim hover:border-edge'
-                    }`}
-                  >
-                    <span className={`text-sm shrink-0 mt-0.5 ${isActive ? 'text-accent' : 'text-fg-faint'}`}>
-                      {isActive ? '●' : '○'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-medium ${isActive ? 'text-fg' : 'text-fg-2'}`}>{t.name}</span>
-                        {isActive && <span className="text-4xs font-medium px-1.5 py-0.5 rounded-sm bg-accent text-on-accent">Active</span>}
-                      </div>
-                      <p className="text-3xs text-fg-muted mt-0.5">{t.desc}</p>
-                    </div>
-                  </button>
-                );
-              })}
+              {/* WHY the shared radio rows (2026-09-28): the hand-drawn ● / ○ boxes, the
+                  accent-tinted selected box and the 9px "Active" tag were a one-off look;
+                  this is the same choice list Sound uses, and the filled radio already
+                  says which one is active. */}
+              <RadioGroup options={TIER_OPTIONS.map(t => t.id)} value={tier} onChange={(id) => { onSetTier(id); setOpen(false); }} aria-label="Package tier" className="space-y-2">
+                {TIER_OPTIONS.map(t => (
+                  <SettingRow key={t.id} variant="item" title={t.name} description={t.desc} selected={tier === t.id}
+                    onSelect={() => { onSetTier(t.id); setOpen(false); }} radioTabIndex={tier === t.id ? 0 : -1} />
+                ))}
+              </RadioGroup>
       </Dialog>
     </>
   );
@@ -2303,7 +2292,11 @@ export function ConnectToDesktopButton() {
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [connectedDeviceName, setConnectedDeviceName] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  // The failed connection AND the computer it was for, so its notice can try that one again.
+  // WHY (small-fixes-1): the message used to be a red box with nothing to press — a dead end
+  // (error-message-standards "Every error state offers an action"); deviceError below is the
+  // same shape.
+  const [connectError, setConnectError] = useState<{ message: string; device: PairedDevice } | null>(null);
   // A saved computer that could not be saved or removed, with the action to try again.
   // WHY: while paired, Save and Remove really ask the phone's own runtime now, and that can
   // fail or time out; before, the failure went nowhere and the row just stayed.
@@ -2360,7 +2353,7 @@ export function ConnectToDesktopButton() {
       setConnectedDeviceName(device.name);
       setOpen(false);
     } catch (err: any) {
-      setConnectError(err?.message || 'Connection failed');
+      setConnectError({ message: plainMessage(err, "Couldn't connect to this computer."), device });
     } finally {
       setConnecting(false);
     }
@@ -2450,8 +2443,8 @@ export function ConnectToDesktopButton() {
           </div>
         }
         title="Connect to Desktop"
+        // WHY no coloured description: the icon already carries a green dot when connected.
         description={subtitle}
-        descriptionClassName={remoteConnected ? 'text-green-400' : undefined}
         onClick={() => { setOpen(true); setShowConnectForm(false); }}
       />
 
@@ -2468,19 +2461,11 @@ export function ConnectToDesktopButton() {
               {!tailscaleLoading && tailscaleStatus !== null && !tailscaleStatus.connected && (
                 <Callout
                   tone="warning"
-                  title={
-                    // The glyph rides in the title node rather than getting its
-                    // own slot: it is the ONLY callout in the app that has one,
-                    // so a slot would be a prop that exists for a single caller.
-                    <span className="flex items-center gap-2">
-                      <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                        <line x1="12" y1="9" x2="12" y2="13" />
-                        <line x1="12" y1="17" x2="12.01" y2="17" />
-                      </svg>
-                      Tailscale not connected
-                    </span>
-                  }
+                  // WHY no warning triangle (final-review#ST-30, Destin: "remove the
+                  // exclamation triangle thing in front of tailscale not connected"):
+                  // the box's amber tint already says "warning", and it was the only
+                  // notice in the app with a glyph of its own.
+                  title="Tailscale not connected"
                 >
                   Enable Tailscale on this phone before connecting. Both devices must be on the same Tailscale network.
                 </Callout>
@@ -2491,7 +2476,10 @@ export function ConnectToDesktopButton() {
                 <div className="bg-green-400/10 border border-green-400/25 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    <span className="text-xs text-green-400 font-medium">
+                    {/* WHY plain text (guide: success lines lose their
+                        colour — only the dot stays green): was a hand-rolled
+                        text-green-400 sentence. */}
+                    <span className="text-xs text-fg-2 font-medium">
                       Connected to {connectedDeviceName || 'Desktop'}
                     </span>
                   </div>
@@ -2508,11 +2496,9 @@ export function ConnectToDesktopButton() {
 
               {/* Error */}
               {connectError && (
-                // Was raw `red-500` around text that already used the destructive
-                // TOKEN — the surface and its own body disagreed about which red
-                // they were. Change 17 moved the app's reds onto the token so
-                // theme packs can restyle them; this one survived that sweep.
-                <Callout tone="danger">{connectError}</Callout>
+                // The shared error box with Try again for the same computer (small-fixes-1),
+                // as the saved-computer error just below.
+                <ErrorState mode="recoverable" message={connectError.message} onRetry={() => void doConnect(connectError.device)} variant="inline" />
               )}
 
               {deviceError && (
@@ -2522,8 +2508,10 @@ export function ConnectToDesktopButton() {
               {/* Saved devices — always listed */}
               {pairedDevices.length > 0 && (
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Saved Devices</h3>
-                  <div className="space-y-1">
+                  {/* WHY SectionLabel, sentence case (labels batch, guide: no
+                      spaced capitals — decisions H-3/L-1…L-4). */}
+                  <SectionLabel className="mb-2">Saved devices</SectionLabel>
+                  <div className="space-y-2">
                     {pairedDevices.map(device => (
                       // K6. The row was already two controls in a flex box: a
                       // borderless <button> wrapping the name so the whole thing
@@ -2559,40 +2547,54 @@ export function ConnectToDesktopButton() {
               {/* Add new device */}
               {!remoteConnected && !connecting && (
                 <section>
+                  {/* WHY "Add device": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
                   {pairedDevices.length > 0 && (
-                    <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Add Device</h3>
+                    <SectionLabel className="mb-2">Add device</SectionLabel>
                   )}
+                  {/* WHY the add-device buttons and their how-to line share one card (final-review
+                      #ST-21/#PR-7, the one popup rule): the buttons sat bare on the popup and the
+                      line floated loose at its foot (guide: text that describes a card lives in it).
+                      The line now shows only while there is something to add. */}
                   {!showConnectForm ? (
-                    <div className="space-y-2">
+                    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+                      <p className="text-2xs text-fg-muted">
+                        Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
+                      </p>
                       {/* Both only had an active: state, so on desktop nothing
                           happened on hover at all. */}
                       <Button onClick={handleScanQr} className="w-full">
-                        Scan QR Code
+                        Scan QR code
                       </Button>
                       <Button variant="secondary" onClick={() => setShowConnectForm(true)} className="w-full">
-                        Enter Manually
+                        Enter manually
                       </Button>
                     </div>
                   ) : (
-                    <div className="space-y-3 bg-inset/50 rounded-lg p-3">
+                    // The shared first-level card (it was the same look hand-typed, outline missing).
+                    <div className={`${CARD_LEVEL_1} space-y-3 p-3`}>
                       {/* All four fields were the same bg-well / rounded-sm /
                           focus:border-fg-muted recipe; they're the shared FIELD surface
                           now (change 20). The Cancel + Save row below stays outside as a
                           form footer — it sits under the whole form, not beside one
                           field, so it is NOT an InputGroup. */}
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Device Name</label>
+                        {/* WHY: field captions drop the spaced-caps eyebrow +
+                            sentence case (labels batch). */}
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Device name</label>
                         <TextInput
                           size="sm"
                           value={formName}
                           onChange={e => setFormName(e.target.value)}
-                          placeholder="My Desktop"
-                          aria-label="Device Name"
+                          placeholder="My desktop"
+                          // WHY: matches the visible label's new sentence
+                          // case (labels batch) — this field has no other
+                          // established Title-Case reference elsewhere.
+                          aria-label="Device name"
                           className="w-full"
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Host / IP</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Host / IP</label>
                         <TextInput
                           size="sm"
                           value={formHost}
@@ -2603,7 +2605,7 @@ export function ConnectToDesktopButton() {
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Port</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Port</label>
                         <TextInput
                           size="sm"
                           value={formPort}
@@ -2614,7 +2616,7 @@ export function ConnectToDesktopButton() {
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Password</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Password</label>
                         <TextInput
                           size="sm"
                           type="password"
@@ -2640,9 +2642,6 @@ export function ConnectToDesktopButton() {
                 </section>
               )}
 
-              <p className="text-3xs text-fg-muted">
-                Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
-              </p>
       </Dialog>
     </>
   );
@@ -2656,7 +2655,6 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
-  const [showDevMenu, setShowDevMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   // WHY the context object doubles as the open flag: two states that must agree
   // (is it open / what is it about) drift; one cannot.
@@ -2720,7 +2718,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
   return (
     <>
-      <div className="flex-1 px-4 py-4 space-y-2">
+      <div className="flex-1 px-4 pt-2 pb-4 space-y-2">{/* WHY pt-2: header-line gap = the 8px between rows (Destin, surface-levels#SL-13) */}
 
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08) */}
         <AccountSection />
@@ -2761,7 +2759,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Help & feedback"
-          description="Tour, tips, community, bug reports"
+          description="Tour, tips, feedback, contributing"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow
@@ -2772,30 +2770,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
           open={showHelp}
           onClose={() => setShowHelp(false)}
           onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
-          version={aboutInfo?.version}
-          build={aboutInfo?.build}
-        />
-
-        {/* Development — bug reports, contributions, known issues */}
-        <SettingRow
-          icon={
-            // {YC} — curly braces with YC monogram in Cascadia Mono (matches
-            // the "Development" label's font size).
-            <svg className="w-6 h-4 text-fg-muted" viewBox="0 0 32 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 4 C 3 4 3 7 3 9 C 3 11 2 12 1 12 C 2 12 3 13 3 15 C 3 17 3 20 5 20" />
-              <path d="M27 4 C 29 4 29 7 29 9 C 29 11 30 12 31 12 C 30 12 29 13 29 15 C 29 17 29 20 27 20" />
-              <text x="16" y="17" textAnchor="middle" fontFamily="'Cascadia Code', 'Cascadia Mono', Consolas, monospace" fontSize="16" fontWeight="500" fill="currentColor" stroke="none">YC</text>
-            </svg>
-          }
-          title="Development"
-          description="Report a bug or help improve the app"
-          onClick={() => setShowDevMenu(true)}
-        />
-        <DevelopmentPopup
-          open={showDevMenu}
-          onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
-          onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+          onOpenContribute={() => { setShowHelp(false); setShowContribute(true); }}
         />
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
@@ -2887,7 +2862,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [showDevMenu, setShowDevMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   // WHY the context object doubles as the open flag: two states that must agree
   // (is it open / what is it about) drift; one cannot.
@@ -2897,9 +2871,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // development sub-screens open the way their menu rows do — the menu closes
   // and the popup takes its place.
   useScreenOpen('settings/help', () => setShowHelp(true));
-  useScreenOpen('settings/development', () => setShowDevMenu(true));
-  useScreenOpen('settings/development/bug-report', () => { setShowDevMenu(false); setReportContext({}); });
-  useScreenOpen('settings/development/contribute', () => { setShowDevMenu(false); setShowContribute(true); });
+  // `?reportFrom=error` (practice app only) opens it the way an error's Report bug does.
+  useScreenOpen('settings/development/bug-report', () => setReportContext(workbenchReportContext() ?? {}));
+  useScreenOpen('settings/development/contribute', () => setShowContribute(true));
   useScreenOpen('settings/shortcuts', () => setShowShortcuts(true));
   useScreenOpen('settings/donate', () => setShowDonateConfirm(true));
   useScreenOpen('settings/about', () => setShowAbout(true));
@@ -2925,7 +2899,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   // The panel's five reads. Its own function so a remote reconnect can repeat them while the
   // panel is open. WHY (2026-09-11 phone pass sweep): they ran once per open, so one read
-  // lost during a phone's drop left the Remote Access panel empty or wrong until it was
+  // lost during a phone's drop left the Remote access panel empty or wrong until it was
   // closed and reopened. The reconnect re-read leaves the setup steps where they are.
   function loadRemotePanel() {
     const claude = (window as any).claude;
@@ -3109,7 +3083,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   return (
     <>
-      <div className="flex-1 px-4 py-4 space-y-2">
+      <div className="flex-1 px-4 pt-2 pb-4 space-y-2">{/* WHY pt-2: header-line gap = the 8px between rows (Destin, surface-levels#SL-13) */}
 
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08).
             GitHub (and future providers) live INSIDE it on the Connected
@@ -3134,8 +3108,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
         />
 
-        <BrowserSettingsButton />{/* the assistant's web browser — computer's own window only */}
-
+        {/* The Browser's settings are a page of Assistant settings (Destin, 2026-10-15). */}
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         <BuddyButton />
@@ -3193,7 +3166,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Help & feedback"
-          description="Tour, tips, community, bug reports"
+          description="Tour, tips, feedback, contributing"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow
@@ -3205,30 +3178,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onClose={() => setShowHelp(false)}
           onShowMeAround={onShowMeAround}
           onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
-          version={desktopVersion}
-          channel={desktopChannel}
-        />
-
-        {/* Development — bug reports, contributions, known issues */}
-        <SettingRow
-          icon={
-            // {YC} — curly braces with YC monogram in Cascadia Mono (matches
-            // the "Development" label's font size).
-            <svg className="w-6 h-4 text-fg-muted" viewBox="0 0 32 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 4 C 3 4 3 7 3 9 C 3 11 2 12 1 12 C 2 12 3 13 3 15 C 3 17 3 20 5 20" />
-              <path d="M27 4 C 29 4 29 7 29 9 C 29 11 30 12 31 12 C 30 12 29 13 29 15 C 29 17 29 20 27 20" />
-              <text x="16" y="17" textAnchor="middle" fontFamily="'Cascadia Code', 'Cascadia Mono', Consolas, monospace" fontSize="16" fontWeight="500" fill="currentColor" stroke="none">YC</text>
-            </svg>
-          }
-          title="Development"
-          description="Report a bug or help improve the app"
-          onClick={() => setShowDevMenu(true)}
-        />
-        <DevelopmentPopup
-          open={showDevMenu}
-          onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
-          onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+          onOpenContribute={() => { setShowHelp(false); setShowContribute(true); }}
         />
         <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
@@ -3241,7 +3191,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
               <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M8 16h8" />
             </svg>
           }
-          title="Keyboard Shortcuts"
+          title="Keyboard shortcuts"
           description="View all hotkeys"
           onClick={() => setShowShortcuts(true)}
         />

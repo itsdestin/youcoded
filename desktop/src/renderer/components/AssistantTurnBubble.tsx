@@ -55,12 +55,12 @@ function stopReasonCopy(reason: string, provider: SessionProvider | undefined): 
     // Empty-step recovery (spec 2026-08-21): the harness already retried once
     // silently; this is the honest end after a SECOND contentless step —
     // "twice" states that verified fact (error-message standards: specific
-    // and accurate). "Retrying may help" stays: it refers to a LATER manual
+    // and accurate). "Trying again may help" stays: it refers to a LATER manual
     // nudge, which recovered all three observed live incidents — distinct
     // from the immediate auto-retry that just failed.
     // Deliberately provider-neutral ("The model") — the failure belongs to
     // the model, not the assistant persona.
-    empty_response: 'The model returned an empty response twice. Retrying may help.',
+    empty_response: 'The model returned an empty response twice. Trying again may help.',
   };
   return map[reason] ?? `Response ended: ${reason}.`;
 }
@@ -207,7 +207,9 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
               suffix only fires once the group has fully settled (Q3a). */}
           {runningCount === 0 && failedCount > 0 && ` — ${failedCount} failed`}
           {runningCount === 0 && stoppedCount > 0 && ` — ${stoppedCount} stopped`}
-          {askingCount > 0 && <span className="text-amber-700">{` — ${askingCount} waiting on you`}</span>}
+          {/* WHY plain text, not text-amber-700 (guide: no coloured body text
+              for messages) */}
+          {askingCount > 0 && <span>{` — ${askingCount} waiting on you`}</span>}
         </span>
         <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted" expanded={expanded} />
       </button>
@@ -654,9 +656,13 @@ function PlanBubbleContent({
             {prompts.length} allowed {prompts.length === 1 ? 'action' : 'actions'} if approved
           </button>
           {showPrompts && (
-            <pre className="mt-1 text-2xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto max-h-40">
-              {JSON.stringify(prompts, null, 2)}
-            </pre>
+            // WHY a frame around the <pre> (2026-10-15, the one scroll fade): the fade is a mask,
+            // so on the filled box it would fade the fill too; only the text fades.
+            <div className="mt-1 bg-panel rounded-sm overflow-hidden">
+              <pre className="scroll-mask text-2xs text-fg-dim p-2 overflow-auto max-h-40">
+                {JSON.stringify(prompts, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       )}

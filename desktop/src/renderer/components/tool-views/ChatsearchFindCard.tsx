@@ -73,7 +73,7 @@ export default function ChatsearchFindCard({ shortIds, onUnavailable }: { shortI
           built from a constant generates no CSS at all and the cap would
           silently do nothing. */}
       <ul
-        className={`space-y-1${scrolls ? ' overflow-y-auto pr-1' : ''}`}
+        className={`space-y-1${scrolls ? ' scroll-mask-y overflow-y-auto pr-1' : ''}`}
         style={scrolls ? { maxHeight: ROWS_MAX_H } : undefined}
       >
         {results.map((r, i) => <ChatsearchRow key={shortIds[i] ?? i} r={r} tagIndex={tagIndex} />)}

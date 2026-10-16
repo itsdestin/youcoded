@@ -1,0 +1,9 @@
+/* WHY: a detail page's chip row is ONE line that scrolls sideways when it doesn't fit
+   (Destin, marketplace-detail-4#M4-2: "chips can be scrollable left/right" — refines
+   decision G-9 "never wraps; fades at its end"). The edge fades only on a side that has
+   more to show, the Marketplace rails' treatment (MarketplaceRail.tsx), shorter because
+   chips are small. No scrollbar, like the rails. */
+[data-detail-chips] { scrollbar-width: none; }
+[data-detail-chips]::-webkit-scrollbar { display: none; }
+/* The edge fade is the app's one fade (`.scroll-mask scroll-mask--chips` on the row, FactChips.tsx),
+   24px as before; it used to be a per-card state + window resize listener that set data-fade. */

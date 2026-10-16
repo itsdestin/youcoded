@@ -1,5 +1,6 @@
 import React from 'react';
 import { FOCUS_RING } from './Button';
+import { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
 
 /**
  * Tab rows (change 45, §1.8).
@@ -17,6 +18,11 @@ import { FOCUS_RING } from './Button';
 export type SegmentedTab = {
   id: string;
   label: React.ReactNode;
+  /** WHY (model picker, 2026-09-29): an option that exists but can't be picked
+   *  right now — Max effort off Opus/Fable — stays visible and greyed, with
+   *  `title` saying why, instead of vanishing from the row. */
+  disabled?: boolean;
+  title?: string;
 };
 
 export type SegmentedTabsProps = {
@@ -27,13 +33,23 @@ export type SegmentedTabsProps = {
    *  width evenly (BugReportPopup). pill = one rounded-full layer-surface pill
    *  holding rounded-full segments — the Projects header switcher, adopted by
    *  the Library (UI review P-2 #2) so the two top-level browsing screens share
-   *  one switcher shape. */
-  variant?: 'bare' | 'contained' | 'pill';
+   *  one switcher shape. nested = card-levels trial (2026-09-27): the SAME
+   *  trough, but on the app's LEVEL-2 nested-box recipe (`CARD_LEVEL_2` — an
+   *  opaque fill + a visible border) instead of `contained`'s translucent
+   *  `bg-inset/50` — which is also LEVEL-1's own card background, so a
+   *  `contained` strip sitting inside a level-1 card was quietly reusing the
+   *  card's own look for the thing nested inside it. Scoped to the two
+   *  screens this trial touches (General's Context/Session-naming strips)
+   *  rather than changing `contained` everywhere it's already shipped. */
+  variant?: 'bare' | 'contained' | 'pill' | 'nested';
   'aria-label'?: string;
   className?: string;
 };
 
-const TAB_BASE = `px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${FOCUS_RING}`;
+// WHY rounded-control / rounded-control-group (decisions "Control shape follows the theme"):
+// tabs take the theme's control corner instead of a fixed pill or the medium corner; the
+// pill container's corner is the control corner plus its 2px inset, so the two stay concentric.
+const TAB_BASE = `px-3 py-1.5 rounded-control text-xs font-medium transition-colors ${FOCUS_RING}`;
 const TAB_ACTIVE = 'bg-accent text-on-accent';
 const TAB_INACTIVE = 'text-fg-2 hover:bg-inset';
 
@@ -46,8 +62,8 @@ const TAB_INACTIVE = 'text-fg-2 hover:bg-inset';
 // after-sweep, 2026-08-27).
 // Compact (Destin, 2026-08-27, review 2): segments are px-3 py-1 text-sm — the same box as
 // the marketplace filter chips — so the switch and the chips beside it read as one size.
-const PILL_CONTAINER = 'w-fit flex items-center gap-0.5 p-0.5 layer-surface !rounded-full';
-const PILL_TAB_BASE = `shrink-0 px-3 py-1 rounded-full text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${FOCUS_RING}`;
+const PILL_CONTAINER = 'w-fit flex items-center gap-0.5 p-0.5 layer-surface !rounded-control-group';
+const PILL_TAB_BASE = `shrink-0 px-3 py-1 rounded-control text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors ${FOCUS_RING}`;
 const PILL_TAB_INACTIVE = 'text-fg-2 hover:text-fg hover:bg-inset';
 
 export function SegmentedTabs({
@@ -64,7 +80,11 @@ export function SegmentedTabs({
     e.preventDefault();
     const i = tabs.findIndex((t) => t.id === value);
     if (i === -1) return;
-    onChange(tabs[(i + delta + tabs.length) % tabs.length].id);
+    // Arrows skip greyed-out options.
+    for (let step = 1; step < tabs.length; step++) {
+      const next = tabs[(i + delta * step + tabs.length * step) % tabs.length];
+      if (!next.disabled) { onChange(next.id); return; }
+    }
   };
 
   const pill = variant === 'pill';
@@ -78,8 +98,10 @@ export function SegmentedTabs({
         pill
           ? PILL_CONTAINER
           : variant === 'contained'
-            ? 'flex gap-1 p-1 bg-inset/50 rounded-lg'
-            : 'flex gap-2',
+            ? `flex gap-1 p-1 ${CARD_LEVEL_1}` // WHY: it had no outline; now a first-level box like any other (2026-09-28)
+            : variant === 'nested'
+              ? `flex gap-1 p-1 ${CARD_LEVEL_2}`
+              : 'flex gap-2',
         className,
       ]
         .filter(Boolean)
@@ -98,15 +120,17 @@ export function SegmentedTabs({
             aria-selected={active}
             // Roving tabindex: the row is one tab stop, arrows move within it.
             tabIndex={active ? 0 : -1}
-            onClick={() => onChange(tab.id)}
+            disabled={tab.disabled}
+            title={tab.title}
+            onClick={() => { if (!tab.disabled) onChange(tab.id); }}
             className={[
               // Contained tabs split the width evenly (flex-1), so side padding only sets
               // the MINIMUM width — cutting it to px-1 lets five short words fit a 420px
               // popup (Appearance's bubble/message-box strips, 2026-09-24) and changes
               // nothing visible on the two-tab strips, whose text is centred anyway.
               pill ? PILL_TAB_BASE : variant === 'contained' ? TAB_BASE.replace('px-3', 'px-1 min-w-0') : TAB_BASE,
-              active ? TAB_ACTIVE : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
-              variant === 'contained' ? 'flex-1' : '',
+              active ? TAB_ACTIVE : tab.disabled ? 'text-fg-faint cursor-not-allowed' : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
+              variant === 'contained' || variant === 'nested' ? 'flex-1' : '',
             ]
               .filter(Boolean)
               .join(' ')}

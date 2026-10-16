@@ -20,7 +20,9 @@ import {
 // Build a valid record JSON string, overriding only the fields a test cares
 // about. Keeps each test focused on the one behavior it pins.
 function recJson(over: Partial<ConversationRecord> = {}): string {
-  const base: ConversationRecord = {
+  // WHY Partial: the baseline deliberately omits note/noteUpdatedAt (a record written before
+  // notes existed) so tests exercise the on-disk shape the store must still read.
+  const base: Partial<ConversationRecord> = {
     schema: RECORD_SCHEMA_VERSION,
     id: 'sess-1',
     provider: 'claude',

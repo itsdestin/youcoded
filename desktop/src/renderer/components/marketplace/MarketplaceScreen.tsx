@@ -14,26 +14,25 @@ import MarketplaceFilterBar, {
 } from "./MarketplaceFilterBar";
 import { catalogType } from "../../../shared/catalog-types";
 import MarketplaceRail from "./MarketplaceRail";
-import MarketplaceCard, { STATUS_TONE_CLASS } from "./MarketplaceCard";
+import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
-import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, CloseButton, EmptyState, ErrorState, LoadingState } from "../ui";
+import { Button, EmptyState, LoadingState, ScreenError } from "../ui";
+import { ScreenBand } from "../ScreenBand";
+import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
 import { useEscClose } from "../../hooks/use-esc-close";
-import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 import { useCurrentPlatform } from "../../platform";
-import { platformDisplayName, platformListDisplay } from "../../../shared/platform-display";
-import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
+import { platformDisplayName } from "../../../shared/platform-display";
+import type { SkillEntry } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
-// Integrations carry their catalog metadata plus live installed/connected state.
-// Previously lived in IntegrationCard.tsx; moved inline when the dedicated
-// component was retired in favor of rendering through MarketplaceCard.
-type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
+// Integrations carry their catalog metadata plus live installed/connected state
+// (type and detail page: IntegrationDetailOverlay.tsx since the 2026-10-04 redesign).
+import { IntegrationDetailOverlay, type IntegrationCardItem } from "./IntegrationDetailOverlay";
 
 // Integration icons live in the marketplace repo at integrations/icons/,
 // referenced via raw.githubusercontent.com. Pre-built once at module scope
@@ -41,9 +40,26 @@ type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 const INTEGRATION_MARKETPLACE_BRANCH = 'master';
 const INTEGRATION_ICON_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${INTEGRATION_MARKETPLACE_BRANCH}/integrations`;
 
+// Photo-only build: which practice-marketplace item each `marketplace/detail/<kind>` screen
+// opens (dev/workbench/screens/marketplace.ts names the screens). '' is the plain screen.
+const SHOOT_DETAIL_IDS: Record<string, string> = {
+  '': 'civic-report',
+  bundle: 'superpowers',
+  member: 'superpowers/brainstorming',
+  caution: 'browser-use',
+  connection: 'mcp-registry/io.github.modelcontextprotocol/filesystem',
+  install: 'browser-use',
+};
+
 interface Props {
   onExit(): void;
-  // Phase 2 redesign — jump to Your Library without round-tripping through
+  // The band across the top (ScreenBand) carries the app's Settings button, as
+  // Projects and Pages do, so the screen needs Settings' state (App.tsx owns it).
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
+  settingsBadge?: boolean;
+  settingsDangerBadge?: boolean;
+  // Phase 2 redesign — jump to Your library without round-tripping through
   // the command drawer. Optional so the screen still renders standalone.
   onOpenLibrary?(): void;
   // ShareSheet (link/QR) is owned by App.tsx so it layers above this screen.
@@ -59,7 +75,7 @@ interface Props {
 }
 
 export default function MarketplaceScreen({
-  onExit, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
+  onExit, settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
 }: Props) {
   const mp = useMarketplace();
   const currentPlatform = useCurrentPlatform();
@@ -74,13 +90,35 @@ export default function MarketplaceScreen({
   useScreenOpen('marketplace/skills', () => setFilter({ ...emptyFilter(), type: 'plugin' }));
   useScreenOpen('marketplace/themes', () => setFilter({ ...emptyFilter(), type: 'theme' }));
   useScreenOpen('marketplace/search', () => setFilter({ ...emptyFilter(), query: 'civic' }));
-  useScreenOpen('marketplace/detail', () => setDetail({ kind: 'skill', id: 'civic-report' }));
-  useScreenOpen('marketplace/theme-detail', () => setDetail({ kind: 'theme', slug: 'meadow-mist' }));
+  // WHY one screen per KIND of detail page (2026-10-04, detail-page redesign): the page
+  // reads differently for a bundle, a member skill, an item the check flagged, a listing
+  // that cannot be installed from here, a theme not yet installed and an integration —
+  // and only the plain-plugin and installed-theme pages could be photographed before.
+  // `detailScreen` tells the popup which name to mark itself with (shoot proves a screen
+  // by its mark); it is only ever set here, so outside the photo-only build it stays unset.
+  const [detailScreen, setDetailScreen] = useState<string | undefined>(undefined);
+  useScreenOpen('marketplace/detail', (sub) => {
+    setDetailScreen(sub ? `marketplace/detail/${sub}` : undefined);
+    setDetail({ kind: 'skill', id: SHOOT_DETAIL_IDS[sub ?? ''] ?? 'civic-report' });
+    // `install`: press Install on an item that is not installed, so the practice backend's
+    // ?install=fail / ?install=slow states (an install that fails, one still running) show.
+    if (sub === 'install') mp.installSkill(SHOOT_DETAIL_IDS.install).catch(() => undefined);
+  }, Object.keys(SHOOT_DETAIL_IDS).filter(Boolean));
+  useScreenOpen('marketplace/theme-detail', (sub) => {
+    setDetailScreen(sub ? `marketplace/theme-detail/${sub}` : undefined);
+    setDetail({ kind: 'theme', slug: sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
+    if (sub === 'install') mp.installTheme('cotton-candy-sky').catch(() => undefined);
+  }, ['not-installed', 'install']);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't
   // in mp.skillEntries and need their own action wiring via handleIntegration.
   const [integrationDetail, setIntegrationDetail] = useState<IntegrationCardItem | null>(null);
+  // Photo-only build: the integration popup, on the fixture that still needs signing in.
+  useScreenOpen('marketplace/integration-detail', () => {
+    const match = integrations.find((it) => it.slug === 'google-workspace') ?? integrations[0];
+    if (match) setIntegrationDetail(match);
+  });
   // After an install/connect that returns a postInstallCommand, we show an
   // inline "run this command to finish setup" banner in the detail overlay
   // rather than auto-typing into a new session. Auto-typing raced the CLI's
@@ -124,7 +162,9 @@ export default function MarketplaceScreen({
     // connected/needs-auth state is moot. When platform is still resolving
     // (null) treat as "not blocked" to avoid a transient grey badge flash.
     if (currentPlatform && item.platforms && item.platforms.length > 0 && !item.platforms.includes(currentPlatform as any)) {
-      return { text: `${platformDisplayName(item.platforms[0])} Only`, tone: 'locked' };
+      // WHY sentence case (labels batch): this pill's uppercase CSS is gone,
+      // so its own text must already be sentence case, not Title Case.
+      return { text: `${platformDisplayName(item.platforms[0])} only`, tone: 'locked' };
     }
     if (item.status === 'planned') return { text: 'Coming soon', tone: 'neutral' };
     if (item.status === 'deprecated') return { text: 'Deprecated', tone: 'neutral' };
@@ -335,10 +375,6 @@ export default function MarketplaceScreen({
     if (match) setIntegrationDetail(match);
   }, [integrations]);
 
-  // P-1 #5: see the header below — decides whether the "Esc · Back to chat"
-  // button exists at all, not just whether it is displayed.
-  const compact = useNarrowViewport();
-
   // Task 8: both chunked grids (bottom catalog + search results) scroll the
   // SAME outer container (ref'd below) — draw-more triggers off it either way.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -386,11 +422,15 @@ export default function MarketplaceScreen({
   const registryState = registryEmpty && mp.loading
     ? <LoadingState what="the marketplace" />
     : registryEmpty && mp.error
-      ? <ErrorState mode="recoverable" message={mp.error} onRetry={() => { void mp.refresh(); }} />
+      // WHY ScreenError (gt-r1#B-3): nothing on the screen loaded, so it gets the full-screen
+      // error, and the raw message moves under Details (guide: machine words never in the sentence).
+      ? <ScreenError title="The marketplace couldn't load" message="Your installed plugins and themes still work." details={mp.error} onRetry={() => { void mp.refresh(); }} />
       : null;
 
   return (
-    <div className="fixed inset-0 z-40">
+    // WHY flex column with the band on top (H-1/H-5): the band (ScreenBand) stays put
+    // while only the body below it scrolls, like Projects and Pages.
+    <div className="fixed inset-0 z-40 flex flex-col">
       {/* Marked once the catalog has loaded, so a picture never shows the spinner. */}
       {!mp.loading && <ScreenMark name="marketplace" />}
       {!mp.loading && !filter.query && filter.type === 'plugin' && <ScreenMark name="marketplace/skills" />}
@@ -400,19 +440,36 @@ export default function MarketplaceScreen({
           inside the FIXED outer wrapper (not the inner scroll container) so it
           stays pinned to the viewport while content scrolls over it. */}
       <WallpaperBackdrop />
+      <ScreenBand
+        settingsOpen={settingsOpen}
+        onToggleSettings={onToggleSettings}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        active={null}
+        icon={<MarketplaceIcon />}
+        title={<span className="truncate">Marketplace</span>}
+        onBack={onExit}
+      />
       {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
           stray horizontal wiggle from rail cards / wallpaper transform. Ref'd
           for both chunked grids' useChunkedReveal (Task 8) — it's the one
-          scrolling root either mode uses. */}
-      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
-      <div className="flex items-center justify-between gap-2 p-3">
-        {/* Auth chip sits flush-left before the title so the GitHub sign-in
-            entry point is the first thing users see when entering the
-            marketplace — fixes the "no obvious way to sign in" gap. */}
-        <div className="flex items-center gap-2 pl-2 min-w-0">
+          scrolling root either mode uses.
+          NO .scroll-mask here — a deliberate exception to the one scroll fade (listed in
+          tests/scroll-mask.test.ts): the page's hero, filter bar and cards are frosted glass (.layer-surface). A mask would make this scroller a "backdrop root",
+          so every frosted card inside would stop blurring the wallpaper (measured 2026-10-15: the
+          hero and filter bar showed the wallpaper sharp through them on Meadow Mist). The fade
+          here needs a masked wallpaper copy laid over the page (the chat's ChatEdgeFade) — an
+          open question for Destin, not decided here. */}
+      <div ref={scrollRef} className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* WHY no title or exit here any more (decisions "Full-screen titles", H-1, and
+          "Way back to chat", H-5): the screen names itself in the band above, centred
+          with its icon, and leaves by the band's light "Esc · Back to chat" (FV-6) — the same
+          band Projects and Pages use. What stays is the screen's own tools: sign-in
+          first (the "no obvious way to sign in" fix keeps it the first thing seen) and
+          the jump to Your library at the right. */}
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 pt-3">
+        <div className="flex items-center gap-2 min-w-0">
           <MarketplaceAuthChip />
-          <h1 className="text-xl font-semibold text-fg truncate">Marketplace</h1>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* panel-glass and the tighter py-1 stay as className overrides (spec
@@ -425,48 +482,16 @@ export default function MarketplaceScreen({
               type="button"
               onClick={onOpenLibrary}
               className="panel-glass py-1"
-              aria-label="Open Your Library"
-              title="Your Library"
+              aria-label="Open your library"
+              title="Your library"
             >
-              {/* Wide: text label. Narrow: bookmark icon — matches the close-X
-                  treatment on the adjacent button. */}
-              <span className="hidden sm:inline">Your Library</span>
+              {/* Wide: text label. Narrow: bookmark icon. */}
+              <span className="hidden sm:inline">Your library</span>
               <span className="sm:hidden inline-flex p-0.5" aria-hidden>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                </svg>
+                <LibraryIcon className="w-4.5 h-4.5" />
               </span>
             </Button>
           )}
-          {/* Wide: "Esc · Back to chat", no border (the Esc key does the work).
-              Ghost Button rather than a bare <button> so it carries the hover
-              pill + focus ring — matched across all three screens, change 27.
-              P-1 #5: this was `className="hidden sm:inline-flex"`, which never
-              hid it — Tailwind v4 emits `.hidden` BEFORE `.inline-flex`, so the
-              Button's own base `inline-flex` won and the keyboard hint rendered
-              at phone width, ~150px that truncated the title to "Ma…". Rendering
-              it only when not compact (same 640px boundary) removes the thief;
-              the CloseButton below is the narrow exit. */}
-          {!compact && (
-            <Button
-              variant="ghost"
-              onClick={onExit}
-              className="text-sm px-2.5 py-1"
-              aria-label="Exit marketplace"
-            >
-              Esc · Back to chat
-            </Button>
-          )}
-          {/* Narrow: bordered close-X button — touch users have no Esc key, so we
-              give them an obvious close affordance with a button-shaped container
-              matching the Library button next to it. */}
-          {/* panel-glass + the border survive as className overrides — the bordered
-              container is what makes this match the Library button next to it. */}
-          <CloseButton
-            onClick={onExit}
-            label="Exit marketplace"
-            className="sm:hidden panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
-          />
         </div>
       </div>
 
@@ -540,7 +565,6 @@ export default function MarketplaceScreen({
                         item={{ kind: "skill", entry: skillLike }}
                         installed={!!item.state.installed}
                         iconUrl={resolvedIcon}
-                        accentColor={item.accentColor}
                         suppressCorner
                         statusBadge={integrationStatusBadge(item)}
                         onOpen={openIntegration}
@@ -597,7 +621,8 @@ export default function MarketplaceScreen({
                 The chunked window keeps every entry reachable by scrolling,
                 same as the removed slice(0, 48) never did. */}
             <section className="flex flex-col gap-2">
-              <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
+              {/* WHY 16px (text-base), not 18px: the full-screen group heading, matching the Projects view's TabHeading (projects-view-2#PV2-2; redesign backlog 14). */}
+              <h3 className="text-base font-medium text-fg px-1">Explore everything</h3>
               {/* P-1 #4: loading / unreachable state under the heading. */}
               {registryState ?? (
                 <MarketplaceGrid
@@ -672,6 +697,7 @@ export default function MarketplaceScreen({
       {detail && (
         <MarketplaceDetailOverlay
           target={detail}
+          screen={detailScreen}
           onClose={() => setDetail(null)}
           onNavigate={setDetail}
           onOpenShareSheet={onOpenShareSheet}
@@ -725,366 +751,3 @@ export default function MarketplaceScreen({
   );
 }
 
-// Detail overlay for integrations. Mirrors MarketplaceDetailOverlay's section
-// structure (header → metadata chips → About → Setup) but stays a separate
-// component because integration actions (Install / Connect / Settings /
-// Uninstall) diverge from plugin actions (Install / Favorite / Share / Review).
-function IntegrationDetailOverlay({
-  item, onClose, onInstall, onConnect, onUninstall,
-  statusBadge, iconUrl, platformBlocked, platformBlockedName,
-  setupHint, onDismissSetupHint, onOpenSetupSession,
-}: {
-  item: IntegrationCardItem;
-  onClose(): void;
-  onInstall(): void | Promise<void>;
-  onConnect(): void | Promise<void>;
-  onUninstall(): void | Promise<void>;
-  statusBadge: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' };
-  iconUrl?: string;
-  platformBlocked: boolean;
-  platformBlockedName: string | null;  // e.g. "macOS" when blocked, else null
-  // Shown as a banner after install/connect when the integration has a
-  // postInstallCommand. Replaces the old auto-type-into-new-session flow.
-  setupHint: { displayName: string; command: string } | null;
-  onDismissSetupHint(): void;
-  onOpenSetupSession(): void;
-}) {
-  useEscClose(true, onClose);
-
-  // Change 24: this was a second, hand-copied tone map that had already drifted
-  // from MarketplaceCard's (it omitted the `border` keyword, and its `locked`
-  // kept the stock slate hue after the card's was tokenized). One map now —
-  // the detail overlay and the card can't disagree about what a status looks
-  // like. The `border` keyword comes from STATUS_TONE_CLASS, so the call site
-  // below no longer adds its own.
-
-  // Derive the action-button state. Precedence: platform-blocked > planned >
-  // deprecated > install-error > install-state. The spec table in
-  // docs/superpowers/specs/2026-04-22-marketplace-integration-polish-design.md §6
-  // is the source of truth.
-  type ActionState =
-    | { kind: 'blocked'; label: string; tooltip: string }
-    | { kind: 'planned' }
-    | { kind: 'deprecated' }
-    | { kind: 'install-error' }
-    | { kind: 'not-installed' }
-    | { kind: 'needs-auth' }
-    | { kind: 'connected' };
-
-  const actionState: ActionState = (() => {
-    if (platformBlocked && platformBlockedName) {
-      return {
-        kind: 'blocked',
-        label: `${platformBlockedName} Only`,
-        tooltip: `Only available on ${platformBlockedName}`,
-      };
-    }
-    if (item.status === 'planned') return { kind: 'planned' };
-    if (item.status === 'deprecated') return { kind: 'deprecated' };
-    if (!item.state.installed && item.state.error) return { kind: 'install-error' };
-    if (!item.state.installed) return { kind: 'not-installed' };
-    if (item.state.installed && !item.state.connected) return { kind: 'needs-auth' };
-    return { kind: 'connected' };
-  })();
-
-  return (
-    <>
-      <Scrim layer={2} onClick={onClose} />
-      {/* Inset shrinks at narrow so the popup fills the phone screen — see
-          MarketplaceDetailOverlay for the same treatment. */}
-      <OverlayPanel
-        layer={2}
-        className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
-        style={item.accentColor ? { borderColor: item.accentColor } : undefined}
-      >
-        <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">Integration</h2>
-          {/* Wide: Esc-text. Narrow: bordered close-X. */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
-            aria-label="Close"
-          >
-            Esc · Close
-          </button>
-          {/* panel-glass + the border survive as className overrides — deliberately a
-              bordered container matching the marketplace top bar. */}
-          <CloseButton
-            onClick={onClose}
-            className="sm:hidden panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
-          />
-        </header>
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
-          <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-            {/* Header stacks at narrow so the icon+title+tagline get full row
-                width and the action button cluster drops below. */}
-            <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
-              <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
-                {/* Custom integration icon, falls back to the displayName letter. */}
-                <div
-                  className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-xl sm:text-2xl font-semibold"
-                  style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
-                >
-                  {iconUrl ? (
-                    <img src={iconUrl} alt="" className="w-full h-full object-contain" />
-                  ) : (
-                    item.displayName.slice(0, 1)
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h1 className="text-xl sm:text-2xl font-semibold text-fg">{item.displayName}</h1>
-                  {item.tagline && <p className="mt-1 text-sm sm:text-base text-fg-2">{item.tagline}</p>}
-                  <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    <span className={`text-3xs uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_TONE_CLASS[statusBadge.tone]}`}>
-                      {statusBadge.text}
-                    </span>
-                    {item.state.error && (
-                      <span className="text-xs text-destructive-fg truncate max-w-[40ch]" title={item.state.error}>{item.state.error}</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="shrink-0 flex items-center gap-2 flex-wrap">
-                <IntegrationActions
-                  state={actionState}
-                  onInstall={onInstall}
-                  onConnect={onConnect}
-                  onUninstall={onUninstall}
-                />
-              </div>
-            </header>
-
-            {setupHint && (
-              <SetupHintBanner
-                command={setupHint.command}
-                onDismiss={onDismissSetupHint}
-                onOpenSetupSession={onOpenSetupSession}
-              />
-            )}
-
-            <IntegrationMetadataChips entry={item} />
-
-            {item.longDescription ? (
-              <section>
-                <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">About</h2>
-                <div className="prose prose-sm max-w-none text-fg-2 whitespace-pre-wrap">
-                  {item.longDescription}
-                </div>
-              </section>
-            ) : null}
-
-            <IntegrationSetupDetails entry={item} />
-          </article>
-        </div>
-      </OverlayPanel>
-    </>
-  );
-}
-
-// Renders the contextual action buttons in the detail header. One branch per
-// ActionState case keeps the overlay JSX clean.
-function IntegrationActions({
-  state, onInstall, onConnect, onUninstall,
-}: {
-  state:
-    | { kind: 'blocked'; label: string; tooltip: string }
-    | { kind: 'planned' }
-    | { kind: 'deprecated' }
-    | { kind: 'install-error' }
-    | { kind: 'not-installed' }
-    | { kind: 'needs-auth' }
-    | { kind: 'connected' };
-  onInstall(): void | Promise<void>;
-  onConnect(): void | Promise<void>;
-  onUninstall(): void | Promise<void>;
-}) {
-  // Shared styles — mirrors MarketplaceDetailOverlay's primary + uninstall classes.
-  const primaryCls = 'px-4 py-2 rounded-md bg-accent text-on-accent hover:opacity-90';
-  const uninstallCls = 'px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim';
-  const disabledCls = 'px-4 py-2 rounded-md bg-inset text-fg-dim border border-edge-dim cursor-not-allowed opacity-60';
-
-  if (state.kind === 'blocked') {
-    return (
-      <button type="button" disabled title={state.tooltip} className={disabledCls}>
-        {state.label}
-      </button>
-    );
-  }
-  if (state.kind === 'planned') {
-    return <button type="button" disabled className={disabledCls}>Coming soon</button>;
-  }
-  if (state.kind === 'deprecated') {
-    return <button type="button" disabled className={disabledCls}>Deprecated</button>;
-  }
-  if (state.kind === 'install-error') {
-    return (
-      <button type="button" onClick={() => { void onInstall(); }} className={primaryCls}>
-        Retry Install
-      </button>
-    );
-  }
-  if (state.kind === 'not-installed') {
-    return (
-      <button type="button" onClick={() => { void onInstall(); }} className={primaryCls}>
-        Install
-      </button>
-    );
-  }
-  if (state.kind === 'needs-auth') {
-    return (
-      <>
-        <button type="button" onClick={() => { void onConnect(); }} className={primaryCls}>
-          Connect
-        </button>
-        <button type="button" disabled title="Coming soon" className={disabledCls}>
-          Settings (Coming soon…)
-        </button>
-        <button type="button" onClick={() => { void onUninstall(); }} className={uninstallCls}>
-          Uninstall
-        </button>
-      </>
-    );
-  }
-  // connected
-  return (
-    <>
-      <button type="button" disabled title="Coming soon" className={disabledCls}>
-        Settings (Coming soon…)
-      </button>
-      <button type="button" onClick={() => { void onUninstall(); }} className={uninstallCls}>
-        Uninstall
-      </button>
-    </>
-  );
-}
-
-// Mirror of MarketplaceDetailOverlay's MetadataChips — pulls the tags +
-// lifeArea from the IntegrationEntry. Intentionally duplicated (not imported)
-// because the plugin MetadataChips takes a SkillEntry shape.
-function IntegrationMetadataChips({ entry }: { entry: IntegrationCardItem }) {
-  const tags = entry.tags || [];
-  const lifeAreas = entry.lifeArea || [];
-  if (!tags.length && !lifeAreas.length) return null;
-
-  return (
-    <div className="flex flex-wrap gap-1.5 items-center">
-      {tags.map((t) => (
-        <span key={`tag-${t}`} className="text-xs px-2 py-0.5 rounded-full bg-inset text-fg-2 border border-edge-dim">
-          #{t}
-        </span>
-      ))}
-      {lifeAreas.map((a) => (
-        <span key={`area-${a}`} className="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-fg border border-accent/30 capitalize">
-          {a}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-// Post-install / post-connect banner. Shows the slash command the user must
-// run to finish setup, with a Copy button and a shortcut that creates a
-// dedicated empty "Set up <X>" session (user still runs the command there
-// themselves — we stopped auto-typing it because the timing against CLI
-// boot was unreliable).
-function SetupHintBanner({
-  command, onDismiss, onOpenSetupSession,
-}: {
-  command: string;
-  onDismiss(): void;
-  onOpenSetupSession(): void;
-}) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = () => {
-    // navigator.clipboard exists in Electron renderer; fall through silently
-    // if the API is missing so the user can still read + retype the command.
-    try {
-      if (navigator?.clipboard?.writeText) {
-        void navigator.clipboard.writeText(command).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        });
-      }
-    } catch { /* ignore — user can still read the command */ }
-  };
-
-  return (
-    <section className="rounded-md border border-accent/40 bg-accent/5 p-3 flex flex-col gap-2">
-      <div className="text-sm text-fg">
-        <span className="font-medium">Installed.</span> To finish setup, run this
-        command in any chat:
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <code className="flex-1 min-w-0 truncate px-2 py-1.5 rounded bg-inset text-fg text-sm font-mono border border-edge-dim">
-          {command}
-        </code>
-        <Button
-          variant="secondary"
-          size="lg"
-          type="button"
-          onClick={copy}
-          className="shrink-0"
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </Button>
-        <Button
-          size="lg"
-          type="button"
-          onClick={onOpenSetupSession}
-          className="shrink-0"
-        >
-          Open new setup session
-        </Button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="shrink-0 text-sm px-2 py-1.5 text-fg-dim hover:text-fg"
-          aria-label="Dismiss"
-        >
-          Dismiss
-        </button>
-      </div>
-    </section>
-  );
-}
-
-// Small bulleted block describing setup — derived from setup.type /
-// requiresOAuth / postInstallCommand / platforms. No new registry fields.
-function IntegrationSetupDetails({ entry }: { entry: IntegrationCardItem }) {
-  const bullets: string[] = [];
-  if (entry.setup.type === 'api-key' && entry.setup.keyName) {
-    bullets.push(`Requires a \`${entry.setup.keyName}\` API key`);
-  }
-  if (entry.setup.requiresOAuth) {
-    const provider = entry.setup.oauthProvider ? entry.setup.oauthProvider : 'OAuth';
-    bullets.push(`Signs in via ${provider}`);
-  }
-  if (entry.platforms && entry.platforms.length > 0) {
-    bullets.push(`Available on ${platformListDisplay(entry.platforms)}`);
-  }
-  if (entry.setup.postInstallCommand) {
-    bullets.push(`After install, runs \`${entry.setup.postInstallCommand}\``);
-  }
-
-  if (bullets.length === 0) return null;
-
-  return (
-    <section>
-      <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">Setup</h2>
-      <ul className="list-disc pl-5 text-sm text-fg-2 space-y-1">
-        {bullets.map((b) => (
-          <li key={b}>
-            {/* Render inline-code segments inside backticks as <code>. */}
-            {b.split(/(`[^`]+`)/g).map((chunk, i) =>
-              chunk.startsWith('`') && chunk.endsWith('`')
-                ? <code key={i} className="px-1 py-0.5 rounded bg-inset text-fg-2 text-xs">{chunk.slice(1, -1)}</code>
-                : <span key={i}>{chunk}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}

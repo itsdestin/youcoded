@@ -22,11 +22,15 @@ export function GitReviewCard({
     // — scrollHeight collapsed to clientHeight. Holding natural height lets the
     // diff show fully (or hit its own 45vh inner scroll) and lets the timeline
     // overflow and scroll.
-    <div className={`shrink-0 rounded-lg border ${accent ? 'border-accent' : 'border-edge'} bg-well overflow-hidden`}>
+    // WHY the whole card lights, not its header (Destin, submit-ticket-5#ST5-Q2, the ST4-2
+    // sweep: "the hard divider line at the bottom is bad"): opened, the header's tint ran edge
+    // to edge and stopped in a hard line above the changes. Same rule as the shared FoldRow.
+    <div className={`shrink-0 rounded-lg border ${accent ? 'border-accent' : 'border-edge'} bg-well overflow-hidden stepped-hover has-[>button:hover]:bg-inset`}>
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-inset transition-colors"
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
       >
         <span className={`text-fg-muted text-3xs transition-transform ${expanded ? 'rotate-90' : ''}`}>▸</span>
         {headerLeft}

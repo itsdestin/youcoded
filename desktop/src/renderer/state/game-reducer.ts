@@ -27,6 +27,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         username: action.username,
         screen: inGameFlow ? state.screen : 'lobby',
         partyError: null,
+        hiddenBlocked: null,
       };
     }
 
@@ -49,6 +50,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // pick a specific hint — but phrase the headline in plain language.
       // "Lost the connection (code 1006) — trying again…" reads less alarming
       // than "Disconnected from game server" while preserving the diagnostic.
+      // The lobby's ErrorScreen (GameLobby.tsx, splitPartyError) lifts the "(code …)" out of
+      // the sentence and shows it under a Details fold — the code is never in the words read.
       const reason = action.reason ? `: ${action.reason}` : '';
       return {
         ...state,
@@ -60,6 +63,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
     case 'PARTY_ERROR':
       return { ...state, connected: false, partyError: action.message };
+
+    // Incognito stayed disconnected because hiding this device could not be promised (final review F4).
+    // Silent like a local disconnect — no error screen — but remembered, so the card can say why.
+    case 'PRESENCE_HIDDEN_BLOCKED':
+      return { ...state, connected: false, onlineUsers: [], partyError: null, hiddenBlocked: action.why };
 
     case 'PARTY_ERROR_CLEARED':
       // User hit Retry on the ErrorScreen — clear the banner so a fresh

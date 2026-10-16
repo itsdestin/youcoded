@@ -42,6 +42,9 @@ type Ok<T> = { ok: true; value: T };
 // the clock moved between two review runs.
 const T = 1_756_600_000;
 
+/** The second friend the leaderboards and the `?friends=many` list share. */
+export const MIRA_ID = 'mira';
+
 const DEFAULT_BESTS: Record<string, GameScoreRowFixture> = {
   'flappy': { best: 31, best_at: T, runs: 47 },
   'twenty-forty-eight': { best: 12_480, best_at: T, runs: 12 },
@@ -59,7 +62,7 @@ const you = (score: number, rank: number): BoardEntryFixture => ({
 
 const POPULATED: Record<string, BoardEntryFixture[]> = {
   'flappy': [
-    { id: 'mira', display_name: 'Mira', handle: 'mira', avatar_url: null, best_score: 58, best_at: T, rank: 1, is_you: false },
+    { id: MIRA_ID, display_name: 'Mira', handle: 'mira', avatar_url: null, best_score: 58, best_at: T, rank: 1, is_you: false },
     you(31, 2),
     { id: JAKE_ID, display_name: JAKE_USERNAME, handle: 'jake', avatar_url: null, best_score: 19, best_at: T, rank: 3, is_you: false },
   ],
@@ -95,6 +98,13 @@ export interface HeadToHeadFixture {
 const RECORDS: HeadToHeadFixture[] = [
   { opponent_id: JAKE_ID, game: 'chess', wins: 4, losses: 2, draws: 1, last_played_at: T },
   { opponent_id: JAKE_ID, game: 'connect-four', wins: 1, losses: 0, draws: 0, last_played_at: T - 86_400 },
+  // `?friends=many` (games-social redesign): Mira LEADS you and Sam is level, so
+  // a lobby shows a winning, a losing and an even record side by side. Listed
+  // after Jake's so the match-report echo (which reads the first record for a
+  // game) still bumps Jake's. Ada has none: a friend you have never played.
+  { opponent_id: MIRA_ID, game: 'chess', wins: 1, losses: 3, draws: 0, last_played_at: T - 2 * 86_400 },
+  { opponent_id: 'sam', game: 'chess', wins: 2, losses: 2, draws: 0, last_played_at: T - 5 * 86_400 },
+  { opponent_id: MIRA_ID, game: 'connect-four', wins: 0, losses: 2, draws: 0, last_played_at: T - 3 * 86_400 },
 ];
 
 export type ArcadeScenario = 'default' | 'empty' | 'alone' | 'degraded';

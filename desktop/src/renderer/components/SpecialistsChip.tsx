@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Dialog, Tooltip } from './ui';
+import { Callout, CARD_LEVEL_1, Dialog, Pill, SectionLabel, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
@@ -57,7 +57,8 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
         style={needsYou > 0
           // Amber = the same "waiting on you" tone the permission chip family uses.
-          ? { backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24', borderColor: 'rgba(251,191,36,0.4)' }
+          // Words in the text colour, amber in the tint and outline (small-fixes-3#SF3-10).
+          ? { backgroundColor: 'rgba(251,191,36,0.15)', color: 'var(--fg-2)', borderColor: 'rgba(251,191,36,0.5)' }
           : { backgroundColor: 'var(--inset)', color: 'var(--fg-muted)', borderColor: 'var(--edge-dim)' }}
         aria-label={tooltip}
         data-testid="specialists-chip"
@@ -88,7 +89,10 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
 
 // ---------------------------------------------------------------------------
 
-const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase px-1 pt-1 pb-1.5';
+// WHY SectionLabel, not a hand-typed eyebrow class (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Padding lives on a wrapper below
+// — SectionLabel owns only margin/layout (design lint no-restyle).
+const SECTION_LABEL_WRAPPER_CLASS = 'px-1 pt-1 pb-1.5';
 
 function SpecialistManager({ summary, sessionId, onJump }: { summary: SpecialistSummary; sessionId?: string; onJump: () => void }) {
   const groups: Array<{ id: HelperView['group']; label: string }> = [
@@ -103,7 +107,9 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
         if (items.length === 0) return null;
         return (
           <section key={g.id}>
-            <h3 className={SECTION_LABEL}>{g.label}</h3>
+            <div className={SECTION_LABEL_WRAPPER_CLASS}>
+              <SectionLabel>{g.label}</SectionLabel>
+            </div>
             <div className="space-y-2">
               {items.map(h => <HelperCard key={h.run.childId} h={h} sessionId={sessionId} onJump={onJump} />)}
             </div>
@@ -116,11 +122,13 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
 
 /** Status pill — the one word that answers "what state is this helper in". */
 function StatusPill({ h }: { h: HelperView }) {
-  const base = 'inline-flex items-center gap-1 text-3xs font-medium px-1.5 py-0.5 rounded-full border';
-  if (h.group === 'needs-you') return <span className={`${base} border-amber-700/40 text-amber-700 bg-amber-700/10`}><QuestionIcon className="w-3 h-3" />Needs you</span>;
+  // WHY every state is the shared Pill (final review F52; guide "Status and notices"): three of
+  // the five were hand-made rounded-full spans beside two Pills.
+  // Words in the text colour; amber stays in the tint and outline (small-fixes-3#SF3-10, as Working below).
+  if (h.group === 'needs-you') return <Pill tone="warning" className="gap-1"><QuestionIcon className="w-3 h-3" />Needs you</Pill>;
   // Green, not blue (Destin, 2026-09-05 deck note). The session pills in the
   // header are this app's status vocabulary — StatusDot.tsx STATUS_LABEL reads
-  // green: 'Working', blue: 'Response Ready' — so a blue "Working" pill here
+  // green: 'Working', blue: 'Response ready' — so a blue "Working" pill here
   // said the OPPOSITE of the colour he reads on every session all day.
   //
   // The WORD stays on a theme text colour and the green lives in the ring and
@@ -129,14 +137,14 @@ function StatusPill({ h }: { h: HelperView }) {
   // 1.81:1 on creme and 1.50:1 on meadow-mist (floor is 4.5:1). Green text
   // passes only on the three dark themes. Do not "fix" this back to
   // text-green-400 — re-measure first.
-  if (h.run.status === 'running') return <span className={`${base} border-green-400/40 text-fg bg-green-400/15`}><BrailleSpinner size="xs" />{h.run.stale ? 'May be stuck' : 'Working'}</span>;
-  if (h.run.status === 'interrupted') return <span className={`${base} border-edge text-fg-muted`}><StoppedIcon className="w-3 h-3" />Stopped</span>;
+  if (h.run.status === 'running') return <Pill tone="ok" className="gap-1"><BrailleSpinner size="xs" />{h.run.stale ? 'May be stuck' : 'Working'}</Pill>;
+  if (h.run.status === 'interrupted') return <Pill tone="neutral" className="gap-1"><StoppedIcon className="w-3 h-3" />Stopped</Pill>;
   // Fix: `danger` was never a real token (no --color-danger anywhere in globals.css,
   // confirmed by building the stylesheet and finding zero `danger` output) — this
   // pill rendered with NO color at all. `destructive` is the app's real semantic
   // token for this state (see globals.css comment above --color-destructive-fg).
-  if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <span className={`${base} border-destructive/40 text-destructive-fg bg-destructive/10`}><FailIcon className="w-3 h-3" />Failed</span>;
-  return <span className={`${base} border-edge text-fg-muted`}><CheckIcon className="w-3 h-3" />Finished</span>;
+  if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <Pill tone="danger" className="gap-1"><FailIcon className="w-3 h-3" />Failed</Pill>;
+  return <Pill tone="neutral" className="gap-1"><CheckIcon className="w-3 h-3" />Finished</Pill>;
 }
 
 function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: string; onJump: () => void }) {
@@ -144,11 +152,41 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
   const first = run.title.split(' ')[0];
   const done = h.group === 'finished';
   const jump = () => { jumpToCard(h.parentToolCallId); onJump(); };
-  const attention = h.group === 'needs-you';
+  // WHAT IT NEEDS — each ask is the shared slim notice box (Callout compact, the look
+  // approved for Cloud provider cards, provider-notices-2): request and buttons on one
+  // line (round 6), inset INSIDE the card rather than a tinted strip welded to its edge.
+  const asks = h.asks.map(seg => {
+    const { label } = friendlyToolDisplay(segToTool(seg));
+    const subject = askSubject(seg.input);
+    return (
+      <Callout key={seg.requestId ?? seg.passwordAsk?.requestId} tone="warning" compact>
+        <div data-testid="helper-card-ask">
+          <SpecialistAskBlock
+            segment={seg}
+            sessionId={sessionId}
+            specialistName={first}
+            compact
+            leading={
+              <div className="text-xs leading-snug">
+                <span className="font-medium text-fg">{first} wants to: </span>
+                <span className="text-fg-2">{label}</span>
+                {subject && subject !== label && <div className="text-2xs font-mono text-fg-dim break-all">{subject}</div>}
+              </div>
+            }
+          />
+        </div>
+      </Callout>
+    );
+  });
 
   return (
     <div
-      className={`rounded-lg border ${attention ? 'border-amber-700/40' : 'border-edge'} bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
+      // WHY no amber outline (specialist-ask, 2026-10-01; Destin, LB-6: the ask "looks
+      // janky"): the card keeps the normal edge in every state. "Needs you" is said by
+      // the status pill and by the notice box below, not by repainting the whole card.
+      // WHY CARD_LEVEL_1 (final review F52; guide "Card levels"): the shared first-level card,
+      // not a hand-typed border/fill.
+      className={`${CARD_LEVEL_1} overflow-hidden ${done ? 'opacity-80' : ''}`}
       data-testid={`helper-card-${run.childId}`}
     >
       {/* ── WHO / WHAT / HOW FAR ─────────────────────────────────────────── */}
@@ -181,7 +219,7 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
               pill instead. Offering dead buttons is worse than offering none. */}
           {run.status === 'running' && sessionId && h.kind === 'native'
             ? <div className="shrink-0"><SpecialistActions sessionId={sessionId} run={run} compact /></div>
-            : !attention && <StatusPill h={h} />}
+            : <StatusPill h={h} />}
         </div>
         {run.description && <div className="text-xs text-fg-2">{run.description}</div>}
         <RunStatusLine run={run} report={tool.specialistReport} elapsedUnknown={h.elapsedUnknown} />
@@ -191,29 +229,9 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
         <AgentSections tool={tool} sessionId={sessionId} suppressAsk accordion />
       </div>
 
-      {/* ── WHAT IT NEEDS — the bottom of the card, request and buttons on
-             one line (Destin, round 6). */}
-      {h.asks.map(seg => {
-        const { label } = friendlyToolDisplay(segToTool(seg));
-        const subject = askSubject(seg.input);
-        return (
-          <div key={seg.requestId ?? seg.passwordAsk?.requestId} className="border-t border-amber-700/30 bg-amber-700/[0.06] px-3 py-2" data-testid="helper-card-ask">
-            <SpecialistAskBlock
-              segment={seg}
-              sessionId={sessionId}
-              specialistName={first}
-              compact
-              leading={
-                <div className="text-xs leading-snug">
-                  <span className="font-medium text-fg">{first} wants to: </span>
-                  <span className="text-fg-2">{label}</span>
-                  {subject && subject !== label && <div className="text-2xs font-mono text-fg-dim break-all">{subject}</div>}
-                </div>
-              }
-            />
-          </div>
-        );
-      })}
+      {/* At the card's foot, after Briefing and Activity (specialist-ask-choice#SA-1;
+          the top placement was not chosen). */}
+      {asks.length > 0 && <div className="px-3 pb-3 space-y-2">{asks}</div>}
     </div>
   );
 }

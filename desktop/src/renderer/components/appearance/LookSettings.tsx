@@ -1,32 +1,35 @@
 // The "Look" parts of Settings → Appearance: the user's own choices laid over every
-// theme (themes/look-overrides.ts). Every control's first option is "Auto" — the
+// theme (themes/look-overrides.ts). Every control's first option is "Theme" — the
 // theme's own choice — which is also what everything starts on. Decisions:
 // appearance-panel-questions (2026-09-24) AP-1 one layout picker, AP-2 glass presets
 // with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
 // nobody's look changes until they change a setting; appearance-panel-review-3 —
-// pictures for every choice, painted in the theme's real colours, and the Look
-// settings behind one "Additional Customizations" row (under Layout — review-5 AR5-2); review-4 — no Message box setting (it now
-// rides on the layout, look-overrides.ts), and the opened settings live inside that row's box.
+// pictures for every choice, painted in the theme's real colours; review-4 — no Message
+// box setting (it now rides on the layout, look-overrides.ts). Everything but Layout sits
+// behind the one "Additional customizations" row (appearance-review AR-2, 2026-10-01,
+// after an all-open trial: "collapse everything aside from the layout/frame"); Particles
+// joined it when the per-theme editor was removed (appearance-questions AQ-2).
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
-// useTheme(), the rules in themes/look-overrides.ts, and "absent field = Auto".
+// useTheme(), the rules in themes/look-overrides.ts, and "absent field = Theme".
 
 import { useState, type ReactNode } from 'react';
 import { useTheme } from '../../state/theme-context';
 import type { BubbleStyle, ChromeStyle, LoadedTheme } from '../../themes/theme-types';
 import {
-  GLASS_DEFAULTS, GLASS_PRESETS, hasAnyOverride, hasSeeThroughBackground, themeRoundness,
-  type GlassField, type GlassPreset, type GlassValues, type LookOverrides,
+  GLASS_DEFAULTS, GLASS_PRESETS, LOOK_PARTICLES, hasAnyOverride, hasSeeThroughBackground, themeRoundness,
+  type GlassField, type GlassPreset, type GlassValues, type LookOverrides, type LookParticles,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, RadioGroup, SegmentedTabs, SettingRow, Toggle, FOCUS_RING } from '../ui';
+import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, Slider, Toggle, FOCUS_RING } from '../ui';
 
-export const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
-
-// "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
-// request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
+// "Theme" = the absent field = the theme's own choice (AP-S1). It was "Auto"
+// (appearance-panel-review-3, AR3-1: "Auto (Theme)" in place of "Theme's").
+// WHY "Theme" now (Destin, final-review#ST-22: "replace "auto" with "theme""): the choice
+// means "whatever this theme does", and "Auto" suggested the app picks something itself.
+// One word for every picker's first choice, the Particles hint and the reset button.
 const THEME = 'theme';
-const AUTO = 'Auto';
+const AUTO = 'Theme';
 
 const CHROME_LABEL: Record<ChromeStyle, string> = {
   default: 'Framed',
@@ -124,7 +127,7 @@ function MiniCorners({ r }: { r: number }) {
 // Static class names so Tailwind generates them.
 const GRID_COLS: Record<number, string> = { 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' };
 
-/** A row of picture tiles, one per choice; the first is always Auto (the theme's own).
+/** A row of picture tiles, one per choice; the first is always Theme (the theme's own).
  *  The picture IS the option; the border marks the pick, like the theme cards.
  *  `value` null = the saved value matches no tile (a roundness set by the old slider). */
 function TilePicker<T extends string>({ label, choices, value, onChange, picture, name, autoIs }: {
@@ -134,7 +137,7 @@ function TilePicker<T extends string>({ label, choices, value, onChange, picture
   onChange: (v: T | undefined) => void;
   picture: (id: T | typeof THEME) => ReactNode;
   name: (id: T) => string;
-  /** What Auto currently resolves to, shown under it. */
+  /** What Theme currently resolves to, shown under it. */
   autoIs: string;
 }) {
   const current = value === undefined ? THEME : value;
@@ -171,9 +174,8 @@ function TilePicker<T extends string>({ label, choices, value, onChange, picture
   );
 }
 
-/** One labelled slider. Greys out when disabled and shows the formatted value.
- *  Shared with the user-theme editor in ThemeScreen. */
-export function LookSlider({
+/** One labelled slider. Greys out when disabled and shows the formatted value. */
+function LookSlider({
   label, min, max, step, value, onChange, format, disabled = false,
 }: {
   label: string;
@@ -184,18 +186,14 @@ export function LookSlider({
   disabled?: boolean;
 }) {
   return (
-    <div className={`flex items-center justify-between gap-3 ${disabled ? 'opacity-40' : ''}`}>
+    <div className={`flex items-center justify-between gap-3 ${disabled ? 'opacity-60' : ''}`}>
       {/* Fixed label column so every slider in a stack starts and ends at the same x. */}
       <span className="text-xs text-fg-2 shrink-0 w-28">{label}</span>
       <div className="flex items-center gap-2 flex-1">
-        <input
-          type="range" min={min} max={max} step={step}
-          value={value}
-          disabled={disabled}
-          aria-label={label}
-          onChange={e => onChange(parseFloat(e.target.value))}
-          className="flex-1 accent-accent"
-        />
+        {/* WHY the shared Slider (submit-ticket-5#ST5-5): the round handle with its fill
+            wrapped around it, one look for every slider in the app. */}
+        <Slider min={min} max={max} step={step} value={value} disabled={disabled}
+          aria-label={label} aria-valuetext={format(value)} onChange={onChange} />
         <span className="text-3xs text-fg-muted w-9 text-right">{format(value)}</span>
       </div>
     </div>
@@ -221,7 +219,8 @@ const GLASS_SLIDERS: { field: GlassField; label: string; min: number; max: numbe
  *  full width below — the design guide's rule for a set of choices (SA-1 "mixed"). */
 function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="space-y-1.5">
+    // WHY space-y-2: 8px between neighbouring rows (decisions "Popup spacing", SP-5; was 6px).
+    <div className="space-y-2">
       <div>
         <div className="text-xs font-medium text-fg">{title}</div>
         {hint && <p className="text-3xs text-fg-muted">{hint}</p>}
@@ -241,8 +240,8 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
   const framed = (active.layout?.['chrome-style'] ?? 'default') === 'default';
   const bakedTerminal = raw.background?.type === 'image' && !!raw.background?.['terminal-value'];
   const tabs = [
-    // "Auto", not Destin's "Auto (Theme)": in a four-way strip the longer label wrapped
-    // to two lines. Every picker's first choice reads "Auto" the same way.
+    // One short word ("Theme", final-review#ST-22): in a four-way strip "Auto (Theme)"
+    // wrapped to two lines. Every picker's first choice reads the same way.
     { id: THEME, label: AUTO },
     { id: 'clear', label: 'Clear' },
     { id: 'frosted', label: 'Frosted' },
@@ -271,10 +270,11 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
   // WHY the hint sits under the title (redesign, 2026-09-24): it used to be a loose
   // paragraph under the strip, which read as a separate block of text.
   const hint = !seeThrough ? 'No effect on this theme — it has no wallpaper'
-    : reducedEffects ? 'Blur is off while Reduce Visual Effects is on' : undefined;
+    : reducedEffects ? 'Blur is off while Reduce visual effects is on' : undefined;
 
   return (
-    <div className="space-y-1.5">
+    // WHY space-y-2: 8px between neighbouring rows (decisions "Popup spacing", SP-5; was 6px).
+    <div className="space-y-2">
       <StackedRow title="Glass" hint={hint}>
         <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
       </StackedRow>
@@ -293,15 +293,14 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
         // layout/theme where it works shows the saved value again.
         control={<Toggle checked={pagesSeeThrough && seeThrough && !framed} onChange={setPagesSeeThrough} disabled={!seeThrough || framed} aria-label="Show theme background behind pages" />}
       />
-      <SettingRow
-        variant="item"
+      {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+      <FoldRow
         title="Fine-tune glass"
         description={look.glass === 'custom' ? 'Your own values' : 'Set each blur and see-through level'}
-        expanded={fineTune}
-        onClick={() => setFineTune(v => !v)}
-      />
-      {fineTune && (
-        <div className="space-y-3 px-3 py-2">
+        open={fineTune}
+        onToggle={setFineTune}
+      >
+        <div className="space-y-3 py-1">
           {GLASS_SLIDERS.map(s => {
             const value = (look.glass === 'custom' ? look.glassCustom?.[s.field] : undefined)
               ?? active.background?.[s.field]
@@ -325,7 +324,7 @@ export function GlassSettings({ active, raw, look, set, reducedEffects }: {
             </p>
           )}
         </div>
-      )}
+      </FoldRow>
     </div>
   );
 }
@@ -359,69 +358,123 @@ export function LayoutSettings() {
   );
 }
 
-const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness'];
-
-/** Bubbles, message box, roundness and glass, behind one "Additional Customizations" row (under Layout — review-5 AR5-2).
- *  WHY folded (Destin, review-3 AR3-2, picked "Look tucked away"): the most-used
- *  settings — layout, themes, the two switches — stay up front; these open in place. */
-export function LookSettings() {
-  const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
-  // The theme's OWN choices, for the Auto labels. allThemes is raw; activeTheme
-  // already has the overrides applied.
+/** Particles for every theme (appearance-questions AQ-2, 2026-10-01): kept from the
+ *  removed per-theme editor, now an Auto-first choice like the rest. Words, not
+ *  pictures: falling snow and drifting dust don't read in a 44px still. */
+function ParticleSettings() {
+  const { allThemes, activeTheme, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
-  const without = (key: keyof LookOverrides) => { const next = { ...look }; delete next[key]; return next; };
+  const own = raw.effects?.particles ?? 'none';
+  const tabs = [{ id: THEME, label: AUTO }, ...LOOK_PARTICLES.map(p => ({ id: p, label: PARTICLE_LABEL[p] }))];
+  const pick = (id: string) => {
+    const next = { ...look };
+    if (id === THEME) delete next.particles;
+    else next.particles = id as LookParticles;
+    set(next);
+  };
+  // WHY the wallpaper hint: the particle layer is drawn BEHIND the app (ThemeEffects,
+  // z-index -1), so it only shows through a see-through background — on a flat theme a
+  // pick would silently do nothing, exactly like glass (seen in the dev copy, 2026-10-01).
+  const hint = !hasSeeThroughBackground(raw) ? 'No effect on this theme — it has no wallpaper'
+    : reducedEffects ? 'Off while Reduce visual effects is on'
+      : `${AUTO} keeps its own: ${PARTICLE_LABEL[own as LookParticles] ?? 'its own picture'}`;
+  return (
+    <StackedRow title="Particles" hint={hint}>
+      <SegmentedTabs tabs={tabs} value={look.particles ?? THEME} onChange={pick} variant="contained" aria-label="Particles" />
+    </StackedRow>
+  );
+}
+
+const PARTICLE_LABEL: Record<LookParticles, string> = { none: 'None', rain: 'Rain', dust: 'Dust', ember: 'Ember', snow: 'Snow' };
+
+/** Message bubble shapes, Auto first. */
+function BubbleSettings() {
+  const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
+  const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const themeBubble: BubbleStyle = raw.layout?.['bubble-style'] ?? 'default';
+  const without = () => { const next = { ...look }; delete next.bubbleStyle; return next; };
+  return (
+    <StackedRow title="Message bubbles">
+      <TilePicker<BubbleStyle>
+        label="Message bubbles"
+        choices={BUBBLE_CHOICES}
+        value={look.bubbleStyle}
+        onChange={v => set(v ? { ...look, bubbleStyle: v } : without())}
+        picture={id => <MiniBubbles style={id === THEME ? themeBubble : id as BubbleStyle} />}
+        name={id => BUBBLE_LABEL[id]}
+        autoIs={BUBBLE_LABEL[themeBubble]}
+      />
+    </StackedRow>
+  );
+}
+
+/** Corner roundness, Auto first. */
+function RoundnessSettings() {
+  const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
+  const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const themeRound = themeRoundness(raw);
   const roundPick = look.roundness === undefined ? undefined
     : (Object.keys(ROUND_PRESETS) as RoundPreset[]).find(k => ROUND_PRESETS[k] === look.roundness) ?? null;
+  const without = () => { const next = { ...look }; delete next.roundness; return next; };
+  return (
+    <StackedRow title="Roundness">
+      <TilePicker<RoundPreset>
+        label="Roundness"
+        choices={['square', 'soft', 'round']}
+        value={roundPick}
+        onChange={v => set(v ? { ...look, roundness: ROUND_PRESETS[v] } : without())}
+        picture={id => <MiniCorners r={id === THEME ? themeRound : ROUND_PRESETS[id as RoundPreset]} />}
+        name={id => ROUND_LABEL[id]}
+        autoIs={ROUND_LABEL[nearestRound(themeRound)]}
+      />
+    </StackedRow>
+  );
+}
+
+/** Glass presets plus Fine-tune, for the Glass & effects card. */
+function GlassLook() {
+  const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
+  const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
+  return <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />;
+}
+
+/** "Reset all to Theme", shown only once something differs from the theme. */
+function ResetLook() {
+  const { lookOverrides: look, setLookOverrides: set } = useTheme();
+  if (!hasAnyOverride(look)) return null;
+  return (
+    <Button variant="secondary" size="sm" onClick={() => set({})} className="w-full">
+      Reset all to {AUTO}
+    </Button>
+  );
+}
+
+const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness', 'particles'];
+
+/** Bubbles, roundness, glass and particles, behind one "Additional customizations" row.
+ *  WHY folded (Destin, review-3 AR3-2 "Look tucked away", reaffirmed appearance-review
+ *  AR-2 2026-10-01): the most-used settings — themes, layout, the two switches — stay up
+ *  front; these open in place. The row's tinted box continues below it when open
+ *  (review-4 AR4-3: "all of the submenus should exist within the customize look container"). */
+export function LookSettings() {
+  const { lookOverrides: look } = useTheme();
   const changed = LOOK_KEYS.filter(k => look[k] !== undefined).length;
   const [open, setOpen] = useState(false);
-
-  // WHY one box (Destin, review-4 AR4-3: "all of the submenus should exist within the
-  // customize look container when expanded"): the row's tinted box continues below it
-  // when open — the row drops its bottom corners and the settings sit in the same tint.
   return (
-    <div>
-      <SettingRow
-        variant="item"
-        title="Additional Customizations"
-        description={changed === 0 ? 'Bubbles, corners, glass, page background' : `${changed} changed from the theme`}
-        expanded={open}
-        onClick={() => setOpen(v => !v)}
-        className={open ? 'rounded-b-none' : ''}
-      />
-      {open && (
-        <div className="space-y-4 bg-inset/50 rounded-b-lg px-3 pt-2 pb-3">
-          <StackedRow title="Message bubbles">
-            <TilePicker<BubbleStyle>
-              label="Message bubbles"
-              choices={BUBBLE_CHOICES}
-              value={look.bubbleStyle}
-              onChange={v => set(v ? { ...look, bubbleStyle: v } : without('bubbleStyle'))}
-              picture={id => <MiniBubbles style={id === THEME ? themeBubble : id as BubbleStyle} />}
-              name={id => BUBBLE_LABEL[id]}
-              autoIs={BUBBLE_LABEL[themeBubble]}
-            />
-          </StackedRow>
-          <StackedRow title="Roundness">
-            <TilePicker<RoundPreset>
-              label="Roundness"
-              choices={['square', 'soft', 'round']}
-              value={roundPick}
-              onChange={v => set(v ? { ...look, roundness: ROUND_PRESETS[v] } : without('roundness'))}
-              picture={id => <MiniCorners r={id === THEME ? themeRound : ROUND_PRESETS[id as RoundPreset]} />}
-              name={id => ROUND_LABEL[id]}
-              autoIs={ROUND_LABEL[nearestRound(themeRound)]}
-            />
-          </StackedRow>
-          <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />
-          {hasAnyOverride(look) && (
-            <Button variant="secondary" size="sm" onClick={() => set({})} className="w-full">
-              Reset all to Auto
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
+    // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+    <FoldRow
+      title="Additional customizations"
+      description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
+      open={open}
+      onToggle={setOpen}
+    >
+      <div className="space-y-4 pt-1 pb-1">
+        <BubbleSettings />
+        <RoundnessSettings />
+        <GlassLook />
+        <ParticleSettings />
+        <ResetLook />
+      </div>
+    </FoldRow>
   );
 }

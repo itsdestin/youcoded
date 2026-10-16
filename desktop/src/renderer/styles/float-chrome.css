@@ -294,10 +294,10 @@
 [data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) > svg {
   color: var(--fg) !important;
 }
-/* Session Files' count uses `bg-accent`, which is translucent on some packs;
+/* Session files' count uses `bg-accent`, which is translucent on some packs;
    over a see-through button it went white-on-pale (1.05:1). The badge alone
    gets an opaque accent. */
-[data-chrome-style='float'] .header-bar [aria-label='Session Files']:not(.bg-accent) > span {
+[data-chrome-style='float'] .header-bar [aria-label='Session files']:not(.bg-accent) > span {
   background-color: var(--accent);
 }
 
@@ -319,8 +319,9 @@
 [data-wallpaper] [data-chrome-style='float'] .header-bar button[data-wallpaper-control-ink]:not(.bg-accent):not(.text-amber-700):not(.text-accent):not([aria-pressed='true']) > svg {
   color: var(--wallpaper-header-ink);
 }
-/* A worded header button (Projects / Pages' "Back to chat · Esc") takes the
-   same ink for its words; the key hint stays quieter. Badges (a span with its
+/* A worded header button in an inset pill takes the same ink for its words;
+   the key hint stays quieter. (The full screens' "Esc · Back to chat" is a
+   filled button now — `.bg-accent` — so it keeps its own colours.) Badges (a span with its
    own fill) keep their colours. */
 [data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:not([class*='bg-']) {
   color: var(--wallpaper-header-ink);
@@ -405,30 +406,6 @@
    from theme-engine.ts (FLOAT_CHROME_GLASS): without a blur — a flat theme,
    "Reduced effects", a zero blur slider — a 24% fill left the chat behind it
    sharp through the rows, so the menu keeps the app's normal overlay there. */
-/* The session list's edge fade. .scroll-fade paints a solid --panel gradient
-   over the rows' ends, which on this see-through menu read as a dark band.
-   Here the rows themselves fade to clear, like messages under the controls
-   (R7-1: "make this fade/scroll effect match the new effect we're using
-   elsewhere"). The painted pseudos carry matching negative margins, so hiding
-   them moves nothing. No row in this list has a blur of its own, so masking
-   the list costs no glass. */
-[data-chrome-style='float'] .session-menu .scroll-fade::before,
-[data-chrome-style='float'] .session-menu .scroll-fade::after {
-  display: none;
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px);
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to top, transparent 0, black 28px);
-  mask-image: linear-gradient(to top, transparent 0, black 28px);
-}
-[data-chrome-style='float'] .session-menu .scroll-fade[data-fade-top='true'][data-fade-bottom='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
-}
-
 /* Scroll bars: the same light see-through fill with a hairline edge, instead of
    the theme's solid grey bar. Tokens, so every scroll bar (including the
    terminal's drawn thumb) follows. */
@@ -462,7 +439,7 @@
   --float-sheet-drop: 0 8px 24px -10px rgba(0, 0, 0, .3);
 }
 
-/* ── Session Files / Games pane ─────────────────────────────────────────────
+/* ── Session files / Games pane ─────────────────────────────────────────────
    Floats clear of the header and the chips (the gaps 'floating' uses) instead
    of butting against the invisible bars. */
 [data-chrome-style='float'] .framed-shell > .drawer-pane {

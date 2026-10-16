@@ -46,7 +46,7 @@ import {
   type PlacedPiece,
   type PromotionPiece,
 } from '../../game/chess';
-import { Button, StatusStrip } from '../ui';
+import { Button, Pill, StatusStrip } from '../ui';
 
 const SOLID: Record<string, string> = {
   k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟',
@@ -216,8 +216,11 @@ export default function ChessBoard({ connection, treatment = 'outline' }: Props)
           tone="busy"
           detail="They have a moment to come back before the game is called."
           action={
+            // WHY outlined, not ghost (decisions "Secondary buttons": a less-important action is
+            // outlined, never bare text; the other StatusStrip actions — LocalModelDownloadStrip's
+            // "Resume download", OfficeAlerts' "Open Office" — are secondary).
             <Button
-              variant="ghost"
+              variant="secondary"
               size="sm"
               onClick={() => { connection.leaveGame(); dispatch({ type: 'RETURN_TO_LOBBY' }); }}
             >
@@ -373,11 +376,11 @@ function StatusLine({
         <span className="w-3 h-3 rounded-full bg-accent" />
         <span className="text-fg-dim">You</span>
       </div>
-      <div className={`text-xs font-medium px-2 py-0.5 rounded-full first-letter:uppercase ${
-        canMove ? 'bg-inset/50 text-fg-2' : 'bg-inset text-fg-muted'
-      }`}>
-        {text}
-      </div>
+      {/* WHY the shared Pill (decisions "Status labels"; "Control shape follows the theme" — no
+          hand-set rounded-full on a hand-made chip): the turn is a status, so it is the one tinted
+          pill. Neutral tone either way — the words already say whose turn it is. */}
+      {/* Only when there is something to say — the old chip drew an empty box before play. */}
+      {text ? <Pill className="first-letter:uppercase">{text}</Pill> : <span />}
       <div className="flex items-center gap-1.5">
         <span className="text-fg-dim">{them}</span>
         <span className="w-3 h-3 rounded-full bg-fg-muted" />
@@ -423,9 +426,10 @@ function PromotionPicker({
             </button>
           ))}
         </div>
-        {/* Ghost, not a second primary — G-4 allows one primary per view and
-            the four piece buttons already are the decision. */}
-        <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+        {/* Not a second primary — G-4 allows one primary per view and the four piece
+            buttons already are the decision. WHY outlined, not ghost (decisions "Secondary
+            buttons": Cancel beside a main choice is outlined, never bare text). */}
+        <Button variant="secondary" size="sm" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   );

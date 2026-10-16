@@ -19,7 +19,9 @@ const write = (file: string, obj: unknown) => {
 };
 const E = (over: Partial<ProjectRegistryEntry>): ProjectRegistryEntry => ({
   schemaVersion: PROJECT_REGISTRY_SCHEMA, name: 'app', repoName: 'r-app',
-  displayName: 'app', state: 'active', updatedAt: 1, ...over,
+  displayName: 'app', state: 'active', updatedAt: 1,
+  // Required by the entry type; null/0 is exactly what the reader fills in for a file without them.
+  description: null, descriptionUpdatedAt: 0, ...over,
 });
 
 describe('project registry store — I/O', () => {

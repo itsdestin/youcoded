@@ -1,4 +1,4 @@
-import { Tooltip } from './ui';
+import { RowStatus, Tooltip } from './ui';
 
 interface Props {
   running: number;   // count of in_progress tasks
@@ -11,9 +11,14 @@ interface Props {
  * Hidden entirely when both counts are 0 — matches the announcement-pill pattern.
  * Clicking opens the OpenTasksPopup (parent owns the popup state).
  *
- * Visual: "TASKS 1◐ 2○" — blue running count, amber pending count. Numbers
- * carry the color; the chip surface stays neutral so it doesn't compete with
- * the salmon BYPASS chip next to it.
+ * Visual: "Tasks ●1 ◐ 2 ○" — every word and number in the chip's normal text colour; the running
+ * count carries the green status dot the session list's Working uses.
+ *
+ * WHY no coloured numbers (Open tasks rework, 2026-10-13; the status-colour sweep's rule,
+ * small-fixes-3#SF3-10): the guide keeps status hues out of words and numbers, and these were
+ * hand-typed hex blue and amber. The state is the small dot before the number (RowStatus — the
+ * status bar's usage and context numbers do the same). "Tasks", not "TASKS": sentence case
+ * (only the mode badges stay in capitals).
  */
 export default function OpenTasksChip({ running, pending, onOpen }: Props) {
   const total = running + pending;
@@ -36,15 +41,15 @@ export default function OpenTasksChip({ running, pending, onOpen }: Props) {
       }}
       aria-label={tooltip}
     >
-      <span className="hidden sm:inline">TASKS</span>
+      <span className="hidden sm:inline">Tasks</span>
       {running > 0 && (
-        <span className="inline-flex items-center gap-0.5" style={{ color: '#60a5fa' }}>
-          <span>{running}</span>
+        <span className="inline-flex items-center gap-0.5">
+          <RowStatus dotClassName="bg-green-400">{running}</RowStatus>
           <span aria-hidden>◐</span>
         </span>
       )}
       {pending > 0 && (
-        <span className="inline-flex items-center gap-0.5" style={{ color: '#fbbf24' }}>
+        <span className="inline-flex items-center gap-0.5">
           <span>{pending}</span>
           <span aria-hidden>○</span>
         </span>

@@ -11,6 +11,10 @@ export interface SavedFolder {
   // Local-only description. A plain folder has nothing to sync it to — the
   // synced equivalent lives in the project registry (project-registry.ts).
   description?: string | null;
+  // Set by "Add a project" on a synced project that was removed from every device's lists
+  // (backlog row 10): this computer lists it again. Without it the entry would stay hidden like
+  // every other device's, because the removed marker is per project, not per device.
+  readded?: true;
 }
 
 /** A row of the new-session folder picker: a saved folder, or a synced project shown beside them. */

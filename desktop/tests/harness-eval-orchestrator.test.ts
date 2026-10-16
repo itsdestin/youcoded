@@ -957,7 +957,8 @@ describe('the worker environment is an allowlist, not the operator shell', () =>
       process.env.ANTHROPIC_API_KEY = 'canary-anthropic';
       process.env.GITHUB_TOKEN = 'canary-github';
       process.env.OPENROUTER_API_KEY = 'canary-openrouter';
-      const env = workerEnv();
+      // WHY: workerEnv is untyped JS and infers `{}`; it returns a process-env-shaped record.
+      const env = workerEnv() as NodeJS.ProcessEnv;
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
       expect(env.GITHUB_TOKEN).toBeUndefined();
       // The OpenRouter key travels in the stdin config now — not here.
@@ -1114,6 +1115,16 @@ describe('the credential never arrives in an environment variable', () => {
   });
 });
 
+// WHY: runMatrix is untyped JS, so TypeScript infers `onResult` as REQUIRED and
+// its result lists as unknown[] — but the code guards it with `if (onResult)`, and
+// the spend-cap tests below deliberately omit it. This loose wrapper keeps the
+// calls unchanged while stating that.
+type LooseMatrixResult = { results: Array<{ cellId: string }>; skipped: Array<{ id: string }>; stopReason?: string };
+async function loadRunMatrix(): Promise<(cells: unknown[], opts: Record<string, unknown>) => Promise<LooseMatrixResult>> {
+  const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+  return runMatrix as unknown as Awaited<ReturnType<typeof loadRunMatrix>>;
+}
+
 describe('the spend cap', () => {
   const cells = ['a', 'b', 'c', 'd'].map((id) => ({ id, model: 'Claude Opus 5' }));
 
@@ -1127,7 +1138,7 @@ describe('the spend cap', () => {
   }
 
   it('runs every cell and never asks about usage when no cap was given', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     let usageCalls = 0;
     const out = await runMatrix(cells, {
@@ -1143,7 +1154,7 @@ describe('the spend cap', () => {
   });
 
   it('stops when real spend passes the cap and names exactly which cells never ran', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     // Baseline 10, then +2 per cell. Cap 5 → tripped after the third cell
     // (spend 6 >= 5), so 'd' never runs.
@@ -1160,7 +1171,7 @@ describe('the spend cap', () => {
   });
 
   it('lets the cell that trips the cap FINISH — a half-run costs the same and yields nothing', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     // The very first cell blows the cap wide open.
     const usage = [0, 1000];
@@ -1174,7 +1185,7 @@ describe('the spend cap', () => {
   });
 
   it('does not check usage after the last cell', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { runOne } = recorder();
     let usageCalls = 0;
     await runMatrix(cells, {
@@ -1188,7 +1199,7 @@ describe('the spend cap', () => {
   });
 
   it('refuses to start when the BASELINE usage read fails — an unmeasurable cap is not a cap', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     await expect(runMatrix(cells, {
       runOne,
@@ -1200,7 +1211,7 @@ describe('the spend cap', () => {
   });
 
   it('stops rather than continuing uncapped when a MID-RUN usage read fails', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     let call = 0;
     const out = await runMatrix(cells, {
@@ -1220,7 +1231,7 @@ describe('the spend cap', () => {
     // resolving with an `error` field — for four per-cell conditions, all of them
     // reachable on cell N after cells 1..N-1 have been billed. That rejection used
     // to escape runMatrix, taking `results` and `skipped` with it.
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const ran: string[] = [];
     const out = await runMatrix(cells, {
       runOne: async (cell: { id: string }) => {
@@ -1242,7 +1253,7 @@ describe('the spend cap', () => {
 
   it('turns an onResult write failure into a stopReason, keeping the cell that already ran', async () => {
     // ENOSPC / EACCES on cell N is not evidence that cells 1..N-1 did not happen.
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { ran, runOne } = recorder();
     const out = await runMatrix(cells, {
       runOne,
@@ -1262,7 +1273,7 @@ describe('the spend cap', () => {
   it('tags ONLY the baseline failure as "before the first cell"', async () => {
     // The tag is what lets the CLI say "nothing was spent" without guessing —
     // and, crucially, what stops it saying that about anything else.
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { runOne } = recorder();
     const err = await runMatrix(cells, {
       runOne,
@@ -1282,7 +1293,7 @@ describe('the spend cap', () => {
   });
 
   it('hands every completed result to onResult BEFORE a later stop', async () => {
-    const { runMatrix } = await import('../test-engine/harness-eval.mjs');
+    const runMatrix = await loadRunMatrix();
     const { runOne } = recorder();
     // Results are written to disk as each cell finishes, so a run stopped by the
     // cap does not also lose the cells that were already paid for.
@@ -1405,7 +1416,7 @@ globalThis.fetch = async (url) => {
   const RUNS_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-eval-runs-'));
 
   function runCliStubbed(stub: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
-    const env = { ...process.env, YOUCODED_EVAL_RUNS_DIR: RUNS_ROOT };
+    const env: NodeJS.ProcessEnv = { ...process.env, YOUCODED_EVAL_RUNS_DIR: RUNS_ROOT };
     delete env.OPENROUTER_API_KEY;
     try {
       const stdout = execFileSync(

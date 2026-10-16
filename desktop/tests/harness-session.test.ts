@@ -10,10 +10,17 @@ import type { TranscriptEvent } from '../src/shared/types';
 // (node_modules/ai/dist/test/index.d.ts).
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+import { looseData } from '../src/shared/transcript-event-types';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 
 function mockModel(parts: any[]) {
   return new MockLanguageModelV4({
-    doStream: async () => ({ stream: simulateReadableStream({ chunks: parts }) }),
+    doStream: async () => ({ stream: simulateReadableStream({ chunks: asParts(parts) }) }),
   });
 }
 
@@ -51,7 +58,7 @@ describe('HarnessSession', () => {
     await session.send('hi');
     const types = events.map((e) => e.type);
     expect(types[0]).toBe('user-message');
-    expect(events[0].data.text).toBe('hi');
+    expect(looseData(events[0]).text).toBe('hi');
     const textEvents = events.filter((e) => e.type === 'assistant-text');
     expect(textEvents.length).toBeGreaterThanOrEqual(2);            // streamed as deltas, not one block
     expect(textEvents.every((e) => e.data.partId)).toBe(true);      // every delta carries the partId
@@ -88,7 +95,7 @@ describe('HarnessSession', () => {
   it('conversation history accumulates across turns (second call sees first exchange)', async () => {
     const seen: any[] = [];
     const factory = async () => new MockLanguageModelV4({
-      doStream: async (req: any) => { seen.push(req.prompt); return { stream: simulateReadableStream({ chunks: TEXT_FINISH }) }; },
+      doStream: async (req: any) => { seen.push(req.prompt); return { stream: simulateReadableStream({ chunks: asParts(TEXT_FINISH) }) }; },
     }) as any;
     const session = new HarnessSession(opts, factory);
     collect(session);

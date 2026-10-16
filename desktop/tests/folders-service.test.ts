@@ -10,10 +10,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const h = vi.hoisted(() => ({ managed: null as null | { projectsRoot: string; listProjects: () => { path: string; name: string }[] } }));
-vi.mock('../src/main/sync-spaces/service', () => ({ getManagedRoots: () => h.managed }));
+const h = vi.hoisted(() => ({ managed: null as null | { projectsRoot: string; listProjects: () => { path: string; name: string }[] }, removed: new Set<string>() }));
+vi.mock('../src/main/sync-spaces/service', () => ({ getManagedRoots: () => h.managed, isRemovedProject: (n: string) => h.removed.has(n) }));
 
-import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from '../src/main/folders-service';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription, isRemovedFromLists } from '../src/main/folders-service';
 
 let dir: string;
 let file: string;
@@ -21,6 +21,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'folders-service-'));
   file = path.join(dir, 'youcoded-folders.json');
   h.managed = null;
+  h.removed = new Set();
 });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -83,5 +84,47 @@ describe('the folder writes behave as the desktop handlers always did', () => {
     expect(removeFolder('/missing', file)).toBe(false);
     expect(removeFolder('/a', file)).toBe(true);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual([]);
+  });
+});
+
+// Backlog row 10 (Destin, project-switcher-1 PQ-1: "stop syncing on all devices, remove from
+// list on all devices"). A synced project is listed because its FOLDER sits in
+// ~/YouCoded/Projects; once it is marked removed (on any device) it leaves this computer's
+// lists too, its files stay, and Add a project on this computer lists it again.
+describe('a synced project removed on any device leaves the lists; its files stay', () => {
+  function setup() {
+    const projectsRoot = path.join(dir, 'Projects');
+    const paf = path.join(projectsRoot, 'PAF 574');
+    fs.mkdirSync(paf, { recursive: true });
+    fs.writeFileSync(path.join(paf, 'notes.md'), 'keep me');
+    fs.writeFileSync(file, JSON.stringify([
+      { path: dir, nickname: 'work', addedAt: 5 },
+      // The import flow saves an entry for a project it moved into Projects.
+      { path: paf, nickname: 'PAF (saved)', addedAt: 4 },
+    ]));
+    h.managed = { projectsRoot, listProjects: () => [{ path: paf, name: 'PAF 574' }] };
+    return { paf };
+  }
+
+  it('drops both its saved entry and its synced row from the picker, and touches no file', () => {
+    const { paf } = setup();
+    h.removed.add('PAF 574');
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['work']);
+    expect(isRemovedFromLists(paf, JSON.parse(fs.readFileSync(file, 'utf8')))).toBe(true);
+    expect(fs.readFileSync(path.join(paf, 'notes.md'), 'utf8')).toBe('keep me');
+  });
+
+  it('Add a project on this computer lists it here again', () => {
+    const { paf } = setup();
+    h.removed.add('PAF 574');
+    addFolder(paf, undefined, file);
+    expect(listPickerFolders(file).map((f) => f.path)).toContain(paf);
+  });
+
+  it('a project that was not removed, and a plain folder, are untouched', () => {
+    const { paf } = setup();
+    expect(listPickerFolders(file).map((f) => f.path)).toEqual([dir, paf]);
+    h.removed.add(path.basename(dir)); // a same-named plain folder outside Projects
+    expect(listPickerFolders(file).map((f) => f.path)).toEqual([dir, paf]);
   });
 });

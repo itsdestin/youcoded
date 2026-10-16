@@ -10,7 +10,7 @@ import type { SkillCatalog } from '../src/main/harness/skills/skill-catalog';
 
 const catalog: SkillCatalog = {
   list: () => [{ id: 'journal', description: 'Write a journal entry' }, { id: 'theme-builder', description: 'Build a theme' }],
-  load: (id) => ({ id, displayName: id, description: 'd', body: 'do the thing' }),
+  load: (id) => ({ id, displayName: id, description: 'd', body: 'do the thing', file: `/tmp/skills/${id}/SKILL.md` }),
 };
 const emptyCatalog: SkillCatalog = { list: () => [], load: () => { throw new Error('none'); } };
 

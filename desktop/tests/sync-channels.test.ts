@@ -55,12 +55,14 @@ describe('sync, syncspaces and github: what is in the table and who may call it'
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const pushes = new Set<string>([IPC.SYNC_SPACES_EVENT, IPC.GITHUB_CONNECT_DONE]);
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !pushes.has(v));
-    expect(names.length).toBe(36); // 17 sync + 14 syncspaces + 5 github; a new one must be decided here
+    // 17 sync + 15 syncspaces + 5 github; a new one must be decided here. syncspaces:remove-project
+    // (backlog row 10, the project switcher's "remove everywhere") joined on the ui-consistency branch.
+    expect(names.length).toBe(37);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
   it('all of them are open to a phone, exactly as before (nothing refused, nothing newly opened)', () => {
     const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name));
-    expect(entries.length).toBe(36);
+    expect(entries.length).toBe(37); // remove-project is open to a phone like stop-project (remote-shim and SessionService both carry it)
     expect(entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name)).toEqual([]);
   });
 });

@@ -1,13 +1,31 @@
 import { useEffect, useState } from 'react';
-import { Button, Dialog, ErrorState, LoadingState } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, LoadingState } from '../ui';
+import { networkOnlineNow } from '../../hooks/useNetworkOnline';
+import type { ReactNode } from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
 import { ContributionWalkthrough } from './ContributionWalkthrough';
 
 type Phase = 'idle' | 'setting-up' | 'ready' | 'failed' | 'open-failed';
 
-export function ContributionDesign({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * A ticket handed over from "Let your assistant try to fix it" (Destin,
+ * submit-ticket-3#ST3-Q1 "contribute": one place explains and runs the download; "ensure
+ * the contribute page is worded in a way that makes sense for handoff peeps too").
+ * `initialInput` is what the new conversation starts with; `onStarted` tells the ticket
+ * the assistant began, so it can show "Not sent — your assistant is working on it".
+ */
+export type ContributionHandover = { title: string; kind: 'bug' | 'feature'; initialInput: string; onStarted: () => void };
+
+export function ContributionDesign({ open, onClose, handover, screen = 'settings/development/contribute' }: {
+  open: boolean; onClose: () => void; handover?: ContributionHandover;
+  /** WHY overridable: opened from a ticket, this IS the ticket flow's next step, so the
+   *  photo-only build marks it as the ticket screen's state (screens/settings.ts). */
+  screen?: string;
+}) {
   useEscClose(open, onClose);
+  // Read only to word a failed download: "no network" only when the computer says so.
+  const online = networkOnlineNow();
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState('');
   const [path, setPath] = useState('');
@@ -50,6 +68,9 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     setError('');
     try {
       const r = await window.claude.dev.setupWorkspace();
+      // From a ticket, the button said "Download and start", so a finished download
+      // starts the conversation rather than stopping on a second "Start" screen.
+      if (r.ok && handover) { setPath(r.path); await openProject(r.path); return; }
       if (r.ok) { setPath(r.path); setPhase('ready'); }
       // WHY: the reason comes from the operation that failed, never from a guess
       // here (docs/error-message-standards.md).
@@ -75,9 +96,10 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     onClose();
   };
 
-  const openProject = async () => {
+  const openProject = async (at: string = path) => {
     try {
-      await window.claude.dev.openSessionIn({ cwd: path });
+      await window.claude.dev.openSessionIn(handover ? { cwd: at, initialInput: handover.initialInput } : { cwd: at });
+      if (handover) { void window.claude.dev.clearSetupStatus?.().catch(() => {}); handover.onStarted(); return; }
       dismiss();
     } catch (e: unknown) {
       // WHY its own phase (code review C2): this used to set 'failed', so a failure
@@ -89,72 +111,91 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     }
   };
 
-  return <Dialog screen="settings/development/contribute" open={open} onClose={onClose} size="panel" title="Contribute to YouCoded">
-    <div className="p-4 space-y-4">
+  // ── Words ──────────────────────────────────────────────────────────────────
+  // WHY rewritten (submit-ticket-3#ST3-Q1 note): "development workspace", "set up" and a
+  // separate project meant nothing to someone who came from a ticket. Every state now says
+  // what happens on THEIR computer, how big it is, and what comes next. The size is the
+  // code's own estimate (dev-tools.ts: "~1GB with five nested .git directories").
+  const forTicket = !!handover;
+  const lead = forTicket
+    ? <>Your assistant will work on “{handover.title}” in its own copy of YouCoded’s code. Your ticket isn’t sent unless you send it.</>
+    : <>You don’t need to know how to code. Describe a change, and your assistant makes it in its own copy of YouCoded’s code.</>;
+  const facts: ReactNode[] = [
+    'The first time, this downloads YouCoded’s code — about 1 GB, so a few minutes. After that, the same copy is reused.',
+    'Your installed app and your own files don’t change.',
+    forTicket ? 'Then a new conversation opens with your ticket already in it.' : 'Then you can open it as a new conversation and describe your idea.',
+  ];
+  const back = forTicket
+    ? <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Back to ticket</Button>
+    : null;
 
-      {phase === 'idle' && <>
-        <p className="text-sm text-fg-2">You don’t need to know how to code. Describe a change to your assistant and try it in a separate project. Your installed app and existing folders stay untouched.</p>
-        <ContributionWalkthrough />
-        {/* WHY: match the app's own dialog action — full width, primary, no prototype caption.
-            It must never reach the legacy installer; that is pinned by DevelopmentDesign.test.tsx. */}
-        <Button className="w-full py-2.5" onClick={setup}>Set up development workspace</Button>
-      </>}
+  return <Dialog screen={screen} open={open} onClose={onClose} size="panel" title={forTicket ? (handover.kind === 'bug' ? 'Let your assistant try to fix it' : 'Let your assistant try to build it') : 'Contribute to YouCoded'}>
+    <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
 
-      {phase === 'setting-up' && <>
-        <LoadingState verb="Setting up" what="your development workspace" />
-        {/* WHY one line and no per-step feed (Destin, R6-24): the steps were noise.
-            What he asked for instead is the reassurance — and it is only honest
-            because setup runs in the main process and this screen re-reads its
-            status on open, so closing really does leave it running. */}
-        <p className="text-xs text-fg-2 text-center">This can take a few minutes. You can close this — setup keeps going, and you’ll find it here when you come back.</p>
-      </>}
-
-      {phase === 'ready' && <>
-        <p className="text-sm text-fg">Your development workspace is ready.</p>
-        <p className="text-xs text-fg-2">It’s one of your projects now, at <code className="text-2xs">{path}</code>. Nothing else on your computer changed.</p>
+      {/* WHY one card (nothing-bare rules, 2026-09-28): a small popup holding a single
+          card needs no label above it. */}
+      {phase === 'idle' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">{lead}</p>
+        <ul className="list-disc ml-4 space-y-1 text-xs text-fg-2 leading-relaxed">{facts.map((f, i) => <li key={i}>{f}</li>)}</ul>
+        {!forTicket && <ContributionWalkthrough />}
+        {/* WHY: full width, primary — narrow popups stack (guide "Buttons"). It must never
+            reach the legacy installer; that is pinned by DevelopmentDesign.test.tsx. */}
         <div className="flex flex-col gap-2">
-          {/* WHY this calls openSessionIn: contract R10 is "setup finishes and the
-              project OPENS". A button labelled "Open it" that only closes the dialog
-              is the dead-button shape this whole feature exists to remove — and it is
-              what the legacy screen's "Open in New Session" already did. */}
-          <Button className="w-full py-2.5" onClick={openProject}>Open it</Button>
-          <Button variant="secondary" className="w-full py-2.5" onClick={dismiss}>Not now</Button>
+          <Button className="w-full py-2.5" onClick={setup}>{forTicket ? 'Download and start' : 'Download YouCoded’s code'}</Button>
+          {back}
         </div>
-      </>}
+      </div>}
 
-      {phase === 'open-failed' && <>
-        <ErrorState
-          title="Your workspace is ready, but it didn’t open"
-          explainer={`${error} It is still there, at ${path}.`}
-          onRetry={openProject}
-        />
-      </>}
+      {phase === 'setting-up' && <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        <LoadingState verb="Downloading" what="YouCoded’s code" variant="inline" />
+        {/* WHY this promise is honest (Destin, R6-24): the download runs in the main
+            process and this screen re-reads its status on open, so leaving does not stop it. */}
+        <p className="text-xs text-fg-2">About 1 GB, so this can take a few minutes. You can {forTicket ? 'go back to your ticket' : 'close this'} — the download keeps going{forTicket ? '' : ', and you’ll find it here when you come back'}.</p>
+        {back}
+      </div>}
 
-      {phase === 'failed' && <>
-        {/* WHY the purpose line stays (UX review U15): a failed setup used to replace
-            the entire screen with an error box, so the user lost what this was even
-            for — while the ticket flow, one screen away, keeps every word they typed
-            through the same kind of failure. */}
-        <p className="text-sm text-fg-2">You don’t need to know how to code. Describe a change to your assistant and try it in a separate project. Your installed app and existing folders stay untouched.</p>
-        {/* WHY: the legacy screen offered only Done on failure, which throws away
-            what already succeeded and gives no way forward (audit E-08). Retry
-            resumes; what was downloaded is kept. */}
-        {/* WHY one block and no separate Close: the first cut had Retry and Report
-            bug at row size inside the error, then a full-width Close under it —
-            three actions at two sizes, which is the "weirdly sized buttons, poor
-            visual hierarchy" Destin rejected on this very screen (S-6). The error
-            owns its actions; the dialog's ✕ is how you leave. */}
-        {/* WHY no Report bug here (code review C3): it was wired to onClose, so the
-            button filed nothing and just shut the dialog — a dead control on the
-            screen whose whole purpose is honest failure. Reporting belongs to the
-            ticket flow, which this screen cannot reach; offering it here would be a
-            second lie. Retry is the action this screen actually has. */}
-        <ErrorState
-          title="Setup didn’t finish"
-          explainer={`${error} Nothing was left behind, so trying again starts cleanly.`}
-          onRetry={setup}
-        />
-      </>}
+      {phase === 'ready' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-sm text-fg">YouCoded’s code is ready on this computer.</p>
+        <p className="text-xs text-fg-2">{forTicket
+          ? 'A new conversation opens with your ticket in it, and your assistant starts working on it.'
+          : <>It’s in your projects, at <code className="text-2xs">{path}</code>. Nothing else on your computer changed.</>}</p>
+        <div className="flex flex-col gap-2">
+          {/* WHY this calls openSessionIn: contract R10 is "setup finishes and the project
+              OPENS" — a button that only closed the dialog would be a dead button. */}
+          <Button className="w-full py-2.5" onClick={() => void openProject()}>{forTicket ? 'Start' : 'Open it'}</Button>
+          {back ?? <Button variant="secondary" className="w-full py-2.5" onClick={dismiss}>Not now</Button>}
+        </div>
+      </div>}
+
+      {/* WHY the guide's notice box in place of the buttons (submit-ticket-5; the ticket's
+          approved failure, submit-ticket-1#ST-5): a failure replaces the buttons it came
+          from, inside the card it is about — one sentence with the real reason (never a
+          guessed cause), its Try again inside it, no title. The card keeps what this screen
+          is for (UX review U15). */}
+      {/* WHY plain words first and the raw reason folded away (Destin, submit-ticket-5#ST5-9:
+          "mock failure dev open session in might scare our users. this error is just confusing
+          and unhelpful"): the operation's own text ("spawn claude ENOENT", git's output) is for
+          a bug report, not the message. The sentence says what happened and what still holds,
+          without guessing a cause (error-message standards); "no network" is said only when
+          the computer reports none. The details stay one click away for whoever needs them. */}
+      {phase === 'open-failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-sm text-fg">YouCoded’s code is ready on this computer.</p>
+        {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+        <Callout tone="danger" actionsPlacement="below" details={error ?? undefined} actions={<>
+          {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
+          <Button size="sm" onClick={() => void openProject()}>Try again</Button>
+        </>}>The new conversation didn’t open. The code is still on this computer, so trying again picks up where this left off.</Callout>
+      </div>}
+
+      {phase === 'failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">{lead}</p>
+        <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below" details={error ?? undefined} actions={<>
+          {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
+          <Button size="sm" onClick={setup}>Try again</Button>
+        </>}>{online
+          ? 'The download didn’t finish. Nothing was left behind, so trying again starts cleanly.'
+          : 'This computer isn’t connected to a network, so the download couldn’t start.'}</Callout>
+      </div>}
 
     </div>
   </Dialog>;

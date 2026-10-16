@@ -61,7 +61,7 @@ import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatV
 
 const userEntry = (id: string) => ({ kind: 'user', message: { id, role: 'user', content: id, timestamp: 1 } });
 
-function baseState(timeline: any[], history = { cursor: null, hasMore: false, loading: false }) {
+function baseState(timeline: any[], history: { cursor: { path: string; offset: number; sizeAtRead: number } | null; hasMore: boolean; loading: boolean } = { cursor: null, hasMore: false, loading: false }) {
   return {
     timeline, queuedMessages: [], toolCalls: new Map(), toolGroups: new Map(),
     assistantTurns: new Map(), activeTurnToolIds: new Set(), isThinking: false,

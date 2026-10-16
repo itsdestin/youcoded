@@ -3,13 +3,13 @@ import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, Toggle, TextInput, Textarea, LoadingState, RadioGroup, SegmentedTabs, SectionLabel, SettingRow } from './ui';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
 // Opens from:
 //   • Typing /config in chat view (SlashCommandDispatcher)
-//   • "Claude Code Preferences" button in SettingsPanel
+//   • "Claude Code preferences" button in SettingsPanel
 // In terminal view, /config passes through to the PTY instead (see dispatcher).
 //
 // Scope: the most-used ~5 options. "Advanced" button at the bottom switches
@@ -47,7 +47,7 @@ const DEFAULTS: PrefsState = {
 
 const PERMISSION_LABELS: Record<PermissionDefault, { label: string; desc: string }> = {
   default: { label: 'Default', desc: 'Ask before each tool use' },
-  acceptEdits: { label: 'Accept Edits', desc: 'Auto-approve file edits' },
+  acceptEdits: { label: 'Accept edits', desc: 'Auto-approve file edits' },
   plan: { label: 'Plan', desc: 'Plan-only mode, no execution' },
   bypassPermissions: { label: 'Bypass', desc: 'Skip all permission prompts (risky)' },
 };
@@ -117,16 +117,17 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
 
   return createPortal(
     <>
-      <Dialog screen="chat/preferences" open={open} onClose={onClose} title="Claude Code Preferences" size="panel">
+      <Dialog screen="chat/preferences" open={open} onClose={onClose} title="Claude Code preferences" size="panel">
         {!loaded ? (
           <LoadingState what="preferences" />
         ) : (
           <>
             {/* Permission default */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Default Permission Mode
-              </h3>
+              {/* WHY SectionLabel, sentence case (fix batch 2, 2026-09-26): the design
+                  guide's small label — 12px, grey, normal case, no spaced-out
+                  capitals (decisions.md "Heading ladder"). Same for the three below. */}
+              <SectionLabel className="mb-2">Default permission mode</SectionLabel>
               {/* Change 39: native radios → the Radio primitive inside a
                   RadioGroup (one tab stop + arrow-key nav via roving tabindex).
                   The row stays fully clickable; the Radio is the visual mark. */}
@@ -134,7 +135,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
                 options={Object.keys(PERMISSION_LABELS) as PermissionDefault[]}
                 value={prefs.defaultMode}
                 onChange={(m) => save('defaultMode', m as PermissionDefault)}
-                aria-label="Default Permission Mode"
+                aria-label="Default permission mode"
                 className="space-y-1.5"
               >
                 {(Object.keys(PERMISSION_LABELS) as PermissionDefault[]).map((mode) => (
@@ -153,13 +154,11 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
 
             {/* Editor mode */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Editor Mode
-              </h3>
+              <SectionLabel className="mb-2">Editor mode</SectionLabel>
               {/* K3: <=4 short options with no description -> segmented. */}
               <SegmentedTabs
                 variant="contained"
-                aria-label="Editor Mode"
+                aria-label="Editor mode"
                 value={prefs.editorMode}
                 onChange={(id) => save('editorMode', id as EditorMode)}
                 tabs={[
@@ -171,20 +170,22 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
 
             {/* Output style */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                Output Style
-              </h3>
+              <SectionLabel className="mb-2">Output style</SectionLabel>
               {/* Shared FIELD surface (change 20) — was its own rounded/px-3 py-1.5
-                  recipe. The uppercase <label> above has no htmlFor, so the field
+                  recipe. The label above has no htmlFor, so the field
                   carries its own accessible name. */}
+              {/* WHY a card round the field and its line (final-review#ST-21/#PR-7, the one popup
+                  rule): they sat bare under the label. Same for System prompt and Advanced. */}
+              <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <TextInput
                 value={prefs.outputStyle}
                 onChange={(e) => save('outputStyle', e.target.value)}
                 placeholder="e.g. concise, explanatory"
-                aria-label="Output Style"
+                aria-label="Output style"
                 className="w-full"
               />
-              <p className="text-2xs text-fg-muted mt-1.5">Preset name that tunes your assistant's response style. Leave blank for default.</p>
+              <p className="text-2xs text-fg-muted">Preset name that tunes your assistant's response style. Leave blank for default.</p>
+              </div>
             </section>
 
             {/* Toggles */}
@@ -211,26 +212,29 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
 
             {/* System prompt */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                System Prompt
-              </h3>
+              <SectionLabel className="mb-2">System prompt</SectionLabel>
               {/* Same FIELD surface as the input above (change 20). resize-none was
                   already the behavior here and is the Textarea default. */}
+              <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <Textarea
                 value={prefs.systemPrompt}
                 onChange={(e) => save('systemPrompt', e.target.value)}
                 placeholder="Instructions appended to every session..."
                 rows={4}
-                aria-label="System Prompt"
+                aria-label="System prompt"
                 className="w-full"
               />
-              <p className="text-2xs text-fg-muted mt-1.5">Applied globally. Leave blank to use Claude Code defaults.</p>
+              <p className="text-2xs text-fg-muted">Applied globally. Leave blank to use Claude Code defaults.</p>
+              </div>
             </section>
 
             {/* Advanced escape hatch — opens Claude Code's native TUI for any option not covered here */}
             {/* /config drives Claude Code's own terminal config UI — native sessions have no such surface, ever (program §2.5). */}
             {showAdvanced !== false && (
-            <section className="pt-3 border-t border-edge-dim">
+            // Card-levels sweep (2026-09-27): dropped the `border-t` — no full-width
+            // line inside a popup; the Dialog body's own `space-y-5` already
+            // separates this from the section above.
+            <section className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
               <Button
                 variant="secondary"
                 size="lg"
@@ -242,7 +246,7 @@ function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props
               >
                 Advanced (terminal) →
               </Button>
-              <p className="text-2xs text-fg-muted mt-1.5 text-center">
+              <p className="text-2xs text-fg-muted text-center">
                 Switches to terminal view and runs Claude Code's full <code>/config</code>
               </p>
             </section>

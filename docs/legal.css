@@ -1,0 +1,133 @@
+/* WHY: use the live site's lavender palette and rounded brand type, but not its
+   wallpaper, glass or hero scale. Long legal documents need a quiet reading page.
+   All assets are local; these pages make no font-service or analytics requests. */
+@font-face {
+  font-family: Outfit;
+  src: url('legal-assets/outfit-latin.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --canvas: #fbf5fc;
+  --fg: #21152c;
+  --fg-secondary: #695775;
+  --accent: #8042a9;
+  --edge: #e7dbea;
+  --tint: #efe3f5;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--fg);
+  background: var(--canvas);
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+  scroll-padding-top: 24px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: var(--accent); text-underline-offset: .22em; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+a:active { color: var(--fg); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.skip-link { position: fixed; top: 12px; left: 12px; z-index: 10; padding: 10px 16px; background: var(--canvas); transform: translateY(-180%); }
+.skip-link:focus { transform: none; }
+.site-nav {
+  max-width: 1060px;
+  margin: auto;
+  min-height: 96px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.logo { display: flex; align-items: center; gap: 9px; color: var(--fg); text-decoration: none; }
+.logo img { width: 36px; height: 36px; }
+.wordmark { font: 600 25px/1 Outfit, system-ui, sans-serif; letter-spacing: -.035em; }
+.wordmark span { color: #a351bd; }
+.policy-nav { display: flex; gap: 4px; }
+.policy-nav a { color: var(--fg-secondary); text-decoration: none; padding: 9px 16px; border-radius: 999px; font: 400 15px/1.6 Outfit, system-ui, sans-serif; }
+.policy-nav a:hover { background: var(--tint); color: var(--fg); }
+.policy-nav a:active { background: var(--edge); }
+.policy-nav a[aria-current='page'] { background: var(--tint); color: var(--accent); }
+/* WHY: the title and document share one column; no separate hero pushes the
+   actual policy down the page. The small index remains available while reading. */
+.document-layout { max-width: 1060px; margin: 40px auto 0; display: grid; grid-template-columns: 232px minmax(0, 680px); gap: 64px; padding: 0 24px; align-items: start; }
+.reading-column { min-width: 0; }
+.hero { padding: 0 0 30px; margin-bottom: 28px; border-bottom: 1px solid var(--edge); }
+.eyebrow { color: var(--fg-secondary); font: 400 13px/1.5 Outfit, system-ui, sans-serif; margin: 0 0 10px; }
+.hero h1 { font: 500 clamp(1.5rem, 2.5vw, 1.9rem)/1.25 Outfit, system-ui, sans-serif; letter-spacing: -.025em; margin: 0 0 12px; text-wrap: balance; }
+.policy-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px; font-size: 12px; color: var(--fg-secondary); }
+.effective-date p { margin: 0; }
+.effective-date strong { font-weight: 400; }
+.source-link { color: var(--fg-secondary); }
+.toc-desktop { position: sticky; top: 24px; }
+.toc-panel { padding: 4px 0; max-height: calc(100dvh - 48px); overflow-y: auto; scrollbar-width: thin; }
+.toc-panel h2 { margin: 0 0 14px; font: 500 14px/1.5 Outfit, system-ui, sans-serif; color: var(--fg-secondary); }
+.toc-panel ol, .toc-mobile ol { list-style: none; padding: 0; margin: 0; }
+.toc-panel li + li, .toc-mobile li + li { margin-top: 3px; }
+.toc-panel li a, .toc-mobile li a { display: block; padding: 6px 0; color: var(--fg-secondary); font-size: 12px; line-height: 1.5; text-decoration: none; }
+.toc-panel li a:hover, .toc-mobile li a:hover { color: var(--accent); text-decoration: underline; }
+.toc-home { display: inline-block; margin-top: 24px; font-size: 12px; text-decoration: none; }
+.toc-mobile { display: none; }
+.policy-content { font-size: 15px; overflow-wrap: anywhere; }
+.policy-content > :first-child { margin-top: 0; }
+.policy-content > :last-child { margin-bottom: 0; }
+.policy-content p { margin: 0 0 18px; }
+.policy-content h2 { font: 500 21px/1.4 Outfit, system-ui, sans-serif; letter-spacing: -.01em; margin: 28px 0 16px; }
+.policy-content h3 { font: 500 18px/1.5 Outfit, system-ui, sans-serif; margin: 28px 0 14px; }
+.policy-content strong { font-weight: 600; }
+.policy-content li { padding-left: 3px; margin-bottom: 12px; }
+.policy-content :is(ul, ol) { padding-left: 22px; margin: 0 0 22px; }
+.policy-content li::marker { color: var(--accent); }
+.policy-content hr { border: 0; border-top: 1px solid var(--edge); margin: 32px 0; }
+.policy-content code { font-size: .87em; font-family: ui-monospace, 'Cascadia Mono', monospace; background: var(--tint); border-radius: 4px; padding: 1px 4px; }
+.site-footer { max-width: 1012px; margin: 56px auto 28px; border-top: 1px solid var(--edge); padding: 20px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; }
+.site-footer > a { color: var(--fg-secondary); text-decoration: none; }
+@media (max-width: 900px) {
+  .document-layout { display: block; max-width: 728px; margin-top: 24px; }
+  .toc-desktop { display: none; }
+  /* WHY: one expandable card keeps the label, chevron and revealed index
+     together, without adding JavaScript or losing native keyboard behavior. */
+  .toc-mobile { display: block; margin-bottom: 24px; border: 1px solid var(--edge); border-radius: 16px; background: #f5edf8; }
+  .toc-mobile summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; cursor: pointer; list-style: none; border-radius: 15px; font: 400 14px/1.5 Outfit, system-ui, sans-serif; color: var(--accent); }
+  .toc-mobile summary::-webkit-details-marker { display: none; }
+  .toc-mobile summary:hover { background: var(--tint); }
+  .toc-mobile summary:active { background: var(--edge); }
+  .toc-chevron { flex-shrink: 0; transition: transform .18s ease; }
+  .toc-mobile[open] .toc-chevron { transform: rotate(180deg); }
+  .toc-mobile[open] summary { border-radius: 15px 15px 0 0; }
+  .toc-mobile nav { margin: 0 18px; padding: 8px 0 12px; border-top: 1px solid var(--edge); }
+  .toc-mobile li a { font-size: 14px; padding: 10px 0; }
+  .site-footer { margin-left: 24px; margin-right: 24px; }
+}
+@media (max-width: 520px) {
+  .site-nav { min-height: 80px; padding: 16px 20px; gap: 12px; }
+  .logo { gap: 6px; }
+  .logo img { width: 30px; height: 30px; }
+  .wordmark { font-size: 22px; }
+  .policy-nav a { padding: 9px 11px; font-size: 14px; }
+  .document-layout { padding: 0 24px; margin-top: 20px; }
+  .hero { padding-bottom: 22px; margin-bottom: 20px; }
+  .policy-content { font-size: 15px; }
+  .policy-content h2 { font-size: 20px; }
+  .site-footer { gap: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { scroll-behavior: auto; }
+  .toc-chevron { transition: none; }
+}
+@media print {
+  :root { background: white; color: black; font-size: 10pt; }
+  .site-nav, .toc-desktop, .toc-mobile, .site-footer, .skip-link, .eyebrow, .source-link { display: none; }
+  .hero { padding: 0 0 16px; }
+  .hero h1 { font-size: 22pt; }
+  .effective-date { color: black; }
+  .document-layout { display: block; max-width: none; padding: 0; margin: 0; }
+  .policy-content { font-size: 10pt; }
+  a { color: black; }
+  .policy-content :is(h2, h3) { break-after: avoid; }
+  .policy-content hr { border-color: #bbb; }
+  .policy-content code { background: none; }
+}

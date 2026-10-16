@@ -1,0 +1,8 @@
+/* The shared Slider (components/ui/Slider.tsx). Its real range input lies over the drawing,
+   invisible; WHY its thumb is sized to the drawn handle (20px): the browser maps a press to a
+   value across (width − thumb), and so does the drawing — with the browser's default ~16px
+   thumb a click near either end landed a few px off the handle (submit-ticket-5#ST5-5). */
+.yc-slider-input { -webkit-appearance: none; appearance: none; background: transparent; }
+.yc-slider-input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; }
+.yc-slider-input::-moz-range-thumb { width: 20px; height: 20px; border: 0; }
+.yc-slider-input::-webkit-slider-runnable-track { height: 20px; }

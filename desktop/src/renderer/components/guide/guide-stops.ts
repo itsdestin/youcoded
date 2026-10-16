@@ -1,20 +1,23 @@
 // src/renderer/components/guide/guide-stops.ts
 //
-// The tour as DATA: eight stops, each naming what the buddy says, which screen
+// The tour as DATA: nine stops, each naming what the buddy says, which screen
 // the app opens while it says it, which control gets ringed, and what "Do it
 // now" does. Reordering or dropping a stop is an edit here, never in the tour.
-// The list is Destin's (2026-09-10 deck, S-1 holds); the sentences are the
-// builder's and go to him on the review deck.
+// The list is Destin's (2026-09-10 deck, S-1 holds; the backup stop added
+// 2026-10-12, backup-warning-1#BW-1); the sentences are the builder's and go
+// to him on the review deck, except the backup stop's, which is his own.
 //
 // Order (UX tester run 1, U6): the stops walk FORWARD through the app — the
 // form, then the Projects screen twice in a row, then Settings twice in a row,
 // then Help — instead of zig-zagging back to screens already visited.
 
+import { BACKUP_WARNING } from '../backup-warning-copy';
+
 /** A screen the app opens for a stop. App.tsx maps these onto its own
  *  open/close state; the tour never touches that state directly. */
 export type GuideScreen =
   | 'welcome'              // the between-sessions screen, form closed
-  | 'welcome-form'         // the same, with the New Session form open
+  | 'welcome-form'         // the same, with the New session form open
   | 'projects'             // the Projects screen
   | 'settings:cloud'       // Settings → Assistant settings → Cloud providers
   | 'settings:appearance'  // Settings → Appearance
@@ -61,8 +64,8 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     id: 'tags',
     // The anchor is the status bar's tags chip (Destin, 2026-09-11: the drawer's
     // button belongs to previews and the old sentence was "not entirely correct").
-    text: 'Down here you can give a session tags, or leave yourself a note about it. Both show under All Sessions, so a conversation from last month is easy to find.',
-    textWhenMissing: 'Once a session is open, a tags button sits in the bar at the bottom. Tags and a note to yourself both show under All Sessions, so old conversations are easy to find.',
+    text: 'Down here you can give a session tags, or leave yourself a note about it. Both show under All sessions, so a conversation from last month is easy to find.',
+    textWhenMissing: 'Once a session is open, a tags button sits in the bar at the bottom. Tags and a note to yourself both show under All sessions, so old conversations are easy to find.',
     screen: 'welcome-form',
     anchor: 'tags-notes',
     // The one stop with a "Do it now" (deck Q-3): opens the tags popup.
@@ -85,6 +88,19 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     pose: 'inquisitive',
   },
   {
+    // The backup warning that used to end setup's sign-in step (moved off it
+    // 2026-10-04, first-run-4#P4-2). Destin picked the tour as its home
+    // (backup-warning-1#BW-1, #BW-2) right after Files — the stop that has
+    // just shown where the assistant's files land — in his own words (#BW-5).
+    // The ring stays on the Files tab. The same words sit at the top of
+    // Settings → Permissions' modes card (backup-warning-copy.ts).
+    id: 'backups',
+    text: BACKUP_WARNING,
+    screen: 'projects',
+    anchor: ['files-tab', 'projects-empty'],
+    pose: 'inquisitive',
+  },
+  {
     id: 'models',
     text: 'The account you signed in with is what answers you, and it is already set up. If you ever want a different AI service, or one that runs free on your own computer, you add it here.',
     screen: 'settings:cloud',
@@ -93,7 +109,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'themes',
-    text: 'Make it yours: pick a theme here. Browse Marketplace, just below, has more themes and plugins made by other people.',
+    text: 'Make it yours: pick a theme here. Browse marketplace, just below, has more themes and plugins made by other people.',
     screen: 'settings:appearance',
     anchor: 'theme-grid',
     pose: 'inquisitive',
@@ -106,3 +122,4 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     pose: 'welcome',
   },
 ];
+

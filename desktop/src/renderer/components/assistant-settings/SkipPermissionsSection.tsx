@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Button, Checkbox, Dialog, SettingRow, Toggle } from '../ui';
+import { Button, ConsentRow, Dialog, OneJobCard, OneJobText, SettingRow, Toggle, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
 
-// Claude Code's one permission setting: the Skip Permissions switch. It lived
+// Claude Code's one permission setting: the Skip permissions switch. It lived
 // in SettingsPanel.tsx's Session Defaults popup; it is now the first block of
 // Assistant settings → Permissions (review round 1, 2026-09-05, P-5 note:
 // "the permissions stuff from claude can move to permissions").
@@ -46,7 +46,7 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
     <section>
       <SettingRow
         variant="item"
-        title="Enable Skip Permissions Mode?"
+        title="Enable skip permissions mode?"
         description="Allows you to toggle claude code's --dangerously-skip-permissions flag when creating a session. Claude won't ask before taking action"
         control={
           <Toggle
@@ -56,34 +56,22 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
               setConfirming(true);
             }}
             tone="danger"
-            aria-label="Enable Skip Permissions Mode?"
+            aria-label="Enable skip permissions mode?"
           />
         }
       />
 
       {/* layer 3 + destructive: this is the app's shape for a confirmation
           that must not be lost behind the thing it is confirming. */}
-      <Dialog open={confirming} onClose={close} title="Skip Permissions Mode" size="prompt" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
-        <div className="space-y-3 text-xs text-fg leading-relaxed">
-          {/* Destin's copy (round 4, R4-3) — the three measured paragraphs it
-              replaced read as a wall of grey. */}
-          <p>
-            When you begin a session in skip permissions mode, Claude Code will not ask before taking
-            actions or running commands. You should be cautious when attempting to use this mode with
-            Haiku- or Sonnet-class models.
-          </p>
-          <div className="flex items-start gap-2 pt-1">
-            <span className="mt-0.5">
-              <Checkbox
-                checked={accepted}
-                onChange={setAccepted}
-                aria-label="I understand, and I use Skip Permissions at my own risk."
-              />
-            </span>
-            <span className="text-fg">I understand, and I use Skip Permissions at my own risk.</span>
-          </div>
-          <div className="flex gap-2 justify-end pt-1">
-            <Button variant="secondary" onClick={close}>Cancel</Button>
+      <Dialog open={confirming} onClose={close} title="Skip permissions mode" size="panel" layer={3} destructive screen="settings/assistant/permissions/skip-confirm">
+        {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-2): the same width,
+            words, tick box and stacked buttons as the chat's first-time warnings — it was 340px
+            with 12px main-colour words while they were 420px with grey ones. Destin's copy (round
+            4, R4-3). The tick box is the shared ConsentRow (decisions.md "Consent tick box"); the
+            red "Turn it on" is the main action, so it goes on top (guide "Destructive confirm"),
+            with the "tick the box" hover hint while it is grey (final-fixes#ST-12). */}
+        <OneJobCard actions={<>
+          <Tooltip text={accepted ? '' : 'Tick the box to continue'}>
             <Button
               variant="danger"
               disabled={!accepted}
@@ -91,8 +79,20 @@ export default function SkipPermissionsSection({ defaults, onDefaultsChange }: {
             >
               Turn it on
             </Button>
-          </div>
-        </div>
+          </Tooltip>
+          <Button variant="secondary" onClick={close}>Cancel</Button>
+        </>}>
+          <OneJobText>
+            <p>
+              When you begin a session in skip permissions mode, Claude Code will not ask before taking
+              actions or running commands. You should be cautious when attempting to use this mode with
+              Haiku- or Sonnet-class models.
+            </p>
+          </OneJobText>
+          <ConsentRow checked={accepted} onChange={setAccepted}>
+            I understand, and I use Skip permissions at my own risk.
+          </ConsentRow>
+        </OneJobCard>
       </Dialog>
     </section>
   );

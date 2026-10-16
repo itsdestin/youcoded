@@ -1,0 +1,14 @@
+/* Design-guide review (2026-09-24): HEADING LADDER Y — no capitals.
+   Same three levels as ladder X (ui-element-review-headers#H-3), but the
+   small level drops the spaced-out capitals for a quiet sentence-case label:
+   12px medium grey. Level 1: 18px medium.
+   Workbench-only: ?proposal=headings-plain. */
+@layer proposal {
+.uppercase:is(.tracking-wider, .tracking-wide, [class*="tracking-"]):not([class*="rounded"], [class*="bg-"], [class*="border"]) {
+  text-transform: none !important;
+  font-size: 12px !important; line-height: 16px !important;
+  font-weight: 500 !important; letter-spacing: 0 !important;
+  color: var(--fg-muted) !important;
+}
+:is(h2, h3).text-lg { font-size: 18px !important; font-weight: 500 !important; }
+}

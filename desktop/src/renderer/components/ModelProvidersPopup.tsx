@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel, OneJobText, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -27,8 +27,11 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
   return (
     <div className="flex items-center gap-1.5 mb-2.5">
       {/* K1: was the app's only text-sm/font-semibold section header, which read
-          as a second dialog title rather than a section label. */}
-      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{title}</h3>
+          as a second dialog title rather than a section label.
+          WHY SectionLabel (fix batch 1, 2026-09-24): design guide "Headings" →
+          Small label — normal case, no letter-spacing, replacing the old
+          hand-typed uppercase/tracking-wider eyebrow. */}
+      <SectionLabel>{title}</SectionLabel>
       <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>
     </div>
   );
@@ -39,7 +42,7 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
-function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
+function ProviderRow({ title, info, status, detail, notice, action, account, children, screen }: {
   title: string;
   /** The `shoot` name of this card (photo-only build): marks it so a picture of the
    *  page scrolls to this card instead of whatever sits at the top. */
@@ -47,19 +50,27 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
   /** The (i) explainer, beside the name INSIDE the card (round 3, P-1): the
    *  eyebrow heading above the card repeated the name, so it is gone. */
   info?: { label: string; body: React.ReactNode };
-  status: React.ReactNode;
+  status?: React.ReactNode;
+  /** WHY (status pills round, 2026-09-29; ui-status-pills#PL-1/PL-2): a card that
+   *  needs attention says so in ONE notice box across its foot — the words and
+   *  the buttons that fix it together, buttons inside at the right — instead of
+   *  a status word up top, an error line below and the fix buttons somewhere
+   *  else. The card's own top-right buttons step aside while it shows. */
+  notice?: { tone: 'warning' | 'danger'; text: React.ReactNode; actions?: React.ReactNode } | null;
   /** A second line under the status: OpenAI's refusal reason, a hint. Tone
    *  'bad' is the destructive colour for a reason the user must read. */
   detail?: { text: React.ReactNode; tone?: 'muted' | 'bad' } | null;
   action?: React.ReactNode;
-  /** Round 2 (R2-3): a "My Account" button, top right, that opens the
+  /** Round 2 (R2-3): a "My account" button, top right, that opens the
    *  provider's own account page in the browser. Only passed when signed in —
    *  an account page is no use to someone who has no account here yet. */
   account?: string;
   children?: React.ReactNode;
 }) {
   return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): LEVEL-1 — the Claude Code / ChatGPT /
+    // OpenRouter cards on the Cloud providers page.
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       {screen && <ScreenMark name={screen} />}
       {/* items-start: the button sits on the title line, top-right, not
           centred against however many lines the status grows to (P-1/P-2). */}
@@ -69,17 +80,17 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
             {title}
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
           </p>
-          <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>
+          {status && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
         </div>
-        {(account || action) && (
+        {(account || (action && !notice?.actions)) && (
           <div className="shrink-0 flex items-center gap-1.5">
             {account && (
               <Button variant="secondary" size="sm"
                 onClick={() => void (window as any).claude.shell.openExternal(account)}>
-                My Account
+                My account
               </Button>
             )}
-            {action}
+            {!notice?.actions && action}
           </div>
         )}
       </div>
@@ -87,8 +98,17 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
           column beside them. WHY: two buttons on the right squeezed a refused
           key's one-sentence warning into three short lines (review
           2026-09-18, R2-2: "could fit on a single line"). */}
+      {/* WHY plain/FieldError, not text-destructive-fg (guide: no coloured
+          body text for messages) */}
       {detail && (
-        <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
+        detail.tone === 'bad'
+          ? <FieldError as="p" size="2xs" className="mt-0.5">{detail.text}</FieldError>
+          : <p className="text-2xs mt-0.5 text-fg-muted">{detail.text}</p>
+      )}
+      {notice && (
+        <div className="mt-2">
+          <Callout tone={notice.tone} actions={notice.actions} compact>{notice.text}</Callout>
+        </div>
       )}
       {children && <div className="mt-2.5">{children}</div>}
     </div>
@@ -439,7 +459,14 @@ export function ChatGptBlock() {
           ),
         }}
         status={line}
-        detail={note ? { text: note, tone: 'bad' } : detail}
+        // Blocked: OpenAI's reason and the one thing to do (Sign out) in one
+        // danger box, like the OpenRouter card's broken key (ui-status-pills#PL-2).
+        detail={note ? { text: note, tone: 'bad' } : status?.state === 'blocked' ? null : detail}
+        // No button inside: nothing in the app can lift a block, and a Sign out
+        // inside made the box twice as tall as its one sentence
+        // (provider-notices#PN-4: "much taller than it needs to be") — it stays
+        // with the card's other buttons at the top.
+        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason } : null}
         // Review R-1 (Destin, 2026-10-06): the official card keeps My Account
         // like today; Manage usage lives only on the limit message.
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
@@ -469,45 +496,49 @@ function shortDate(iso: string | undefined): string | null {
  *  and a refused key says why and what to do — in the destructive tone, since
  *  nothing OpenRouter-backed works until it is fixed. */
 function openRouterKeyWords(health: ProviderHealth | undefined, canSignIn = false): {
-  status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
+  status: string | null; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean; unchecked?: boolean;
 } {
   if (!health) return { status: 'Checking…', detail: null, broken: false };
-  if (health.verdict === 'verified') return { status: 'Connected', detail: null, broken: false };
+  // No status for a key that works (PL-2: "no online status").
+  if (health.verdict === 'verified') return { status: null, detail: null, broken: false };
   if (health.verdict === 'unchecked') {
     return {
       status: 'Key saved — not checked yet',
-      detail: { text: "OpenRouter couldn't be reached to check it. The app tries again on its own, or press Test." },
+      // Short enough to sit on one line beside its buttons (provider-notices-2#PN2-1).
+      detail: { text: 'Key saved, not checked yet.' },
       broken: false,
+      unchecked: true,
     };
   }
-  // The fix sentence names the card's own main button: "Sign in again" where
-  // sign-in works, "Replace key" where it doesn't (remote access).
-  const fix = canSignIn ? 'Sign in again, or paste a new API key.' : null;
+  // No fix sentence any more (provider-notices-2#PN2-2): the buttons inside
+  // the notice are the fix — Sign in / API Key, or Replace key over remote.
+  void canSignIn;
   switch (health.reason) {
     case 'openrouter-key-expired': {
       const day = shortDate(health.expiresAt);
       return {
         status: 'Key expired',
-        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. ${fix ?? 'Create a new key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        // One short line (PN2-2): the buttons beside it say what to do next.
+        detail: { text: `This key expired${day ? ` on ${day}` : ''}.`, tone: 'bad' },
         broken: true,
       };
     }
     case 'openrouter-wrong-key-type':
       return {
         status: 'Wrong kind of key',
-        detail: { text: `This is an account-management key, which can't run models. ${fix ?? 'Create a regular API key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        detail: { text: "This kind of key can't run models.", tone: 'bad' },
         broken: true,
       };
     case 'openrouter-forbidden':
       return {
         status: 'Key refused',
-        detail: { text: `OpenRouter refused this key. ${fix ?? 'Check it on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        detail: { text: 'OpenRouter refused this key.', tone: 'bad' },
         broken: true,
       };
     default:
       return {
         status: 'Key not accepted',
-        detail: { text: `OpenRouter didn't accept this key. ${fix ?? 'Replace it to keep using OpenRouter models.'}`, tone: 'bad' },
+        detail: { text: "OpenRouter didn't accept this key.", tone: 'bad' },
         broken: true,
       };
   }
@@ -592,6 +623,11 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
     }
     await readSignIn();
   };
+  // "Try again" on an unchecked key: the same check opening the page runs.
+  const retest = async () => {
+    try { if (openrouter?.id) await window.claude.providers.test(openrouter.id); } catch { /* the verdict below says what happened */ }
+    await refresh();
+  };
   const cancelSignIn = async () => {
     try { await openRouterSignInApi()!.cancelSignIn(); } catch { /* the poll shows the truth */ }
     await readSignIn();
@@ -637,13 +673,35 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
               <BrailleSpinner size="sm" />
               Waiting for the browser…
             </span>
-          ) : openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
-          // My Account only for a key that works: with a refused key there is
+          ) : openrouter === undefined ? 'Checking…'
+            // A key with a problem says so in the notice below, not twice (PL-1).
+            : connected ? (words.broken || words.unchecked ? null : words.status) : 'Not connected'}
+          // My account only for a key that works: with a refused key there is
           // no account connection to visit (review SI-4).
           account={connected && !waiting && !words.broken ? OPENROUTER_CREDITS_URL : undefined}
           detail={waiting ? null
             : signIn.state === 'failed' && signIn.message ? { text: signIn.message, tone: 'bad' }
-            : connected ? words.detail : null}
+            : null}
+          // WHY one notice with its fix inside (ui-status-pills#PL-1/PL-2): a broken
+          // key is the danger box holding the way back in; an unchecked key the
+          // warning box holding Replace key and Try again (the filled one).
+          notice={waiting || !connected || !(words.broken || words.unchecked) || !words.detail ? null : {
+            tone: words.broken ? 'danger' : 'warning',
+            text: words.detail.text,
+            actions: words.broken ? (signInSupported ? (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+                <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
+            )) : (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
+                <Button size="sm" onClick={() => void retest()}>Try again</Button>
+              </>
+            ),
+          }}
           action={waiting ? (
             <Button variant="secondary" size="sm" onClick={() => void cancelSignIn()}>
               Cancel
@@ -679,7 +737,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
           `keysHeading`: the Assistant settings page names the list, because
           there the OpenRouter card is the only thing above it. */}
       {keysHeading && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-4 mb-2">{keysHeading}</h3>
+        <SectionLabel className="mt-4 mb-2">{keysHeading}</SectionLabel>
       )}
       <ProvidersSection embedded="cloud" />
 
@@ -749,59 +807,62 @@ function ConnectOpenRouterModal({
         open
         onClose={onClose}
         layer={3}
-        size="prompt"
+        size="panel"
         title={hasKey ? 'Replace OpenRouter key' : 'Connect OpenRouter'}
         scrollBody={false}
         screen="settings/assistant/cloud/openrouter/key"
       >
         <div className="p-4 space-y-3">
-          <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">
-            <li>
-              Create a free account at{' '}
-              <button
-                onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
-                className="text-accent hover:underline"
-              >
-                openrouter.ai
-              </button>
-              .
-            </li>
-            <li>Add a little credit and create an API key.</li>
-            <li>Paste the key below and press Connect.</li>
-          </ol>
-
-          {/* Change 20 only. NOT an InputGroup: Connect/Cancel sit in the modal
-              footer BELOW the field, which is explicitly the shape change 77 does
-              not convert. */}
-          <TextInput
-            type="password"
-            autoFocus
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
-            placeholder="Paste your OpenRouter API key"
-            aria-label="OpenRouter API key"
-            className="w-full"
-          />
-
-          {note && (
-            <p className={`text-3xs ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>{note.text}</p>
-          )}
-
-          <div className="flex gap-2 pt-1">
-            {/* Popup footer pair — md is the footer size; only the flex-1 stretch
-                and the taller py-2 are genuine layout extras. */}
-            <Button variant="secondary" onClick={onClose} className="flex-1 py-2">
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void save()}
-              disabled={busy || keyDraft.trim().length === 0}
-              className="flex-1 py-2"
-            >
+          {/* WHY the shared one-job card (popup-cards-1#PC-1, popup-cards-2#A-1): the same width,
+              12px words, named field and stacked buttons (Connect on top) as Rename session and
+              Pick a handle — Destin: the three "basically have the same job/size" and should look
+              it. Was 11px steps and a nameless box at 340px. Connect/Cancel stack because the
+              popup is narrow (guide "Buttons"), which is also why this is not an InputGroup. */}
+          <OneJobCard actions={<>
+            <Button onClick={() => void save()} disabled={busy || keyDraft.trim().length === 0}>
               {busy ? 'Connecting…' : 'Connect'}
             </Button>
-          </div>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          </>}>
+            <div>
+              <OneJobLabel htmlFor="openrouter-key">API key</OneJobLabel>
+              <TextInput
+                id="openrouter-key"
+                type="password"
+                autoFocus
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
+                placeholder="Paste your OpenRouter API key"
+                className="w-full"
+              />
+              {/* WHY plain/FieldError, not green/red text (guide: no coloured
+                  body text for messages) */}
+              {note && (
+                note.tone === 'ok'
+                  ? <OneJobHint>{note.text}</OneJobHint>
+                  : <FieldError as="p" className="mt-1.5">{note.text}</FieldError>
+              )}
+            </div>
+            {/* WHY the steps under the box (popup-cards-3#B-1, Destin: "the grey subtext should be below
+                the text box in each for consistency"); step 3 says "above" to match. */}
+            <OneJobText under>
+              <ol className="space-y-1 list-decimal pl-4">
+                <li>
+                  Create a free account at{' '}
+                  <button
+                    onClick={() => void window.claude.shell.openExternal('https://openrouter.ai')}
+                    className="text-accent hover:underline"
+                  >
+                    openrouter.ai
+                  </button>
+                  .
+                </li>
+                <li>Add a little credit and create an API key.</li>
+                <li>Paste the key above and press Connect.</li>
+              </ol>
+            </OneJobText>
+          </OneJobCard>
         </div>
       </Dialog>
     </>,
@@ -832,7 +893,7 @@ export const LOCAL_MODELS_INFO = {
 export function LocalModelsBlock({ withHeader = true }: { withHeader?: boolean } = {}) {
   return (
     <section>
-      {withHeader && <SectionHeader title="Local Models" info={LOCAL_MODELS_INFO} />}
+      {withHeader && <SectionHeader title="Local models" info={LOCAL_MODELS_INFO} />}
 
       {/* Embedded: no standalone header (this section supplies it). */}
       <LocalModelsSection embedded />
@@ -949,13 +1010,13 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
   // inside it and the two backend rows one surface deeper. Everywhere else the
   // block keeps the bare-section shape the Model Providers popup gave it.
   return (
-    <section className={card ? 'bg-inset/50 rounded-lg px-3 py-2.5' : undefined}>
+    <section className={card ? `${CARD_LEVEL_1} px-3 py-2.5` : undefined}>
       {card ? (
         <div className="flex items-center gap-1.5">
           <p className="text-xs text-fg font-medium">Web search</p>
           <AnchorTip label={WEB_SEARCH_INFO.label} title="Web search">{WEB_SEARCH_INFO.body}</AnchorTip>
         </div>
-      ) : withHeader && <SectionHeader title="Web Search" info={WEB_SEARCH_INFO} />}
+      ) : withHeader && <SectionHeader title="Web search" info={WEB_SEARCH_INFO} />}
 
       <p className={`text-3xs text-fg-muted leading-relaxed ${card ? 'mb-1.5' : 'mb-2.5'}`}>
         Web search works for free with no setup. Add an optional key to make it faster and more reliable.
@@ -967,7 +1028,7 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
           const isEditing = editing === row.id;
           const note = testMsg[row.id];
           return (
-            <div key={row.id} className={card ? 'bg-well rounded-md px-2.5 py-2' : 'bg-inset/50 rounded-lg px-3 py-2.5'}>
+            <div key={row.id} className={card ? `${CARD_LEVEL_2} px-2.5 py-2` : `${CARD_LEVEL_1} px-3 py-2.5`}>
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-fg font-medium">{row.label}</p>
@@ -975,7 +1036,8 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
                 </div>
                 {row.hasKey ? (
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-3xs font-medium text-green-400">Key saved</span>
+                    {/* WHY plain text (guide: success lines lose their colour) */}
+                    <span className="text-3xs font-medium text-fg-muted">Key saved</span>
                     {/* danger-outline per spec change 68: "Remove" reads the same
                         everywhere. This one was the neutral half of the
                         ProvidersSection(red)-vs-here(neutral) contradiction; it
@@ -1027,10 +1089,12 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
                 </div>
               )}
 
+              {/* WHY FieldError, not text-red-500 (guide: no coloured body
+                  text for messages) */}
               {note && (
-                <p className={`text-3xs mt-2 ${note.ok ? 'text-fg-muted' : 'text-red-500'}`}>
-                  {note.text}
-                </p>
+                note.ok
+                  ? <p className="text-3xs mt-2 text-fg-muted">{note.text}</p>
+                  : <FieldError as="p" className="mt-2">{note.text}</FieldError>
               )}
             </div>
           );

@@ -25,7 +25,11 @@ const DIFF_PREVIEW_LINES = 15;
 
 // Shared base for the row box's collapsed/expanded class strings (review round
 // 1, 2026-09-18) — the two variants only ever differed by the scroll cap.
-const DIFF_BOX_BASE = 'text-xs font-mono rounded-sm border border-edge';
+const DIFF_BOX_BASE = 'text-xs font-mono';
+// WHY the border lives on its own frame (2026-10-15, the one scroll fade): the expanded
+// box fades its rows at a scrolled edge, and the fade is a mask — on a bordered box it
+// would fade the border too. The frame keeps the border whole; only the rows fade.
+const DIFF_FRAME = 'rounded-sm border border-edge overflow-hidden';
 
 // WHY 200 and not the lists' 50 (REVEAL_CHUNK): a diff line is 3–4 DOM nodes
 // where a list card is 15–25, so 200 lines cost about what 50 cards do — and a
@@ -176,13 +180,14 @@ export function UnifiedDiff({
 
   return (
     <>
+      <div className={DIFF_FRAME}>
       <div
         ref={boxRef}
         // WHY one base string: collapsed/fill draw exactly what fits (a 15-row
         // slice, or a host-driven reveal) so there is nothing to scroll inside
         // THIS box — only the expanded scroller needs `overflow-auto` + the cap
         // (review round 1, 2026-09-18).
-        className={expanded ? `${DIFF_BOX_BASE} overflow-auto scroll-box-cap` : DIFF_BOX_BASE}
+        className={expanded ? `${DIFF_BOX_BASE} scroll-mask-y overflow-auto scroll-box-cap` : DIFF_BOX_BASE}
       >
         {drawn.map((row, idx) => {
           const showSeparator = hunkBoundaries.has(idx);
@@ -194,12 +199,13 @@ export function UnifiedDiff({
                 ? 'bg-green-400/10 border-l-[3px] border-green-400'
                 : 'border-l-[3px] border-transparent';
           const glyph = row.kind === 'del' ? '−' : row.kind === 'add' ? '+' : ' ';
-          const glyphClass =
-            row.kind === 'del'
-              ? 'text-red-400 font-bold'
-              : row.kind === 'add'
-                ? 'text-green-400 font-bold'
-                : 'text-fg-muted';
+          // WHY the − / + in the text colour (known deviations fixed by existing rules,
+          // 2026-10-13): principle 2 and the status-colour sweep (small-fixes-3#SF3-10) keep
+          // status hues out of text — words in the normal colour, the colour in a tint or a
+          // bar. The row's red / green tint and left bar already say removed / added; the
+          // glyphs were red and green text on top of them. The same rows draw the Edit tool
+          // card's diff, so its marks change too (colour only).
+          const glyphClass = row.kind === 'ctx' ? 'text-fg-muted' : 'text-fg-2 font-bold';
           const textClass = row.kind === 'ctx' ? 'text-fg-dim' : 'text-fg';
           return (
             <React.Fragment key={idx}>
@@ -223,10 +229,15 @@ export function UnifiedDiff({
         })}
         {showSentinel && <div ref={reveal.sentinelRef} data-reveal-sentinel className="h-px" aria-hidden />}
       </div>
+      </div>
       {overflow && (
         <button
           onClick={() => setOpen(o => !o)}
-          className="mt-1 text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2"
+          // WHY: drop the spaced-caps eyebrow (labels batch, guide: no spaced
+          // capitals). Not exempt as a "file viewer" — this is a generic
+          // expand toggle shared across git review and the session-context
+          // popup, not the dedicated file-content viewer.
+          className="mt-1 text-xs text-fg-muted hover:text-fg-2"
         >
           {/* Wording matches CollapsibleBlock (ToolBody.tsx) so every long box in a card reads the same. */}
           {open ? 'Show less' : `Show ${total - DIFF_PREVIEW_LINES} more lines`}

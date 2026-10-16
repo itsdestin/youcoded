@@ -1,24 +1,19 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
-import { mergeFriends, statusLabel } from './friends-data';
-import { Badge, Button, InputGroup } from '../ui';
-import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
-import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
+import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, LoadingState, SectionLabel, SettingRow } from '../ui';
+import type { HeadToHead } from '../../state/marketplace-api-client';
+import { recordSentence, recordsByOpponent } from './head-to-head';
+import { useFriends, type ApiResult } from './useFriends';
+import { NameWithPill, PresencePill } from './FriendsPanel';
 // WHY (Office fix round 5): the reload button reloads the window, so open Office documents save first.
 import { reloadAfterOfficeSave } from '../office/office-store';
 // Task 7c, workbench-only auto-play — see the effect below and
 // dev/workbench/fake-party.ts. isWorkbenchAutoplay() is false in every
 // shipped build (it checks for a global only install-mock.ts ever sets).
 import { isWorkbenchAutoplay, JAKE_ID } from '../../dev/workbench/fake-party';
-
-// Local mirror of the renderer/main ApiResult shape (useIpc.ts declares it but
-// doesn't export it — keeping a copy avoids importing across that boundary).
-type ApiResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; status: number; message: string };
 
 interface Props {
   connection: GameConnection;
@@ -28,6 +23,9 @@ interface Props {
    *  the game the user opened; before the split every challenge was hardcoded
    *  to Connect 4 (§3.1 item 3). */
   gameId: string;
+  /** "Add a friend" from an empty lobby: back to the Games list, where adding
+   *  friends lives now (backlog row 11). */
+  onAddFriend?: () => void;
 }
 
 // Classify the lobby error so the hint matches the actual cause.
@@ -46,7 +44,7 @@ function classifyPartyError(msg: string | null): { hint: string } {
     return { hint: 'The game server is taking a breather. This usually fixes itself in a minute.' };
   }
   if (text.includes('code 1006') || text.includes('code 1015') || text.includes('lost the connection') || text.includes('lost connection')) {
-    return { hint: "Looks like the internet hiccuped. We'll keep trying — you can also hit Retry." };
+    return { hint: "Looks like the internet hiccuped. We'll keep trying — you can also hit Try again." };
   }
   if (text.includes('code 4000')) {
     return { hint: 'Something got mixed up signing in. Try reloading the app.' };
@@ -54,10 +52,24 @@ function classifyPartyError(msg: string | null): { hint: string } {
   return { hint: "Hang tight — we'll keep trying in the background." };
 }
 
+/** Splits the reducer's "Lost the connection (code 1006: reason) — trying again…" into the
+ *  plain words a person reads and the machine detail ("code 1006: reason").
+ *  WHY (guide "Game boards" known deviation; decisions "Failed install on a detail page" — the
+ *  approved Contribute failure shape, submit-ticket-5#ST5-9): a raw connection code never sits in
+ *  the sentence; it moves one click away under a Details fold, never dropped. The reducer keeps the
+ *  code in its string so classifyPartyError() above can still pick its hint. */
+function splitPartyError(msg: string | null): { words: string; detail: string | null } {
+  const text = msg ?? '';
+  const m = text.match(/\s*\((code [^)]*)\)/);
+  if (!m) return { words: text, detail: null };
+  return { words: text.replace(m[0], ''), detail: m[1] };
+}
+
 function ErrorScreen({ connection }: { connection: GameConnection }) {
   const state = useGameState();
   const dispatch = useGameDispatch();
   const { hint } = classifyPartyError(state.partyError);
+  const { words, detail } = splitPartyError(state.partyError);
   // Track retries so we can offer a harder reload after repeated failures —
   // partysocket reconnect can fail forever if e.g. the host name is bad or the
   // user is rate-limited. After 2 manual retries we surface "Reload app" too.
@@ -73,359 +85,79 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
     setTimeout(() => setRetrying(false), 4000);
   };
 
+  // WHY ErrorState, not the big red "!" disc over a red line (error-notices-1,
+  // 2026-10-12): that screen was the old "errors are a mark, not a box" rule. The
+  // guide now makes every error the one notice box, buttons inside at the right, and
+  // a problem takes the place of what it is about — here the whole game pane. The
+  // words are the same two (the connection's own error, then the hint); Retry is the
+  // filled button, last; "Reload app" still appears only after two retries.
+  const more = [
+    ...(retryCount >= 2 ? [{ label: 'Reload app', onClick: () => reloadAfterOfficeSave() }] : []),
+    { label: 'Dismiss', onClick: () => dispatch({ type: 'CLEAR_CHALLENGE' }) },
+  ];
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-8">
-      {/* G-2 (§5.5): was `bg-red-900/30`, a raw Tailwind colour identical in
-          every theme. `--destructive` is the token for exactly this, and it is
-          derived per theme so the disc stays legible on light packs too.
-          Design rule 6 also says errors are not red BOXES — this is a mark, and
-          it stays a mark. */}
-      <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
-        <span className="text-2xl text-destructive-fg" aria-hidden="true">!</span>
-      </div>
-      <p className="text-sm text-destructive-fg text-center">{state.partyError}</p>
-      <p className="text-xs text-fg-muted text-center max-w-xs">{hint}</p>
-      <div className="flex gap-2 mt-1 items-center">
-        <button
-          onClick={handleRetry}
-          disabled={retrying}
-          className="text-xs text-link hover:text-link-hover transition-colors disabled:opacity-50"
-        >
-          {retrying ? 'Retrying…' : 'Retry'}
-        </button>
-        {retryCount >= 2 && (
-          <button
-            onClick={() => reloadAfterOfficeSave()}
-            // G-2: `amber` is not in the app's token set, and this is not a
-            // status indicator (the one documented exception) — it is a
-            // secondary action inside an error screen, so it uses the same
-            // quiet foreground every other secondary action here does.
-            className="text-xs text-fg-2 hover:text-fg transition-colors"
-            title="Hard reload the renderer — drops all in-memory state"
-          >
-            Reload app
-          </button>
-        )}
-        <button
-          onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}
-          className="text-xs text-fg-muted hover:text-fg-2 transition-colors"
-        >
-          Dismiss
-        </button>
-      </div>
+    <div className="flex-1 flex flex-col justify-center px-4 py-8 space-y-2">
+      <ErrorState
+        message={<>{words} {hint}</>}
+        moreActions={more}
+        busy={retrying}
+        onRetry={handleRetry}
+        // The machine detail under Details, inside the box (popup-cards-8#Q-1: Details sits inside the error box, everywhere).
+        details={detail ?? undefined}
+      />
     </div>
   );
 }
 
-// Per-friend "…" row menu. Manages its own open + block-confirm state and
-// closes on outside click (anchored popover pattern from MarketplaceAuthChip —
-// no Scrim because it's anchored, not centered). Block is consequence-gated:
-// the menu item swaps the popover to a plain-language confirm BEFORE acting
-// (Destin's standing rule for destructive/hard-to-reverse actions).
-function FriendRowMenu({ onUnfriend, onBlock, pending }: { onUnfriend: () => void; onBlock: () => void; pending?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [confirmingBlock, setConfirmingBlock] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setConfirmingBlock(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
-
-  const close = () => { setOpen(false); setConfirmingBlock(false); };
-
-  return (
-    <div ref={wrapRef} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        title="More"
-        aria-label="Friend options"
-        // Touch target: p-1.5 gives the ⋯ a ≥32px square hit box — this panel
-        // ships to a 320px Android WebView, so bare 10px text (~14px box) is
-        // untappable. Keep the padding even if the visual density changes.
-        className="text-fg-muted hover:text-fg-2 p-1.5 transition-colors"
-      >
-        ⋯
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="layer-surface absolute right-0 top-full mt-1 min-w-[220px] rounded-md p-1.5 text-xs shadow-md"
-          // z-index 62 = one above L2 popup content (61), same as the
-          // MarketplaceAuthChip popover — clears any L1 drawer overlap.
-          style={{ zIndex: 62 }}
-        >
-          {confirmingBlock ? (
-            <div className="flex flex-col gap-2 p-1">
-              <p className="text-fg-2 leading-snug">
-                Blocking removes this friend, cancels pending requests, and hides you
-                from each other. You can unblock later in Settings → Account.
-              </p>
-              <div className="flex gap-2">
-                {/* The raw `bg-red-600`/`text-white` was a stock Tailwind red that didn't
-                    match the app's own destructive colour and ignored themes. The shared
-                    `danger` variant uses the theme's destructive token and derives a
-                    readable label colour per theme.
-                    The `md` size already supplies py-1.5, which keeps these ≥32px tall
-                    for touch (see the ⋯ trigger note). */}
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="md"
-                  onClick={() => { onBlock(); close(); }}
-                  disabled={pending}
-                  className="flex-1"
-                >
-                  Block
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  onClick={() => setConfirmingBlock(false)}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* py-1.5 keeps menu items ≥32px tall for touch (see the ⋯ trigger note). */}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { onUnfriend(); close(); }}
-                disabled={pending}
-                className="w-full text-left px-2 py-1.5 rounded text-fg-2 hover:text-fg hover:bg-inset disabled:opacity-40 transition-colors"
-              >
-                Unfriend
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => setConfirmingBlock(true)}
-                className="w-full text-left px-2 py-1.5 rounded text-destructive-fg hover:bg-inset transition-colors"
-              >
-                Block
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// The lobby is the friends list now (spec §6): add-by-handle, incoming/outgoing
-// requests, and challenge buttons gated to online friends. Presence relays only
-// ONLINE FRIENDS, so onlineUsers is merged onto the server friends list to light
-// up "Online" / "In game" and the Challenge button.
-function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Props) {
+// The lobby (redesign backlog row 11). Destin: "this game panel should just show
+// scores for each person and such with challenge. no add friend in game panels."
+// Everything social — your own presence, add a friend, requests, unfriend/block —
+// moved to the friends panel at the top of the Games list (FriendsPanel.tsx). What
+// stays is what you came to a game for: an incoming challenge, and each friend with
+// their live state, your record against them AT THIS GAME, and Challenge.
+function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFriend }: Props) {
   const state = useGameState();
   const dispatch = useGameDispatch();
-  // Review fix: self-exclusion keys on the ACCOUNT ID (ids-not-names principle) —
-  // display names aren't unique, so tag-comparison would miss a friend who
-  // shares your name and fire spurious refreshes on null display_name edges.
-  const { user } = useAccount();
-  const myId = user?.id ?? null;
-
-  const [friends, setFriends] = useState<FriendRow[] | null>(null);
-  const [requests, setRequests] = useState<RequestsPayload | null>(null);
+  const f = useFriends();
   /** Head-to-head records for THIS game, keyed by opponent (§6.2). Empty until
    *  the fetch lands, and empty forever if it fails — a row simply shows no
-   *  number, which is the honest state. A record is a fact about another
-   *  person, so it is better absent than approximate. */
+   *  number, which is the honest state. */
   const [records, setRecords] = useState<Map<string, HeadToHead>>(new Map());
-  const [addHandle, setAddHandle] = useState('');
-  // Add-friend inline feedback: plain sentence + tone (ok=green, else red).
-  const [addFeedback, setAddFeedback] = useState<{ text: string; ok: boolean } | null>(null);
-  // True while a sendRequest is in flight — disables the Send button so a
-  // double-tap can't fire two requests (and burn the daily cap twice).
-  const [addPending, setAddPending] = useState(false);
-  // Per-row error strings keyed by request/friend id (rendered under the row).
-  const [rowError, setRowError] = useState<Record<string, string>>({});
-  // Ids with a mutation in flight — their row buttons are disabled. The ref is
-  // the synchronous double-fire guard (state alone can lag a fast double-tap);
-  // the state copy drives the disabled rendering.
-  const pendingRowsRef = useRef<Set<string>>(new Set());
-  const [pendingRows, setPendingRows] = useState<Set<string>>(new Set());
-
-  // Fetch both lists in parallel; called on mount and after every mutation.
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    let live = true;
     const arcade = (window.claude as { arcade?: { records?: (g?: string) => Promise<ApiResult<HeadToHead[]>> } }).arcade;
-    const [fr, rq, rec] = await Promise.all([
-      window.claude.social.listFriends(),
-      window.claude.social.listRequests(),
-      // Narrowed to this game: winning at Connect 4 says nothing about who is
-      // better at chess, so one number per (person, game) and never a total.
-      // Optional-chained because a surface with no arcade bridge still has a
-      // perfectly good lobby — it just shows no records.
-      arcade?.records?.(gameId) ?? Promise.resolve(null),
-    ]);
-    if (fr.ok) setFriends(fr.value);
-    if (rq.ok) setRequests(rq.value);
-    if (rec?.ok) setRecords(recordsByOpponent(rec.value, gameId));
+    // Narrowed to this game: winning at Connect 4 says nothing about who is
+    // better at chess, so one number per (person, game) and never a total.
+    void (arcade?.records?.(gameId) ?? Promise.resolve(null)).then((rec) => {
+      if (live && rec?.ok) setRecords(recordsByOpponent(rec.value, gameId));
+    });
+    return () => { live = false; };
   }, [gameId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  // Refresh when presence shows an online user who ISN'T a known friend yet — a
-  // request I sent was just accepted (the server pokes visibility ahead of my
-  // list refetch). friendIdsRef avoids re-running purely on the friends array
-  // reference changing, so this can't tight-loop; it settles once the new friend
-  // lands in the list. Self can appear in onlineUsers, so exclude it by ACCOUNT
-  // ID (review fix — names aren't unique keys).
-  const friendIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    friendIdsRef.current = new Set((friends ?? []).map(f => f.id));
-  }, [friends]);
-  useEffect(() => {
-    const hasUnknownOnline = state.onlineUsers.some(
-      u => u.id !== myId && !friendIdsRef.current.has(u.id),
-    );
-    if (hasUnknownOnline) void refresh();
-  }, [state.onlineUsers, myId, refresh]);
-
-  // Shared mutation runner for accept/decline/cancel/unfriend/block: on failure
-  // stash a plain sentence under the row; on success clear it and refresh.
-  // Review fix: a per-key in-flight guard so a double-tap can't fire the same
-  // mutation twice — the ref check is synchronous (state updates would lag a
-  // fast second tap), and pendingRows state disables the row's buttons.
-  const runMutation = useCallback(async (
-    fn: () => Promise<ApiResult<unknown>>,
-    key: string,
-    fallback = 'Something went wrong. Try again.',
-  ) => {
-    if (pendingRowsRef.current.has(key)) return;
-    pendingRowsRef.current.add(key);
-    setPendingRows(prev => new Set(prev).add(key));
-    try {
-      const res = await fn();
-      if (!res.ok) {
-        setRowError(prev => ({ ...prev, [key]: res.message || fallback }));
-        return;
-      }
-      // Success: drop any stale error for this row so entries can't accumulate.
-      setRowError(prev => { const next = { ...prev }; delete next[key]; return next; });
-      await refresh();
-    } finally {
-      pendingRowsRef.current.delete(key);
-      setPendingRows(prev => { const next = new Set(prev); next.delete(key); return next; });
-    }
-  }, [refresh]);
-
-  // Add a friend by exact handle. Maps the Worker's status codes to human copy.
-  const submitAddFriend = useCallback(async () => {
-    const handle = addHandle.trim();
-    // addPending guard (review fix): Enter + click (or a double-tap) must not
-    // send the request twice — a duplicate burns the daily request cap.
-    if (!handle || addPending) return;
-    setAddPending(true);
-    try {
-      const res = await window.claude.social.sendRequest(handle);
-      if (res.ok) {
-        setAddFeedback({
-          text: res.value.status === 'friends' ? `You're now friends with @${handle}` : 'Request sent',
-          ok: true,
-        });
-        setAddHandle('');
-        await refresh();
-        return;
-      }
-      // 404 = unknown or blocked handle (no enumeration oracle — same message).
-      // 429 = daily request cap. 400 = a validation reason the server phrases well
-      // ("that's you"). Anything else falls back to the server message.
-      const text =
-        res.status === 404 ? 'No one has that handle' :
-        res.status === 429 ? 'Daily request limit reached — try tomorrow' :
-        res.status === 400 ? (res.message || "That request can't be sent") :
-        (res.message || 'Could not send the request. Try again.');
-      setAddFeedback({ text, ok: false });
-    } finally {
-      setAddPending(false);
-    }
-  }, [addHandle, addPending, refresh]);
-
-  const merged = mergeFriends(friends ?? [], state.onlineUsers);
-  const incoming = requests?.incoming ?? [];
-  const outgoing = requests?.outgoing ?? [];
-  const loaded = friends !== null;
-  const isEmpty = loaded && merged.length === 0 && incoming.length === 0 && outgoing.length === 0;
-
   return (
-    <div className="flex flex-col gap-0">
-      {/* Player info bar */}
-      <div className="px-3 py-2 border-b border-edge flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-fg truncate">{state.username}</span>
-          {/* Plain-word status, never a glyph (Destin's standing rule — the old
-              green/faint dot was removed 2026-07-09). This screen only renders
-              when connected or incognito (the parent gates the rest), so the
-              two reachable states are exactly these words. */}
-          <span className="text-3xs text-fg-muted shrink-0">{incognito ? 'Incognito' : 'Online'}</span>
-        </div>
-        {onToggleIncognito && (
-          <button
-            onClick={onToggleIncognito}
-            className={`text-3xs px-1.5 py-0.5 rounded-sm transition-colors ${
-              incognito
-                ? 'bg-inset text-fg-2 hover:bg-edge'
-                : 'text-fg-muted hover:text-fg-2'
-            }`}
-            title={incognito ? 'Go online — appear to friends' : 'Go incognito — hide from friends'}
-          >
-            {incognito ? 'Go Online' : 'Go Incognito'}
-          </button>
-        )}
-      </div>
-
+    <div className="flex flex-col gap-4 p-3">
       {/* Incoming challenge — challengeFrom is account identity: .id is the
-          stable key passed to respondToChallenge, .name the visible tag, and
-          .handle is now carried so we can render @handle alongside.
-          Room codes still exist INTERNALLY as the capability token for PartyKit
-          rooms — accepting a challenge joins by the received code below. The
-          manual Create Game / enter-a-room-code UI was removed 2026-07-09
-          (Destin: friends/handles cover the real use case); challenges are the
-          only way into a game now. */}
+          stable key passed to respondToChallenge, .name the visible tag. Room
+          codes still exist INTERNALLY as the capability token for PartyKit rooms
+          — accepting joins by the received code below. */}
       {state.challengeFrom && (
-        <div className="px-3 py-2 border-b border-edge bg-inset">
+        // WHY a Callout (quick-fix batch): the guide's one notice box. Buttons
+        // stay under the words, each half-width — the pane can be narrow.
+        <Callout>
           <p className="text-sm text-fg mb-2">
-            <span className="font-medium text-link">{state.challengeFrom.name}</span>
+            {/* WHY text-fg, not text-link (guide principle 2; decisions "Status colours out of
+                words"): the name is not a link, and colour never goes in words. */}
+            <span className="font-medium text-fg">{state.challengeFrom.name}</span>
             {state.challengeFrom.handle && (
               <span className="text-fg-muted text-xs ml-1">@{state.challengeFrom.handle}</span>
             )}
             <span> wants to play!</span>
           </p>
-          <div className="flex gap-2">
-            {/* WHY green → `primary`: accepting a game invite is not a safety decision.
-                The green was borrowed from the permission prompt, where green/red really
-                does mean allow/deny. Here it just meant "the main action", which is what
-                `primary` is for — and it also removes the last hardcoded `text-white`
-                from the games screens, so this button now follows the user's theme. */}
-            <Button
-              variant="primary"
-              size="md"
-              onClick={() => {
-                connection.respondToChallenge(state.challengeFrom!.id, true);
-                // Join the game you were actually challenged to. The reducer
-                // now keeps it; it used to be dropped, so Accept always opened
-                // Connect 4 whatever the challenge said (§3.1 item 3).
-                connection.joinGame(state.challengeCode!, state.challengeGame ?? gameId);
-                dispatch({ type: 'CLEAR_CHALLENGE' });
-              }}
-              className="flex-1"
-            >
-              Accept
-            </Button>
+          {/* WHY Decline first, Accept last (decisions "Button arrangement by width": side by
+              side, the filled button on the right, the outlined one directly left of it; the
+              friend request rows' "Accept (filled) on the right of Decline", decisions "Games:
+              friend rows and list"). Accept was the filled button on the left. */}
+          <div className="flex gap-2" data-parts-agree="challenge buttons">
             <Button
               variant="secondary"
               size="md"
@@ -434,194 +166,86 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
             >
               Decline
             </Button>
+            <Button
+              variant="primary"
+              size="md"
+              onClick={() => {
+                connection.respondToChallenge(state.challengeFrom!.id, true);
+                // Join the game you were actually challenged to (§3.1 item 3).
+                connection.joinGame(state.challengeCode!, state.challengeGame ?? gameId);
+                dispatch({ type: 'CLEAR_CHALLENGE' });
+              }}
+              className="flex-1"
+            >
+              Accept
+            </Button>
           </div>
-        </div>
+        </Callout>
       )}
 
-      {/* Challenge declined notification */}
+      {/* Challenge declined — the same notice box, Dismiss inside it. */}
       {state.challengeDeclinedBy && (
-        <div className="px-3 py-2 border-b border-edge">
+        <Callout actions={<Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}>Dismiss</Button>}>
           <p className="text-xs text-fg-dim">
             <span className="text-fg-2">{state.challengeDeclinedBy.name}</span> declined your challenge.
-            <button onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })} className="text-link hover:text-link-hover ml-1">Dismiss</button>
           </p>
-        </div>
+        </Callout>
       )}
 
-      {/* Incoming friend requests */}
-      {incoming.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Friend requests</div>
-          <ul className="flex flex-col gap-2">
-            {incoming.map((req) => (
-              <li key={req.id} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-fg-2 truncate flex-1 min-w-0">
-                    {req.from.display_name}
-                    {req.from.handle && <span className="text-fg-muted ml-1">@{req.from.handle}</span>}
-                  </span>
-                  {/* Touch target: px-1.5 py-1.5 keeps these row actions ≥32px
-                      tall on the Android WebView — the 10px text alone is a
-                      ~14px hit box. Applies to every row button in this screen. */}
-                  {/* Change 47, DECIDED 2026-07-16 as option A: Accept is the
-                      primary action, NOT semantic green. `text-green-400` here
-                      meant "yes" by colour alone, which is exactly the pairing
-                      rule 5 retires — and it read as a status, not a button, on
-                      a row whose other action was grey text. Button's `sm` size
-                      carries `coarse-hit`, so the ≥32px touch box the old
-                      px-1.5/py-1.5 was hand-building is now the primitive's job. */}
-                  <Button
-                    size="sm"
-                    onClick={() => runMutation(() => window.claude.social.acceptRequest(req.id), req.id, "Couldn't accept — try again")}
-                    disabled={pendingRows.has(req.id)}
-                    className="shrink-0"
-                  >
-                    Accept
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => runMutation(() => window.claude.social.declineRequest(req.id), req.id, "Couldn't decline — try again")}
-                    disabled={pendingRows.has(req.id)}
-                    className="shrink-0"
-                  >
-                    Decline
-                  </Button>
-                </div>
-                {rowError[req.id] && <p className="text-xs text-destructive-fg">{rowError[req.id]}</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
+      {/* Incognito: nobody can see or challenge you. The way back is a notice with
+          its button inside (guide "Status and notices") — the incognito switch
+          itself lives in the friends panel now. */}
+      {incognito && onToggleIncognito && (
+        <Callout actions={<Button variant="secondary" size="sm" onClick={onToggleIncognito}>Go online</Button>}>
+          <p className="text-xs text-fg-2">You're incognito. Friends can't see you or challenge you, and you can't challenge them.</p>
+        </Callout>
       )}
 
-      {/* Add a friend by handle */}
-      <div className="px-3 py-3 border-b border-edge flex flex-col gap-2">
-        <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Add a friend</div>
-        {/* Change 77: "Send request" moves INSIDE the field. It was left
-            `variant="secondary" size="lg"` purely so it would height-match the
-            input sitting beside it — inside the field there is nothing to
-            height-match, so it goes back to the primary it always semantically
-            was (this is the submit for the field it lives in).
-            Change 20 also applies to the field itself: bg-well and the gray
-            focus (`focus:border-fg-dim`) are both retired by the shared surface. */}
-        <InputGroup size="md">
-          <InputGroup.Field
-            type="text"
-            aria-label="Friend's handle"
-            value={addHandle}
-            // Handles are lowercase — normalize as the user types so the exact-match
-            // lookup on the Worker doesn't 404 on a stray capital.
-            onChange={(e) => setAddHandle(e.target.value.toLowerCase())}
-            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddFriend(); }}
-            placeholder="friend's handle"
-          />
-          <Button
-            size="sm"
-            onClick={() => void submitAddFriend()}
-            disabled={!addHandle.trim() || addPending}
-          >
-            Send request
-          </Button>
-        </InputGroup>
-        {addFeedback && (
-          <p className={`text-xs ${addFeedback.ok ? 'text-green-400' : 'text-destructive-fg'}`}>{addFeedback.text}</p>
+      <section>
+        <SectionLabel className="mb-2">Friends</SectionLabel>
+        {f.merged.length > 0 ? (
+          // The Settings list (Destin picked it, G2C-2): each friend its own boxed row, 8px
+          // apart (guide "Lists and menus" → settings-style lists are boxed rows; SettingRow).
+          // Name with its status pill beside it, no @handle (G2-7); your record at this game as
+          // a sentence under it (GC-3); Challenge at the right.
+          <div className="flex flex-col gap-2">
+            {f.merged.map((row) => {
+              const rec = records.get(row.id);
+              return (
+                <SettingRow
+                  key={row.id}
+                  variant="nav"
+                  // Presence is real while incognito too (a hidden connection, round 5), but a
+                  // challenge would reveal you — so no Challenge until you go online.
+                  title={<NameWithPill name={row.name} pill={state.connected ? <PresencePill row={row} /> : undefined} />}
+                  description={rec ? recordSentence(rec, row.name) : 'Not played yet'}
+                  control={row.online && !incognito ? <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} /> : undefined}
+                />
+              );
+            })}
+          </div>
+        ) : f.loaded ? (
+          // Guide "Empty states": first time → a card, a short explanation and one
+          // full-width filled button. Adding friends happens on the Games list now,
+          // so the button goes there (Destin: "no add friend in game panels").
+          <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
+            <p className="text-sm text-fg">No friends yet. Add a friend on the Games list, then challenge them here.</p>
+            <Button variant="primary" className="w-full" onClick={onAddFriend}>Add a friend</Button>
+          </div>
+        ) : (
+          <LoadingState what="your friends" variant="inline" />
         )}
-      </div>
-
-      {/* Friends list */}
-      {merged.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Friends ({merged.length})</div>
-          <ul className="flex flex-col gap-2">
-            {merged.map((row) => (
-              <li key={row.id} className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-fg-2 truncate flex-1 min-w-0">
-                    {row.name}
-                    {row.handle && <span className="text-fg-muted ml-1">@{row.handle}</span>}
-                  </span>
-                  {/* Your record against this person AT THIS GAME — the fact
-                      that decides who you want to play next. Absent for anyone
-                      you have never finished a game against, which is most
-                      people most of the time, so it must not leave a gap. */}
-                  {records.has(row.id) && (
-                    <Badge label={recordAria(records.get(row.id)!)}>
-                      {recordLabel(records.get(row.id)!)}
-                    </Badge>
-                  )}
-                  {/* Challenge only when the friend is actually online (has a live
-                      presence entry). row.id is the account id challengePlayer wants. */}
-                  {row.online && (
-                    // Change 47: this is an ACTION, not a link. Recolouring it to
-                    // the link tokens (the first pass) left the lobby arguing with
-                    // itself — the friend-request row right above has real Buttons
-                    // for Accept/Decline while this row styled its only action as
-                    // text. `secondary` rather than `primary`: Challenge appears on
-                    // every online friend, and a filled accent button per row would
-                    // read as a list of alerts. Button's `sm` carries `coarse-hit`,
-                    // which replaces the hand-rolled px/py-1.5 touch padding.
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => connection.challengePlayer(row.id, gameId)}
-                      className="shrink-0"
-                    >
-                      Challenge
-                    </Button>
-                  )}
-                  <FriendRowMenu
-                    pending={pendingRows.has(row.id)}
-                    onUnfriend={() => runMutation(() => window.claude.social.unfriend(row.id), row.id, "Couldn't unfriend — try again")}
-                    onBlock={() => runMutation(() => window.claude.social.block(row.id), row.id, "Couldn't block — try again")}
-                  />
-                </div>
-                {/* Plain-word status — never glyphs (workspace rule). */}
-                <span className="text-3xs text-fg-muted">{statusLabel(row, Date.now())}</span>
-                {rowError[row.id] && <p className="text-xs text-destructive-fg">{rowError[row.id]}</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Sent (outgoing) requests — dim, collapsed-feeling */}
-      {outgoing.length > 0 && (
-        <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Sent requests</div>
-          <ul className="flex flex-col gap-1">
-            {outgoing.map((req) => (
-              <li key={req.id} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-fg-dim truncate flex-1 min-w-0">
-                    @{req.to.handle ?? req.to.display_name}
-                  </span>
-                  <button
-                    onClick={() => runMutation(() => window.claude.social.cancelRequest(req.id), req.id, "Couldn't cancel — try again")}
-                    disabled={pendingRows.has(req.id)}
-                    // px/py-1.5 = touch-target padding (see the Accept button note).
-                    className="text-3xs px-1.5 py-1.5 text-fg-muted hover:text-fg-2 disabled:opacity-40 transition-colors shrink-0"
-                  >
-                    Cancel
-                  </button>
-                </div>
-                {rowError[req.id] && <p className="text-xs text-destructive-fg">{rowError[req.id]}</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Empty state — no friends and no requests in either direction */}
-      {isEmpty && (
-        <div className="px-3 py-6">
-          <p className="text-xs text-fg-muted text-center leading-relaxed">
-            No friends yet. Ask a friend for their handle and add them above.
-          </p>
-        </div>
-      )}
+      </section>
     </div>
   );
+}
+
+/** Challenge only when the friend has a live presence entry. FILLED (Destin, G2-8: "challenge
+ *  button should be dark probably") — it is the action this page exists for. This overrides
+ *  change 47's "outlined, so a row of them doesn't read as alerts" and the guide's "one filled
+ *  button per view" whenever two friends are online; recorded in the friction log. */
+function ChallengeButton({ onClick }: { onClick: () => void }) {
+  return <Button size="sm" onClick={onClick} className="shrink-0">Challenge</Button>;
 }
 
 function JoiningScreen({ connection }: { connection: GameConnection }) {
@@ -712,15 +336,17 @@ function SignInScreen() {
       >
         {signInPending ? 'Signing in…' : 'Sign in to YouCoded'}
       </Button>
-      {/* knowledge-debt #6: surface a failed sign-in instead of silently swallowing it. */}
+      {/* knowledge-debt #6: surface a failed sign-in instead of silently
+          swallowing it. WHY FieldError (guide: no red/coloured body text
+          for messages). */}
       {signInError && !signInPending && (
-        <p className="text-xs text-destructive-fg text-center max-w-xs">Sign-in failed: {signInError}. Try again.</p>
+        <FieldError as="p" size="2xs" className="text-center max-w-xs">Sign-in failed: {signInError}. Try again.</FieldError>
       )}
     </div>
   );
 }
 
-export default function GameLobby({ connection, incognito, onToggleIncognito, gameId }: Props) {
+export default function GameLobby({ connection, incognito, onToggleIncognito, gameId, onAddFriend }: Props) {
   const state = useGameState();
   const { signedIn } = useAccount();
 
@@ -758,5 +384,5 @@ export default function GameLobby({ connection, incognito, onToggleIncognito, ga
       </div>
     );
   }
-  return <FriendsScreen connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={gameId} />;
+  return <LobbyScreen connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={gameId} onAddFriend={onAddFriend} />;
 }

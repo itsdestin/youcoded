@@ -13,7 +13,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Open Projects",
+        "label": "Open projects",
         "nth": 1
       }
     },

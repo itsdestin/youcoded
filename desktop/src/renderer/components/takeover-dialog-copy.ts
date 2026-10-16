@@ -11,7 +11,7 @@
 // JSX dependency), which splits `lead` on the device substring to wrap it.
 export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable' | 'claim-denied';
 
-// One explanation for the dialog's information tip and Backup & Sync: neither
+// One explanation for the dialog's information tip and Backup & sync: neither
 // may promise exclusive offline ownership or confuse a claim with fresh messages.
 export const HANDOFF_EXPLANATION = 'When you resume a conversation another computer is using, YouCoded asks it to stop and hand it over. Recent messages may still be syncing. If the handoff cannot be confirmed, you can still try to open it; conflicting updates may be kept as separate copies rather than combined. Live handoff works between computers, not in the phone app.';
 

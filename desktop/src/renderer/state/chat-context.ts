@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import { ChatAction, ChatState, SessionChatState, ToolCallState, createSessionChatState } from './chat-types';
 import { chatReducer } from './chat-reducer';
+import { toolIdsBeforeLastClear } from './task-state';
 
 // Stable fallback returned by useChatState(id) when the session doesn't exist
 // in the map yet. Must be a singleton — useSyncExternalStore requires snapshot
@@ -244,6 +245,33 @@ export function useSessionToolCalls(sessionId: string): Map<string, ToolCallStat
     [store, sessionId],
   );
   const getSnapshot = useCallback(() => store.getSession(sessionId).toolCalls, [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+// The tool calls from before the session's last /clear (task-state.ts toolIdsBeforeLastClear), for
+// Open tasks. WHY cached on the timeline and tool-group refs, and the SAME Set handed back while its
+// contents are unchanged: the store notifies on every streamed word, but the timeline only changes
+// when an entry is added, so the walk runs per entry rather than per word, and the one App-level
+// reader re-renders only when a clear actually moves the cut (performance.md rules 3–4).
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+export function useSessionPreClearToolIds(sessionId: string): ReadonlySet<string> {
+  const store = useStore();
+  const cache = useRef<{ timeline: unknown; groups: unknown; value: ReadonlySet<string> } | null>(null);
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId, cb),
+    [store, sessionId],
+  );
+  const getSnapshot = useCallback(() => {
+    const s = store.getSession(sessionId);
+    const c = cache.current;
+    if (c && c.timeline === s.timeline && c.groups === s.toolGroups) return c.value;
+    const next = toolIdsBeforeLastClear(s);
+    const prev = c?.value ?? EMPTY_IDS;
+    const same = next.size === prev.size && [...next].every((id) => prev.has(id));
+    const value = same ? prev : next;
+    cache.current = { timeline: s.timeline, groups: s.toolGroups, value };
+    return value;
+  }, [store, sessionId]);
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 

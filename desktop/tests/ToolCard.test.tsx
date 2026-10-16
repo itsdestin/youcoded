@@ -12,6 +12,8 @@ import PromptCard from '../src/renderer/components/PromptCard';
 import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { CardKeysLiveContext } from '../src/renderer/state/card-keys-context';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
+import { Dialog } from '../src/renderer/components/ui/Dialog';
 import type { ToolCallState } from '../src/shared/types';
 import type { InteractivePrompt } from '../src/renderer/state/chat-types';
 
@@ -129,7 +131,7 @@ describe('an answer with no reply', () => {
  * waiting card listens for keys on `window`. The composer idle-blurs after
  * 0.75s, after which InputBar's own window listener sends on Enter — and every
  * card in every hidden chat ALSO took that Enter, on a default button of
- * Always Allow. Bash asks opened the confirm by themselves; other asks saved a
+ * Always allow. Bash asks opened the confirm by themselves; other asks saved a
  * rule outright.
  */
 describe('a stray Enter', () => {
@@ -149,12 +151,12 @@ describe('a stray Enter', () => {
   } as ToolCallState);
 
   // The command from the reported screenshot — it yields two grant widths, so
-  // Always Allow routes through the confirm.
+  // Always allow routes through the confirm.
   const bashAsk = () => nativeAsk({
     toolName: 'Bash',
     input: { command: 'python3 scripts/ui-review/review-cards.py serve docs/x.json --no-build --port 4791 --timeout 180' },
   });
-  // No grant options and not deny-listed — Always Allow responds with no confirm.
+  // No grant options and not deny-listed — Always allow responds with no confirm.
   const writeAsk = () => nativeAsk({ toolName: 'Write', input: { file_path: '/tmp/x.txt', content: 'hi' } });
 
   function mount(tool: ToolCallState, onScreen: boolean) {
@@ -200,7 +202,24 @@ describe('a stray Enter', () => {
       expect(respondToPermission).not.toHaveBeenCalled();
     });
 
-    it('answers an unhandled Enter with a one-time Yes, never Always Allow', async () => {
+    it('ignores Enter while a popup is open over the chat', async () => {
+      // Destin, approved in chat 2026-10-12: Enter in a popup answered the card behind it.
+      render(
+        <EscCloseProvider>
+          <ChatProvider>
+            <CardKeysLiveContext.Provider value>
+              <ToolCard sessionId="s1" tool={writeAsk()} />
+            </CardKeysLiveContext.Provider>
+          </ChatProvider>
+          <Dialog open onClose={() => {}} title="Session details" noScreen="test"><p>a popup</p></Dialog>
+        </EscCloseProvider>,
+      );
+      pressEnterOnBody();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(respondToPermission).not.toHaveBeenCalled();
+    });
+
+    it('answers an unhandled Enter with a one-time Yes, never Always allow', async () => {
       mount(writeAsk(), true);
       pressEnterOnBody();
       await waitFor(() => expect(respondToPermission).toHaveBeenCalledTimes(1));
@@ -209,7 +228,7 @@ describe('a stray Enter', () => {
       expect(decision).not.toHaveProperty('updatedPermissions');
     });
 
-    it('still reaches Always Allow deliberately: one arrow press, then Enter', () => {
+    it('still reaches Always allow deliberately: one arrow press, then Enter', () => {
       mount(bashAsk(), true);
       fireEvent.keyDown(document.body, { key: 'ArrowRight' });
       pressEnterOnBody();
@@ -288,14 +307,14 @@ describe('Always-allow on a deny-listed tool', () => {
   // Open the confirm the way a user does — the confirm has no standalone entry.
   function renderConfirm() {
     const utils = render(<ChatProvider><ToolCard tool={denyListedTool()} sessionId="s1" /></ChatProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Always Allow' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
     return utils;
   }
 
   describe('deny-listed always-allow confirm', () => {
-    it('gates Always Allow behind the confirm instead of responding immediately', () => {
+    it('gates Always allow behind the confirm instead of responding immediately', () => {
       render(<ChatProvider><ToolCard tool={denyListedTool()} sessionId="s1" /></ChatProvider>);
-      fireEvent.click(screen.getByRole('button', { name: 'Always Allow' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
       expect(respondToPermission).not.toHaveBeenCalled();
       expect(screen.getByText(/Always allow this exact command/)).toBeTruthy();
     });

@@ -49,6 +49,7 @@ export interface SyncChannelTypes {
   'syncspaces:import-project': { request: { sourcePath: string; name: string }; response: Res<typeof SpacesService.syncSpacesImportProject> };
   'syncspaces:rename-project': { request: { name: string; displayName: string }; response: Res<typeof SpacesService.syncSpacesRenameProject> };
   'syncspaces:stop-project': { request: { name: string }; response: Res<typeof SpacesService.syncSpacesStopProject> };
+  'syncspaces:remove-project': { request: { name: string }; response: Res<typeof SpacesService.syncSpacesRemoveProject> };
   'syncspaces:set-project-description': { request: { name: string; description: string }; response: Res<typeof SpacesService.syncSpacesSetProjectDescription> };
   'syncspaces:lease-query': { request: { claudeSessionId: string }; response: LeaseQueryAnswer };
   'syncspaces:lease-takeover': { request: { claudeSessionId: string }; response: { outcome: 'ready' | 'timeout' | 'error' | 'undeliverable' } };

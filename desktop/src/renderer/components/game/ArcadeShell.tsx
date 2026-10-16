@@ -18,6 +18,9 @@ import { GAMES, type GameDefinition } from './game-registry';
 import { readAllBests, recordRun } from './local-best';
 import { useMatchReport } from '../../hooks/useMatchReport';
 import ArcadePicker from './ArcadePicker';
+import FriendsPanel from './FriendsPanel';
+import { socialState, SOCIAL_STATE_COPY } from './friends-data';
+import { useNetworkOnline } from '../../hooks/useNetworkOnline';
 import Leaderboard, { type LeaderboardRow } from './Leaderboard';
 import { arcadeApi, buildStatuses, mergeBests, serverBests, staleNote, toRows } from './arcade-api';
 import ChessBoard, { type PieceTreatment } from './ChessBoard';
@@ -25,7 +28,8 @@ import GameLobby from './GameLobby';
 import ConnectFourBoard from './ConnectFourBoard';
 import GameChat from './GameChat';
 import GameOverlay from './GameOverlay';
-import { Button, LoadingState } from '../ui';
+import '../ui/Dialog.css';
+import { Button, CloseButton, LoadingState } from '../ui';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
@@ -203,19 +207,24 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
    *  an HTTP call: it is a socket fact, and an endpoint's answer would be stale
    *  within seconds. You are filtered out of your own list — "You are online"
    *  is not a reason to start a game. */
+  const networkOnline = useNetworkOnline();
+  const social = socialState({ networkOnline, incognito, connected: state.connected, partyError: state.partyError });
   const statuses = useMemo(() => {
     if (server === null) return null;
+    const copy = social === 'online' ? null : SOCIAL_STATE_COPY[social];
     return buildStatuses({
       bests,
       onlineNames: state.onlineUsers
         .filter((u) => u.name !== state.username)
         .map((u) => u.name),
-      // Only a REPORTED failure marks versus unavailable. Using "not connected
-      // yet" would flash "Can't reach the game server" on every launch during
-      // the second before the lobby socket opens.
-      versusUnavailable: state.partyError ? "Can't reach the game server" : undefined,
+      // Only a REPORTED failure marks versus unavailable (never "not connected
+      // yet", which would flash on every launch). WHY one state for tiles and the
+      // friends card (games-social round 2, GS-12): offline, incognito and an
+      // unreachable server each read differently, and the two must agree.
+      versusUnavailable: signedIn && copy?.greysVersus ? copy.tile : undefined,
+      versusNote: signedIn && copy && !copy.greysVersus ? copy.tile : undefined,
     });
-  }, [server, bests, state.onlineUsers, state.username, state.partyError]);
+  }, [server, bests, state.onlineUsers, state.username, social, signedIn]);
 
   const leave = () => {
     if (state.screen !== 'lobby' && state.screen !== 'setup') {
@@ -243,21 +252,21 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           and the chat below it can fill the remaining height instead of
           growing into an unbounded scroll container. */}
       {/* a size container: the chess board reads `cqh` off it to stay inside a short pane (ChessBoard.tsx) */}
-      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'overflow-y-auto'}`} style={{ containerType: 'size' }}>
+      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'scroll-mask overflow-y-auto'}`} style={{ containerType: 'size' }}>
         {/* Photo-only marks: the open game's own screen, once it has drawn. */}
         {openGame?.kind === 'solo' && !playing && board !== null && <ScreenMark name={`chat/games/${openGame.id === 'twenty-forty-eight' ? '2048' : openGame.id}`} />}
         {openGame?.kind === 'versus' && <ScreenMark name={`chat/games/${openGame.id}${inPlay ? '' : '/lobby'}`} />}
         {!openGame && (
-          statuses === null
-            ? <LoadingState what="games" />
-            : (
-              <ArcadePicker
-                statuses={statuses}
-                onPick={setOpenGame}
-                signedIn={!!signedIn}
-                onSignIn={() => { void startSignIn(); }}
-              />
-            )
+          // WHY friends first, games below (redesign backlog row 11, Destin: the
+          // sign-in banner "should be at the top, and should be replaced by a new
+          // friends panel/menu when signed in with games below"). 16px between the
+          // two groups (guide "Spacing": 16 between groups).
+          <div className="flex flex-col gap-4 p-3">
+            <FriendsPanel incognito={incognito} onToggleIncognito={onToggleIncognito} social={social} onRetry={() => connection.reconnectLobby()} />
+            {statuses === null
+              ? <LoadingState what="games" />
+              : <ArcadePicker statuses={statuses} onPick={setOpenGame} signedIn={!!signedIn} />}
+          </div>
         )}
 
         {openGame?.kind === 'solo' && (
@@ -328,6 +337,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
               incognito={incognito}
               onToggleIncognito={onToggleIncognito}
               gameId={openGame.id}
+              onAddFriend={leave}
             />
           )
         )}
@@ -340,7 +350,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
               {state.screen === 'game-over' && <GameOverlay connection={connection} />}
             </div>
           ) : (
-            <GameLobby connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={openGame.id} />
+            <GameLobby connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={openGame.id} onAddFriend={leave} />
           )
         )}
       </div>
@@ -360,7 +370,9 @@ function chessTreatment(): PieceTreatment {
 
 function ArcadeHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
   return (
-    <div className="flex items-center gap-1 px-2 py-2 border-b border-edge shrink-0">
+    // WHY dialog-header, not border-b (quick-fix batch, LB-16: "not the fulll
+    // horizontal lines"): the popups' short tapered divider (ui/Dialog.css).
+    <div className="dialog-header flex items-center gap-1 px-2 py-2 shrink-0">
       {onBack && (
         <button
           type="button"
@@ -375,17 +387,12 @@ function ArcadeHeader({ title, onBack, onClose }: { title: string; onBack?: () =
           </svg>
         </button>
       )}
-      <span className={`text-sm font-semibold text-fg flex-1 min-w-0 truncate ${onBack ? '' : 'pl-1'}`}>{title}</span>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close games"
-        className="w-7 h-7 flex items-center justify-center rounded-md text-fg-muted hover:text-fg-2 hover:bg-inset transition-colors"
-      >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </button>
+      {/* WHY text-base (16px) semibold, not text-sm (decisions "Popup and side-panel titles", H-2:
+          every side panel uses the shared popup title — Dialog's h2 is `text-base font-semibold`). */}
+      <span className={`text-base font-semibold text-fg flex-1 min-w-0 truncate ${onBack ? '' : 'pl-1'}`}>{title}</span>
+      {/* WHY the shared ✕ (decisions B-1): every popup and side panel closes
+          with the same drawn button; this was a hand-drawn copy. */}
+      <CloseButton label="Close games" onClick={onClose} />
     </div>
   );
 }

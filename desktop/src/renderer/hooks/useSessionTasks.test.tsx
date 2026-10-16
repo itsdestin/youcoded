@@ -41,6 +41,7 @@ interface SeedCall {
   toolName: string;
   input: Record<string, unknown>;
   response?: string;
+  isError?: boolean;
 }
 
 /**
@@ -70,7 +71,7 @@ function useSeedTasks() {
           sessionId: SESSION_ID,
           toolUseId: call.toolUseId,
           result: call.response,
-          isError: false,
+          isError: call.isError ?? false,
         } as any);
       }
     }
@@ -182,5 +183,105 @@ describe('useSessionTasks', () => {
     expect(result.current.tasks[0].markedInactive).toBeFalsy();
     const stored = JSON.parse(localStorage.getItem(INACTIVE_STORAGE_KEY) ?? '{}');
     expect(stored[SESSION_ID] ?? []).not.toContain('1');
+  });
+
+  // WHY (Open tasks investigation, 2026-10-13): a native-harness session plans with TodoWrite
+  // (its only task tool). The event reaches the renderer as an ordinary TRANSCRIPT_TOOL_USE
+  // (harness-session.ts emits 'tool-use' -> native-session-host -> ipc-handlers -> App.tsx),
+  // so this drives the same reducer path the app does, and the chip's counts must follow.
+  it('counts a native session\'s TodoWrite list, and the next write replaces it', () => {
+    const { result } = renderHook(() => {
+      const seed = useSeedTasks();
+      return { seed, ...useSessionTasks(SESSION_ID) };
+    }, { wrapper: Providers });
+
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n1', toolName: 'TodoWrite',
+        input: { todos: [
+          { content: 'Read the file', status: 'in_progress', activeForm: 'Reading the file' },
+          { content: 'Fix it', status: 'pending', activeForm: 'Fixing it' },
+        ] },
+        response: 'Todo list updated: 2 items, 0 completed.',
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 1, completed: 0, inactive: 0 });
+
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n2', toolName: 'TodoWrite',
+        input: { todos: [
+          { content: 'Read the file', status: 'completed', activeForm: 'Reading the file' },
+          { content: 'Fix it', status: 'in_progress', activeForm: 'Fixing it' },
+        ] },
+        response: 'Todo list updated: 2 items, 1 completed.',
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 0, completed: 1, inactive: 0 });
+
+    // A write the tool rejected changes nothing (the harness never replaced its list).
+    act(() => {
+      result.current.seed([{
+        toolUseId: 'n3', toolName: 'TodoWrite',
+        input: { todos: [{ content: 'Fix it', status: 'completed', activeForm: 'Fixing it' }] },
+        response: 'Invalid input', isError: true,
+      }]);
+    });
+    expect(result.current.counts).toEqual({ running: 1, pending: 0, completed: 1, inactive: 0 });
+  });
+});
+
+// Final review F6: /clear ends the context a to-do list belonged to. The chat keeps the earlier
+// cards (faded), but Open tasks must stop counting their items.
+describe('useSessionTasks after /clear', () => {
+  beforeEach(() => { localStorage.removeItem(INACTIVE_STORAGE_KEY); });
+  const todos = (id: string, items: Array<[string, string]>) => ({
+    toolUseId: id, toolName: 'TodoWrite',
+    input: { todos: items.map(([content, status]) => ({ content, status, activeForm: content })) },
+    response: 'Todo list updated',
+  });
+
+  it('drops the list written before the clear, and shows the one written after it', () => {
+    const { result } = renderHook(() => {
+      const seed = useSeedTasks();
+      const dispatch = useChatDispatch();
+      return { seed, dispatch, ...useSessionTasks(SESSION_ID) };
+    }, { wrapper: Providers });
+
+    act(() => { result.current.seed([todos('w1', [['Write the intro', 'pending'], ['Fix the chart', 'pending'], ['Send it', 'pending']])]); });
+    expect(result.current.counts.pending).toBe(3);
+
+    act(() => { result.current.dispatch({ type: 'CLEAR_TIMELINE', sessionId: SESSION_ID, markerId: 'clear-1', timestamp: 1 } as any); });
+    expect(result.current.tasks).toEqual([]);
+    expect(result.current.counts).toEqual({ running: 0, pending: 0, completed: 0, inactive: 0 });
+
+    act(() => { result.current.seed([todos('w2', [['New plan', 'in_progress']])]); });
+    expect(result.current.tasks.map((t) => t.subject)).toEqual(['New plan']);
+  });
+
+  it('a compact divider keeps the list (compaction keeps it in context)', () => {
+    const { result } = renderHook(() => {
+      const seed = useSeedTasks();
+      const dispatch = useChatDispatch();
+      return { seed, dispatch, ...useSessionTasks(SESSION_ID) };
+    }, { wrapper: Providers });
+    act(() => { result.current.seed([todos('w1', [['Keep me', 'pending']])]); });
+    act(() => { result.current.dispatch({ type: 'COMPACTION_COMPLETE', sessionId: SESSION_ID, markerId: 'compact-1', timestamp: 1, auto: true } as any); });
+    expect(result.current.tasks.map((t) => t.subject)).toEqual(['Keep me']);
+  });
+});
+
+// Final review F37: a "marked inactive" flag on a to-do item that left the list is dropped.
+describe('useSessionTasks inactive flags for to-do items', () => {
+  beforeEach(() => { localStorage.removeItem(INACTIVE_STORAGE_KEY); });
+  it('forgets the flag of an item a newer list no longer has, keeps the others', () => {
+    const { result } = renderHook(() => ({ seed: useSeedTasks(), ...useSessionTasks(SESSION_ID) }), { wrapper: Providers });
+    const write = (id: string, items: string[]) => ({ toolUseId: id, toolName: 'TodoWrite',
+      input: { todos: items.map((content) => ({ content, status: 'pending', activeForm: content })) }, response: 'ok' });
+    act(() => { result.current.seed([write('w1', ['Old wording', 'Stays'])]); });
+    act(() => { result.current.markInactive('todo:Old wording'); result.current.markInactive('todo:Stays'); });
+    act(() => { result.current.seed([write('w2', ['New wording', 'Stays'])]); });
+    const stored = JSON.parse(localStorage.getItem(INACTIVE_STORAGE_KEY) ?? '{}');
+    expect(stored[SESSION_ID]).toEqual(['todo:Stays']);
   });
 });

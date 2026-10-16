@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ArtifactViewProps } from './types';
 import { inlineLocalAssets } from './html-inline-assets';
+import { CenterLoading } from './BinaryContent';
 
 // HtmlView — full-size interactive preview of an HTML artifact.
 //
@@ -30,11 +31,9 @@ export function HtmlView({ content, absolutePath }: ArtifactViewProps) {
   }, [content, absolutePath]);
 
   if (content === null || doc === null) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-fg-muted">
-        Loading…
-      </div>
-    );
+    // WHY CenterLoading, not a bare "Loading…": the shared LoadingState names what is loading
+    // (guide "File viewers" known deviation, 2026-10-13).
+    return <CenterLoading what="page" />;
   }
   return (
     <iframe

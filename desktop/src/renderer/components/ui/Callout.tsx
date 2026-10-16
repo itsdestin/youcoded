@@ -1,74 +1,207 @@
 import React from 'react';
 import { ChevronDown } from './ChevronDown';
+import { FoldRow } from './FoldRow';
 
 /**
- * K4 — the callout. Passive information, one geometry, three tones.
+ * K4 — the callout. THE notice box: one geometry, three tones, used for every
+ * warning, error and info notice in the app.
  *
  * Replaces two competing geometries that were doing the same job:
  * `rounded-md px-2.5 py-2` (3 sites) and `rounded-lg p-3` (2 sites), plus
  * SyncPanel's destructive banner, which was a full-bleed `border-b` strip
  * because no danger tone existed to reach for.
  *
- * THERE IS NO ACTION SLOT, AND THAT IS THE POINT. A block that states something
- * AND offers a button to resolve it is a K5 status strip — a different role with
- * a different geometry (bg-inset, a status dot, a horizontal layout). The two
- * collapsed back into each other historically because nothing stopped a callout
- * from growing a button. The API stops it now: if you need an action here, you
- * are reaching for the wrong component.
+ * ── It HAS an action slot now (2026-09-25) ─────────────────────────────────
+ * This file used to say "THERE IS NO ACTION SLOT, AND THAT IS THE POINT" — a
+ * block that offered a button was meant to be a K5 status strip instead. Destin
+ * overruled that on the settings-pieces deck (`ui-element-review-settings-
+ * pieces#P-2`, `#P-4`, decisions.md "Errors and warnings in a setting" /
+ * "Problem on a list item"): a problem is ALWAYS this same tinted box, sitting
+ * inside the thing it is about, and **its buttons (Try again, Show details,
+ * Resume, Delete…) go INSIDE the box, at the right**. Splitting "a notice"
+ * from "a notice with a button" into two looks is exactly what he rejected
+ * (fix batch 1: "these top banners are still unlike anything else in the app").
+ * StatusStrip remains for a subsystem's RUNNING state ("Checking…", "Not set up
+ * yet"), which is not a problem notice.
+ *
+ * ── Colour lives in the box only ───────────────────────────────────────────
+ * Design guide "Status and notices": the text inside is the normal grey/black,
+ * never red or coloured text. The danger tone used to write its body in
+ * `text-destructive-fg`, then kept a red title; since 2026-10-05 (Destin, app-wide)
+ * every tone's title and body are the normal text colours and only the tint and
+ * border carry the colour (pinned by callout-authority.test.tsx).
  *
  * Tone preserves change 14's rule — accent means information, amber means
- * warning — and adds the danger tone the old set never had.
+ * warning — plus the danger tone.
  */
 
 export type CalloutTone = 'info' | 'warning' | 'danger';
+
+/** The danger tone's box (tint + border). WHY exported (fix-batch3#FB-1): the
+ *  one-line field error (FieldError, states.tsx) is this box in miniature, so it
+ *  reads the SAME recipe rather than a copy that could drift. */
+export const CALLOUT_DANGER_SURFACE = 'bg-destructive/10 border-destructive/50';
 
 const TONE: Record<CalloutTone, { surface: string; body: string; title: string }> = {
   info: { surface: 'bg-accent/10 border-accent/25', body: 'text-fg-2', title: 'text-fg' },
   // Status colors stay hardcoded per the standing rule (desktop/CLAUDE.md), so
   // amber is a raw Tailwind color rather than a theme token.
-  warning: { surface: 'bg-amber-500/10 border-amber-500/25', body: 'text-fg-2', title: 'text-amber-400' },
+  // WHY the warning title is normal text colour, not amber (fix batch 2, 2026-09-26): amber-400
+  // text on the pale amber tint was near-invisible on light and wallpaper themes ("Download
+  // interrupted" inside a model card), and the app's own rule is that a status hue lives in the
+  // tint and border, NEVER in the word (react-renderer.md, "Status colours").
+  warning: { surface: 'bg-amber-500/10 border-amber-500/25', body: 'text-fg-2', title: 'text-fg' },
   // `destructive` is the one status color that IS tokenised: change 17 moved the
   // app's reds onto it so theme packs can restyle their own danger.
-  danger: { surface: 'bg-destructive/10 border-destructive/50', body: 'text-destructive-fg', title: 'text-destructive-fg' },
+  // WHY body text-fg-2 (2026-09-25, decisions.md P-2): "text is normal
+  // grey/black, never red". WHY the title too (2026-10-05, Destin: the red title "seems to
+  // be unique styling not used elsewhere"): 13 of 16 red notices had no title at all, and the
+  // warning/info titles and ErrorState's title were already the normal text colour — only the
+  // box and its border carry the red. Pinned by callout-authority.test.tsx.
+  danger: { surface: CALLOUT_DANGER_SURFACE, body: 'text-fg-2', title: 'text-fg' },
 };
 
 export type CalloutProps = {
   tone?: CalloutTone;
-  /** Optional bold lead-in line above the body. */
+  /** Optional bold lead-in line above the body, in the normal text colour (2026-10-05). */
   title?: React.ReactNode;
   className?: string;
   /** Collapse to the title line; the body opens on click. Needs `title`.
-   *  Opening is not an action, so this keeps the no-button rule — it is for a
-   *  warning whose headline says enough and whose detail is a list (the Sync
-   *  box's too-big conversations, 2026-09-16). */
+   *  For a warning whose headline says enough and whose detail is a list (the
+   *  Sync box's too-big conversations, 2026-09-16). */
   collapsible?: boolean;
-  children: React.ReactNode;
+  /**
+   * The notice's own buttons — Try again, Show details, Resume, Delete — drawn
+   * INSIDE the box at the right (decisions.md P-2/P-4). Usually `<Button
+   * size="sm">`s: outlined ones first, the one filled main action last, so the
+   * filled button ends up at the far right like every other button pair.
+   * When the box is too narrow for text and buttons side by side (a phone),
+   * the buttons wrap onto their own line, still right-aligned.
+   */
+  actions?: React.ReactNode;
+  /** 'below': the words run the full width and the buttons sit on their own
+   *  line at the bottom right. WHY (provider-notices#PN-1/PN-2, 2026-10-01:
+   *  "fit the text all the way across and put the buttons at the bottom
+   *  right"): a sentence-long notice beside two buttons wrapped into a narrow
+   *  column. Default 'right' keeps every existing notice as it was. */
+  actionsPlacement?: 'right' | 'below';
+  /** One short line beside its buttons, in a slim box. WHY (provider-notices-2,
+   *  2026-10-01: "shorten the copy to see if we can fit in one line"; "why is
+   *  this red box so tall"): the full p-3 box around a single line read as
+   *  twice the height of what it says. Centred, thin padding; opt-in. */
+  compact?: boolean;
+  /** Optional: a title-only notice (e.g. "Download interrupted" with its
+   *  Resume/Delete) has nothing more to say underneath. */
+  children?: React.ReactNode;
+  /** Passed to the box itself. WHY (error-notices-1, 2026-10-12): ErrorState now draws
+   *  THIS box and must keep announcing itself (`alert`); a wrapper div would add a layer
+   *  around every error and take the caller's margins off the box. */
+  role?: 'alert' | 'status';
+  /** The failure's own words (an operation's raw message), folded under "Details" INSIDE the box,
+   *  at its foot. WHY (final-fixes#CH-11 follow-up, Destin: the "Details" card belongs in the error
+   *  box if it is part of the error): the fold used to sit under the box, reading as a separate
+   *  thing. Blank text draws no fold. */
+  details?: string;
 };
 
-export function Callout({ tone = 'info', title, className = '', collapsible = false, children }: CalloutProps) {
+// WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
+// marked rows and fails when the buttons in one differ in height — a notice's buttons sit
+// side by side, so they must match.
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role, details }: CalloutProps) {
   const t = TONE[tone];
+  const fold = details?.trim() ? (
+    <FoldRow className="mt-2" title="Details">
+      <p className="text-2xs text-fg-2 font-mono break-all">{details}</p>
+    </FoldRow>
+  ) : null;
   if (collapsible && title) {
     return (
-      <details className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+      <details role={role} className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
         {/* The browser's own left-hand triangle is hidden; the arrow sits on the
             right and turns like the session switcher's (Destin, 2026-09-16). */}
         <summary className={`flex items-center justify-between gap-2 list-none [&::-webkit-details-marker]:hidden text-xs font-medium cursor-pointer select-none ${t.title}`}>
           <span className="min-w-0">{title}</span>
           <ChevronDown className="w-3 h-3 shrink-0 text-fg-muted transition-transform group-open:rotate-180" strokeWidth={2.5} />
         </summary>
-        <div className={`text-xs mt-1.5 ${t.body}`}>{children}</div>
+        {children && <div className={`text-xs mt-1.5 ${t.body}`}>{children}</div>}
+        {actions && <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>}
       </details>
     );
   }
+  // Both slots are <div>, not <p>. A callout body can legitimately carry a
+  // block child — SyncSetupWizard's install error puts an "Install manually"
+  // link on its own line — and a <div> inside a <p> is invalid HTML that the
+  // browser silently repairs by closing the paragraph early, which would drop
+  // the body's own text classes off everything after it.
+  //
+  // WHY the title is text-xs (12px) medium, not the old text-3xs: the guide's
+  // reference notice is Backup & sync's "too big to sync" box, whose title is
+  // the collapsible branch above at text-xs. The plain branch used a smaller
+  // title, so the "same" box read as two looks; the audit also flagged the
+  // tiny amber title on Setup complete as hard to read.
+  const text = (
+    <>
+      {title && <div className={`text-xs font-medium ${children ? 'mb-0.5' : ''} ${t.title}`.trim()}>{title}</div>}
+      {children && <div className={`text-xs ${t.body}`}>{children}</div>}
+    </>
+  );
+  // WHY buttons BELOW the Details fold whenever there is one (Destin, guide test gt-r1#E-2/#E-3:
+  // "the try again button should go below the details line"; "buttons below details dropdown,
+  // not above"): the box reads top to bottom — what happened, the machine's own words if you want
+  // them, then what you can do. Buttons above the fold split the explanation in two. Applies to
+  // every shape (slim, beside, below), so no caller has to choose.
+  if (fold && actions) {
+    return (
+      <div role={role} className={`rounded-lg ${compact ? 'px-2.5 py-1.5' : 'p-3'} border ${t.surface} ${className}`.trim()}>
+        {text}
+        {fold}
+        <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+      </div>
+    );
+  }
+  if (compact) {
+    return (
+      <div role={role} className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
+        <div className="flex-1 min-w-40">{text}</div>
+        {actions && <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {/* The slim one-line box takes Details on its own full-width line at the foot. */}
+        {fold && <div className="basis-full">{fold}</div>}
+      </div>
+    );
+  }
+  if (!actions) {
+    return <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}{fold}</div>;
+  }
+  if (actionsPlacement === 'below') {
+    return (
+      <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+        {text}
+        <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+        {fold}
+      </div>
+    );
+  }
   return (
-    <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
-      {/* Both slots are <div>, not <p>. A callout body can legitimately carry a
-          block child — SyncSetupWizard's install error puts an "Install manually"
-          link on its own line — and a <div> inside a <p> is invalid HTML that the
-          browser silently repairs by closing the paragraph early, which would
-          drop the body's own text classes off everything after it. */}
-      {title && <div className={`text-3xs font-medium mb-0.5 ${t.title}`}>{title}</div>}
-      <div className={`text-xs ${t.body}`}>{children}</div>
+    <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+      {/* WHY flex-wrap with a basis on the text: side by side when there is
+          room, and on a phone the button group drops to its own line (still
+          at the right, via ml-auto) instead of squeezing the words into a
+          one-word column. `items-start` keeps the buttons level with the
+          title, and they never move when the body grows (e.g. Show details
+          opening below the summary — Destin, 2026-09-16). */}
+      {/* WHY items-center when there is no body (Destin, fix batch 2 review C-6): a
+          title-only notice ("Download interrupted" + Delete/Resume) sat at the top
+          edge beside the taller buttons and read as not vertically centred. With a
+          body, items-start still keeps the buttons level with the title. */}
+      {/* WHY items-center when there is no TITLE (error-notices-1#EN-1, 2026-10-12: "the
+          spacing is very odd"): a notice that is one sentence beside its button sat at the
+          top edge while the taller button hung lower, so the words looked misaligned. Only
+          a title + body keeps items-start, so the buttons stay level with the title. */}
+      <div className={`flex flex-wrap ${title && children ? 'items-start' : 'items-center'} gap-x-3 gap-y-2`}>
+        <div className="flex-1 min-w-48">{text}</div>
+        <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
+      </div>
+      {fold}
     </div>
   );
 }

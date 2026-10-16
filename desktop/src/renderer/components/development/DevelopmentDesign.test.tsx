@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BugReportPopup } from './BugReportPopup';
 import { ContributePopup } from './ContributePopup';
-import { DevelopmentPopup } from './DevelopmentPopup';
+import { HelpPopup } from '../HelpPopup';
 
 beforeEach(() => window.history.replaceState({}, '', '/?mode=workbench'));
 afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
@@ -13,9 +13,10 @@ afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
 const idle = () => Promise.resolve({ state: 'idle' as const });
 
 describe('development design safety', () => {
+  // Development's rows live in Help & feedback since 2026-09-28 (help-merge#HM-1..3).
   it('keeps the walkthrough inside Contribute and public navigation usable', () => {
     const openExternal = vi.spyOn(window, 'open').mockImplementation(() => null);
-    render(<DevelopmentPopup open onClose={() => {}} onOpenBug={() => {}} onOpenContribute={() => {}} />);
+    render(<HelpPopup open onClose={() => {}} onOpenBug={() => {}} onOpenContribute={() => {}} />);
     expect(screen.queryByRole('button', { name: 'How contributing works' })).toBeNull();
     fireEvent.click(screen.getByText('Roadmap'));
     expect(openExternal).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer');
@@ -26,9 +27,8 @@ describe('development design safety', () => {
   it('uses one ticket heading for both report types and discloses evidence on demand', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeTruthy();
-    expect(screen.queryByText(/Logs record app activity/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'About recent logs' }));
-    expect(screen.getByText(/Logs record app activity/)).toBeTruthy();
+    // Each choice explains itself in its own row (submit-ticket-1#ST-1/ST-13), not behind an (i).
+    expect(screen.getByText(/last 200 lines of activity/)).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
     expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeTruthy();
   });
@@ -56,7 +56,7 @@ describe('development design safety', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     expect(dev.logTail).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     await vi.waitFor(() => expect(dev.logTail).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(screen.getByText('Optional AI help')).toBeTruthy();
@@ -85,10 +85,12 @@ describe('development design safety', () => {
     expect(screen.queryByText('Optional AI help')).toBeNull();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A retained title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A retained description' } });
-    expect(screen.getByRole('checkbox', { name: 'Include recent logs' }).getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    expect(screen.getByRole('switch', { name: 'Include recent logs' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     expect(screen.queryByLabelText('Logs to review')).toBeNull();
     fireEvent.click(screen.getByText('Review ticket'));
+    // The logs are a folded row on review (submit-ticket-1#ST-C1 "folded"); open it to edit.
+    fireEvent.click(screen.getByRole('button', { name: /^Recent logs/ }));
     fireEvent.change(screen.getByLabelText('Logs to review'), { target: { value: 'Sample log' } });
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     expect(screen.getByText(/Nothing is sent automatically/)).toBeTruthy();
@@ -96,9 +98,10 @@ describe('development design safety', () => {
     fireEvent.click(screen.getByText('Back to draft'));
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('A retained title');
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('A retained description');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Finish with attachments in GitHub' }));
     expect(screen.getByText(/GitHub uploads a file as soon as you attach it/)).toBeTruthy();
     fireEvent.click(screen.getByText('Review ticket'));
+    // The logs fold is still open from before — what you opened stays open.
     expect((screen.getByLabelText('Logs to review') as HTMLTextAreaElement).value).toBe('Sample log');
   });
   // WHY: four nouns for one object (ticket / report / bug report / issue) read as four
@@ -108,7 +111,7 @@ describe('development design safety', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
     fireEvent.click(screen.getByText('Review ticket'));
-    expect(screen.getByText('Review your ticket')).toBeTruthy();
+    expect(screen.getByText('Your ticket')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Submit public ticket' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/bug report|feature request|public issue/i);
   });
@@ -132,7 +135,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     expect(document.body.textContent).not.toMatch(CAPTION);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(document.body.textContent).not.toMatch(CAPTION);
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
@@ -142,7 +145,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
   it('does not collect logs for feature requests', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
-    expect(screen.queryByRole('checkbox', { name: 'Include recent logs' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Include recent logs' })).toBeNull();
   });
   it('never connects managed setup to the old installer', async () => {
     const installWorkspace = vi.fn();
@@ -153,10 +156,10 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // dead. Destin rejected the disabled/greyed treatment: the workbench must look like the app.
     // It now also asserts the NEW path IS taken: "installWorkspace was not called" alone stays
     // true if the button does nothing at all, which is how a dead button passes a safety test.
-    fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
     expect(setupWorkspace).toHaveBeenCalledTimes(1);
     expect(installWorkspace).not.toHaveBeenCalled();
-    await screen.findByText(/Your development workspace is ready/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/);
   });
 
   it('finds setup still running when you close and come back', async () => {
@@ -167,8 +170,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupStatus = vi.fn().mockResolvedValue({ state: 'running' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Setting up your development workspace/);
-    expect(screen.queryByRole('button', { name: 'Set up development workspace' })).toBeNull();
+    await screen.findByText(/Downloading YouCoded’s code/);
+    expect(screen.queryByRole('button', { name: 'Download YouCoded’s code' })).toBeNull();
   });
 
   it('notices setup finishing while the screen is open', async () => {
@@ -181,15 +184,15 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
       .mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), clearSetupStatus: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Setting up your development workspace/);
-    await screen.findByText(/Your development workspace is ready/, {}, { timeout: 4000 });
+    await screen.findByText(/Downloading YouCoded’s code/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/, {}, { timeout: 4000 });
   });
 
   it('shows a setup that finished while you were away', async () => {
     const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Projects/w' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Your development workspace is ready/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/);
   });
 
   it('offers a way forward when setup fails, and never just Done', async () => {
@@ -199,9 +202,34 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
     Object.assign(window, { claude: { dev: { setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
-    await screen.findByText(/Could not reach github\.com\./);
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
+    // Plain words in the notice box, its Try again inside it (submit-ticket-5#ST5-9);
+    // the operation's own text is one fold away, never the message itself.
+    const line = await screen.findByText(/The download didn’t finish/);
+    const box = line.closest('div.rounded-lg') as HTMLElement;
+    expect(box.className).toMatch(/destructive/);
+    // The box's LAST button is Try again: Details comes first, the buttons under it (gt-r1#E-2).
+    expect([...box.querySelectorAll('button')].pop()?.textContent).toBe('Try again');
+    expect(screen.queryByText(/Could not reach github\.com\./)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/Could not reach github\.com\./)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
+  });
+
+  it('says a conversation that would not open in plain words, with the raw reason folded away', async () => {
+    // Destin, submit-ticket-5#ST5-9: "mock failure dev open session in might scare our users.
+    // this error is just confusing and unhelpful".
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
+    const openSessionIn = vi.fn().mockRejectedValue(new Error('spawn claude ENOENT'));
+    Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), openSessionIn, clearSetupStatus: vi.fn() } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
+    const line = await screen.findByText(/The new conversation didn’t open/);
+    expect((line.closest('div.rounded-lg') as HTMLElement).className).toMatch(/destructive/);
+    expect(screen.queryByText(/ENOENT/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/spawn claude ENOENT/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('keeps the draft and offers a retry when a ticket cannot be sent', async () => {
@@ -213,8 +241,13 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText('GitHub rejected the request.');
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    await screen.findByText(/GitHub rejected the request\./);
+    // The notice carries its own Try again (guide: a notice's buttons sit inside it).
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // The review step shows the ticket read-only; the words are still there, and Back
+    // to draft returns them to their boxes untouched.
+    expect(screen.getByText('The menu closes')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Back to draft' })[0]);
     // This file does not load jest-dom, so read the values directly.
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
@@ -233,10 +266,10 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Finish with attachments in GitHub' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue in GitHub' }));
-    await screen.findByText(/Finish your ticket in GitHub/);
+    await screen.findByText(/open in your browser with everything you wrote/);
     expect(submitIssue).toHaveBeenCalledWith(expect.objectContaining({ browserOnly: true }));
     // WHY openExternal and not window.open: window.open is a dead call on Android
     // and remote, so the hand-off would silently do nothing there.
@@ -269,8 +302,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText(/Finish your ticket in GitHub/);
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    await screen.findByText(/open in your browser with everything you wrote/);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('starts a report from an error with the failure already in it', async () => {
@@ -278,12 +311,15 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // was gone the moment you clicked Report and you described it from memory.
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Settings → Permissions', error: 'EACCES: permission denied' }} />);
-    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
-      .toContain('Settings → Permissions');
+    // Offered as its own choice, saying where it came from — never typed into the
+    // description for you (submit-ticket-1#ST-13).
+    expect(screen.getByText(/Adds where it happened \(Settings → Permissions\)/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Permissions will not load' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'It will not load.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     // Shown for review BEFORE anything is sent — never attached unseen (R11).
-    expect(screen.getByText('EACCES: permission denied')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^The error you saw/ }));
+    expect(screen.getByText(/EACCES: permission denied/)).toBeTruthy();
   });
 
   it('keeps Diagnose an assistant action, not a blank form', async () => {
@@ -292,8 +328,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // quietly turned all five into a button that opens an empty ticket.
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Local model settings', diagnose: true }} />);
-    expect(screen.getByRole('heading', { name: 'Review your ticket' })).toBeTruthy();
-    expect(screen.getByText(/Only this draft and selected details go to your chosen assistant/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Sent with it' })).toBeTruthy();
+    expect(screen.getByText(/Only this ticket and what you chose to include go to your assistant/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
   });
 
@@ -312,50 +348,53 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText('No browser is available.');
-    expect(screen.queryByText(/Finish your ticket in GitHub/)).toBeNull();
+    await screen.findByText(/No browser is available\./);
+    expect(screen.queryByText(/open in your browser with everything you wrote/)).toBeNull();
     // …and the report they wrote is still there.
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
-  it('hands the ticket to a working copy without sending it anywhere', async () => {
-    // The action carried over from the deleted screen. The grader found NO test
-    // touched it at all. Two promises worth pinning: it reuses a workspace that is
-    // already set up rather than cloning a second ~1GB copy, and it does not submit.
+  it('hands the ticket to Contribute, which starts the conversation with it, without sending it anywhere', async () => {
+    // submit-ticket-3#ST3-Q1 "contribute": the ticket no longer downloads anything itself.
+    // A finished copy is reused (no second download), the new conversation starts with the
+    // ticket's words, nothing is filed, and the ticket comes back saying so.
     const submitIssue = vi.fn();
     const setupWorkspace = vi.fn();
     const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
     const openSessionIn = vi.fn().mockResolvedValue({ id: 's1' });
-    Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn } } });
+    Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn, clearSetupStatus: vi.fn().mockResolvedValue(undefined) } } });
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
-    await screen.findByText(/Your assistant is on it/);
+    // Contribute, in plain words, already knowing the copy is there.
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
+    await screen.findByText(/working on a fix in a new conversation/);
     expect(openSessionIn).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/home/you/YouCoded/Development/w',
-      // The DESCRIPTION is what it hands over — the words describing the problem,
-      // not the title.
       initialInput: expect.stringContaining('Opening the menu closes the window.') as unknown as string,
     }));
-    expect(setupWorkspace).not.toHaveBeenCalled();   // already set up — no second clone
-    expect(submitIssue).not.toHaveBeenCalled();      // nothing was filed
+    expect(setupWorkspace).not.toHaveBeenCalled();
+    expect(submitIssue).not.toHaveBeenCalled();
   });
 
-  it('says so when a working copy cannot be set up, and keeps the draft', async () => {
+  it('says the download size and keeps the way back to the ticket', async () => {
     const setupStatus = vi.fn().mockResolvedValue({ state: 'idle' });
-    const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
-    Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace, setupStatus, openSessionIn: vi.fn() } } });
+    Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace: vi.fn(), setupStatus, openSessionIn: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
-    await screen.findByText(/Could not reach github\.com\./);
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText(/about 1 GB/)).toBeTruthy();
+    expect(screen.getByText(/will work on “The menu closes”/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to ticket' }));
+    expect(screen.queryByText(/about 1 GB/)).toBeNull();
+    expect(screen.getByText('The menu closes')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Submit public ticket' })).toBeTruthy();
   });
 
   it('rewrites the wording only when something actually rewrote it', async () => {
@@ -371,8 +410,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
-    await vi.waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value)
-      .toBe('Menu closes the window'));
+    // The review step shows the ticket as it will read, so the new words appear there.
+    await screen.findByText('Menu closes the window');
   });
 
   it('leaves the wording alone, and says so, when nothing rewrote it', async () => {
@@ -391,7 +430,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
     await screen.findByText('No assistant is set up on this computer to rewrite it.');
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('menu bad');
+    expect(screen.getByText('menu bad')).toBeTruthy();
   });
 
   it('says what remote access cannot do, not a channel name', async () => {
@@ -409,7 +448,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     await screen.findByText(/Developer tools isn.t available via remote access yet/);
     expect(document.body.textContent).not.toContain('remote-unsupported');
     // The draft survives it, like any other failure (R23).
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
   it('sends a ticket with no AI call at all', async () => {
@@ -423,7 +462,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText(/Your ticket is submitted/);
+    await screen.findByText(/Submitted to GitHub/);
     expect(summarizeIssue).not.toHaveBeenCalled();
   });
 });

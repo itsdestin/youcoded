@@ -36,7 +36,7 @@ import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getCapabilities, isRemoteMode } from '../platform';
 import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
+import { Button, CloseButton, Dialog, EmptyState, ErrorState, FieldError, Pill, SearchFilterPill, SectionLabel, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -44,12 +44,14 @@ import { usePreviewMeta } from '../hooks/usePreviewMeta';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { resumeBlockedReason, requestResume } from './tool-views/SessionRefActions';
 import { TagGlyph } from './tags/glyphs';
-import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
 import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
-import { TagNoteEditor } from './tags/TagNoteEditor';
+import { SessionDetails } from './tags/SessionDetails';
+import { ArtifactThumbnail } from './ArtifactThumbnail';
+import { useScrollFade } from '../hooks/useScrollFade';
+import './ui/Dialog.css';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
 import { officeHeaderAction, useOfficeEditScreen } from './office/use-office-edit-screen';
 import { PanelIcon as Ic, PanelIconButton as IconBtn } from './panel-icon-button';
@@ -103,20 +105,25 @@ interface Props {
 function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: () => void }) {
   const title = state.active ? 'Back to reading' : 'Comments';
   return (
-    <button
-      type="button"
+    // WHY the shared Button (guide "File viewers" known deviation, 2026-10-13; G-1 "one primitive,
+    // one look"): this was a hand-made pill (rounded-full, its own hover). `raised` is the shared
+    // button for a control sitting ON content — a solid panel fill and outline, so it stays
+    // readable over the document it floats on; its corners now come from the theme (decisions
+    // "Control shape follows the theme"). The accent ring while Comments is on stays (G-8: the
+    // accent may paint an on-state), as does the floating shadow.
+    <Button
+      variant="raised"
+      size="lg"
       aria-pressed={state.active}
       title={title}
       onClick={onClick}
-      className={`pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel border shadow-lg hover:text-fg hover:bg-well transition-colors ${
-        state.active ? 'text-fg border-accent ring-1 ring-accent' : 'text-fg-2 border-edge'
-      }`}
+      className={`pointer-events-auto gap-2 shadow-lg ${state.active ? 'text-fg border-accent ring-1 ring-accent' : ''}`}
     >
       <MenuIcon name="comment" className="w-4 h-4" />
       Comments
       {/* G-19: label + muted numeral, never an accent badge (G-8). */}
       {state.count > 0 && <span className="text-fg-muted">{state.count}</span>}
-    </button>
+    </Button>
   );
 }
 
@@ -189,7 +196,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const previewMeta = usePreviewMeta(activePreview ? activePreview.id : null);
   const narrowViewport = useNarrowViewport();
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false);
-  const previewSheetWrapRef = useRef<HTMLDivElement>(null);
   // The tags tip's moment: the first time the drawer is on screen with the
   // Organize button that opens the tag editor (guide/tips.ts).
   useEffect(() => { if (activePreview) triggerTip('tags'); }, [activePreview]);
@@ -204,17 +210,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       .then((d) => { if (d) setSessionDefaults({ model: d.model ?? 'sonnet', skipPermissions: !!d.skipPermissions }); })
       .catch(() => {});
   }, []);
-  useEscClose(previewSheetOpen, () => setPreviewSheetOpen(false));
-  useEffect(() => {
-    if (!previewSheetOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (previewSheetWrapRef.current && !previewSheetWrapRef.current.contains(e.target as Node)) {
-        setPreviewSheetOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [previewSheetOpen]);
+  // Session details is a Dialog now: it closes itself on Esc and on a click outside.
   // Sheet must not survive a preview swap/close — reopening on a DIFFERENT
   // conversation's Preview click must not silently show the outgoing one's
   // still-open tag sheet.
@@ -716,20 +712,23 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const dragRaf = useRef(0);
   const [dragging, setDragging] = useState(false);
+  // WHY: only fade the file list when files really continue past a scroll edge;
+  // hooks must stay above the early return so the drawer can open/close safely.
+  const listScrollRef = useScrollFade<HTMLDivElement>();
 
   if (!drawerOpen) return null;
 
   // ── List column (shared by the no-selection and push-sidebar layouts) ──
   const listInner = (
     <>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-edge shrink-0">
-        {/* "Session Files" (Destin, 2026-07-23) — was "Session artifacts"
+      <div data-session-files-header className="flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
+        {/* "Session files" (Destin, 2026-07-23) — was "Session artifacts"
             (2026-07-20, which itself superseded reserving "Artifacts" for the
             Project View tab). "Files" is the plain word for what this actually
             lists; the "Session" qualifier still carries the distinction: this
             drawer is one session's activity log (created/edited/viewed all
             appear), vs the project-wide set in Project View. */}
-        <span className="font-semibold text-sm">Session Files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
+        <span className="text-base font-semibold text-fg">Session files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
         {/* Only in the list-only shape (no artifact, no preview) — once
             either is showing, the top bar's own Close icon covers this, and
             showing both would be a redundant second close button. */}
@@ -747,7 +746,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           "if the goal is consistency, we should try to better match"). The
           click-outside listener stays here — the popover requires one ref around
           both trigger and popover, which the pill forwards. */}
-      <div className="px-2 py-1.5 border-b border-edge-dim shrink-0">
+      {/* WHY: the tapered header is the sole decorative divider; search has no second rule. */}
+      <div className="px-2 py-1.5 shrink-0">
         <SearchFilterPill
           ref={filterWrapRef}
           className="w-full"
@@ -776,7 +776,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           )}
         </SearchFilterPill>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listScrollRef} data-session-files-scroll className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
         {/* A pill click that couldn't resolve — shown INSTEAD of letting the
             generic empty state contradict the file the user just clicked. */}
         {/* break-words on both notes: a long unbroken file name otherwise forces
@@ -845,6 +845,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             <ArtifactListItem
               key={a.id}
               artifact={a}
+              projectRoot={projectRoot}
               isActive={activeArtifactId === a.id}
               isDeleted={a.status === 'deleted' || orphanIds.has(a.id)}
               sessionId={sessionId}
@@ -861,13 +862,22 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           after the title truncates the title itself. */}
       {referenced.length > 0 && (
         <div className="mt-3 border-t border-edge pt-2">
-          <div className="px-3 pb-1 text-2xs uppercase tracking-wider text-fg-muted">{COPY.referencedHeading}</div>
+          {/* WHY SectionLabel, not the old uppercase caption (fix batch 1,
+              2026-09-24): design guide small label — normal case, no
+              letter-spacing. Padding on the wrapper: SectionLabel owns only
+              margin (design-lint no-restyle). */}
+          <div className="px-3 pb-1">
+            <SectionLabel>{COPY.referencedHeading}</SectionLabel>
+          </div>
           {referenced.map((r) => (
             <button
               key={`${r.provider}:${r.id}`}
               type="button"
-              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-well ${
-                activePreview?.id === r.id ? 'bg-well text-fg' : 'text-fg-dim'
+              // WHY bg-accent/10 for selected, not bg-well (fix batch 1,
+              // 2026-09-24): was the same token as hover — the collision this
+              // batch's job D exists to fix. Hover only applies unselected.
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                activePreview?.id === r.id ? 'bg-accent/10 text-fg' : 'text-fg-dim hover:bg-well'
               }`}
               onClick={() => guardUnsaved(() => dispatch({ type: 'SESSION_PREVIEW_SET', sessionId, provider: r.provider, id: r.id, title: r.title }))}
             >
@@ -983,7 +993,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           button for either case — SessionPreviewPane used to draw its own
           second title/close row in its body; that was the "two X's" bug
           Destin flagged, so it no longer renders one. Don't add one back. */}
-      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
+      {/* WHY data-session-files-header, not border-b (guide "File viewers" known deviation,
+          2026-10-13; decisions "Card levels": never a full-width line in a popup or panel, and
+          "Header divider colour"): the same tapered card-outline line the file list's own header
+          and every shared popup (Dialog.css) draw under their title. */}
+      <div data-session-files-header className="flex items-center gap-1 px-2 py-1.5 shrink-0">
         {narrowViewport && active && !listOpen ? (
           // A phone has no hover hint to explain a bare list glyph, and a file
           // that has replaced the list needs a way BACK that reads as one
@@ -996,7 +1010,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {active ? (renaming ? (
           <div className="flex items-center gap-2 min-w-0 px-1 relative">
-            <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-red-500' : 'border-accent'}`}>
+            {/* WHY border-destructive, not border-red-500 (guide "File viewers" known deviation,
+                2026-10-13; principle 2, colours are theme tokens): the theme's own red, the one the
+                shared error box's border uses (Callout CALLOUT_DANGER_SURFACE). */}
+            <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-destructive' : 'border-accent'}`}>
               <input
                 ref={renameInputRef}
                 autoFocus
@@ -1009,10 +1026,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               <span className="text-xs text-fg-muted font-mono px-2">{extOf(fileName)}</span>
             </span>
             {/* Inline failure note — keeps the field open so the user can correct it. */}
+            {/* WHY a solid bg-panel backing under the box (final review F18): this note floats over
+                the file list, and the shared FieldError is a see-through red tint — on its own the
+                rows showed through it. Same box, same corner, now opaque. */}
             {renameError && (
-              <FieldError size="2xs" className="absolute left-1 top-full mt-1 whitespace-nowrap z-10">
-                {renameError}
-              </FieldError>
+              <div className="absolute left-1 top-full mt-1 z-10 rounded-md bg-panel">
+                <FieldError size="2xs" className="whitespace-nowrap">
+                  {renameError}
+                </FieldError>
+              </div>
             )}
           </div>
         ) : (
@@ -1046,7 +1068,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             `active &&`-gated exactly as before. */}
         {activePreview && (
           <>
-            <div ref={previewSheetWrapRef} className="relative">
+            <div className="relative">
               <button
                 type="button"
                 onClick={() => setPreviewSheetOpen((v) => !v)}
@@ -1061,48 +1083,30 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     shared so it can't drift between the two surfaces. */}
                 <TagGlyph className="w-4 h-4" />
               </button>
-              {previewSheetOpen && (
-                // layer-surface (panel) hosting TagNoteEditor's own bg-inset
-                // card — the same nesting CloseSessionPrompt's OverlayPanel
-                // uses, and TagNoteEditor already lifts its OWN fields to
-                // bg-well against that bg-inset card, so no fieldClassName
-                // override is needed here (unlike the Resume Browser, whose
-                // sheet drops the TagPicker/NoteEditor straight onto its
-                // bg-inset card with no layer-surface between it and the
-                // panel below).
-                <div
-                  className="layer-surface absolute right-0 top-full mt-2 w-[280px] p-2 z-30"
-                  role="dialog"
-                  aria-label={COPY.tagsAndNoteLabel}
-                >
-                  {/* An unreadable note is reported, never opened as an empty editor — a
-                      save writes the whole note, so typing would replace the one nobody
-                      was shown (code review 2026-09-11, F1). */}
-                  {previewMeta.unreadable ? (
-                    <ErrorState
-                      variant="inline"
-                      message={`Couldn't load this conversation's tags and note: ${previewMeta.unreadable}`}
-                      onRetry={previewMeta.reload}
-                    />
-                  ) : (
-                    <TagNoteEditor
-                      appliedIds={new Set(previewMeta.tags)}
-                      onToggleTag={previewMeta.toggleTag}
-                      registry={previewTagRegistry}
-                      note={previewMeta.note}
-                      onNote={previewMeta.saveNote}
-                      // Priority as a built-in tag, as in the Resume browser
-                      // and the Projects preview.
-                      builtIns={[{
-                        tag: PRIORITY_TAG,
-                        hint: PRIORITY_HINT,
-                        applied: !!previewMeta.flags.priority,
-                        onToggle: (next) => void previewMeta.toggleFlag('priority', next),
-                      }]}
-                    />
-                  )}
-                </div>
-              )}
+              {/* Session details as a popup, the same as the status bar's and Resume's
+                  (resume-sheet-4, Destin 2026-10-04). */}
+              <Dialog noScreen="Session details again, from a preview header; photographed as chat/resume/organize" open={previewSheetOpen} onClose={() => setPreviewSheetOpen(false)} title="Session details" size="panel">
+                {/* An unreadable note is reported, never opened as an empty editor — a
+                    save writes the whole note, so typing would replace the one nobody
+                    was shown (code review 2026-09-11, F1). */}
+                {previewMeta.unreadable ? (
+                  <ErrorState
+                    variant="inline"
+                    message={`Couldn't load this conversation's tags and note: ${previewMeta.unreadable}`}
+                    onRetry={previewMeta.reload}
+                  />
+                ) : (
+                  <SessionDetails
+                    name={activePreview.title || COPY.untitled}
+                    appliedIds={new Set(previewMeta.tags)}
+                    onToggleTag={previewMeta.toggleTag}
+                    registry={previewTagRegistry}
+                    note={previewMeta.note}
+                    onNote={previewMeta.saveNote}
+                    pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }} complete={{ done: !!previewMeta.flags.complete, onComplete: (next) => void previewMeta.toggleFlag('complete', next) }}
+                  />
+                )}
+              </Dialog>
             </div>
             {/* Complete, beside the tag button — the Resume browser's pair. */}
             <CompleteToggle
@@ -1320,32 +1324,41 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>
-                      {!editState.autosaves && <button
-                        type="button"
+                      {/* WHY the shared Button for Cancel / Save / Edit (guide "File viewers" known
+                          deviation, 2026-10-13; G-1 "one primitive, one look"): these were
+                          hand-made pills. Save and Edit are the filled `primary` — kept solid on
+                          wallpaper themes by solid-accent, as Ask Your Assistant beside them
+                          (CommentsFloatingActions) is; Cancel is `raised`, the shared button that
+                          sits on content, like Comments. Corners now follow the theme. */}
+                      {!editState.autosaves && <Button
+                        variant="raised"
+                        size="lg"
                         onClick={() => editRef.current?.cancelEdit()}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel text-fg-2 border border-edge shadow-lg hover:text-fg hover:bg-well transition-colors"
+                        className="gap-2 shadow-lg"
                       >
                         <Ic name="close" size={15} />
                         Cancel
-                      </button>}
-                      <button
-                        type="button"
+                      </Button>}
+                      <Button
+                        variant="primary"
+                        size="lg"
                         onClick={() => editRef.current?.saveEdit()}
-                        className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                        className="solid-accent gap-2 shadow-lg"
                       >
                         <Ic name="check" size={15} />
                         {editState.autosaves ? 'Done' : 'Save'}
-                      </button>
+                      </Button>
                     </>
                   ) : (
-                    <button
-                      type="button"
+                    <Button
+                      variant="primary"
+                      size="lg"
                       onClick={() => { editRef.current?.startEdit(); setListOpen(false); }}
-                      className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                      className="solid-accent gap-2 shadow-lg"
                     >
                       <Ic name="editdoc" size={15} />
                       Edit
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}
@@ -1385,9 +1398,8 @@ export function GitFooterEntry({
 }: {
   counts: { added: number; removed: number } | null;
   show: boolean;
-  /** mid-merge unmerged file — renders an amber "Conflict" word before the
-   *  counts (2026-07-22 bug: these files used to vanish from the footer).
-   *  Plain word, not a chip: the metadata strip speaks in words (statusWord). */
+  /** mid-merge unmerged file — renders the warning "Conflict" pill before the
+   *  counts (2026-07-22 bug: these files used to vanish from the footer). */
   conflicted?: boolean;
   onOpenReview: () => void;
 }) {
@@ -1395,26 +1407,26 @@ export function GitFooterEntry({
   return (
     <>
       {conflicted && (
+        // A pill, not amber words (small-fixes-3#SF3-10) — decisions "Status words": the Conflict pill.
         <Tooltip text="This file has merge conflicts">
-        <span className="font-medium text-amber-700">
-          Conflict
-        </span>
+        <span className="shrink-0"><Pill tone="warning">Conflict</Pill></span>
         </Tooltip>
       )}
       {counts && (
         <>
-          <span className="font-mono text-green-400">+{counts.added}</span>
-          <span className="font-mono text-red-400">−{counts.removed}</span>
+          {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+          <span className="font-mono">+{counts.added}</span>
+          <span className="font-mono">−{counts.removed}</span>
         </>
       )}
       <Tooltip text="Review this file's changes">
-      <button
-        type="button"
-        onClick={onOpenReview}
-        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-2xs text-fg-dim hover:text-fg hover:bg-inset transition-colors"
-      >
-        Review Changes <Ic name="forward" size={11} />
-      </button>
+      {/* WHY the shared outlined Button (known deviations fixed by existing rules, 2026-10-13):
+          it was grey text with its own hand-set corners — a bare text button. The guide: a
+          less-important action is outlined, never bare text (decisions "Secondary buttons");
+          small, as the inline row actions are (EngineCard, provider rows). */}
+      <Button variant="secondary" size="sm" onClick={onOpenReview}>
+        Review changes <Ic name="forward" size={11} />
+      </Button>
       </Tooltip>
     </>
   );
@@ -1426,6 +1438,7 @@ export function GitFooterEntry({
 
 interface ListItemProps {
   artifact: ArtifactRecord;
+  projectRoot: string;
   isActive: boolean;
   isDeleted: boolean;
   // WHY: the row's word/timestamp describe what THIS session did to the file,
@@ -1440,7 +1453,7 @@ interface ListItemProps {
   onRemoveId: (id: string) => void;
 }
 
-function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSelectId, onRemoveId }: ListItemProps) {
+function ArtifactListItemImpl({ artifact, projectRoot, isActive, isDeleted, sessionId, onSelectId, onRemoveId }: ListItemProps) {
   const statusWord = statusInfo(artifact, isDeleted, sessionId);
   const relTime = formatRelativeTime(lastModifiedInSession(artifact, sessionId));
   const fileName = artifact.path.split('/').pop() ?? artifact.path;
@@ -1454,19 +1467,31 @@ function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSele
   return (
     // group/relative wrapper hosts the hover-revealed remove × (a button can't
     // nest inside the select button) — same pattern as ProjectSwitcher rows.
-    <div className="group relative">
+    // WHY: keep the card unclipped so the remove button's 44px coarse-hit
+    // pseudo-element can extend into the row gutter on touch screens.
+    <div className="group relative mx-2 my-1.5 rounded-lg border border-edge-dim bg-inset">
       <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
       <button
-        className={`w-full text-left px-2 py-2 ${canRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
-          isActive ? 'bg-inset' : ''
+        // WHY bg-accent/10, not bg-inset, when selected (fix batch 1,
+        // 2026-09-24): both this and the hover state used the SAME token, so
+        // a hovered-but-not-selected row looked identical to the actually
+        // selected one (inventory/cards-rows-spacing.md's hover/selected
+        // collision finding). Selected gets an accent tint, matching
+        // ModelPicker/FolderSwitcher; hover only applies when NOT selected.
+        className={`w-full text-left rounded-lg px-2 py-2.5 ${canRemove ? 'pr-8' : ''} transition-colors ${
+          isActive ? 'bg-accent/10' : 'hover:bg-inset'
         } ${isDeleted ? 'opacity-50' : ''}`}
         onClick={() => onSelectId(artifact.id)}
       >
-        <div className="flex items-center gap-1 min-w-0">
-          <span className={`font-mono text-xs truncate flex-1 ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
+        {/* WHY: the real file preview identifies a row faster than another file-type word;
+            text centers against its 48px height; status remains a word, not a glyph. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <ArtifactThumbnail artifact={artifact} projectPath={projectRoot} className="shrink-0 rounded border border-edge-dim w-21 h-12" bgClass="bg-canvas" />
+          <div className="min-w-0 flex-1 flex flex-col justify-center gap-1">
+            <span className={`font-medium text-xs truncate ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
+            <div className="text-3xs text-fg-muted">{statusWord} · {relTime}</div>
+          </div>
         </div>
-        {/* WHY: status shown as a word, not a ●◐○ glyph (user-disliked — see dislikes-status-glyphs memory). */}
-        <div className="text-3xs text-fg-muted ml-0.5">{statusWord} · {relTime}</div>
       </button>
       </Tooltip>
       {canRemove && (
@@ -1485,7 +1510,7 @@ function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSele
 }
 
 // Task 12 ("Side drawer rows memoised"): default shallow compare is safe
-// because every prop is now either DATA — artifact (same object reference
+// because every prop is DATA — projectRoot (stable), artifact (same object
 // across a `listedArtifacts` recompute: filter/slice/sort never clone
 // elements — see the useMemo above), isActive/isDeleted (primitives,
 // `===` per row), sessionId (this drawer's own session, constant while it

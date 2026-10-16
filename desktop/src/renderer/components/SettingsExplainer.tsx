@@ -1,8 +1,8 @@
-import { Tooltip } from './ui';
+import { CARD_LEVEL_1, SectionLabel, Tooltip } from './ui';
 /**
  * SettingsExplainer.tsx — the explainer payload, and nothing else.
  *
- * Used by Remote Access, Backup & Sync, Appearance and Context to render a
+ * Used by Remote access, Backup & sync, Appearance and Context to render a
  * "What is this?" view inside the same modal frame. The host keeps a `showInfo`
  * boolean and renders this instead of its main content, so the user can back
  * out to the original settings.
@@ -45,31 +45,45 @@ interface Props {
 }
 
 export default function SettingsExplainer({ intro, sections }: Props) {
+  // WHY labelled cards (final-review#ST-21, Destin: "the inside of this (i) popup for appearance
+  // needs similar grouping to our new about popup. probably other (i) popups with bare text as
+  // well"): every (i) explainer — Appearance, Backup & sync, Remote access, Context, Permissions,
+  // Specialists, Performance and the rest that render this — now groups like About: each section
+  // is a small label over one first-level card holding its paragraphs and bullets. The opening
+  // summary is labelled "Overview" too (popup-cards-1#PC-3, Destin: the first box should have a
+  // header above it when there are multiple and headers are being used), so no card reads as
+  // filed under nothing. Labels over a card are plain, as About's are, so the reading underline
+  // (final#F-1) is gone with the bare text it marked.
   return (
     <>
-      <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
+      <SectionLabel className="mb-2">Overview</SectionLabel>
+      <div className={`${CARD_LEVEL_1} p-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
+      </div>
 
       {sections.map((section, i) => (
         <section key={i}>
-          {/* h3, matching K1 — the dialog title is h2, so an h3 here announces
-              as its child rather than its sibling. */}
-          <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
+          {/* h3 (SectionLabel renders one), matching K1 — the dialog title is h2,
+              so an h3 here announces as its child rather than its sibling. */}
+          <SectionLabel className="mb-2">
             {section.heading}
-          </h3>
-          {section.paragraphs?.map((p, j) => (
-            <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
-          ))}
-          {section.bullets && (
-            <ul className="space-y-1.5 mt-1">
-              {section.bullets.map((b, j) => (
-                <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
-                  {b.term && <span className="font-semibold text-fg">{b.term}</span>}
-                  {b.term && ' — '}
-                  {b.text}
-                </li>
-              ))}
-            </ul>
-          )}
+          </SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3`}>
+            {section.paragraphs?.map((p, j) => (
+              <p key={j} className="text-xs text-fg-2 leading-relaxed mb-2 last:mb-0">{p}</p>
+            ))}
+            {section.bullets && (
+              <ul className={`space-y-1.5 ${section.paragraphs?.length ? 'mt-2' : ''}`}>
+                {section.bullets.map((b, j) => (
+                  <li key={j} className="text-xs text-fg-2 leading-relaxed pl-3 relative before:content-['•'] before:absolute before:left-0 before:text-fg-faint">
+                    {b.term && <span className="font-semibold text-fg">{b.term}</span>}
+                    {b.term && ' — '}
+                    {b.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </section>
       ))}
     </>

@@ -108,7 +108,8 @@ const BrowserAskCard = memo(function BrowserAskCard({ sessionId }: { sessionId: 
     case 'handoff':
       actions = (
         <>
-          <Button variant="ghost" size="sm" disabled={sending} onClick={() => void answer('cant')}>I can't do this</Button>
+          {/* Outlined, never bare text (guide "Buttons": everything less important is outlined). */}
+          <Button variant="secondary" size="sm" disabled={sending} onClick={() => void answer('cant')}>I can't do this</Button>
           {!state?.windowShown && !state?.myChrome && (
             <Button variant="secondary" size="sm" disabled={sending} onClick={() => void openWindow()}>Show window</Button>
           )}

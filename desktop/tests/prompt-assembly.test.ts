@@ -307,8 +307,16 @@ describe('CODER_DEFAULT_BODY', () => {
   });
 });
 
+// WHY cwd '/tmp', not process.cwd(): these byte-identity checks assemble the prompt
+// up to four times, and each assembly shells out to `git status` in its cwd with the
+// app's 3 s timeout. In this real checkout the line reads "Git branch: … (clean)" —
+// until one call on a loaded machine overruns 3 s and reads "Git: not a repository",
+// so a prompt "differs" from itself (reproduced with a git that stalls 3.5 s one
+// call in three). Outside a repo every outcome — fast failure or timeout — is the
+// same line, so only the variant/tool behaviour under test can change the bytes.
+// It also stops the real checkout's CLAUDE.md files from leaking into the prompt.
 describe('prompt variant overlay', () => {
-  const base = { presetBody: 'PRESET_BODY', cwd: process.cwd(), appVersion: '9.9.9' };
+  const base = { presetBody: 'PRESET_BODY', cwd: '/tmp', appVersion: '9.9.9' };
 
   it('default/anthropic/gpt append nothing (byte-identical to no variant)', () => {
     const none = assembleSystemPrompt({ ...base });
@@ -326,7 +334,9 @@ describe('prompt variant overlay', () => {
 });
 
 describe('assembleSystemPrompt — tool-less models (hasTools:false)', () => {
-  const base = { presetBody: 'PRESET_BODY', cwd: process.cwd(), appVersion: '9.9.9' };
+  // WHY '/tmp': the same git-timeout race as 'prompt variant overlay' above — the
+  // explicit-true vs default comparison assembled twice against the real checkout.
+  const base = { presetBody: 'PRESET_BODY', cwd: '/tmp', appVersion: '9.9.9' };
 
   it('omits the tool-guidance line AND the variant overlay when hasTools is false', () => {
     // A tool-less model (profile.supportsTools === false, e.g. Gemma 3n) gets no

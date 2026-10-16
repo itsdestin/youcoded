@@ -12,6 +12,7 @@
 //    leaderboard being down must never look like the game being down (§4.2).
 
 import type { GameDefinition } from './game-registry';
+import { Button, SectionLabel } from '../ui';
 
 export interface LeaderboardRow {
   accountId: string;
@@ -60,14 +61,13 @@ export default function Leaderboard({ game, rows, staleNote, unpublishedBest, on
             ? 'Saved on this device. Sign in to rank it against your friends.'
             : 'Play a round and your best shows up here.'}
         </p>
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text — "Sign in links that are really actions" is named
+            explicitly): was a hand-rolled text-link button. */}
         {onSignIn && unpublishedBest && (
-          <button
-            type="button"
-            onClick={onSignIn}
-            className="self-start text-2xs font-medium text-link hover:text-link-hover transition-colors"
-          >
+          <Button variant="secondary" size="sm" className="self-start" onClick={onSignIn}>
             Sign in
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -119,9 +119,9 @@ export default function Leaderboard({ game, rows, staleNote, unpublishedBest, on
   );
 }
 
-// G-7: uppercase text-2xs fg-muted is the app's only section header.
+// G-7 WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide:
+// no spaced capitals — decisions H-3/L-1…L-4). The arcade lobby/leaderboard
+// menus are NOT exempt from the guide (only the game boards themselves are).
 function Eyebrow({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-2xs font-medium text-fg-muted tracking-wide uppercase">{children}</span>
-  );
+  return <SectionLabel>{children}</SectionLabel>;
 }

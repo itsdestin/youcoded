@@ -43,6 +43,11 @@ const HOW_TO_FIX = [
   'freezes every window until it returns. Prefer the async form —',
   '`await fs.promises.readFile(...)` (stat, readdir, writeFile, mkdir, rm …), or',
   'an async child process (`execFile` with a callback / util.promisify, `spawn`).',
+  // WHY this option (project-switcher friction, proposal 10): new state in a NEW file on a path
+  // that already reads an allowlisted file synchronously adds a second blocking call; the same
+  // state kept inside the file the path already reads adds none.
+  'New state on a path that already reads or writes a file (an allowlisted one)?',
+  'Store it IN that file — one more field, no new call — rather than in a new file.',
   'Only if the call truly runs just at startup/shutdown, or is tiny and rare',
   '(a user clicking a button once), add an entry to',
   'desktop/tests/main-blocking-calls.allowlist.json, in the right group, with a',
@@ -408,6 +413,15 @@ describe('main-process blocking calls (one allowlist, ratcheted)', () => {
       return hit;
     });
     expect(hits).toEqual([true, true, true, true, true, true, false, false, false, false]);
+  });
+
+  it('the failure names every honest way out, not only "go async"', () => {
+    // WHY (project-switcher friction, proposal 10): a new small JSON file beside an allowlisted
+    // one failed here; the cheapest compliant fix — keep the new state INSIDE the file that path
+    // already reads — was found by trial, because the message offered only async or the list.
+    expect(HOW_TO_FIX).toMatch(/async/);
+    expect(HOW_TO_FIX).toMatch(/already reads/);
+    expect(HOW_TO_FIX).toMatch(/allowlist/);
   });
 
   it('the scanner catches every spelling of a blocking call and nothing else', () => {

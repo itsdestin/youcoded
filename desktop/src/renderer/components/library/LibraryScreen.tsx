@@ -1,11 +1,13 @@
-// Your Library — management destination. Favorites + Installed + Updates.
+// Your library — management destination. Favorites + Installed + Updates.
 // Shares MarketplaceProvider with MarketplaceScreen (per design doc — do
 // not fork the context; install/uninstall must mutate one source of truth).
 
 import React, { useCallback, useMemo, useState, useEffect } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
-import { Button, CloseButton, EmptyState, ErrorState, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
+import { ScreenBand } from "../ScreenBand";
+import { LibraryIcon, MarketplaceIcon } from "../screen-icons";
+import { Button, EmptyState, ScreenError, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
@@ -18,6 +20,12 @@ import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
 interface Props {
   onExit(): void;
+  // The band across the top (ScreenBand) carries the app's Settings button, as
+  // Projects and Pages do, so the screen needs Settings' state (App.tsx owns it).
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
+  settingsBadge?: boolean;
+  settingsDangerBadge?: boolean;
   // Jump to the marketplace destination. Matches MarketplaceScreen's
   // onOpenLibrary — symmetric navigation between the two top-level views.
   onOpenMarketplace?(): void;
@@ -29,7 +37,7 @@ interface Props {
 }
 
 export default function LibraryScreen({
-  onExit, onOpenMarketplace, onOpenShareSheet, onOpenThemeShare, initialTab,
+  onExit, settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onOpenMarketplace, onOpenShareSheet, onOpenThemeShare, initialTab,
 }: Props) {
   const mp = useMarketplace();
 
@@ -47,8 +55,12 @@ export default function LibraryScreen({
     const failure = what === 'themes' ? (mp.error ?? mp.themesError) : mp.error;
     if (failure) {
       return (
-        <ErrorState
-          message={`Couldn't load your installed ${what}: ${plainMessage(failure)}`}
+        // WHY ScreenError (gt-r1#B-3): the tab has nothing to show, so it gets the full-screen
+        // error; the raw reason moves under Details instead of after a colon in the sentence.
+        <ScreenError
+          title={`Your installed ${what} couldn't load`}
+          message="Nothing was removed."
+          details={plainMessage(failure)}
           onRetry={() => { void mp.refresh(); }}
         />
       );
@@ -114,7 +126,7 @@ export default function LibraryScreen({
   // id, or `theme:<slug>`), which is exactly what routes it. This does NOT
   // make the card's memo hold here: the `item`/`pluginBadge` objects below are
   // still built per render, and the card reads marketplace context itself, so
-  // Your Library redraws its cards on every re-render. That is deliberate —
+  // Your library redraws its cards on every re-render. That is deliberate —
   // these lists are tens of cards, not the thousands the Marketplace grid
   // windows; stabilising them would buy nothing a user could feel.
   const openLibraryEntry = useCallback((id: string) => {
@@ -171,59 +183,57 @@ export default function LibraryScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-40">
+    // WHY flex column with the band on top (H-1/H-5): the band stays put while only
+    // the body under it scrolls, like Projects and Pages.
+    <div className="fixed inset-0 z-40 flex flex-col">
       {!mp.loading && <ScreenMark name="library" />}
       {!mp.loading && tab === 'themes' && <ScreenMark name="library/themes" />}
       {/* Pre-blurred wallpaper as a non-scrolling backdrop — pinned to the
           fixed outer wrapper so it stays put as content scrolls. */}
       <WallpaperBackdrop />
-      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <div className="flex items-center justify-between gap-2 p-3">
-        <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
-        <div className="flex items-center gap-2 shrink-0">
+      <ScreenBand
+        settingsOpen={settingsOpen}
+        onToggleSettings={onToggleSettings}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        active={null}
+        icon={<LibraryIcon />}
+        title={<span className="truncate">Your library</span>}
+        onBack={onExit}
+      />
+      {/* NO .scroll-mask here — a deliberate exception to the one scroll fade (listed in
+          tests/scroll-mask.test.ts): the tab pill and cards are frosted glass (.layer-surface). A mask would make this scroller a "backdrop root",
+          so every frosted card inside would stop blurring the wallpaper (measured 2026-10-15: the
+          hero and filter bar showed the wallpaper sharp through them on Meadow Mist). The fade
+          here needs a masked wallpaper copy laid over the page (the chat's ChatEdgeFade) — an
+          open question for Destin, not decided here. */}
+      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* WHY no h1 or exit here (decisions "Full-screen titles", H-1; "Way back to
+          chat", H-5): the band above names the screen, centred with its icon, and
+          leaves by its light "Esc · Back to chat" (final-review#FV-6), like Projects and Pages. The
+          jump to the Marketplace stays as this screen's own tool, at the right. */}
+      {onOpenMarketplace && (
+        <div className="flex items-center justify-end gap-2 px-3 sm:px-4 pt-3">
           {/* panel-glass and the tighter py-1 stay as className overrides (spec
               decision 69) — glass re-tiers translucency on wallpaper themes, so a
               naive migration would leave this chip opaque over the wallpaper. */}
-          {onOpenMarketplace && (
-            <Button
-              variant="secondary"
-              size="lg"
-              type="button"
-              onClick={onOpenMarketplace}
-              className="panel-glass py-1"
-              aria-label="Open marketplace"
-              title="Marketplace"
-            >
-              {/* Wide: text. Narrow: storefront icon — symmetric with MarketplaceScreen's library bookmark. */}
-              <span className="hidden sm:inline">Marketplace</span>
-              <span className="sm:hidden inline-flex p-0.5" aria-hidden>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 9l1-5h16l1 5" />
-                  <path d="M5 9v11h14V9" />
-                  <path d="M9 13h6" />
-                </svg>
-              </span>
-            </Button>
-          )}
-          {/* Wide: Esc text. Narrow: bordered close-X — matches the marketplace top bar. */}
           <Button
-            variant="ghost"
-            onClick={onExit}
-            className="hidden sm:inline-flex text-sm px-2.5 py-1"
-            aria-label="Exit library"
+            variant="secondary"
+            size="lg"
+            type="button"
+            onClick={onOpenMarketplace}
+            className="panel-glass py-1"
+            aria-label="Open marketplace"
+            title="Marketplace"
           >
-            Esc · Back to chat
+            {/* Wide: text. Narrow: storefront icon — symmetric with MarketplaceScreen's library bookmark. */}
+            <span className="hidden sm:inline">Marketplace</span>
+            <span className="sm:hidden inline-flex p-0.5" aria-hidden>
+              <MarketplaceIcon className="w-4.5 h-4.5" />
+            </span>
           </Button>
-          {/* Was a hand-rolled button + inline ✕ SVG while Marketplace next door
-              already used the primitive — change 27 is "one exit per surface
-              type", so the two narrow exits must be the same component. */}
-          <CloseButton
-            onClick={onExit}
-            label="Exit library"
-            className="sm:hidden panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
-          />
         </div>
-      </div>
+      )}
 
       {/* Tab row — sticky so it stays visible while scrolling content.
           UI review P-2 #2: the Library adopts the Projects header switcher —
@@ -346,7 +356,8 @@ function Section({ title, empty, action, children }: {
   const hasContent = React.Children.toArray(children).filter(Boolean).length > 0;
   return (
     <section>
-      <h2 className="text-lg font-medium text-fg px-1 mb-2">{title}</h2>
+      {/* WHY 16px (text-base), not 18px: the full-screen group heading, matching the Projects view's TabHeading (projects-view-2#PV2-2; redesign backlog 14). */}
+      <h2 className="text-base font-medium text-fg px-1 mb-2">{title}</h2>
       {hasContent ? children : <EmptyState message={empty} action={action} />}
     </section>
   );

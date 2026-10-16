@@ -29,9 +29,10 @@ import MarketplaceFilterBar, { emptyFilter } from '../src/renderer/components/ma
 
 afterEach(cleanup);
 
-// The Marketplace's pre-extraction Chip recipe, verbatim.
-const ACTIVE = 'px-3 py-1 rounded-full text-sm transition-colors bg-accent text-on-accent';
-const INACTIVE = 'px-3 py-1 rounded-full text-sm transition-colors bg-inset text-fg-2 hover:text-fg border border-edge hover:border-edge-dim';
+// The Marketplace's pre-extraction Chip recipe, verbatim — except the corner, which is now the
+// theme's control corner instead of a fixed pill (decisions "Control shape follows the theme").
+const ACTIVE = 'px-3 py-1 rounded-control text-sm transition-colors bg-accent text-on-accent';
+const INACTIVE = 'px-3 py-1 rounded-control text-sm transition-colors bg-inset text-fg-2 hover:text-fg border border-edge hover:border-edge-dim';
 
 describe('FilterChip', () => {
   it('is a checkbox that reports its state and toggles on click', () => {

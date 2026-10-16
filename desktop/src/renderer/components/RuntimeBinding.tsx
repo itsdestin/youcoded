@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getCapabilities } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
-import { FieldError, SettingRow, Toggle } from './ui';
+import { FieldError, FoldRow, Pill, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -120,7 +120,7 @@ function isNativeSupported(): boolean {
 // WHY BOTH FORMS MUST ALSO USE THIS FOR THEIR POST-CREATE RESET (review R2-3):
 // after every create, each form resets its runtime back to a default so the next
 // open starts clean. When that reset was the literal 'claude', the ChatGPT
-// default lasted exactly ONE session -- the second New Session was Claude Code
+// default lasted exactly ONE session -- the second New session was Claude Code
 // again, with no Claude login behind it. Resetting to defaultRuntime() instead
 // makes the default hold for every session, not just the first.
 //
@@ -336,7 +336,7 @@ export function NativeExtras({ nb, preset, onPreset }: {
           the full tool suite; they differ in prompt + starting permission
           posture. Stamped at create; drives the resolved harnessId. */}
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Preset</label>
+        <label className="text-xs font-medium text-fg-muted mb-1 block">Preset</label>
         <div className="flex gap-2">
           {PRESETS.map((p) => (
             <button
@@ -369,28 +369,24 @@ export function NativeExtras({ nb, preset, onPreset }: {
         // Round-5 note (Destin): the toggle is a SUB-CARD inside the expanded warning card,
         // not a sibling row — so the card is one container that grows, and the toggle row's
         // own tint reads as nested inside it.
-        <div className="rounded-lg bg-inset/50">
-          <SettingRow
-            variant="item"
-            className="bg-transparent"
+        // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold — its row tint ended in a hard line above the opened part.
+        <FoldRow
+            open={nb.memDetailOpen}
+            onToggle={(next) => nb.setMemDetailOpen(() => next)}
             title={(
-              // WHY `text-warning-fg` and not a fixed amber (contract R30, 2026-09-06):
-              // one hard-coded amber is crisp on a dark theme and invisible on a pale
-              // one — measured 9.5:1 on Halftone Dimension and 1.05:1 on Meadow Mist,
-              // where it sat on that theme's pale-green card at practically the same
-              // brightness. `--warning-fg` is the same amber nudged, per theme, until
-              // it is readable on that theme's own surfaces, so a theme nobody has
-              // written yet comes out right too. Dark themes are unchanged.
-              <span className={nb.memVerdict.verdict === 'too-large' ? 'text-destructive-fg' : 'text-warning-fg'}>
+              // (Before: `text-warning-fg`, a per-theme amber chosen over a fixed one for contrast,
+              // contract R30 2026-09-06. The pill's tint is the shared, measured status tint.)
+              // WHY a pill now (small-fixes-2#SF2-10, "fix-next"): the per-theme amber/red TEXT
+              // above was still status colour in words, which the guide rules out. Same words, in a
+              // status pill whose tint carries the amber/red — Local models' fit pills (SF2-9).
+              <Pill tone={nb.memVerdict.verdict === 'too-large' ? 'danger' : 'warning'}>
                 {nb.memVerdict.verdict === 'too-large' ? 'This model is too large for this computer' : 'This model may not fit in available memory'}
-              </span>
+              </Pill>
             )}
             description={nb.memDetailOpen ? nb.memVerdict.headline : undefined}
-            onClick={() => nb.setMemDetailOpen((o) => !o)}
-            expanded={nb.memDetailOpen}
-          />
-          {nb.memDetailOpen && nb.memVerdict.verdict === 'tight' && nb.dismissMemoryWarning && (
-            <div className="px-1.5 pb-1.5">
+          >
+          {nb.memVerdict.verdict === 'tight' && nb.dismissMemoryWarning && (
+            <div>
               <SettingRow
                 variant="item"
                 className="bg-inset"
@@ -409,7 +405,7 @@ export function NativeExtras({ nb, preset, onPreset }: {
               {nb.memDismissError && <FieldError as="p" className="px-3 pb-1.5">{nb.memDismissError}</FieldError>}
             </div>
           )}
-        </div>
+        </FoldRow>
       )}
     </>
   );

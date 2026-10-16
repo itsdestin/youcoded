@@ -5,13 +5,16 @@
 // the whole section is gated on window.claude.native.supported so production
 // builds (native.supported false until Phase 2) render nothing.
 //
-// Styling mirrors ProvidersSection: the panel's row cards are the shared
-// in-panel row surface (bg-inset/50, borderless — change 25; they were
-// bg-well + border-edge-dim), plain-word status (never ●◐○ glyphs),
-// consequence-gated destructive actions.
+// Styling mirrors ProvidersSection: plain-word status (never ●◐○ glyphs),
+// consequence-gated destructive actions. Card-levels sweep (2026-09-27):
+// top-level cards ("Models", "Other local apps") are `CARD_LEVEL_1`
+// (`bg-inset/50`); everything nested one level in (RepoCard, LocalModelRow,
+// a detected app, a quant option) is `CARD_LEVEL_2` — they used to share the
+// SAME `bg-inset/50` as their own parent card, a box wearing its box's look.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, FieldError, InputGroup, ProgressBar, Callout, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel, FoldRow, Pill } from './ui';
+import type { PillTone } from './ui/Pill';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
   InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
@@ -22,6 +25,8 @@ import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { useScreenOpen } from '../shoot-mode';
+import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 
 // quants() decorates every option with a GPU-aware fit label.
 type QuantWithFit = QuantOption & { fit: FitEstimate };
@@ -39,8 +44,23 @@ function gbNum(bytes: number): string {
 // Fit → a status color. These are theme-independent status colors (the app's
 // standing rule keeps green/amber/red hardcoded); the label text is plain words
 // straight from the estimator.
-function fitColor(fit: FitEstimate['fit']): string {
-  return fit === 'fits' ? 'text-green-600' : fit === 'tight' ? 'text-amber-500' : 'text-red-500';
+// WHY a pill, not coloured words (small-fixes-2, Destin "yes, proceed"): "Runs fast — fits on
+// your GPU" was green TEXT (amber / red for the others), and the guide keeps status colours out of
+// text — "a status label is a small tinted pill in its status colour" (guide "Status and
+// notices"; the Local engine's Running / Stopped pill on this same screen). Same words, same
+// colours, now in the pill's tint with the words in the normal text colour.
+function fitTone(fit: FitEstimate['fit']): PillTone {
+  return fit === 'fits' ? 'ok' : fit === 'tight' ? 'warning' : 'danger';
+}
+
+/** A model's size and how well it fits, on one centred line: the size, then the fit pill. */
+function SizeAndFit({ q, testId }: { q: QuantWithFit; testId?: string }) {
+  return (
+    <p className="text-3xs mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1" data-testid={testId} data-centres-agree="size and fit">
+      <span><SizeLine q={q} /></span>
+      <Pill tone={fitTone(q.fit.fit)}>{q.fit.label}</Pill>
+    </p>
+  );
 }
 
 /** The size under a downloadable model (deck S-2, Q-3 pick c; round 2 P-5): ONE
@@ -108,7 +128,8 @@ export default function LocalModelsSection({ embedded = false }: { embedded?: bo
   return (
     <section>
       {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
+        // WHY SectionLabel (fix batch 2): the guide's small label, normal case.
+        <SectionLabel className="mb-2">Local models</SectionLabel>
       )}
 
       <div className="space-y-4">
@@ -211,13 +232,14 @@ function DownloadProgressRow({ dl }: { dl: DownloadProgress }) {
         </p>
         {/* "Pause", not "Cancel": stopping keeps every downloaded byte, and the
             row below uses the same word for the same action (Destin, 2026-08-27).
-            No longer red — pausing destroys nothing. */}
-        <button
-          onClick={() => void window.claude.models.downloadCancel(dl.downloadId)}
-          className="text-3xs font-medium text-fg-muted hover:text-fg hover:underline"
-        >
+            No longer red — pausing destroys nothing.
+            WHY a real Button, not the old underlined text link (fix batch 1
+            addendum, 2026-09-24): a paused/resumed download's own action is
+            never bare text — matches LocalModelRow's installed-row Pause,
+            which already used a proper Button. */}
+        <Button variant="ghost" size="sm" onClick={() => void window.claude.models.downloadCancel(dl.downloadId)}>
           Pause
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -298,7 +320,8 @@ function ModelBrowser({
   return (
     // Change 25: in-panel row surface, matching EngineCard and "Other local
     // apps" — the three are siblings in this panel and shared one class string.
-    <div className="rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): this is the LEVEL-1 card.
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       <p className="text-xs text-fg font-medium mb-2.5">Models</p>
 
       {/* Search — filters recommended/installed locally, searches Hugging Face. */}
@@ -333,7 +356,9 @@ function ModelBrowser({
           {/* Installed (+ in-progress) */}
           {installedFiltered.length > 0 && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Installed</p>
+              {/* WHY SectionLabel (fix batch 1, 2026-09-24): design guide small
+                  label — normal case, no letter-spacing. */}
+              <SectionLabel>Installed</SectionLabel>
               {installedFiltered.map((m) => (
                 <LocalModelRow key={m.id} model={m} progress={progressFor(m)} onRefresh={onRefreshInstalled} />
               ))}
@@ -343,9 +368,7 @@ function ModelBrowser({
           {/* Recommended (label changes to "matches" while filtering) */}
           {curatedFiltered.length > 0 && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                {q ? 'Recommended matches' : 'Recommended'}
-              </p>
+              <SectionLabel>{q ? 'Recommended matches' : 'Recommended'}</SectionLabel>
               {curatedFiltered.map((m) => (
                 <RepoCard
                   key={m.id}
@@ -366,7 +389,7 @@ function ModelBrowser({
           {/* Hugging Face — only while actively searching */}
           {searching && (
             <div className="space-y-2">
-              <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">More on Hugging Face</p>
+              <SectionLabel>More on Hugging Face</SectionLabel>
               {hfState === 'loading' && <p className="text-2xs text-fg-muted px-1">Searching Hugging Face…</p>}
               {hfState === 'error' && <FieldError as="p" size="2xs" className="px-1">Couldn't reach Hugging Face.</FieldError>}
               {hfState === 'idle' && hfFiltered.length === 0 && (
@@ -464,7 +487,10 @@ export function RepoCard({
   const hiddenCount = (quants ?? []).length - visible.length;
 
   return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): nested inside the "Models" level-1 card
+    // above (ModelBrowser), so this is LEVEL-2 — was quietly wearing the same
+    // `bg-inset/50` as its own parent (a box-inside-box the same look hid).
+    <div className={`${CARD_LEVEL_2} px-3 py-2.5`}>
       <div className="flex items-start gap-2">
         {/* Round 2 (P-1 note): the expand affordance is the same right-hand chevron every
             navigating row has, turned down while open — never a leading "›" text toggle. */}
@@ -497,14 +523,12 @@ export function RepoCard({
               <p className="text-3xs text-fg-muted mt-0.5">Checking size…</p>
             )}
             {chosen && (
-              <p className="text-3xs mt-0.5" data-testid="repo-size-line">
-                <SizeLine q={chosen} />
-                {' · '}
-                <span className={fitColor(chosen.fit.fit)}>{chosen.fit.label}</span>
-              </p>
+              <SizeAndFit q={chosen} testId="repo-size-line" />
             )}
+            {/* Grey, not amber (fix batch 2): the guide keeps status colours out
+                of text; the Retry box opens when the row is expanded. */}
             {loadState === 'error' && quants === null && (
-              <p className="text-3xs text-amber-700 mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
+              <p className="text-3xs text-fg-muted mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
             )}
           </div>
           <svg className={`w-4 h-4 mt-0.5 text-fg-muted transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
@@ -512,33 +536,45 @@ export function RepoCard({
           </svg>
         </div>
         {/* Inline row action -> sm, matching EngineCard's Install/Restart. */}
-        {chosen && !dl && (
+        {/* Hidden while its failure shows: that notice carries Try again (small-fixes-1). */}
+        {chosen && !dl && !dlError && (
           <Button size="sm" onClick={() => void startDefault()} className="shrink-0">
             Download
           </Button>
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {dlError && <FieldError as="p" className="mt-1">{dlError}</FieldError>}
+      {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press. The guide's
+          rule is that a failed action's notice takes the place of the button it came from and
+          carries Try again itself (guide "Status and notices"; the plugin page's failed
+          install is the same shape), so Download hides while it shows. */}
+      {dlError && <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={dlError} onRetry={() => void startDefault()} />}
 
       {/* Expanded: the full quant list. */}
       {expanded && (
         <div className="mt-2 pl-5">
           {loadState === 'loading' && <p className="text-3xs text-fg-muted px-1">Loading versions…</p>}
+          {/* WHY ErrorState, not an underlined text link (fix batch 1
+              addendum, 2026-09-24): Retry is a real button, never bare text. */}
           {loadState === 'error' && (
-            <button onClick={() => void loadQuants()} className="text-3xs text-amber-700 hover:underline px-1">
-              Couldn't reach Hugging Face — tap to retry
-            </button>
+            <ErrorState
+              variant="inline"
+              message="Couldn't reach Hugging Face."
+              onRetry={() => void loadQuants()}
+            />
           )}
           {quants !== null && loadState !== 'loading' && (
             <div className="space-y-1.5">
               {visible.map((qq) => (
                 <QuantDownloadRow key={qq.quant} repo={repo} q={qq} downloads={downloads} />
               ))}
+              {/* WHY outlined (guide: secondary actions are outlined, never
+                  bare text — "Show more" is named explicitly): was a
+                  hand-rolled underline-on-hover text button. */}
               {!showAll && hiddenCount > 0 && (
-                <button onClick={() => setShowAll(true)} className="text-3xs text-fg-2 hover:underline px-1">
+                <Button variant="secondary" size="sm" onClick={() => setShowAll(true)}>
                   Show all {(quants ?? []).length}
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -593,78 +629,15 @@ function displayName(model: InstalledLocalModel): string {
   return name || model.id;
 }
 
-/** The banner strip across the top of a row that is not simply "finished".
- *  Three states on the app's own status palette (globals.css:291-294 — the
- *  THREE colours it holds constant across every theme): green = moving,
- *  amber = stopped but you can carry on, red = stopped and you can't.
- *
- *  SOLID fill with BLACK text, and both halves of that were measured, not
- *  guessed (2026-08-27):
- *    - The first version used a 15% tint with coloured text. On Creme that
- *      scored 1.07:1 and on Light 1.14:1 — the label was invisible on both
- *      light themes while reading 5.62:1 on Midnight. A translucent strip
- *      takes its final colour from the theme behind it, so no single text
- *      colour can be safe in all six; a solid strip can.
- *    - The second version used white text on `amber-700`, assuming Tailwind's
- *      #B45309 (5.02:1). It is NOT: globals.css:294 remaps --color-amber-700
- *      to #FF9800, where white scores 2.06:1 — still failing. Black on the
- *      app's three status colours scores 9.74 / 7.56 / 4.98, so black it is.
- *  Deliberately `red-400` rather than `bg-destructive`: this is a STATUS
- *  indicator, not a destructive-action surface, and --destructive is
- *  community-overridable with no contrast guard. */
-const ROW_BANNER = {
-  downloading: {
-    text: 'Downloading',
-    strip: 'bg-green-400 text-black',
-    border: 'border-green-400/40',
-  },
-  verifying: {
-    text: 'Verifying',
-    strip: 'bg-green-400 text-black',
-    border: 'border-green-400/40',
-  },
-  interrupted: {
-    text: 'Download interrupted',
-    strip: 'bg-amber-700 text-black',
-    border: 'border-amber-700/40',
-  },
-  damaged: {
-    text: 'Damaged',
-    strip: 'bg-red-400 text-black',
-    border: 'border-red-400/40',
-  },
-} as const;
-
-/** The band's outline: flat across the middle, then sweeping DOWN into each of
- *  the card's rounded corners so the two read as one shape.
- *
- *  The arc's ORIENTATION is the whole trick, and getting it backwards is what
- *  made the first attempt look like a blocky tab: each corner ellipse is centred
- *  at the INNER-BOTTOM of its wedge, so the arc leaves the flat run with a
- *  HORIZONTAL tangent (no step where they join) and meets the card's side edge
- *  with a VERTICAL one. Centring it at the outer corner instead flips both
- *  tangents and produces the notch.
- *
- *  Built from three mask layers rather than a drawn shape: a mask is
- *  colour-agnostic, so the three state colours stay ordinary background classes
- *  with their contrast untouched, and px-sized layers do not stretch with the
- *  panel the way an SVG scaled to width would.
- */
-const BAND_H = 11;   // flat thickness across the middle
-const BAND_SWEEP = 14;   // how far in from each end the curve starts
-const BAND_DEPTH = 6;    // how far the ends drop below the flat run
-
-const MASK = {
-  image: [
-    'linear-gradient(#000, #000)',
-    `radial-gradient(${BAND_SWEEP}px ${BAND_DEPTH}px at 100% 100%, transparent 99%, #000 100%)`,
-    `radial-gradient(${BAND_SWEEP}px ${BAND_DEPTH}px at 0 100%, transparent 99%, #000 100%)`,
-  ].join(', '),
-  size: `100% ${BAND_H}px, ${BAND_SWEEP}px ${BAND_DEPTH}px, ${BAND_SWEEP}px ${BAND_DEPTH}px`,
-  position: 'top left, bottom left, bottom right',
-  repeat: 'no-repeat',
-};
-
+/* The coloured banner strip that used to run across the top of a row that was
+ * not simply "finished" (green Downloading/Verifying, amber "Download
+ * interrupted", red "Damaged") — and the mask geometry that curved it into the
+ * card's corners — is GONE (fix batch 2, 2026-09-26). Destin: "these top
+ * banners are still unlike anything else in the app. it should match other
+ * existing warning/error styles" (fix batch 1, B1-3); decisions.md "Problem on
+ * a list item" (settings-pieces#P-4): the shared warning/error box INSIDE the
+ * item's card, the item's options inside that box, no coloured strips. A live
+ * download now says "Downloading"/"Verifying" in its progress line instead. */
 
 // Exported (named) so tests can pin each row state without booting the whole
 // LocalModelsSection (which needs the full models API mocked).
@@ -682,6 +655,12 @@ export function LocalModelRow({
   const [busy, setBusy] = useState(false);
   // Failures of the buttons on this row (resume refused, delete failed).
   const [actionError, setActionError] = useState<string | null>(null);
+  // Which button failed, so its notice can carry Try again for that same thing (small-fixes-1:
+  // the box used to have nothing to press). Resume's failure already sits in the interrupted
+  // notice, beside its own Resume button.
+  const [failedAction, setFailedAction] = useState<'vision' | 'delete' | 'resume' | null>(null);
+  // A download failure with no button to retry it opens the bug report (never a guessed fix).
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Per-model Settings disclosure (deck Q-2 pick a) — collapsed by default so a
   // non-developer sees the row exactly as before; the controls inside each carry
   // an (i). Only a complete model has settings to offer.
@@ -701,7 +680,7 @@ export function LocalModelRow({
     // operating system's own words about a file it could not move — which the
     // user needs, and cannot find behind the prefix.
     try { await window.claude.models.addVision(model.id); await onRefresh(); }
-    catch (e) { setActionError(plainMessage(e, 'Could not add vision to this model.')); }
+    catch (e) { setActionError(plainMessage(e, 'Could not add vision to this model.')); setFailedAction('vision'); }
     finally { setBusy(false); }
   };
 
@@ -711,12 +690,13 @@ export function LocalModelRow({
   const total = live ? live.totalBytes : model.totalSizeBytes;
   const pct = percentOf(onDisk, total);
 
-  // Every state except "finished" wears a banner, so the row's condition reads
-  // before any number does. Only a complete model has none.
-  const banner = live
-    ? (live.state === 'verifying' ? ROW_BANNER.verifying : ROW_BANNER.downloading)
-    : model.status === 'unfinished' ? ROW_BANNER.interrupted
-    : model.status === 'untraceable' ? ROW_BANNER.damaged
+  // A stopped download is a PROBLEM on this item, shown as the shared notice box
+  // inside the card with the item's options in it (fix batch 2 — decisions.md
+  // P-4). Not while a download is live (it is moving again) or while the
+  // delete confirmation is up (that has its own box).
+  const problem: 'interrupted' | 'damaged' | null = live ? null
+    : model.status === 'unfinished' ? 'interrupted'
+    : model.status === 'untraceable' ? 'damaged'
     : null;
 
   // WHY a download's own failure is read from the progress stream: resume()
@@ -740,6 +720,7 @@ export function LocalModelRow({
       // Surface the real refusal (disk guard, already downloading, no manifest).
       // A resume that silently did nothing was the original PartialRow bug.
       setActionError(plainMessage(e, 'Could not resume the download.'));
+      setFailedAction('resume');
     } finally {
       setBusy(false);
     }
@@ -769,6 +750,7 @@ export function LocalModelRow({
       await onRefresh();
     } catch (e) {
       setActionError(plainMessage(e, 'Could not delete the model.'));
+      setFailedAction('delete');
     } finally {
       setBusy(false);
     }
@@ -789,8 +771,13 @@ export function LocalModelRow({
   // under the model name (Destin, 2026-08-27): they describe the bar, so they
   // belong with it. A row with no bar has nothing to caption, and shows its size
   // under the name as before.
+  // WHY the state word leads the line (fix batch 2): the banner that used to
+  // name a live download ("Downloading" / "Verifying") is gone, so the line
+  // over the bar says it instead — same word, normal grey text.
+  const liveWord = live ? (live.state === 'verifying' ? 'Verifying' : 'Downloading') : null;
   const progressText = showBar
-    ? `${pct ?? 0}% — ${gbNum(onDisk)} of ${gb(total ?? 0)}`
+    ? (liveWord ? `${liveWord} · ` : '')
+      + `${pct ?? 0}% — ${gbNum(onDisk)} of ${gb(total ?? 0)}`
       + (live && live.parts > 1 ? ` · part ${live.currentPart} of ${live.parts}` : '')
     : null;
 
@@ -799,51 +786,10 @@ export function LocalModelRow({
     : `${gb(model.sizeBytes)} downloaded`;
 
   return (
-    <div className={`rounded-lg bg-inset/50 overflow-hidden ${banner ? `border ${banner.border}` : ''}`.trim()}>
-      {/* The banner names the state before any number is read — a stopped
-          download is the thing this screen exists to make obvious. */}
-      {/* An accent, not a surface (Destin, 2026-08-27): 9px type — the smallest
-          size the app defines, and arbitrary text-[Npx] is banned (globals.css:299)
-          — on 1px of padding with leading-none, so the band is about a third of
-          the header it started as.
-          The bottom edge runs FLAT across the width and rounds into the card's
-          corners only at the two ends. rounded-b-lg is the SAME 12px the card
-          itself uses (--radius-lg), so the band's ends echo the corner they sit
-          in rather than introducing a second, competing curve.
-          Two earlier shapes were built and rejected before this one: an ellipse
-          clip tapering to points (the ends floated in mid-air above the corners)
-          and its inverse, dipping into the corners (it read as a header again).
-          WHY a SOLID fill and not a fade-to-transparent: a translucent strip
-          takes its colour from the theme behind it, which is what made this
-          label score 1.07:1 on Creme. Rounding removes fill without diluting
-          it, so the contrast under the label is untouched. */}
-      {banner && (
-        <div
-          // The silhouette Destin tuned on 2026-08-27 (sweep 8 / depth 6 / flat 11,
-          // smoothed to a 14px sweep): FLAT across the middle, then curving DOWN
-          // into each corner so the band and the card's corner read as one shape.
-          //
-          // Three mask layers unioned: the flat strip down to 11px, plus an
-          // elliptical wedge at each bottom corner reaching 6px deeper. A MASK
-          // rather than a drawn shape because the mask is colour-agnostic — the
-          // three state colours stay ordinary background classes — and because
-          // px-sized layers do not stretch with the panel, which an SVG scaled to
-          // width would (the sweep would visibly distort on resize).
-          // border-radius cannot do this: it only ever cuts a corner off, and
-          // this corner has to bulge outward.
-          style={{
-            height: `${BAND_H + BAND_DEPTH}px`,
-            WebkitMaskImage: MASK.image, maskImage: MASK.image,
-            WebkitMaskSize: MASK.size, maskSize: MASK.size,
-            WebkitMaskPosition: MASK.position, maskPosition: MASK.position,
-            WebkitMaskRepeat: MASK.repeat, maskRepeat: MASK.repeat,
-          }}
-          className={`px-3 pt-px text-4xs leading-none font-medium tracking-wider uppercase text-center ${banner.strip}`}
-        >
-          {banner.text}
-        </div>
-      )}
-
+    // No coloured border or strip any more (fix batch 2): every row is the same
+    // plain card; a problem shows as the notice box inside it, below.
+    // Card-levels sweep: nested inside the "Models" level-1 card, so LEVEL-2.
+    <div className={CARD_LEVEL_2}>
       <div className="px-3 pt-2 pb-2">
         <div className="flex items-center justify-between gap-3">
           <LocalBrandMark id={model.id} />
@@ -861,42 +807,37 @@ export function LocalModelRow({
             {subtitle && <p className="text-3xs text-fg-muted">{subtitle}</p>}
             {/* Its own line, in full — Destin, 2026-08-27 (A3). It is free to wrap;
                 the room came from the detail line above, which handed its state
-                word ("Downloading…") to the banner. */}
+                word ("Downloading…") to the progress line over the bar. */}
             {quality && <p className="text-3xs text-fg-muted">{quality}</p>}
             {/* S-3: "Add vision (0.9 GB)" — the projector this download never fetched.
                 One step: download it and move the model into its own folder so the
                 engine pairs the two. A text line under the name rather than a third
                 button: three buttons beside the name squeezed it to one letter at
                 the dialog's width (seen in the first workbench capture). */}
-            {model.status === 'complete' && model.vision === 'available' && !live && !confirming && (
-              <p className="text-3xs">
-                <button
-                  type="button"
-                  onClick={() => void addVision()}
-                  disabled={busy}
-                  className="underline text-fg-2 hover:text-fg disabled:opacity-50"
-                >
-                  {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
-                </button>
-              </p>
+            {/* WHY a small outlined Button (fix batch 2 — decisions.md "Follow-up
+                actions"): underlined text is only for a link inside a sentence,
+                never for an action. Still under the name, for the same reason. */}
+            {model.status === 'complete' && model.vision === 'available' && !live && !confirming && !(failedAction === 'vision' && actionError) && (
+              <Button variant="secondary" size="sm" onClick={() => void addVision()} disabled={busy} className="mt-1">
+                {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
+              </Button>
             )}
           </div>
-          {!confirming && (
+          {/* The row's own buttons at the right. A stopped download has none
+              here: its Resume/Delete moved INTO its notice box below. */}
+          {!confirming && !problem && (
             <div className="flex items-center gap-1.5 shrink-0">
+              {/* Outlined, not bare text (fix batch 2 — decisions.md "Secondary
+                  buttons", final#F-2: never bare text beside another button). */}
               {model.status === 'complete' && !live && (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="sm"
                   onClick={() => setSettingsOpen((o) => !o)}
                   aria-expanded={settingsOpen}
                   aria-label={`Settings for ${displayName(model)}`}
                 >
                   Settings
-                </Button>
-              )}
-              {model.status === 'unfinished' && !live && (
-                <Button variant="secondary" size="sm" onClick={() => void resume()} disabled={busy}>
-                  Resume
                 </Button>
               )}
               {live ? (
@@ -925,17 +866,44 @@ export function LocalModelRow({
           </div>
         )}
 
-        {/* A damaged row is NOT a dead end — the way out lives behind the (i)
-            rather than as a permanent paragraph under the least useful row. */}
-        {model.status === 'untraceable' && !confirming && (
-          <div className="mt-1.5 flex items-center gap-1">
-            <AnchorTip label="Why this download is damaged" title="Damaged download" widthClass="w-72">
-              This download started before the app kept track of where downloads come from,
-              so it can&rsquo;t be resumed automatically. Find the model in search and download
-              it again — it will continue from where it stopped.
-            </AnchorTip>
-            <span className="text-3xs text-fg-muted">Why can&rsquo;t this be resumed?</span>
-          </div>
+        {/* WHY a notice box with the options inside it (fix batch 2, 2026-09-26
+            — decisions.md "Problem on a list item", settings-pieces#P-4): the
+            shared warning/error box sits INSIDE the item's card, its text grey,
+            and the item's own options (Resume, Delete) sit inside it at the
+            right — outlined Delete first, the filled Resume last. It replaces the
+            amber "Download interrupted" / red "Damaged" strips across the top of
+            the card. Delete stays danger-outline: it throws away downloaded
+            bytes. A failed Resume/Delete shows its reason in the same box.
+            The damaged explanation used to hide behind an (i) and a "Why can't
+            this be resumed?" line; it is the box's text now, so there is no
+            separate explanation link. */}
+        {problem && !confirming && (
+          <Callout
+            tone={problem === 'damaged' ? 'danger' : 'warning'}
+            className="mt-2"
+            title={problem === 'damaged' ? 'Damaged download' : 'Download interrupted'}
+            actions={(
+              <>
+                <Button variant="danger-outline" size="sm" onClick={() => setConfirming(true)} disabled={busy}>
+                  Delete
+                </Button>
+                {problem === 'interrupted' && (
+                  <Button size="sm" onClick={() => void resume()} disabled={busy}>
+                    Resume
+                  </Button>
+                )}
+              </>
+            )}
+          >
+            {problem === 'damaged' && (
+              <>
+                This download started before the app kept track of where downloads come from,
+                so it can&rsquo;t be resumed automatically. Find the model in search and download
+                it again — it will continue from where it stopped.
+              </>
+            )}
+            {error && <div className={problem === 'damaged' ? 'mt-1.5' : ''}>{error}</div>}
+          </Callout>
         )}
 
         {/* Consequence-gated removal — plain-language warning naming the real size. */}
@@ -946,17 +914,40 @@ export function LocalModelRow({
                 ? `This removes the model file (${gb(model.sizeBytes)}) from this computer. Re-downloading it later will take a while.`
                 : `Delete ${gb(model.sizeBytes)}? This removes every downloaded piece of this model.`}
             </Callout>
-            <div className="flex gap-2">
+            {/* A failed delete's notice takes these buttons' place, Keep and Try again inside it
+                (guide "A failed action replaces the buttons it came from"; small-fixes-1). */}
+            {!(failedAction === 'delete' && actionError) && <div className="flex gap-2">
               <Button variant="secondary" onClick={() => setConfirming(false)} className="flex-1">
                 Keep
               </Button>
               <Button variant="danger" onClick={() => void remove()} disabled={busy} className="flex-1">
                 {busy ? 'Removing…' : model.status === 'complete' ? 'Delete model' : 'Delete download'}
               </Button>
-            </div>
+            </div>}
           </div>
         )}
-        {error && <FieldError as="p" className="mt-1">{error}</FieldError>}
+        {/* WHY ErrorState (small-fixes-1): this was a red box with nothing to press — a dead end
+            (error-message-standards "Every error state offers an action"). Each failure carries
+            Try again for the button it came from, which hides meanwhile (the plugin page's failed
+            install is the same shape). A download that failed later, with no button to repeat
+            it, offers Report bug. A stopped download's error is shown inside its own notice box
+            above instead (fix batch 2), not twice. */}
+        {error && !(problem && !confirming) && (() => {
+          const retry = actionError && failedAction === 'vision' ? () => void addVision()
+            : actionError && failedAction === 'delete' ? () => void remove()
+            : actionError && failedAction === 'resume' ? () => void resume()
+            // A download that failed after it started: which download it was is not known here,
+            // so no Try again is guessed — the row's own buttons stay, plus Report bug.
+            : null;
+          const keep = actionError && failedAction === 'delete' && confirming
+            ? [{ label: 'Keep', onClick: () => { setConfirming(false); setActionError(null); setFailedAction(null); } }]
+            : undefined;
+          return retry
+            ? <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={error} onRetry={retry} moreActions={keep} />
+            : <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={error}
+                onReportBug={() => setReportContext({ surface: 'Local models' })} />;
+        })()}
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
 
         {/* Round 2 P-14 (Destin): the settings open in a small dialog on its own layer,
             not inline under the row. */}
@@ -1168,8 +1159,9 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
         // who fixed the flag an hour ago should not read a card that says the
         // model is broken right now. `break-words` because engine errors carry
         // long unbroken file paths that CSS will not break on its own.
-        <Callout tone="danger" title="This model failed to load last time">
-          <p className="text-2xs break-words">{settings.lastLoadError}</p>
+        // WHY no red title (games-social round 5): one plain sentence, the engine's own words after it.
+        <Callout tone="danger">
+          <p className="break-words">This model failed to load last time: <span className="break-words">{settings.lastLoadError}</span></p>
         </Callout>
       )}
       <SettingRow
@@ -1199,14 +1191,13 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
         description="Never put this model to sleep. Instant replies, memory held."
         control={<Toggle checked={settings.keepLoaded} aria-label="Keep loaded" onChange={(next) => void save({ keepLoaded: next })} />}
       />
-      <SettingRow
-        variant="item"
+      {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+      <FoldRow
         title="Advanced"
         description={advanced ? undefined : 'Graphics-chip layers, extra engine flags'}
-        onClick={() => setAdvanced((o) => !o)}
-        expanded={advanced}
-      />
-      {advanced && (
+        open={advanced}
+        onToggle={setAdvanced}
+      >
         <div className="space-y-1.5">
           <SettingRow
             variant="item"
@@ -1234,7 +1225,9 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
               </span>
             )}
           />
-          <div className="rounded-lg bg-inset/50 px-3 py-2">
+          {/* Card-levels sweep: this is a top-level field card on its own
+              dialog page (like General's FieldRow), so LEVEL-1. */}
+          <div className={`${CARD_LEVEL_1} px-3 py-2`}>
             <p className="text-xs text-fg font-medium flex items-center gap-1">
               Extra engine flags
               <AnchorTip label="About extra engine flags" title="Extra engine flags" widthClass="w-72">
@@ -1256,7 +1249,7 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
             />
           </div>
         </div>
-      )}
+      </FoldRow>
       {/* design §C2: a saved setting does NOT reach a model that is answering
           right now — rewriting the engine's settings file mid-reply would drop
           the model halfway through a sentence. So the save is held until this
@@ -1315,25 +1308,28 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
   };
 
   return (
-    <div className="px-2 py-1.5 rounded-md bg-well">
+    // Card-levels sweep: nested inside a RepoCard (level-2), so this reuses
+    // level-2 too rather than the retired one-off `bg-well` look — a third
+    // visual level isn't earned here, it's the same "nested box" job one
+    // layer deeper.
+    <div className={`${CARD_LEVEL_2} px-2 py-1.5`}>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-2xs text-fg font-medium">{q.quant}</p>
           <p className="text-3xs text-fg-muted">{q.description}</p>
-          <p className="text-3xs mt-0.5">
-            <SizeLine q={q} />
-            {' · '}
-            <span className={fitColor(q.fit.fit)}>{q.fit.label}</span>
-          </p>
+          <SizeAndFit q={q} />
         </div>
-        {!dl && (
+        {/* Hidden while its failure shows: that notice carries Try again (small-fixes-1). */}
+        {!dl && !dlError && (
           <Button size="sm" onClick={() => void startDownload()} className="shrink-0">
             Download
           </Button>
         )}
       </div>
       {dl && <DownloadProgressRow dl={dl} />}
-      {dlError && <FieldError as="p" className="mt-1">{dlError}</FieldError>}
+      {/* Same as the repo card's own failed start above (small-fixes-1): the notice carries
+          Try again in place of the hidden Download button. */}
+      {dlError && <ErrorState mode="recoverable" variant="inline" className="mt-1.5" message={dlError} onRetry={() => void startDownload()} />}
     </div>
   );
 }
@@ -1378,7 +1374,8 @@ function OtherLocalApps() {
 
   return (
     // Change 25: in-panel row surface — see the "Models" card above.
-    <div className="rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep: LEVEL-1, same as "Models".
+    <div className={`${CARD_LEVEL_1} px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-fg font-medium">Other local apps</p>
         <Button
@@ -1400,7 +1397,8 @@ function OtherLocalApps() {
             {hits.map((hit) => {
               const isAdded = hit.alreadyAdded || added[hit.baseUrl];
               return (
-                <div key={hit.baseUrl} className="bg-inset/50 rounded-lg px-3 py-2.5">
+                // Card-levels sweep: nested inside "Other local apps" (level-1), so LEVEL-2.
+                <div key={hit.baseUrl} className={`${CARD_LEVEL_2} px-3 py-2.5`}>
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-fg">

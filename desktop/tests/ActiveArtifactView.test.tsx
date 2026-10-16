@@ -407,7 +407,7 @@ describe('read lifecycle through useArtifactContent', () => {
       await settle(() => pending[0].resolve({ ok: false, error: 'outside-projects' }));
       expect(utils.queryByText(MISSING_MSG)).toBeNull();
       expect(utils.getByText('YouCoded won’t open this file because it’s outside your project folders.')).toBeTruthy();
-      expect(utils.getByText('Retry')).toBeTruthy();
+      expect(utils.getByText('Try again')).toBeTruthy();
     });
 
     it('hands an image recorded through ../ to the viewer at the location the host judged', async () => {
@@ -469,7 +469,7 @@ describe('read lifecycle through useArtifactContent', () => {
       expect(utils.queryByText(MISSING_MSG)).toBeNull();
       expect(utils.getByText(/protected location/i)).toBeTruthy();
       // Retry re-runs the read; a successful second read shows the content.
-      await settle(() => { fireEvent.click(utils.getByText('Retry')); });
+      await settle(() => { fireEvent.click(utils.getByText('Try again')); });
       expect(get).toHaveBeenCalledTimes(2);
       await settle(() => pending[1].resolve({
         ok: true, content: '# Back now', orphan: false, binary: false, mtimeMs: 2,
@@ -694,7 +694,7 @@ describe('read lifecycle through useArtifactContent', () => {
         ok: true, content: 'all of it\n', orphan: false, binary: false,
         truncated: false, sizeBytes: 10, mtimeMs: 1,
       }));
-      expect(utils.queryByText(/Large File/)).toBeNull();
+      expect(utils.queryByText(/Large file/)).toBeNull();
     });
   });
 });

@@ -1,16 +1,31 @@
-// ProjectSwitcher — command-palette project jumper (Task 2.3).
-// Opened from the ProjectHero name button. A centered popup (L2) with a search
-// field, a filtered "Recent" list of projects (avatar + name + repo glyph +
-// mono path + files·chats hint + active check), and an "Add a project" footer.
+// ProjectSwitcher — command-palette project jumper, opened from the ProjectHero name button.
+// A popup hanging from 15% down the window (L2): a search row with the ✕, a "Recent" list of
+// projects, and an "Add a project" footer.
 //
-// Layout/visuals mirror docs/superpowers/prototypes/2026-06-14-project-view-redesign.html
-// (switcherPaletteEl). Icon style matches ProjectHero — inline lucide SVG,
-// stroke currentColor.
+// Redesign backlog row 10 (decks project-switcher-1/-2). Round 1 rebuilt this on the shared
+// Dialog; Destin kept the OLD container and row style ("i honestly liked the old styling of the
+// broader container (search, add project, row style) more", PS-1) and took these pieces onto it:
+//  - sync as a named status pill with its dot, like the session switcher's Working / Inactive
+//    (PS-2 yes) — "Only on this computer" shortened to "Not synced" (PQ-2);
+//  - counts as "21 files · 5 chats" with bold numbers (PC-1 "summary"; guide "Text and
+//    numbers": a summary line is a bold number then a grey word);
+//  - a remove bin that shows only on the pointed / keyboard row, always on touch, and takes NO
+//    space when hidden so the pills and counts sit flush right (PC-3 "hover" + note);
+//  - "Folder missing" for a project whose folder is gone (PS-3 states);
+//  - the project you are in has NO marker (project-switcher-2 P2C-1: "just drop that indicator.
+//    the currently selected one should be the highlighted/hovered one when nothing else is
+//    hovered, but focus should switch when hovering on a different project"): the highlight
+//    rests on it, follows the pointer or the arrow keys, and returns to it when the pointer
+//    leaves the list. Screen readers still get aria-current;
+//  - Add a project is centred (P2-1) and the list fades at the edge that has more (P2-2).
+// WHY: the search row borrows the popups' tapered divider (.dialog-header).
+import '../ui/Dialog.css';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
-import { syncDotFor, findSpaceFor, type SyncStatusData } from '../sync-dot-state';
+import { syncPillFor, findSpaceFor, type SyncStatusData } from '../sync-dot-state';
+import { useScrollFade } from '../../hooks/useScrollFade';
 
 interface ProjectSwitcherProps {
   projects: CentralIndexProject[];
@@ -18,19 +33,17 @@ interface ProjectSwitcherProps {
   onSelect: (project: CentralIndexProject) => void;
   onClose: () => void;
   onAddProject: () => void;
-  // Optional: removes a project from YouCoded (opens the confirm modal in the
-  // parent). The palette is the project-list surface now that the rail is gone,
-  // so the hover-revealed × delete lives on each row here.
+  // Opens the parent's "Remove project" confirm. Removing never deletes the folder or its
+  // files; for a synced project it stops syncing and takes it off every device's lists.
   onDeleteProject?: (project: CentralIndexProject) => void;
-  // Per-project sync state (spec §4) — drives the row sync dots and hides the
-  // remove-× on synced rows. null → syncSpaces unavailable (no dots at all).
+  // Per-project sync state (spec §4) — drives the rows' sync pills. null → syncSpaces
+  // unavailable (Android, an older remote host): no sync pills at all.
   syncStatus?: SyncStatusData | null;
 }
 
-// Shared glyphs — see ./icons.tsx. (The check is the active-project indicator,
-// NOT a status glyph.)
-import { SearchIcon, CheckIcon, PlusIcon } from './icons';
-import { CloseButton } from '../ui';
+// Shared glyphs — see ./icons.tsx.
+import { SearchIcon, PlusIcon, TrashIcon } from './icons';
+import { Button, CloseButton, Pill, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
 export function ProjectSwitcher({
@@ -43,45 +56,56 @@ export function ProjectSwitcher({
   syncStatus,
 }: ProjectSwitcherProps) {
   const [query, setQuery] = useState('');
-  const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The list fades at the edge that has more (P2-2 "need scroll fade") — the see-through
+  // .scroll-mask the sessions menu and Appearance's themes box use, not the painted band.
+  const listRef = useRef<HTMLDivElement>(null);
+  useScrollFade<HTMLDivElement>(listRef);
 
-  // ESC closes via the shared LIFO stack too — the input's own onKeyDown only
-  // fires while the field is FOCUSED, and clicking a row blurs it. The palette
-  // is only mounted while open, so `open` is simply true here.
+  // ESC closes via the shared LIFO stack too — the input's own onKeyDown only fires while the
+  // field is FOCUSED, and clicking a row blurs it. The palette is only mounted while open.
   useEscClose(true, onClose);
 
-  // Focus the search field on open. WHY: autoFocus inside an overlay can race
-  // the mount/scrim; the ref pattern is reliable. (See task notes.)
+  // Focus the search field on open. WHY: autoFocus inside an overlay can race the
+  // mount/scrim; the ref pattern is reliable.
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Case-insensitive substring match against name OR path. Empty query → all
-  // projects in their given order.
+  // Case-insensitive substring match against name OR path. Empty query → all projects in
+  // their given order.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return projects;
     return projects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
+      (p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q),
     );
   }, [query, projects]);
 
-  // Reset the keyboard highlight to the top whenever the filtered set changes
-  // (query edits). Without this the highlight could point past the end.
+  // WHERE THE HIGHLIGHT RESTS (P2C-1): on the project you are in while nothing else is pointed
+  // at; with a search typed, on the first match (Enter opens it, as before). The pointer and the
+  // arrow keys move it; leaving the list puts it back.
+  const restIndex = useMemo(() => {
+    if (query.trim()) return 0;
+    const i = filtered.findIndex((p) => p.id === activeId);
+    return i >= 0 ? i : 0;
+  }, [filtered, activeId, query]);
+  const [highlightIndex, setHighlightIndex] = useState(restIndex);
+  // `moved`: the highlight was moved by the pointer or the keys (not resting). The bin follows
+  // only a MOVED highlight, so it never sits on the project you are in by default — that would
+  // put "remove" on the one row you were most likely about to pick (see the deck's P3-4).
+  const [moved, setMoved] = useState(false);
   useEffect(() => {
-    setHighlightIndex(0);
-  }, [query]);
+    setHighlightIndex(restIndex);
+    setMoved(false);
+  }, [restIndex, query]);
 
-  // NOTE: no Escape branch here — the useEscClose registration above already
-  // closes the palette via the shared LIFO stack; a second path would be
-  // redundant. This handler owns only the list-navigation keys.
+  // No Escape branch here — useEscClose above owns it. This handler owns the list keys.
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') setMoved(true);
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
-      // Clamp to range (no wrap — stop at the last row).
       setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
       return;
     }
@@ -95,14 +119,7 @@ export function ProjectSwitcher({
       e.preventDefault();
       const sel = filtered[highlightIndex];
       if (sel) onSelect(sel);
-      return;
     }
-  };
-
-  const handleAdd = () => {
-    // The parent owns the flow now: it closes this palette, opens the OS folder
-    // picker, saves the folder (folders.add) and selects the new project.
-    onAddProject();
   };
 
   return (
@@ -116,14 +133,12 @@ export function ProjectSwitcher({
         className="fixed left-1/2 top-[15%] -translate-x-1/2 w-[min(640px,92vw)] flex flex-col"
       >
         <ScreenMark name="projects/switcher" />
-        {/* Search row */}
-        <div className="p-2.5 border-b border-edge-dim flex items-center gap-2">
+        {/* Search row. WHY dialog-header, not border-b (quick-fix batch, 2026-09-29;
+            ui-labels-batch#LB-11): the popups' approved short, tapered divider. */}
+        <div className="dialog-header p-2.5 flex items-center gap-2">
           <span className="text-fg-muted pl-1">
             <SearchIcon size={17} />
           </span>
-          {/* Keydown lives on the input so ↑/↓/Enter/Esc work while it's focused
-              (it autofocuses on open). OverlayPanel's typed props don't surface
-              onKeyDown, so attaching here is the correct seam. */}
           <input
             ref={inputRef}
             type="text"
@@ -133,20 +148,22 @@ export function ProjectSwitcher({
             onKeyDown={handleKeyDown}
             className="flex-1 bg-transparent outline-none text-base text-fg placeholder:text-fg-muted"
           />
-          <span className="text-3xs text-fg-muted border border-edge-dim rounded px-1.5 py-0.5">
-            esc
-          </span>
+          {/* WHY the drawn ✕, not an "esc" key chip (decisions Q-2; LB-11). Esc still closes. */}
+          <CloseButton label="Close project switcher" onClick={onClose} />
         </div>
 
-        {/* Recent micro-label */}
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, decisions H-3). */}
         <div className="px-2 pt-2">
-          <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase px-2">
-            Recent
-          </span>
+          <div className="px-2">
+            <SectionLabel>Recent</SectionLabel>
+          </div>
         </div>
 
-        {/* Project rows */}
-        <div className="p-2 max-h-[50vh] overflow-y-auto flex flex-col gap-0.5">
+        <div
+          ref={listRef}
+          className="scroll-mask overflow-y-auto scrollbar-none p-2 max-h-[50vh] flex flex-col gap-0.5"
+          onMouseLeave={() => { setHighlightIndex(restIndex); setMoved(false); }}
+        >
           {filtered.length === 0 && (
             <div className="px-3 py-4 text-sm-tight text-fg-muted">
               No projects match “{query.trim()}”.
@@ -155,136 +172,126 @@ export function ProjectSwitcher({
           {filtered.map((p, i) => {
             const isActive = p.id === activeId;
             const isHighlighted = i === highlightIndex;
-            // Prefer the synced display name (cross-device registry overlay,
-            // 2026-07-12) over the folder name for a synced project.
-            const shown = ((findSpaceFor(p.path, syncStatus ?? null) as any)?.displayName as string | undefined) || p.name;
-            // Same synced-wins precedence as the name above: registry overlay
-            // for a synced project, saved-folders record for a plain folder.
-            // WHY no `as any` here (unlike displayName above): SyncStatusData's
-            // spaces now declare `description` (2026-08-05), so this read
-            // type-checks without a cast — the type hole this feature opened
-            // is closed. displayName's cast is untouched/out of scope.
-            const desc = findSpaceFor(p.path, syncStatus ?? null)?.description || p.description || null;
-            const avatar = shown.charAt(0).toUpperCase() || '?';
+            // Prefer the synced display name (cross-device registry overlay, 2026-07-12).
+            const space = findSpaceFor(p.path, syncStatus ?? null) as (ReturnType<typeof findSpaceFor> & { displayName?: string }) | null;
+            const shown = space?.displayName || p.name;
+            const desc = space?.description || p.description || null;
+            // A missing folder outranks its sync state: nothing can sync a folder that isn't
+            // there, and it is what explains why opening it shows nothing.
+            const sync = p.missing ? null : syncPillFor(p.path, syncStatus ?? null);
+            const files = p.fileCount ?? p.stats.artifactCount;
+            const filesLabel = p.fileCountTruncated ? `${files.toLocaleString()}+` : files.toLocaleString();
+            const chats = p.conversationCount;
             return (
-              // group/relative so the row can host a hover-revealed × delete
-              // button (a button cannot nest inside the select button).
-              <div key={p.id} className="group relative">
+              // The old row look, kept (PS-1): keyboard highlight is an accent outline. It sits
+              // on this wrapper so the bin is INSIDE the row's box when it shows.
+              // No fill or mark for the project you are in (P2C-1): the resting highlight IS
+              // its marking.
+              <div
+                key={p.id}
+                // WHY no `hover:` look here (project-switcher-3 check, 2026-10-06): the highlight
+                // and the bin come from ONE state, highlightIndex. A CSS :hover tint and a
+                // group-hover bin were a second source — with the pointer resting on one row and
+                // the arrow keys moving the highlight, two rows were lit, one with a bin
+                // (reproduced with explore). mouseMove re-takes the highlight after the keys.
+                className={`relative flex items-center rounded-md transition-colors border ${
+                  isHighlighted ? 'border-accent bg-inset' : 'border-transparent'
+                }`}
+                onMouseEnter={() => { setHighlightIndex(i); setMoved(true); }}
+                onMouseMove={() => { if (!isHighlighted || !moved) { setHighlightIndex(i); setMoved(true); } }}
+              >
                 <button
                   type="button"
-                  // Keyboard highlight is outline-not-fill (border-accent); the
-                  // active project gets a subtle bg-inset fill instead. pr-9
-                  // reserves room for the hover × when delete is available.
-                  className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors border ${
-                    isHighlighted
-                      ? 'border-accent bg-inset'
-                      : isActive
-                        ? 'border-transparent bg-inset'
-                        : 'border-transparent hover:bg-inset'
-                  }`}
-                  onMouseEnter={() => setHighlightIndex(i)}
+                  aria-current={isActive ? 'true' : undefined}
+                  // A short name for screen readers (and saved click paths): the project and its
+                  // status, not every line of the row — the path and description
+                  // made it a 70-character sentence.
+                  aria-label={[shown, p.missing ? 'Folder missing' : sync?.short].filter(Boolean).join(', ')}
+                  data-project-row=""
+                  className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-2 text-left"
                   onClick={() => onSelect(p)}
                 >
-                  {/* Avatar: first letter of the name in a rounded square. */}
-                  <span className="shrink-0 w-7 h-7 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-xs font-semibold text-fg-2">
-                    {avatar}
-                  </span>
-                  {/* Name + path. */}
+                  {/* WHY no letter tile before the name (final-review#PR-5, Destin: "remove the
+                      letter icon in front of each project"): the name leads the row. */}
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-fg truncate">
-                        {shown}
-                      </span>
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-sm font-medium text-fg truncate">{shown}</span>
                     </span>
                     <span className="block font-mono text-2xs text-fg-muted truncate" title={p.path}>
                       {p.path}
                     </span>
-                    {/* Description as a THIRD line — additive, so the path stays
-                        visible (it's what disambiguates two folders of the same
-                        name). Rows with no description keep their current
-                        height, so the list only grows where it's earning it.
-                        Single line + truncate: a wrapping description would let
-                        one verbose project set the row height for the whole
-                        list. Italic-in-quotes matches the hero. */}
+                    {/* Description as a third line (unchanged): rows without one keep their
+                        height; one line, italic in quotes like the hero. */}
                     {desc && (
                       <span className="block text-2xs italic text-fg-dim truncate" title={desc}>
                         “{desc}”
                       </span>
                     )}
                   </span>
-                  {/* Files · chats hint. "files" = ALL FILES (fileCount) — the
-                      folder's on-disk files — falling back to the artifact
-                      count until the withCounts pass resolves both (and for
-                      GATED roots like Home, which get no fileCount at all —
-                      no scan runs there). Truncated counts render "N+" so a
-                      capped sample never poses as exact. Chat count appears
-                      only after the withCounts pass. */}
-                  {(() => {
-                    const files = p.fileCount ?? p.stats.artifactCount;
-                    const filesLabel = p.fileCountTruncated ? `${files.toLocaleString()}+` : String(files);
-                    return (
-                      // Hidden below 640px: this shrink-0 counts hint (~120px)
-                      // squeezed the name+path column to ~140px in a 359px
-                      // palette, truncating both to a few characters. The name
-                      // is what identifies the project; the counts decorate.
-                      <span className="hidden sm:inline text-2xs text-fg-muted shrink-0 whitespace-nowrap">
-                        {filesLabel} file{files === 1 ? '' : 's'}
-                        {typeof p.conversationCount === 'number' && (
-                          <> · {p.conversationCount} chat{p.conversationCount === 1 ? '' : 's'}</>
+                  {/* The row's right side: counts, then the status pill, on one centre line —
+                      marked so `shoot --check` fails if they drift apart (round 2's first pictures
+                      had the counts ~3px above the pill's centre). */}
+                  <span className="shrink-0 flex items-center gap-2" data-centres-agree="project-row-status">
+                    {/* Counts (PC-1 "summary"): bold number, grey word. Hidden below 640px, as
+                        before — the name is what identifies the project there. No counts on a
+                        missing folder (there is nothing to count). */}
+                    {!p.missing && (
+                      <span data-counts="" className="hidden sm:inline text-2xs leading-none text-fg-muted shrink-0 whitespace-nowrap">
+                        <b className="font-semibold text-fg-2">{filesLabel}</b> file{files === 1 ? '' : 's'}
+                        {typeof chats === 'number' && (
+                          <> · <b className="font-semibold text-fg-2">{chats}</b> chat{chats === 1 ? '' : 's'}</>
                         )}
                       </span>
-                    );
-                  })()}
-                  {/* Sync dot (spec §4) — green synced / red errored / gray
-                      only-on-this-computer. Hidden entirely when syncStatus is
-                      null (Android). Tooltip carries the plain-words label. */}
-                  {(() => {
-                    const dot = syncDotFor(p.path, syncStatus ?? null);
-                    return dot ? (
-                      <span
-                        className={`w-2 h-2 rounded-full shrink-0 ml-1 ${dot.color === 'green' ? 'bg-green-400' : dot.color === 'red' ? 'bg-red-400' : 'bg-fg-faint'}`}
-                        title={dot.label}
-                        aria-label={dot.label}
-                      />
-                    ) : null;
-                  })()}
-                  {/* Active check (NOT a status glyph). */}
-                  {isActive && (
-                    <span className="text-fg shrink-0 ml-1">
-                      <CheckIcon size={15} />
-                    </span>
-                  )}
+                    )}
+                    {p.missing && (
+                      <span title="This folder isn't where it was — it was moved or deleted outside YouCoded." className="shrink-0 flex">
+                        <Pill tone="warning" dot>Folder missing</Pill>
+                      </span>
+                    )}
+                    {/* Sync as a status pill with its dot (PS-2) — where the bare dot was. */}
+                    {sync && (
+                      <span title={sync.detail} className="shrink-0 flex">
+                        <Pill tone={sync.tone} dot>{sync.short}</Pill>
+                      </span>
+                    )}
+
+                  </span>
                 </button>
-                {/* Hover-revealed remove-from-YouCoded × (opens the confirm modal
-                    in the parent). Does not delete files. Hidden for SYNCED rows —
-                    removing a folder that's managed by sync is a deferred
-                    move-out flow, not a simple un-list. */}
-                {onDeleteProject && !findSpaceFor(p.path, syncStatus ?? null) && (
-                  <CloseButton
-                    // w-6 h-6 survives as a className override: this is a hover-revealed
-                    // affordance sized to the row, not a panel-header closer.
-                    // touch-reveal + coarse-hit: group-hover never resolves on a
-                    // touch device, so "Remove project" had no touch path at
-                    // all on Android / remote phones. Stays visible and gets a
-                    // 44px hit box when the pointer is coarse. pr-9 on the row
-                    // already reserves the space, so nothing shifts.
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100 touch-reveal coarse-hit transition-opacity w-6 h-6 rounded-md"
-                    title={`Remove ${p.name} from YouCoded`}
-                    label={`Remove ${p.name} from YouCoded`}
+                {onDeleteProject && (
+                  // PC-3 "hover" — "when hidden, the other chips and such should sit flush right":
+                  // the bin is display:none (not just transparent) until the highlight is MOVED
+                  // onto its row (pointer or keys) — the same state that draws the highlight, so
+                  // they can never disagree; on a touch screen it always shows (pointer-coarse:
+                  // hover never happens there). Every project has one, synced included.
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove ${shown} from your projects`}
+                    title="Remove from your projects"
+                    className={`shrink-0 mr-1 hover:text-destructive-fg pointer-coarse:inline-flex ${isHighlighted && moved ? 'inline-flex' : 'hidden'}`}
                     onClick={(e) => { e.stopPropagation(); onDeleteProject(p); }}
-                  />
+                  >
+                    <TrashIcon size={14} />
+                  </Button>
                 )}
               </div>
             );
           })}
         </div>
 
-        {/* Footer: Add a project (opens the OS folder picker via the parent). */}
+        {/* Footer: Add a project (opens the OS folder picker via the parent). WHY the tapered
+            line, not border-t (quick-fix batch): same divider as the header above. */}
         <button
           type="button"
-          className="flex items-center gap-2 px-4 py-3 border-t border-edge-dim text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
-          onClick={handleAdd}
+          // Centred (P2-1: "center the add a project button").
+          className="relative flex items-center justify-center gap-2 px-4 py-3 text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
+          onClick={onAddProject}
         >
+          <span
+            aria-hidden
+            className="absolute inset-x-4 top-0 h-px"
+            style={{ background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)' }}
+          />
           <PlusIcon size={15} />
           Add a project
         </button>

@@ -294,3 +294,12 @@ describe('gameReducer — CHAT_MESSAGE cap', () => {
     expect(s.chatMessages).toHaveLength(5);
   });
 });
+
+// Final review F4: why incognito is not connected is kept until a connection succeeds.
+describe('PRESENCE_HIDDEN_BLOCKED', () => {
+  it('records the reason silently and a successful connect clears it', () => {
+    const blocked = gameReducer({ ...createInitialGameState(), connected: true }, { type: 'PRESENCE_HIDDEN_BLOCKED', why: 'unreachable' });
+    expect(blocked).toMatchObject({ connected: false, partyError: null, hiddenBlocked: 'unreachable', onlineUsers: [] });
+    expect(gameReducer(blocked, { type: 'PARTY_CONNECTED', username: 'Me' }).hiddenBlocked).toBeNull();
+  });
+});

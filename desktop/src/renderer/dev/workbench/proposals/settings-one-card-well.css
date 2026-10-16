@@ -1,0 +1,119 @@
+/* Card-recipe comparison (2026-09-27), candidate "well" (dark solid card).
+   WHY this exists: Destin's own complaint ("every settings menu looks like it was styled
+   completely differently... three or four different levels of glass, different text inside,
+   different boundaries") was measured, not guessed — docs/active/design/2026-09-23-ui-element-
+   review/audit/card-measurements.md found 8 different grouping-card recipes (A-H) and 9 text
+   recipes (T1-T9) across Settings alone. Card A (bg-well, solid, thin border, no glass) is
+   already the most-reused recipe (4 screens) and matches Destin's stated dislike of see-
+   through/glassy cards (decisions.md) - so this candidate makes EVERY grouping card use Card
+   A's fill. The four-kinds trial (decisions.md "Four-kinds trial") was REJECTED for removing
+   grouping cards entirely - this candidate does the opposite: it keeps every existing group
+   exactly where it is and only unifies what each group's box LOOKS like.
+   WORKBENCH-ONLY: ?proposal=settings-one-card-well. Scoped to Settings-family dialogs/drawer
+   only (per task) - never touches chat, Marketplace, tool cards, or notice-box tones. */
+@layer proposal {
+
+/* ---- 1. Every grouping card -> Card A's fill (one recipe) --------------------------------
+   Targets: Card A (bg-well), Card B (bg-inset / bg-inset/50 field cards), Card F (borderless
+   bg-inset status block), and Card G's wrapping bg-inset/50 group box (measured: Permissions
+   and Specialists' "bare divider" rows are already wrapped in a rounded-lg bg-inset/50 box -
+   card-measurements.md (f) - so unifying the wrapper's fill unifies Card G too).
+   Excluded on purpose: [role=dialog] itself (the popup shell, not a card), the settings
+   drawer's own root, buttons/inputs/tabs (a control, not a grouping card), and anything
+   already tinted for a status/notice (handled separately in section 3 so its color survives). */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer)
+  :is(div,section)[class~="rounded-lg"]:is(
+    [class~="bg-well"], [class~="bg-inset"], [class~="bg-inset/50"], [class~="bg-panel"]
+  ):not(.settings-drawer):not(button):not(input):not(textarea):not(select):not([role="tab"])
+  :not([class*="destructive"]):not([class*="amber-"]):not([class*="green-"]):not([class*="accent/10"])
+{
+  background: var(--well) !important;
+  border: 1px solid var(--edge) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* WHY the whole "Backup & Sync" dialog is excluded (found in visual review, 2026-09-27, and
+   NOT resolved - flagged for Destin/a follow-up pass): its status card nests a notice box and
+   the notice's own "Try again" button inside a shared header. Restyling this card - even with
+   a value IDENTICAL to its own native bg-well/border-edge (a true no-op on paint) - made the
+   button's fill vanish (text unreadable) and put stray outlines around a few text labels.
+   Several narrower guards were tried (excluding only the card that :has() a nested notice
+   tone) and did NOT stop it, which is why the exclusion here is the whole dialog, by its
+   title, rather than a shape rule. The cause was not isolated within this pass - forcing
+   `!important` on an equal-to-native value should be a no-op and visibly was not one, which
+   points at a stacking-context side effect from the forced properties rather than a wrong
+   selector. A real fix wants the shared <Card> component (card-measurements.md (e)), built
+   and tested against this exact screen, not another external override. Meaning for the
+   comparison: Backup & Sync, its error state and its "file too big to sync" state show NO
+   visible difference between Today and this candidate - not because nothing needed fixing,
+   but because this pass could not safely touch this one screen. */
+
+/* ---- 2. Rows inside a card: the divider LINE is unified; padding and "flatten the
+   inner box" are NOT attempted here (see the note below the rule). ------------------------ */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="rounded-lg"] > [class~="border-t"] {
+  border-top: 1px solid var(--edge-dim) !important;
+}
+/* WHY there is no "card holds rows -> padding:0, else padding:12px" rule, and no
+   "flatten a nested card" rule, even though the write-up below asks for both (fixed
+   after visual review, 2026-09-27): a first version tried both with plain attribute
+   selectors (:has(> .border-t) for the padding switch, [.rounded-lg] [.rounded-lg] for
+   flattening). On Backup & Sync's real card - not a simple box of rows, but a flex
+   header (dot + title + toggle) followed by a notice box THEN a second, differently-
+   shaped card for "Additional backups" - forcing a blanket padding value blew the
+   layout apart: the toggle switch drifted to a corner, "Try again" lost its fill and
+   read as blank, and large gaps opened between rows (seen in a capture, not shipped).
+   CSS attribute selectors can restyle a box's paint (fill/border/radius/shadow, done
+   above) without knowing anything about the flex/spacing relationships INSIDE it, and
+   this codebase's cards vary too much internally to guess a safe universal padding or
+   safely delete an inner box from outside. Getting an identical inner padding AND
+   flattening every card-in-side-a-card needs the real fix docs/active/design/2026-09-23-
+   ui-element-review/audit/card-measurements.md (e) already names: one shared <Card>
+   component every screen imports, so the padding and nesting rule lives in one place
+   instead of being guessed at per screen from outside. */
+
+/* ---- 3. Notice boxes (Callout tones, success/status strips) keep their tint, just take
+   the same radius/padding as every other card. Safe to normalize (unlike section 2's
+   padding/nesting): a Callout is a single shared component, not a bespoke card, so its
+   own internal layout does not depend on padding supplied from outside it. ---------------- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="rounded-lg"]:is(
+  [class*="destructive"], [class*="amber-"], [class*="green-"], [class*="accent/10"]
+) {
+  border-radius: 12px !important;
+  padding: 12px !important;
+}
+
+/* ---- 4. Spacing: 16px between groups/cards, 8px section-label-to-card ------------------- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-5"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 16px !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-4"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 16px !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) [class~="space-y-2"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 8px !important;
+}
+
+/* ---- 5. Popup edge padding: 16px everywhere (fixes Donate's 20px, Development's doubled
+   32px). Development's extra padding comes from a second hand-added wrapper div INSIDE the
+   Dialog's own 16px body (DevelopmentPopup.tsx `<div className="p-4">`) - CSS can zero that
+   wrapper's own padding since the Dialog body already supplies the 16px; it cannot delete the
+   wrapper itself, so a real fix still wants that div removed in source (see report). --------- */
+[aria-label="Donate"] [class~="p-5"] { padding: 16px !important; }
+[aria-label="Development"] [class~="p-4"]:first-child { padding: 0 !important; }
+
+/* ---- 6. Text: in-card titles/labels T4 (12px/500), hints/values T6 (11px/400),
+   small text buttons T7 bumped up to match T4 (12px/500) ---------------------------------- */
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) h3[class~="text-xs"][class~="font-medium"] {
+  font-size: 12px !important; font-weight: 500 !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is([class~="text-2xs"], [class~="text-3xs"]):not([class~="font-medium"]) {
+  font-size: 11px !important; font-weight: 400 !important;
+}
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is(button, a, [role="button"]):is([class*="text-2xs"], [class*="text-3xs"])[class*="font-medium"],
+:is([role="dialog"]:not(:has(:is([class*="destructive"], [class*="amber-"], [class*="green-"]) button)), .settings-drawer) :is(button, a, [role="button"]) :is([class*="text-2xs"], [class*="text-3xs"])[class*="font-medium"] {
+  font-size: 12px !important; font-weight: 500 !important;
+}
+
+}

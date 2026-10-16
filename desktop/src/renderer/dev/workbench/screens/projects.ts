@@ -6,12 +6,27 @@ const pr = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['pr
 export const PROJECTS: readonly ScreenEntry[] = [
   { ...pr('projects/files', 'view'), sameAs: { name: 'projects', why: 'Projects opens on its Files tab' } },
   pr('projects/files/filter', 'popover'),
+  // The hero's description being written (close-session-4: the box keeps the card's margins).
+  { ...pr('projects/files#description-edit', 'view'), open: [{ do: 'click', target: { role: 'button', labelStarts: '“The desktop and Android app' } }] },
   pr('projects/conversations', 'view'),
   pr('projects/conversations/preview', 'dialog'),
   pr('projects/context', 'view'),
   pr('projects/context/editor', 'dialog'),
   pr('projects/context/how', 'dialog'),
   pr('projects/switcher', 'dialog'),
+  // Project switcher redesign (backlog row 10): a long list with a missing folder; the
+  // highlight moved off the project you are in by the pointer (it rests there otherwise).
+  { ...pr('projects/switcher#many', 'dialog'), params: { projects: 'many' } },
+  // The pointer on another row: the highlight (and its bin) moves there off the project you
+  // are in. (Round 3 first used arrow keys here: a pointer trip showed two rows lit — a real
+  // bug, CSS :hover beside the highlight state, fixed in ProjectSwitcher.)
+  { ...pr('projects/switcher#pointed', 'dialog'), open: [{ do: 'hover', target: { role: 'button', label: 'recipes, Sync stopped' } }] },
+  // A project that doesn't sync, open in the hero: its sync pill reads "Not synced" (P2Q-1).
+  { ...pr('projects/files#not-synced', 'view'), open: ['youcoded', 'wecoded-marketplace, Not synced'] },
+  // The Remove confirm, one per wording: a plain folder, a synced project, a missing folder.
+  pr('projects/remove', 'dialog'),
+  pr('projects/remove/synced', 'dialog'),
+  { ...pr('projects/remove/missing', 'dialog'), params: { projects: 'many' } },
   pr('projects/add', 'dialog'),
   // The hero's "Turn on sync" consent modal — shared with `projects/add`'s own
   // move step (AddProjectModal), reached only by clicking through there.

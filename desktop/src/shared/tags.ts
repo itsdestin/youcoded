@@ -11,14 +11,25 @@ export const TAG_COLORS = [
   'tag-blue', 'tag-indigo', 'tag-purple', 'tag-pink', 'tag-gray',
 ] as const;
 
-export type TagColor = typeof TAG_COLORS[number];
+export type TagSlotColor = typeof TAG_COLORS[number];
+/** A slot key, or any colour the user picked as `#rrggbb` (pick-menus-13#PM13-2: "a color
+ *  wheel/picker in the color list"). A picked colour doesn't re-tint per theme the way the
+ *  slots do; TagChip still blends it with the theme's text colour, which keeps it legible. */
+export type TagColor = TagSlotColor | `#${string}`;
+
+const HEX = /^#[0-9a-f]{6}$/i;
 
 // Default color for tags created without an explicit color, and the clamp
 // target for any unrecognized color read off disk.
 export const DEFAULT_TAG_COLOR: TagColor = 'tag-gray';
 
 export function isTagColor(v: unknown): v is TagColor {
-  return typeof v === 'string' && (TAG_COLORS as readonly string[]).includes(v);
+  return typeof v === 'string' && ((TAG_COLORS as readonly string[]).includes(v) || HEX.test(v));
+}
+
+/** The CSS colour to paint: a slot's theme variable, or the picked hex as-is. */
+export function tagColorCss(color: string): string {
+  return color.startsWith('#') ? color : `var(--${color})`;
 }
 
 // Tag ids are prefixed so they're visually distinct in the flag map's

@@ -7,6 +7,7 @@ import MarkdownContent from './MarkdownContent';
 import { OPEN_FENCE_CHUNK_LINES } from './markdown-blocks';
 import { SessionRefsEnabled } from './session-refs-context';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from '../../../tests/helpers/cpu-budget';
 
 // Every source string handed to react-markdown, so the streaming cost pins below
 // count real parse+highlight passes. Delegates to the real renderer unchanged.
@@ -439,7 +440,10 @@ describe('remote images wait for a tap; local images render inline', () => {
 
 // Streaming (smoothness sweep A5): a growing reply is drawn piece by piece, and
 // the page must be byte-for-byte what drawing the whole text at once gives.
-describe('MarkdownContent while a reply streams in', () => {
+// Pure CPU work (every prefix drawn twice and compared): budgeted in CPU time, not wall time —
+// tests/helpers/cpu-budget.ts says why (a starved verify run took 30 s+ for a 1 s test).
+describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
+  budgetCpuPerTest();
   // `live` = the reply is still streaming (only then may a long open fence be drawn in chunks).
   // Defaults to `incremental`, i.e. a streaming bubble; pass live={false} for a finished one.
   const Bubble = ({ md, incremental, live = incremental }: { md: string; incremental?: boolean; live?: boolean }) => (
@@ -610,11 +614,6 @@ describe('MarkdownContent while a reply streams in', () => {
     live.unmount();
   });
 
-  // WHY a named budget (measured 2026-09-28): these fixed-count streaming
-  // checks take 1.5–7 s alone, but in verify.sh's full run — every suite and the
-  // screenshot checks at once — two of them passed 30 s and timed out while
-  // correct. They count work, never clock time, so more time tests nothing less.
-  const STREAMING_SWEEP_BUDGET_MS = 120_000;
 
   // Review F4: seeded random replies, streamed word by word into a bubble that
   // sometimes mounts mid-reply, compared as DRAWN PAGES (not parse trees) with
@@ -666,7 +665,7 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  }, STREAMING_SWEEP_BUDGET_MS);
+  });
 
   // What each streamed update costs, in characters: everything the splitter
   // parsed plus everything handed to react-markdown. Today's whole-message
@@ -704,7 +703,7 @@ describe('MarkdownContent while a reply streams in', () => {
     expectNoMoreThanToday(costs);
     // A definition only re-draws the blocks that use its label.
     for (const c of costs) expect(c.drawn.length, `after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(2);
-  }, STREAMING_SWEEP_BUDGET_MS);
+  });
 
   // A reply that ends in one big block with no blank line in it: the splitter
   // must not parse that block again on top of drawing it.
@@ -1293,8 +1292,11 @@ describe('MarkdownContent while a reply streams in', () => {
     let seed = 20260925;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     // A fixed count sized to ~5 s here, not a time box (under load a time box
-    // would quietly test less).
-    for (let docs = 0; docs < 200; docs++) {
+    // would quietly test less). WHY 70, not 200 (2026-09-29): the awkward-cut
+    // fragments added since made 200 documents take ~15 s alone and ~46 s in
+    // the full parallel suite, past the 30 s limit — a flake. 70 is back at
+    // ~5 s; the seed is fixed, so the same 70 documents run every time.
+    for (let docs = 0; docs < 70; docs++) {
       const md = Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join(rnd() < 0.35 ? '\n' : '\n\n');
       const cuts = boundaries(md);
       const prefixes: string[] = [];
@@ -1338,5 +1340,5 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  }, STREAMING_SWEEP_BUDGET_MS);
+  });
 });

@@ -109,6 +109,7 @@ describe('the definition refetch-on-miss', () => {
     // The hook re-evaluated against the new roster and saw the same miss
     // again. definitionMissRetried already recorded (cwd, 'mystery-agent'),
     // so this must NOT trigger a 4th call.
+    // settle (negative assertion): the same miss must not trigger a 4th call.
     await new Promise((r) => setTimeout(r, 30));
     expect(list).toHaveBeenCalledTimes(3);
   });

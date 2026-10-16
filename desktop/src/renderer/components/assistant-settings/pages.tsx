@@ -15,7 +15,9 @@ import SkipPermissionsSection, { type PermissionOverrides } from './SkipPermissi
 import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
-import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
+import { ErrorState, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } from '../ui';
+import BrowserSettings, { BROWSER_INFO } from '../browser/BrowserSettings';
+import { GlobeIcon } from '../Icons';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -28,7 +30,7 @@ import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
 // Session Defaults, Model Providers, Permissions, Specialists — re-homed, not
 // redrawn: the blocks are the ones the popups rendered.
 
-export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists';
+export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists' | 'browser';
 
 export interface AssistantDefaults {
   skipPermissions: boolean;
@@ -54,7 +56,7 @@ export interface PageContext {
   onDefaultsChange: (updates: DefaultsUpdate) => void;
   cwd?: string;
   onOpenClaudePreferences?: () => void;
-  /** Closes the whole panel — the Claude Code Preferences button hands off to
+  /** Closes the whole panel — the Claude Code preferences button hands off to
    *  another dialog and must not leave this one open underneath it. */
   onClosePanel: () => void;
   /** Switch to another page. */
@@ -73,6 +75,9 @@ export interface PageDef {
   /** Provider pages exist only where the native runtime does — the same gate
    *  the Model Providers row had (false over remote access, false on Android). */
   needsNative?: boolean;
+  /** The Browser page exists only on the computer's own window
+   *  (capabilities.assistantBrowser — false on phones, Android and remote). */
+  needsBrowser?: boolean;
   render: (ctx: PageContext) => React.ReactNode;
 }
 
@@ -111,21 +116,11 @@ export function startSummary(defaults: AssistantDefaults, labels?: Map<string, {
   return known ? `${known.provider} · ${known.model}` : c.modelId;
 }
 
-/** Title + hint + a full-width control, the shape both dropdown rows share
- *  (round 2, R2-1: "default model and default project folder should both have
- *  correctly styled dropdowns"; R2-2: the project folder gets the same hint
- *  line the model row has). */
-function FieldRow({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-1.5">
-      <div>
-        <p className="text-xs font-medium text-fg">{title}</p>
-        <p className="text-3xs text-fg-muted">{hint}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
+// WHY: FieldRow (title + hint + a full-width control, the shape both dropdown
+// rows share — round 2, R2-1/R2-2) is now the shared `components/ui/FieldRow`
+// primitive (fix batch 1, 2026-09-24, design guide settings-anatomy#SA-1) —
+// promoted rather than redefined here so every wide control across Assistant
+// settings reaches for one definition.
 
 function ProjectFolderRow({ defaults, onDefaultsChange }: PageContext) {
   // Round 3 (R3-1): "project picker should look like it does in the new session
@@ -235,7 +230,10 @@ export function StepGuardRow() {
     <TypeableSelect aria-label="Step guard" options={STEP_GUARD_OPTIONS} value={saved === null ? '' : String(saved)} onCommit={commit} disabled={loading || saving || !loaded} />
     {loading && <p className="text-3xs text-fg-muted">Loading…</p>}
     {validationError && <FieldError as="p">{validationError}</FieldError>}
-    {ioError && <FieldError as="div">{ioError} <Button size="sm" variant="ghost" onClick={() => { if (retryValue !== undefined) save(retryValue); else void load(); }}>Retry</Button></FieldError>}
+    {/* WHY ErrorState, not a field-error line with a bare text Retry inside it
+        (error-notices-1, 2026-10-12): an error you can act on is the notice box with its
+        button inside at the right; the miniature box is for a line with nothing to press. */}
+    {ioError && <ErrorState variant="inline" message={ioError} onRetry={() => { if (retryValue !== undefined) save(retryValue); else void load(); }} />}
   </FieldRow>;
 }
 
@@ -265,7 +263,9 @@ function GeneralPage(ctx: PageContext) {
   );
 
   return (
-    <div className="space-y-5">
+    // WHY space-y-4/space-y-2: 16px between groups, 8px between rows (decisions
+    // "Popup spacing", SP-5, which superseded SA-4's 6px).
+    <div className="space-y-4">
       <section className="space-y-2">
         {/* Q-3a: the same picker the chat uses, so any connected model can be
             the default. Title and hint are Destin's words from round 1 (P-3
@@ -276,6 +276,11 @@ function GeneralPage(ctx: PageContext) {
         >
           <ModelPicker
             value={startChoice(defaults)}
+            // Card-levels trial: this trigger sits on the level-1 `bg-inset/50`
+            // FieldRow card, not an opaque `bg-inset` one — opt out of the
+            // picker's usual bg-well deepening so it matches every other
+            // nested control on this page (level-2, the shared FIELD default).
+            triggerClassName=""
             onSelect={(choice, label) => onDefaultsChange({
               startModel: choice,
               startModelLabel: choice.runtime === 'native' ? label : undefined,
@@ -381,15 +386,18 @@ export const PAGES: PageDef[] = [
     icon: <Icon><path d="M12 3l7 3v5.5c0 4.3-2.9 8.1-7 9.5-4.1-1.4-7-5.2-7-9.5V6l7-3z" /><path d="M9 12l2 2 4-4" /></Icon>,
     // Two blocks (questions deck Q-2 option a, chosen in round 1's P-5 note):
     // Claude Code's switch first, then the modes and Always-allow list that
-    // cover every other provider — labelled so the two systems are not
-    // mistaken for one.
+    // cover every other provider.
+    //
+    // WHY no wrapping "ChatGPT, OpenRouter and local models" label any more
+    // (fix batch 1, 2026-09-24): it sat directly above PermissionsSection's
+    // OWN "Permission modes" label with nothing between them — two eyebrows
+    // back to back read as a mistake (settings-screens.md audit, candidate
+    // rule 4: "a section never gets two eyebrows"). PermissionsSection's own
+    // label is the more specific one and stays; the wrapper's was redundant.
     render: (ctx) => (
-      <div className="space-y-5">
+      <div className="space-y-4">
         <SkipPermissionsSection defaults={ctx.defaults} onDefaultsChange={ctx.onDefaultsChange} />
-        <section>
-          <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">ChatGPT, OpenRouter and local models</h3>
-          <PermissionsSection />
-        </section>
+        <PermissionsSection />
       </div>
     ),
   },
@@ -399,5 +407,16 @@ export const PAGES: PageDef[] = [
     explainer: { intro: SPECIALISTS_EXPLAINER_INTRO, sections: SPECIALISTS_EXPLAINER_SECTIONS },
     icon: <Icon><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" /><path d="M16 5.5a3 3 0 0 1 0 5.6" /><path d="M17.5 14.5c2 .6 3.5 2.4 3.5 4.5" /></Icon>,
     render: (ctx) => <SpecialistsSection cwd={ctx.cwd} />,
+  },
+  {
+    // WHY here (Destin, 2026-10-15, browser-fit-1#N-1): the Browser was its own row in
+    // Settings; it is a tool the assistant uses, so it sits with the assistant's other
+    // settings. Last in the list: the least-visited page.
+    id: 'browser',
+    label: 'Browser',
+    needsBrowser: true,
+    info: BROWSER_INFO,
+    icon: <GlobeIcon className="w-4 h-4" />,
+    render: () => <BrowserSettings />,
   },
 ];

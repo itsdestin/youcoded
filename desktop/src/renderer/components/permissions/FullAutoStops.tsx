@@ -91,7 +91,7 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
             that can never silence its ask. External consent uses its own path. */}
         {kind !== 'budget' && (kind === 'external' || !suppressAlwaysAllow) && <>
           <span aria-hidden="true" className="w-px h-3.5 bg-edge shrink-0" />
-          <button ref={el => { buttonsRef.current[2] = el; }} disabled={responding} onClick={kind === 'external' ? onOpenExternal : onAlways} className={alwaysAllowClass}>{kind === 'external' ? 'Allow for This Session' : 'Always Allow'}</button>
+          <button ref={el => { buttonsRef.current[2] = el; }} disabled={responding} onClick={kind === 'external' ? onOpenExternal : onAlways} className={alwaysAllowClass}>{kind === 'external' ? 'Allow for this session' : 'Always allow'}</button>
         </>}
       </div>
       {unconfirmedNote}

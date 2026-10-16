@@ -10,12 +10,17 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
+  // The close prompt's other faces (backlog row 17, deck close-session-1): a session
+  // carrying only a note (wb-5), one with nothing on it (wb-2), and a phone.
+  { ...chat('chat/close-session#note', 'dialog'), session: 'wb-5' },
+  { ...chat('chat/close-session#bare', 'dialog'), session: 'wb-2' },
+  { ...chat('chat/close-session#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
+  // A tag clicked: its edit box opens inside the Tags card, as in Session details.
+  { ...chat('chat/close-session#tag-edit', 'dialog'), open: ['Edit work'] },
+  // The note being written in place ("+ Add a note" on a session with none).
+  { ...chat('chat/close-session#note-typing', 'dialog'), session: 'wb-2', open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
-  // App.tsx's own editorSkillId — no live trigger reaches it yet; a fixture id
-  // opens the real editor, a bogus one its "not found" branch.
-  chat('chat/skills/edit', 'dialog'),
-  chat('chat/skills/edit-missing', 'dialog', 'error-state'),
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
@@ -26,13 +31,29 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
   chat('chat/tags', 'dialog'),
+  // Session details with Mark complete turned on (close-session-3), and its note being written.
+  { ...chat('chat/tags#complete', 'dialog'), open: [{ do: 'click', target: { role: 'switch', label: 'Mark complete' } }] },
+  // Session details with its note being written (the shared note box, close-session-2).
+  { ...chat('chat/tags#note-typing', 'dialog'), open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
+  // A tag's edit box open in place, and the New tag box — the pair to set beside the quick chips
+  // editor's edit and add pages (final-review#CH-5/CH-6: "want to see next to tag edit menu").
+  { ...chat('chat/tags#tag-edit', 'dialog'), open: ['Edit work'] },
+  { ...chat('chat/tags#new-tag', 'dialog'), open: ['+ New tag'] },
   chat('chat/status-bar', 'dialog'),
   chat('chat/status-bar/themes', 'dialog'),
   chat('chat/context', 'dialog'),
   // A real, unexpired announcement — statusData otherwise always sends `null`.
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
+  chat('chat/quick-chips/edit', 'dialog'),
+  chat('chat/quick-chips/add', 'dialog'),
+  // Remove asks first, in place (as Delete tag does), and Add pressed with both boxes empty says
+  // why under each box (as New tag's Create does) — final-review#CH-5/CH-6.
+  { ...chat('chat/quick-chips/edit#remove', 'dialog'), open: ['Remove'] },
+  { ...chat('chat/quick-chips/add#empty', 'dialog'), open: ['Add'] },
   chat('chat/session-context', 'dialog'),
+  // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5).
+  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh
@@ -84,6 +105,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
+  // The sign-in step's second page, one kind opened (deck first-run-2 P2-3).
+  { name: 'first-run#signin-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signInPick: 'payg' } },
+  { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
+  { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
   // A new user's checklist: Git installing, then Git done at sign-in (?prereqs, mock-shim).
   { name: 'first-run#setup-installing', tags: ['first-run', 'view'], viewport: { width: 800, height: 440 }, params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
@@ -97,6 +122,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/skills#load-failed', 'drawer', 'error-state'), params: { fail: 'skills.list' } },
   { ...chat('chat/tags#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
   { ...chat('chat/close-session#meta-unreadable', 'dialog', 'error-state'), params: { fail: 'session.getMeta' } },
+  // error-notices-1 (2026-10-12): more of the app's "couldn't load" notices, so every
+  // screen family's error box can be seen (the Resume list).
+  { ...chat('chat/resume#load-failed', 'dialog', 'error-state'), params: { fail: 'session.browse' } },
   // Each game, signed in (a friend online). Chess and Connect 4 land on a board by
   // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
   { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },
@@ -107,16 +135,42 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games/chess/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
   { ...chat('chat/games/connect-four', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/connect-four/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
+  // The friends panel's states (backlog row 11; mock-shim `?friends=`): four friends with every
+  // status, none yet, a request each way; then a phone and a 640×480 window. The chess lobby with
+  // the same four friends shows a winning, a losing, an even and a never-played record.
+  { ...chat('chat/games#friends', 'pane', 'games'), params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games#no-friends', 'pane', 'games'), params: { signedIn: '1', friends: 'none' } },
+  // Opened (it starts folded) so its rows compare with round 1's always-open card.
+  { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests', friendsOpen: '1' } },
+  { ...chat('chat/games#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games#signed-out-phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 } },
+  { ...chat('chat/games#small', 'pane', 'games'), viewport: { width: 640, height: 480 }, params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games/chess/lobby#friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many' } },
+  { ...chat('chat/games/chess/lobby#no-friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'none' } },
+  { ...chat('chat/games/chess/lobby#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', autoplay: '0', friends: 'many' } },
+  // Round 2 (deck games-social-2): a friends list long enough to scroll and the three
+  // not-connected states.
+  { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
+  { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
+  // Incognito with the card opened: friends' statuses still show (hidden presence, round 5).
+  { ...chat('chat/games#incognito-open', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1', friendsOpen: '1' } },
+  { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
+  // Your status pill's menu open, and a friend's details popup (a Dialog, deck games-social-4).
+  // The menu is opened by clicking the pill (screen list `open`), not by a practice switch.
+  { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many' }, open: ['Your status: Online'] },
+  { ...chat('chat/games/friend', 'dialog', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1' } },
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),
+  chat('chat/resume/organize', 'dialog'),
   { ...chat('chat/resume/preview#stress', 'dialog'), scenario: 'stress' },
   // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
-  chat('chat/tags/manage', 'dialog'),
-  { ...chat('chat/tags/manage#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // The update's download failed: the notice box with its sentence, Open in browser instead and
+  // Try again, in the Update button's place (small-fixes-2).
+  { ...chat('chat/update#download-failed', 'dialog', 'error-state'), params: { update: 'available', fail: 'update.download' }, open: ['Update now…'] },
   // Files in the viewer: a chart image, a diagram, a PDF (fixture files).
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-diagram', 'pane', 'viewer'),
@@ -127,5 +181,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // The reading view of the Word and Excel files whose comments office/*-comments shows in
   // Office's own panel — the two are compared side by side (finish plan Task 6).
   chat('chat/files/open/a-launch-brief', 'pane', 'viewer'),
+  // Git review (Review changes): a commit card opened and pointed at — the card lights as one,
+  // no hard line above the changes (submit-ticket-5#ST5-Q2). Marked by the drawer itself
+  // ('chat/files'): the review replaces the viewer, whose own mark goes with it.
+  { ...chat('chat/files/open/a-launch-brief#git-review', 'pane', 'viewer'), mark: 'chat/files',
+    open: ['Review changes', '▸ a1b2c3d chat: cache the per-session selector…', { do: 'hover', target: { role: 'button', labelStarts: '▸ a1b2c3d chat: cache the per-session selector' } }] },
   chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
 ];

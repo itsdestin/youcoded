@@ -1,0 +1,14 @@
+/* WHY: the real skill/theme Details shell now wears the selected treatment.
+   Only the Today candidate restores the old appearance, scoped to Workbench. */
+.marketplace-detail-header-review { min-height: 570px; }
+.marketplace-detail-header-review[data-treatment="today"] .layer-surface > header:first-child {
+  border-bottom: 1px solid var(--edge-dim);
+}
+.marketplace-detail-header-review[data-treatment="today"] .layer-surface > header:first-child::after { content: none; }
+.marketplace-detail-header-review[data-treatment="today"] .layer-surface > header:first-child h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+.marketplace-detail-header-review[data-treatment="today"] .layer-surface > header:first-child + div {
+  mask-image: none;
+}

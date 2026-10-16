@@ -22,6 +22,7 @@ import { render, cleanup, screen, fireEvent, within } from '@testing-library/rea
 import { BugReportPopup } from '../src/renderer/components/development/BugReportPopup';
 import { ContributePopup } from '../src/renderer/components/development/ContributePopup';
 import { versionLine } from '../src/renderer/app-version';
+import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 
 beforeEach(() => {
   window.history.replaceState({}, '', '/');
@@ -36,7 +37,7 @@ beforeEach(() => {
     },
   });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const fillDraft = () => {
   fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
@@ -44,10 +45,12 @@ const fillDraft = () => {
 };
 
 describe('the ticket screen keeps its approved shape', () => {
-  it('R21: the review step ends in two stacked full-width buttons and nothing else', () => {
-    // R4-23's headline is literally "No captions anywhere, and two stacked buttons".
-    // A third action in this footer failed the row for a round; only a rule catches
-    // that, because the offending control had a different name each time.
+  it('R21: the review step ends in two buttons — side by side in this wide popup, Submit on the right', () => {
+    // R21 ("Submit is the main button with Back to draft beneath it") predates the design
+    // guide's button rule; the guide (decisions BP-1, BW-2) puts a pair side by side in a
+    // wide popup, filled on the right, and stacks it only at phone width. The 600px ticket
+    // popup is wide. Reopened on deck submit-ticket-1 (ST-6). A THIRD button is still a
+    // failure here — that is what R21 was really guarding.
     render(<BugReportPopup open onClose={() => {}} />);
     fillDraft();
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
@@ -56,7 +59,20 @@ describe('the ticket screen keeps its approved shape', () => {
     const footer = submit.parentElement!;
     expect(back.parentElement).toBe(footer);
     expect(within(footer).getAllByRole('button')).toHaveLength(2);
-    for (const b of [submit, back]) expect(b.className).toContain('w-full');
+    // Filled on the right: Back comes first in the row.
+    expect(within(footer).getAllByRole('button')[1]).toBe(submit);
+    expect(footer.className).toMatch(/justify-end/);
+  });
+
+  it('stacks the two review buttons at phone width, Submit on top, both full width', () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === NARROW_VIEWPORT_QUERY, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    const submit = screen.getByRole('button', { name: 'Submit public ticket' });
+    const footer = submit.parentElement!;
+    expect(within(footer).getAllByRole('button')[0]).toBe(submit);
+    for (const b of within(footer).getAllByRole('button')) expect(b.className).toContain('w-full');
   });
 
   it('R17: every AI action sits behind the disclosure, never in the footer', () => {
@@ -70,19 +86,16 @@ describe('the ticket screen keeps its approved shape', () => {
     expect(screen.getByRole('button', { name: 'Let your assistant try to fix it' })).toBeTruthy();
   });
 
-  it('R18: evidence is plain rows with no sub-labels — explanations live in the (i)', () => {
-    // WHY it looks for the ELEMENT and not for prose (grader, 2026-09-10): the first
-    // version searched for text containing ". " — and the sub-label that actually
-    // broke this row for a whole round, "Finish this ticket in your browser, where
-    // you can attach them", has no full stop in it. The regression came back green
-    // against its own guard. SettingRow renders a description as a <p> with the muted
-    // class (SettingRow.tsx:183-191); the rule is that these rows have none.
+  it('each include choice says in its own row what ticking it adds — no (i) buttons', () => {
+    // Replaces R18 ("explained by the (i) on its row"). Destin, submit-ticket-1#ST-1 "the
+    // checkbox ux is still odd" and #ST-13 "should explain itself": the explanation is the
+    // row's own hint now. Opened from Settings there is no error, so two choices only.
     render(<BugReportPopup open onClose={() => {}} />);
-    const heading = screen.getByText('Include with ticket');
-    const section = heading.parentElement!;
-    expect(within(section).getAllByRole('checkbox')).toHaveLength(3);
-    expect(section.querySelectorAll('p.text-fg-muted')).toHaveLength(0);
-    expect(within(section).getAllByRole('button', { name: /^About / })).toHaveLength(3);
+    const section = screen.getByText('Include with ticket').parentElement!;
+    expect(within(section).getAllByRole('switch')).toHaveLength(2);
+    expect(within(section).queryAllByRole('button', { name: /^About / })).toHaveLength(0);
+    expect(within(section).getByText(/last 200 lines/)).toBeTruthy();
+    expect(within(section).getByText(/attach them there/)).toBeTruthy();
   });
 
   it('R22: the version line is the real one, not a fixed string', () => {
@@ -93,9 +106,105 @@ describe('the ticket screen keeps its approved shape', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     fillDraft();
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
-    expect(screen.getByText(versionLine())).toBeTruthy();
+    // Always listed now (submit-ticket-1#ST-Q1): the version goes with every ticket.
+    expect(screen.getByText(new RegExp(`^${versionLine().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — always sent`))).toBeTruthy();
     expect(screen.queryByText(/1\.2\.4/)).toBeNull();
   });
+});
+
+describe('a ticket opened from an error', () => {
+  it('never pre-fills the description; offers the error as its own choice, saying what it adds', () => {
+    // Destin, submit-ticket-1#ST-13: "it shouldn't fill text in the description, but the
+    // error details checkbox should explain itself when it applies". Mounted first, then
+    // opened with a context — the way every caller does it.
+    const { rerender } = render(<BugReportPopup open={false} onClose={() => {}} />);
+    rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByRole('switch', { name: 'Include error details' })).toBeTruthy();
+    expect(screen.getByText(/Adds where it happened \(Office\) and the error message/)).toBeTruthy();
+  });
+
+  it('offers no error choice when opened from Settings', () => {
+    render(<BugReportPopup open onClose={() => {}} />);
+    expect(screen.queryByRole('switch', { name: 'Include error details' })).toBeNull();
+  });
+
+  it('sends the error details only while their box is ticked', async () => {
+    const submitIssue = window.claude.dev.submitIssue as ReturnType<typeof vi.fn>;
+    submitIssue.mockResolvedValue({ ok: true, url: 'u' });
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await vi.waitFor(() => expect(submitIssue).toHaveBeenCalledTimes(1));
+    expect(submitIssue.mock.calls[0][0].description).toMatch(/This happened in Office\.\nEBUSY/);
+    cleanup();
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('switch', { name: 'Include error details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await vi.waitFor(() => expect(submitIssue).toHaveBeenCalledTimes(2));
+    expect(submitIssue.mock.calls[1][0].description).toBe('Opening the menu closes the window.');
+  });
+
+  it('opens Diagnose on the review step with AI help open, even when mounted earlier', () => {
+    const { rerender } = render(<BugReportPopup open={false} onClose={() => {}} />);
+    rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', diagnose: true }} />);
+    expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
+  });
+
+});
+
+
+describe('the review step shows the ticket as it will be sent', () => {
+  it('shows the words read-only, with the kind, and edits only through Back to draft', () => {
+    // WHY: the review step used to be the draft again — the same editable boxes, with the
+    // Bug/Feature choice gone — so nothing said what was being reviewed.
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.getByText('The menu closes')).toBeTruthy();
+    expect(screen.getByText('Bug')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Sent with it' })).toBeTruthy();
+  });
+
+  it('lists only the version when nothing else was chosen', () => {
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    // Only the always-sent version row; no folds.
+    const card = screen.getByRole('heading', { name: 'Sent with it' }).parentElement!;
+    expect(within(card).getByText('App version and system')).toBeTruthy();
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
+  });
+});
+
+describe('a failure says what failed, inside one notice with its own buttons', () => {
+  const failSend = (error: string) => {
+    (window.claude.dev.submitIssue as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error, fallbackUrl: 'x' });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+  };
+
+  it('puts Try again and Back to draft inside the notice, in place of the send buttons', async () => {
+    failSend('GitHub did not create the ticket (500).');
+    const line = await screen.findByText(/GitHub did not create the ticket \(500\)\./);
+    const box = line.closest('div.rounded-lg')!;
+    expect(within(box as HTMLElement).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(within(box as HTMLElement).getByRole('button', { name: 'Back to draft' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit public ticket' })).toBeNull();
+  });
+
+  it('names no network only when the computer reports none', async () => {
+    vi.stubGlobal('navigator', { ...navigator, onLine: false });
+    failSend('getaddrinfo ENOTFOUND api.github.com');
+    expect(await screen.findByText(/isn.t connected to a network/)).toBeTruthy();
+  });
+
 });
 
 describe('the contribute walkthrough keeps its approved steps', () => {
@@ -119,5 +228,39 @@ describe('the contribute walkthrough keeps its approved steps', () => {
     expect(list.className).toMatch(/list-decimal/);
     expect(list.className).toMatch(/\bml-\d/);
     expect(list.className).not.toMatch(/list-inside/);
+  });
+});
+
+describe('a folded card opens inside itself', () => {
+  it('shows AI help\'s actions inside the same box as its header row', () => {
+    // Destin, submit-ticket-1#ST-3: "an expandable card should always contain expanded
+    // content within itself, not open a new separate card below".
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    const header = screen.getByRole('button', { name: 'Optional AI help' });
+    fireEvent.click(header);
+    const rewrite = screen.getByRole('button', { name: 'Improve wording with the assistant' });
+    // The box holding the header row also holds the opened actions.
+    expect(header.parentElement!.contains(rewrite)).toBe(true);
+  });
+});
+
+describe('while a ticket sends', () => {
+  it('shows only the sending box under "Your ticket", then the summary when it is done', async () => {
+    // Destin, submit-ticket-2#ST2-10: "bare sending your ticket box under your ticket
+    // header, gets replaced with the submission summary when done".
+    let finish: (v: unknown) => void = () => {};
+    (window.claude.dev.submitIssue as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(r => { finish = r; }));
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    expect(await screen.findByText(/Sending your ticket/)).toBeTruthy();
+    expect(screen.getByText('Your ticket')).toBeTruthy();
+    expect(screen.queryByText('The menu closes')).toBeNull();
+    finish({ ok: true, url: 'u' });
+    expect(await screen.findByText('The menu closes')).toBeTruthy();
+    expect(screen.getByText('Submitted')).toBeTruthy();
   });
 });

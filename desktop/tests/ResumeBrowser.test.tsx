@@ -5,7 +5,7 @@
 // the real hook through window.matchMedia; a vi.mock cannot be scoped to part of
 // a file.
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Counts card renders: every list card with a recorded model resolves its brand
@@ -114,7 +114,7 @@ describe('model prefill for Claude Code rows', () => {
   const forwardedAlias = (onResume: ReturnType<typeof vi.fn>) => onResume.mock.calls[0][3];
 
   async function resumeAndReadAlias(onResume: ReturnType<typeof vi.fn>) {
-    fireEvent.click(await screen.findByRole('button', { name: 'Resume Session' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume session' }));
     await waitFor(() => expect(onResume).toHaveBeenCalled());
     return forwardedAlias(onResume);
   }
@@ -232,7 +232,7 @@ describe('model prefill for Claude Code rows', () => {
       render(<ResumeBrowser open={true} onClose={() => {}} onResume={onResume} defaultModel="haiku" />);
       await expandRow('Native Chat');
 
-      const resumeBtn = await screen.findByRole('button', { name: 'Resume Session' });
+      const resumeBtn = await screen.findByRole('button', { name: 'Resume session' });
       await waitFor(() => expect(resumeBtn).not.toBeDisabled());
       fireEvent.click(resumeBtn);
       await waitFor(() => expect(onResume).toHaveBeenCalled());
@@ -490,7 +490,7 @@ describe('native resume', () => {
       fireEvent.change(field, { target: { value: 'Claude X' } });
       expect(await screen.findByText(/Claude X/)).toBeInTheDocument();
       // CC-only controls must NOT appear for a native row.
-      expect(screen.queryByText('Skip Permissions')).not.toBeInTheDocument();
+      expect(screen.queryByText('Skip permissions')).not.toBeInTheDocument();
     });
 
     it('prefill match auto-selects the matching model and enables Resume without any click', async () => {
@@ -503,7 +503,7 @@ describe('native resume', () => {
 
       // THE point of this test: no interaction at all. The prefill resolves and
       // Resume enables without the dropdown ever being opened.
-      const resumeBtn = await screen.findByRole('button', { name: 'Resume Session' });
+      const resumeBtn = await screen.findByRole('button', { name: 'Resume session' });
       await waitFor(() => expect(resumeBtn).not.toBeDisabled());
       // And the trigger names the resolved model, so the pick is visible unopened.
       await waitFor(() => expect(screen.getByText(/GPT-5/)).toBeInTheDocument());
@@ -528,7 +528,7 @@ describe('native resume', () => {
       await expandRow('Native Chat');
 
       // Nothing pre-selected — Resume stays disabled, unopened.
-      const resumeBtn = await screen.findByRole('button', { name: 'Resume Session' });
+      const resumeBtn = await screen.findByRole('button', { name: 'Resume session' });
       expect(resumeBtn).toBeDisabled();
 
       // Manual pick enables Resume and flows through onResume as the 8th arg.
@@ -551,11 +551,11 @@ describe('native resume', () => {
       render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} />);
       await expandRow('CC Chat');
 
-      expect(await screen.findByText('Skip Permissions')).toBeInTheDocument();
+      expect(await screen.findByText('Skip permissions')).toBeInTheDocument();
       // The picker is closed by default, so its search field is absent until opened.
       expect(screen.queryByPlaceholderText('Search all models…')).not.toBeInTheDocument();
       // CC Resume never gates on a native binding.
-      const resumeBtn = screen.getByRole('button', { name: 'Resume Session' });
+      const resumeBtn = screen.getByRole('button', { name: 'Resume session' });
       expect(resumeBtn).not.toBeDisabled();
     });
 
@@ -680,7 +680,7 @@ describe('organizing', () => {
       expect(button).toHaveFocus();
       fireEvent.click(name);
       expect(await screen.findByDisplayValue('CC Chat')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume session' })).not.toBeInTheDocument();
       expect(onResume).not.toHaveBeenCalled();
       expect(bubbled).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -696,7 +696,7 @@ describe('organizing', () => {
       const name = await screen.findByRole('button', { name: 'Rename CC Chat' });
       fireEvent.keyDown(name, { key: 'Enter' });
       expect(await screen.findByDisplayValue('CC Chat')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume session' })).not.toBeInTheDocument();
     });
 
     // WHY (Plan B review of u6, 2026-09-16): the retired "matches the file viewer
@@ -726,53 +726,41 @@ describe('organizing', () => {
     it('offers to undo once complete', async () => {
       mockWindowClaude([row({ flags: { complete: true } })]);
       mount();
-      // Complete rows are filtered out by default — turn Show Complete on so the
+      // Complete rows are filtered out by default — turn Show complete on so the
       // row is listed, then assert the icon has flipped to its undo affordance.
-      fireEvent.click(await screen.findByRole('switch', { name: 'Show Complete' }));
+      fireEvent.click(await screen.findByRole('switch', { name: 'Show complete' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Mark CC Chat not complete' }));
       expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('cc-1', 'complete', false);
     });
 
-    it('applies Priority through the tag picker but writes a flag, not a tag', async () => {
+    // Priority is now the Pin to top switch (pick-menus-2#PM2-3) — the same stored flag.
+    it('pins through the Pin to top switch, writing the priority flag, not a tag', async () => {
       mount();
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      // Listed among the tags, ahead of the registry ones.
-      fireEvent.click(await screen.findByRole('button', { name: /^Priority/ }));
+      fireEvent.click(await screen.findByRole('switch', { name: 'Pin to top' }));
       expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('cc-1', 'priority', true);
       expect((window as any).claude.session.setTag).not.toHaveBeenCalled();
     });
 
-    it('keeps the "pins to top" explanation next to Priority', async () => {
+    it('offers no Priority tag — pinning is not a tag any more', async () => {
       mount();
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      expect(await screen.findByText('pins to top')).toBeInTheDocument();
+      // The registry tag is offered (and editable on click); there is no Priority pill.
+      expect(await screen.findByRole('button', { name: 'Edit Research' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Priority/ })).not.toBeInTheDocument();
     });
 
-    it('does not offer Priority for renaming or deletion in the tag manager', async () => {
+    // resume-sheet-4 (2026-10-04): the tag icon opens Session details as a popup over
+    // Resume — named for the conversation — instead of a sheet inside the card.
+    it('opens Session details as a popup named for the conversation, and closes it again', async () => {
       mount();
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      fireEvent.click(await screen.findByText('Manage tags…'));
-      // The registry tag is editable there; the built-in has no row at all.
-      expect(await screen.findByRole('textbox', { name: 'Rename Research' })).toBeInTheDocument();
-      expect(screen.queryByRole('textbox', { name: 'Rename Priority' })).not.toBeInTheDocument();
-    });
+      const dialog = await screen.findByRole('dialog', { name: 'Session details' });
+      expect(within(dialog).getByRole('button', { name: 'Rename CC Chat' })).toBeInTheDocument();
+      expect(within(dialog).getByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
 
-    it('shows the resume pane OR the tag sheet, never both', async () => {
-      mount();
-      // Expand to resume…
-      fireEvent.click(await screen.findByText('CC Chat'));
-      expect(await screen.findByRole('button', { name: 'Resume Session' })).toBeInTheDocument();
-
-      // …opening tags replaces it rather than stacking a second panel under it,
-      // which is what would push the Resume button down the screen as you typed.
-      fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
-
-      // …and back the other way.
-      fireEvent.click(await screen.findByText('CC Chat'));
-      expect(await screen.findByRole('button', { name: 'Resume Session' })).toBeInTheDocument();
-      expect(screen.queryByPlaceholderText('Search or create a tag…')).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close Session details' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session details' })).toBeNull());
     });
 
     it('organizes a row that cannot be resumed on this device', async () => {
@@ -865,8 +853,8 @@ describe('preview panel', () => {
       await waitFor(() => expect(screen.getByText(/why did the ask time out/)).toBeInTheDocument());
       // The card in the LIST does not grow its own resume controls any more —
       // they live in the card at the foot of the panel, which is the only
-      // Resume Session button on screen.
-      expect(screen.getAllByRole('button', { name: 'Resume Session' })).toHaveLength(1);
+      // Resume session button on screen.
+      expect(screen.getAllByRole('button', { name: 'Resume session' })).toHaveLength(1);
     });
 
     // The arrival is keyed on the transcript having SETTLED, not on the click:
@@ -962,7 +950,7 @@ describe('preview panel', () => {
       mockClaude([row()]);
       open();
       fireEvent.click(await screen.findByText('Permission ask timeout'));
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Resume session' })).toBeInTheDocument());
       expect((window as any).claude.chatsearch.read).not.toHaveBeenCalled();
     });
 
@@ -976,7 +964,7 @@ describe('preview panel', () => {
       fireEvent.click(await screen.findByText('Permission ask timeout'));
       await waitFor(() => expect(screen.getByText(/why did the ask time out/)).toBeInTheDocument());
       expect(screen.getByText(/has to be resumed where its folder lives/)).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume session' })).not.toBeInTheDocument();
     });
 
     // The transcript itself has not arrived, so there is nothing to show.
@@ -997,7 +985,7 @@ describe('preview panel', () => {
       mockClaude([row()]);
       open();
       fireEvent.click(await screen.findByText('Permission ask timeout'));
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Resume session' })).toBeInTheDocument());
       expect((window as any).claude.chatsearch.read).not.toHaveBeenCalled();
     });
   });

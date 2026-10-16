@@ -1,0 +1,18 @@
+/* WHY: the Project detail shell is larger than a dialog, but Destin chose the
+   same 8% divider and 42px / 4%-side content fade on this specific surface.
+   Do not change the meta strip or other custom OverlayPanel callers. */
+.project-detail-header { position: relative; }
+.project-detail-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
+}
+/* the project detail popup's scroll fade is the app's one fade (`.scroll-mask`, styles/scroll-mask.css) since
+   2026-10-15 — this file used to carry a private copy (42px, eased, with an unfaded 4% strip at
+   each side that Destin had already removed from dialogs: "the fade looks really strange"). */
+

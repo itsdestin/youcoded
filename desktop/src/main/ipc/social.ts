@@ -26,7 +26,7 @@ export const socialChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.SOCIAL_BLOCK, kind: 'handle', desktopOnly: true, handler: ({ userId }) => ops().block(userId) }),
   defineChannel({ name: IPC.SOCIAL_UNBLOCK, kind: 'handle', desktopOnly: true, handler: ({ userId }) => ops().unblock(userId) }),
   defineChannel({ name: IPC.SOCIAL_LIST_BLOCKS, kind: 'handle', desktopOnly: true, handler: () => ops().listBlocks() }),
-  defineChannel({ name: IPC.SOCIAL_PRESENCE_CONNECT, kind: 'handle', desktopOnly: true, handler: () => ops().presenceConnect() }),
+  defineChannel({ name: IPC.SOCIAL_PRESENCE_CONNECT, kind: 'handle', desktopOnly: true, handler: (p) => ops().presenceConnect(p ?? undefined) }),
   defineChannel({ name: IPC.SOCIAL_PRESENCE_DISCONNECT, kind: 'handle', desktopOnly: true, handler: () => ops().presenceDisconnect() }),
   defineChannel({ name: IPC.SOCIAL_PRESENCE_SEND, kind: 'handle', desktopOnly: true, handler: ({ message }) => ops().presenceSend(message) }),
 ];

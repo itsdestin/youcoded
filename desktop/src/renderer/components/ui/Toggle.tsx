@@ -19,7 +19,7 @@ export type ToggleTone = 'default' | 'danger';
 const TRACK_ON: Record<ToggleTone, string> = {
   // was green-600 in settings/sync — the app's accent is the on-state now (change 16)
   default: 'bg-accent',
-  // was a raw #DD4444 hex; danger toggles (Skip Permissions, approve-all) ride
+  // was a raw #DD4444 hex; danger toggles (Skip permissions, approve-all) ride
   // the theme's destructive token so packs can restyle them (change 17)
   danger: 'bg-destructive',
 };

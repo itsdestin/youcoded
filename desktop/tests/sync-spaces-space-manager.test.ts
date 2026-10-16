@@ -240,9 +240,14 @@ describe('SpaceManager — non-blocking reads and writes', () => {
     m.setEnabled(true); // a change lands and is fully written meanwhile
     await m.flush();
     expect(readDisk().enabled).toBe(true);
+    // WHY captured (final review F55): what follows is "nothing changed", so it compares with
+    // the value before the stale result, the guard's honest settle shape.
+    const before = m.isEnabled();
+    expect(before).toBe(true);
     release(); // now the stale refresh result arrives
+    // settle (negative assertion): the stale refresh must not undo the newer change.
     await new Promise((r) => setTimeout(r, 10));
-    expect(m.isEnabled()).toBe(true); // the newer change survives
+    expect(m.isEnabled()).toBe(before); // the newer change survives
     expect(readDisk().enabled).toBe(true);
   });
 

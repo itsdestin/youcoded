@@ -23,7 +23,7 @@ import { ScreenMark } from './shoot-mode';
 import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, CARD_LEVEL_1, Dialog, ErrorState, OneJobCard, OneJobText, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy, HANDOFF_EXPLANATION } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
@@ -110,7 +110,6 @@ import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
 import LibraryScreen from './components/library/LibraryScreen';
 import { MarketplaceProvider } from './state/marketplace-context';
 import ThemeShareSheet from './components/ThemeShareSheet';
-import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
 import { PagesView } from './components/pages/PagesView';
@@ -172,7 +171,7 @@ import { findGuideAnchor } from './components/guide/GuideRing';
 import { requestGuideAdvance, requestGuideReset } from './components/guide/guide-events';
 import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
 import { triggerTip } from './components/guide/tips';
-// --- First-time warnings: Skip Permissions, Full auto, a small model ---
+// --- First-time warnings: Skip permissions, Full auto, a small model ---
 import { useFocusComposerAfterSwitch } from './hooks/use-focus-composer-after-switch';
 import { useFirstTimeGate } from './components/FirstTimeWarning';
 import { isSmallModel } from './components/first-time-warnings';
@@ -389,14 +388,14 @@ function AppInner() {
   const placeDecidedRef = useRef(false);
   const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
   // Batch 2 (§3): before the computer's list arrives, the no-conversation screen says it is
-  // catching up instead of offering New Session — a tap there created a stray conversation.
+  // catching up instead of offering New session — a tap there created a stray conversation.
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
   }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
-  // bubble's "Open Settings" jump so Settings opens straight to that section.
+  // bubble's "Open settings" jump so Settings opens straight to that section.
   const [providersAutoOpen, setProvidersAutoOpen] = useState(false);
   const [specialistsAutoOpen, setSpecialistsAutoOpen] = useState(false);
 
@@ -495,7 +494,7 @@ function AppInner() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  // Open Tasks popup — opened by the OpenTasksChip in the StatusBar
+  // Open tasks popup — opened by the OpenTasksChip in the StatusBar
   const [openTasksPopupOpen, setOpenTasksPopupOpen] = useState(false);
   // SINGLE useSessionTasks instance for the whole page. The chip (in StatusBar)
   // and the popup both read from this one derivation so their inactiveMap state
@@ -564,7 +563,6 @@ function AppInner() {
   );
 
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
-  const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
 
   const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = loading
@@ -575,7 +573,7 @@ function AppInner() {
   const [tourOpen, setTourOpen] = useState(false);
   useEffect(() => { if (isFirstRun === false && isGuidePending()) setTourOpen(true); }, [isFirstRun]);
 
-  // Welcome screen "New Session" expansion form state
+  // Welcome screen "New session" expansion form state
   const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
   const [welcomeCwd, setWelcomeCwd] = useState('');
   const [welcomeModel, setWelcomeModel] = useState('sonnet');
@@ -730,6 +728,14 @@ function AppInner() {
   const [artifactStore] = useState(() => createArtifactStore());
   const artifactState = useSyncExternalStore(artifactStore.subscribe, artifactStore.getState);
   const dispatchArtifact = artifactStore.dispatch;
+  // WHY: the Marketplace and Library now sit under the same band as Projects and Pages
+  // (ScreenBand, decisions "Full-screen titles"), whose Pages / Projects buttons open those
+  // screens. Both are drawn at the same layer as the Marketplace and earlier in the page,
+  // so they would open UNDER it — leave the Marketplace or Library when either opens.
+  useEffect(() => {
+    if (!artifactState.projectViewOpen && !artifactState.pageViewOpen) return;
+    setActiveView((v) => (v === 'marketplace' || v === 'library' ? 'chat' : v));
+  }, [artifactState.projectViewOpen, artifactState.pageViewOpen]);
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate, offerPageSession] = usePageCreate();
@@ -1814,7 +1820,7 @@ function AppInner() {
       // rendering, StrictMode) and keeps only the returned value, so nested
       // dispatch/setState calls could be replayed or dropped on the floor. That
       // left the session list populated while the model/permission maps stayed
-      // empty, which surfaces as "Model Unknown" / "PERMISSION UNKNOWN" chips
+      // empty, which surfaces as "Model unknown" / "PERMISSION UNKNOWN" chips
       // after a reload. Every setter here is has()-guarded, so running it across
       // the whole list (rather than only the not-yet-known ones) is idempotent
       // and never clobbers what session:created already seeded.
@@ -2085,7 +2091,7 @@ function AppInner() {
   }, [chatStore]);
 
   // Check if remote setup banner is active (show badge on gear icon)
-  // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
+  // Badge shows whenever the blue "Set up remote access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
   // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
@@ -3011,7 +3017,7 @@ function AppInner() {
   // Task 12 IPC (NOT a PTY Shift+Tab — native sessions have no PTY). The IPC
   // returns the APPLIED mode, which is authoritative — state updates from the
   // return value, not the optimistic `next` (no screen-scrape correction path).
-  // First-time warnings (Destin, 2026-09-10): the first time Skip Permissions
+  // First-time warnings (Destin, 2026-09-10): the first time Skip permissions
   // or Full auto is switched on, and the first session on a small model, a
   // plain explainer with an "I understand" checkbox for the two dangerous
   // ones. `gate(proceed)` runs proceed at once when already acknowledged.
@@ -3096,7 +3102,7 @@ function AppInner() {
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
     };
-    // 'bypass' IS Skip Permissions, reached by cycling: the first time, the
+    // 'bypass' IS Skip permissions, reached by cycling: the first time, the
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
@@ -3159,7 +3165,7 @@ function AppInner() {
   }, [isFirstRun, sessions.length, resumeRequested, resumeProbe]);
   const firstTimeWelcome = showFirstRunWelcome({ sessionCount: sessions.length, hasResumable, sessionListLoaded });
 
-  // One opener for the welcome form, shared by the New Session button, the
+  // One opener for the welcome form, shared by the New session button, the
   // first-time auto-open and the tour, so the defaults it loads cannot drift.
   const openWelcomeForm = useCallback(() => {
     setWelcomeCwd(sessionDefaults.projectFolder || '');
@@ -3212,7 +3218,7 @@ function AppInner() {
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
         claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
-        // WHY always false: this screen shows no Skip Permissions switch, so a
+        // WHY always false: this screen shows no Skip permissions switch, so a
         // default of "skip" would have reopened every session with approvals off,
         // unseen. Resuming one row through its own card still shows the switch.
         false, false, r.provider, binding, r.name,
@@ -3324,16 +3330,15 @@ function AppInner() {
   // entire shell (2026-09-16 A1).
   const guideThinking = useSessionIsThinking(sessionId ?? '');
   const guideBusy = !!sessionId && guideThinking;
-  const exitTour = useCallback(() => {
+  const exitTour = useCallback((_done?: boolean, stay?: boolean) => {
     markGuideDone();
     setTourOpen(false);
     lastGuideScreen.current = null;
-    // Leave the person on the welcome screen, or their session — never inside
-    // a settings page the tour opened for its own reasons.
-    setSettingsOpen(false); setProvidersAutoOpen(false);
-    dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
-    dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
-    requestGuideReset();
+    // Skip/Done leave the person on the welcome screen or their session — never inside a page the
+    // tour opened. Escape (`stay`) closes only the bubble, like any popup: the screen under it stays.
+    // WHY (backup-warning-1): Escape used to close that screen and leave the tour floating.
+    if (!stay) { setSettingsOpen(false); setProvidersAutoOpen(false); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }
+    if (!stay) { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); requestGuideReset(); }
   }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
@@ -3410,7 +3415,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setEditorSkillId, setPublishThemeSlug, setShareSkillId });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -3511,6 +3516,7 @@ function AppInner() {
                 wallpaper directly, so the whole chrome reads as one
                 continuous tone. */}
             <div className={`chrome-glass${(activeDrawerOpen || sidePaneOpen) ? ' chrome-glass--drawer-open' : ''}`} />
+            <div aria-hidden className={`chrome-outline${(activeDrawerOpen || sidePaneOpen) ? ' chrome-outline--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
                 sessions={stripSessions}
@@ -3723,6 +3729,7 @@ function AppInner() {
                   effort={effortLevel}
                   onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
+                  sessionName={currentSession?.name}
                   onDispatch={handleStatusDispatch}
                   openTasksCounts={openTasksCounts}
                   onOpenOpenTasks={openOpenTasksPopup}
@@ -3749,6 +3756,7 @@ function AppInner() {
                 5rem fallback reserved for an input bar that isn't here — as
                 wide as the header, so the frame closes evenly top and bottom. */}
             <div className="chrome-glass chrome-glass--bare" />
+            <div aria-hidden className="chrome-outline chrome-outline--bare" />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <BareHeaderBar
                 settingsOpen={settingsOpen}
@@ -3772,7 +3780,7 @@ function AppInner() {
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
             <ScreenMark name="welcome" />
-            {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
+            {/* First-time version (deck 2026-09-10, Q-8): "No active session"
                 reads like an error to someone who has never had one. Once a
                 session exists to resume, this is the everyday screen again.
                 select-none: a screen title, not content. Ctrl+A must not paint
@@ -3797,29 +3805,47 @@ function AppInner() {
                 }}
               />
             ) : firstTimeWelcome ? (
-              <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
-                <p className="text-xl text-fg">Start your first session</p>
-                <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+              // Welcome deck WL-1 (Destin picked D1, the roomy form, with "the mascot to the
+              // left of the start your first session text"). The tour's first stop still rings
+              // the buddy here.
+              // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
+              // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
+              <div className="flex items-center gap-2 mb-5 select-none">
+                {/* WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
+                    and text"): the rig box centres the BODY, but the feet hang below it, so the
+                    whole figure sat ~13px lower than the text block. Destin then set the text lower than
+                    centre, twice (GB4-1 "a smidge", GB5-1 "lower"), and gap-2 closer. */}
+                <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim" scene />
+                </div>
+                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1">
+                  <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
+                  <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+                </div>
               </div>
             ) : (
-              <p className="text-xl text-fg-muted select-none">No Active Session</p>
+              <p className="text-xl text-fg-muted select-none">No active session</p>
             )}
             <DevWindowLabel />
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
-            <div data-guide-anchor="welcome-mascot" className="flex">
-              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
-            </div>
-            {/* Welcome screen: New Session (expandable) + Resume Session */}
-            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
+            {!firstTimeWelcome && (
+              <div data-guide-anchor="welcome-mascot" className="flex">
+                <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+              </div>
+            )}
+            {/* Welcome screen: New session (expandable) + Resume session */}
+            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome ? 'w-96' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */
                 <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
                   <ScreenMark name="welcome/new-session" />
                   <div>
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
+                    {/* WHY: field caption drops the spaced-caps eyebrow + sentence
+                        case (labels batch, guide: no spaced capitals). */}
+                    <label className="text-xs font-medium text-fg-muted mb-1 block">Project folder</label>
                     {/* Match SessionStrip: the picker's "Manage projects…"
                         footer opens Project View (where adding lives). */}
                     <FolderSwitcher
@@ -3835,7 +3861,7 @@ function AppInner() {
                       user answers "which model?" instead of decoding "Runtime"
                       first. */}
                   <div>
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+                    <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
                     <ModelPicker
                       value={welcomeModelChoice}
                       onSelect={applyWelcomeModelChoice}
@@ -3849,7 +3875,7 @@ function AppInner() {
                   {welcomeRuntime === 'native' && welcomeNb.nativeSupported && (
                     <NativeExtras nb={welcomeNb} preset={welcomePreset} onPreset={setWelcomePreset} />
                   )}
-                  {/* Skip Permissions is CLAUDE-CODE ONLY — it bypasses the CLI's
+                  {/* Skip permissions is CLAUDE-CODE ONLY — it bypasses the CLI's
                       permission flow, and a native session has neither a PTY nor
                       that flow, so on a native runtime the control did nothing.
                       Same gate as SessionStrip's create form and the Resume
@@ -3858,9 +3884,10 @@ function AppInner() {
                     <>
                       <div className="flex items-center justify-between">
                         {/* The same (i) explainer the strip form carries — the
-                            welcome form had none (UX tester run 1, U10). */}
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
-                          Skip Permissions
+                            welcome form had none (UX tester run 1, U10).
+                            WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                        <label className="text-xs font-medium text-fg-muted inline-flex items-center">
+                          Skip permissions
                           <SkipPermissionsInfoTooltip />
                         </label>
                         {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state; now
@@ -3872,7 +3899,7 @@ function AppInner() {
                           // On goes through the first-time warning; off never does.
                           onChange={(next) => (next ? gateSkip(() => setWelcomeDangerous(true)) : setWelcomeDangerous(false))}
                           tone="danger"
-                          aria-label="Skip Permissions"
+                          aria-label="Skip permissions"
                         />
                       </div>
                       {/* Warning text was a raw text-[#DD4444] hex — the THIRD copy of
@@ -3889,13 +3916,14 @@ function AppInner() {
                         (bg-inset text-fg-dim hover:bg-edge) that decision 60 collapses
                         into the outline, and it sits beside Create as a peer choice —
                         the exact case decision 60 gives for rejecting ghost. */}
-                    <Button
+                    {/* No Cancel on the first-time screen: there is nothing to go back to (D1). */}
+                    {!firstTimeWelcome && <Button
                       variant="secondary"
                       size="lg"
                       onClick={() => setWelcomeFormOpen(false)}
                     >
                       Cancel
-                    </Button>
+                    </Button>}
                     {/* Third skip-permissions Create button — spec decision 62 cited only
                         SessionStrip and ResumeBrowser plus App.tsx's toggle, and missed this
                         one on the welcome form. Same call: FILLED danger, deliberately
@@ -3946,7 +3974,7 @@ function AppInner() {
                       size="lg"
                       className="flex-1 py-1.5"
                     >
-                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (Dangerous)' : 'Create Session'}
+                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (dangerous)' : firstTimeWelcome ? 'Start session' : 'Create session'}
                     </Button>
                   </div>
                 </div>
@@ -3968,7 +3996,7 @@ function AppInner() {
                     data-guide-anchor="new-session"
                     onClick={openWelcomeForm}
                   >
-                    New Session
+                    New session
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
                       as a className override so wallpaper themes still re-tier it.
@@ -3983,7 +4011,7 @@ function AppInner() {
                       <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      <span className="text-sm font-medium">Resume Session</span>
+                      <span className="text-sm font-medium">Resume session</span>
                     </Button>
                   )}
                 </>
@@ -4068,7 +4096,7 @@ function AppInner() {
           // CC's live Ink menu and the trailing \r would answer it.
           if (sessionId) guardedPtySend(sessionId, text + '\r');
         }}
-        // Slash commands from settings (currently only "Build New Theme with
+        // Slash commands from settings (currently only "Build new theme with
         // Claude") route through the dispatcher instead of raw PTY text. In a
         // native session onSendInput reached guardedPtySend, which refuses and
         // whose return value was discarded — so that button did NOTHING at all
@@ -4153,7 +4181,7 @@ function AppInner() {
       />
       <CloseSessionPrompt
         open={closePromptFor !== null}
-        sessionName={closePromptName ?? sessions.find((s) => s.id === closePromptFor)?.name}
+        sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
         onConfirm={(result) => {
@@ -4248,7 +4276,7 @@ function AppInner() {
           ? { type: 'COMPACTION_PENDING', sessionId: sid, cardId: `compact-switch-${Date.now()}`, beforeContextTokens: null, awaitsResult: true }
           : { type: 'COMPACTION_CANCELLED', sessionId: sid })}
       />
-      {/* Open Tasks popup — rendered at App root so it escapes any inner stacking context.
+      {/* Open tasks popup — rendered at App root so it escapes any inner stacking context.
           Reads from the single `openTasks` useSessionTasks instance declared in AppInner. */}
       {sessionId && (
         <OpenTasksPopup
@@ -4267,6 +4295,10 @@ function AppInner() {
         activeView === 'marketplace' ? (
           <MarketplaceScreen
             onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
+            settingsOpen={settingsOpen}
+            onToggleSettings={() => setSettingsOpen((v) => !v)}
+            settingsBadge={settingsBadge}
+            settingsDangerBadge={settingsDangerBadge}
             onOpenLibrary={() => { setActiveView('library'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
             onOpenShareSheet={(id) => setShareSkillId(id)}
             onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
@@ -4277,6 +4309,10 @@ function AppInner() {
         ) : (
           <LibraryScreen
             onExit={() => setActiveView('chat')}
+            settingsOpen={settingsOpen}
+            onToggleSettings={() => setSettingsOpen((v) => !v)}
+            settingsBadge={settingsBadge}
+            settingsDangerBadge={settingsDangerBadge}
             onOpenMarketplace={() => setActiveView('marketplace')}
             onOpenShareSheet={(id) => setShareSkillId(id)}
             onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
@@ -4285,9 +4321,6 @@ function AppInner() {
       )}
       {publishThemeSlug && (
         <ThemeShareSheet themeSlug={publishThemeSlug} onClose={() => setPublishThemeSlug(null)} />
-      )}
-      {editorSkillId && (
-        <SkillEditor skillId={editorSkillId} onClose={() => setEditorSkillId(null)} />
       )}
       {shareSkillId && (
         <ShareSheet skillId={shareSkillId} onClose={() => setShareSkillId(null)} />
@@ -4340,46 +4373,28 @@ function AppInner() {
         );
         return (
           <>
+            {/* WHY titled, with the ✕ (final-fixes#Q-TO, Destin approved "Take over this conversation?"
+                / "That device can't be reached": it was the one popup with no title and no ✕) and the
+                shared one-job layout (popup-cards-2/-3): one card holding the words and the stacked
+                buttons, main on top, in every phase. Wording unchanged. */}
             <Dialog
               screen={`chat/takeover/${takeoverPrompt.phase}`}
               open
               onClose={() => resolveTakeover(false)}
               size="panel"
-              aria-label="Take over conversation"
-              scrollBody={false}
-              className="p-5"
+              title={takeoverPrompt.phase === 'undeliverable' ? 'That device can’t be reached' : 'Take over this conversation?'}
             >
-              {takeoverPrompt.phase === 'confirm' || takeoverPrompt.phase === 'claim-denied' ? (
-                <p className="text-sm text-fg mb-4">
-                  {copy.lead}
-                  {infoTip}
-                </p>
-              ) : (
-                <>
-                  <p className="text-sm text-fg mb-2">
-                    {boldDevice(copy.lead)}
-                    {infoTip}
-                  </p>
-                  <p className="text-xs text-fg-2 mb-4">{copy.consequence}</p>
-                </>
-              )}
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  onClick={() => resolveTakeover(false)}
-                >
-                  {takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="lg"
-                  className="px-3 py-1.5"
-                  onClick={() => resolveTakeover(true)}
-                >
-                  {takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}
-                </Button>
-              </div>
+              {(() => {
+                const actions = <>
+                  <Button onClick={() => resolveTakeover(true)}>{takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+                  <Button variant="secondary" onClick={() => resolveTakeover(false)}>{takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
+                </>;
+                // Every phase boxed alike (popup-cards-6#T-1, Destin: ask/taken back "should have the
+                // box/card styling of no answer/cant reach") — no short-question exception here.
+                return <OneJobCard actions={actions}>
+                  <OneJobText><p>{boldDevice(copy.lead)}{infoTip}</p>{copy.consequence && <p>{copy.consequence}</p>}</OneJobText>
+                </OneJobCard>;
+              })()}
             </Dialog>
           </>
         );
@@ -4399,19 +4414,16 @@ function AppInner() {
             screen="chat/resume/pick-model" open
             // Dismissal stays suppressed while the resume is in flight.
             onClose={() => { if (pendingNativeResuming) return; setPendingNativeResume(null); setPendingNativeBinding(null); }}
-            size="panel"
-            aria-label="Choose a model to resume with"
-            scrollBody={false}
-            className="p-5"
+            // WHY no card: the dropdown and buttons sit bare (popup-cards-2#A-4, Destin: "fine as bare dropdown w buttons").
+            size="panel" title="Choose a model to resume with" busy={pendingNativeResuming}
           >
-            <h3 className="text-sm font-semibold text-fg mb-3">Choose a model to resume with</h3>
-            <ModelPicker
+            <div className="flex flex-col gap-3"><ModelPicker
               value={pendingNativeBinding ? { runtime: 'native', providerId: pendingNativeBinding.providerId, modelId: pendingNativeBinding.modelId } : null}
               onSelect={(c) => { if (c.runtime === 'native') setPendingNativeBinding({ providerId: c.providerId, modelId: c.modelId }); }}
               includeClaude={false}
               onManageModels={() => { setProvidersAutoOpen(true); setSettingsOpen(true); }}
             />
-            <div className="flex justify-end gap-2 mt-4">
+            <div className="flex justify-end gap-2">
               <Button
                 variant="secondary"
                 size="lg"
@@ -4440,6 +4452,7 @@ function AppInner() {
               >
                 {pendingNativeResuming ? 'Resuming…' : 'Resume'}
               </Button>
+            </div>
             </div>
           </Dialog>
         </>
@@ -4512,7 +4525,7 @@ function AppInnerProfiler({ children }: { children: React.ReactNode }) {
 //
 // WHAT THE USER SEES: a Linux user who already had the buddy switched on finds it
 // OFF exactly once, the first time they launch the version that adds the KDE
-// helper. Turning it back on is one click in Settings → Buddy Floater, and that
+// helper. Turning it back on is one click in Settings → Buddy floater, and that
 // click is where the helper is offered. Nothing pops up at launch (R13).
 //
 // WHY it has to happen at all: before this version the buddy appeared on Wayland
@@ -4597,7 +4610,7 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // show() can now answer "no" (design §5) — a Wayland desktop whose helper has
   // gone missing since last launch refuses rather than putting a buddy on screen
   // that cannot be dragged. When it does, the stored preference is cleared, so
-  // Settings → Buddy Floater does not sit there reading "On" with nothing on the
+  // Settings → Buddy floater does not sit there reading "On" with nothing on the
   // desktop. The refusal itself is main's to explain; the launch path stays
   // silent (R13: no dialog interrupts you).
   try {

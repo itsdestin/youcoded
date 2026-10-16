@@ -47,7 +47,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     expect(await screen.findByText(/couldn.t load your models/i)).toBeInTheDocument();
     expect(screen.queryByText('You have not set up any model providers.')).toBeNull();
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 
   it('a catalog that failed says so too', async () => {
@@ -68,7 +68,7 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
     await openPanel();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
   });
 
@@ -169,6 +169,7 @@ describe('list refresh after a download', () => {
       const before = (window.claude.providers.catalog as any).mock.calls.length;
       subscribers.forEach((cb) => cb({ downloadId: 'd1', state: 'downloading' }));
       subscribers.forEach((cb) => cb({ downloadId: 'd1', state: 'verifying' }));
+      // settle (negative assertion): no refetch may follow the download states.
       await new Promise((r) => setTimeout(r, 30));
       expect((window.claude.providers.catalog as any).mock.calls.length).toBe(before);
     });
@@ -180,6 +181,7 @@ describe('list refresh after a download', () => {
       fireEvent.click(trigger);                       // open
       await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBe(2));
       fireEvent.click(trigger);                       // close — must NOT refetch
+      // settle (negative assertion): closing must not refetch; the count stays at 2.
       await new Promise((r) => setTimeout(r, 30));
       expect((window.claude.providers.catalog as any).mock.calls.length).toBe(2);
       catalogRows = AFTER;
@@ -719,9 +721,9 @@ describe('ModelPicker recommended-models bands', () => {
   });
 });
 
-// ── The inline layout (the Model & Effort dialog) ────────────────────────────
+// ── The inline layout (the Model & effort dialog) ────────────────────────────
 /**
- * Two bugs `explore` found on 2026-09-26 in the Model & Effort dialog, which hosts this
+ * Two bugs `explore` found on 2026-09-26 in the Model & effort dialog, which hosts this
  * picker with `layout="inline"` above its Effort buttons and Fast mode switch:
  * 1. Pressing any other control in the dialog counted as "a click outside the picker" and
  *    collapsed the list; the dialog shrank, the button left the pointer before the release,
@@ -758,6 +760,43 @@ describe('ModelPicker — inline layout', () => {
     host();
     fireEvent.click(await screen.findByRole('button', { name: 'Filter and sort' }));
     expect(await screen.findByText('Source')).toBeInTheDocument();
+  });
+});
+
+// ── The chat's model menu for a Claude Code session ─────────────────────────
+// ui-model-picker#MP-1 (Destin, 2026-09-29): a Claude Code session only ever has
+// its four models, so the menu shows them all with no search field; and "Manage
+// models" is the list's own last row, not a footer apart from the models.
+describe('ModelPicker — flat, no search (Claude Code menu)', () => {
+  beforeEach(() => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (window as any).claude = {
+      providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  it('lists every Claude model with no search box, then Manage models', async () => {
+    const onManage = vi.fn();
+    render(
+      <ModelPicker
+        value={{ runtime: 'claude', alias: 'sonnet' }}
+        onSelect={() => {}}
+        includeClaude
+        includeNative={false}
+        defaultOpen
+        layout="flat"
+        hideSearch
+        onManageModels={onManage}
+      />,
+    );
+    await screen.findByText(/Manage models/);
+    const text = document.body.textContent ?? '';
+    for (const name of ['Haiku', 'Sonnet', 'Opus', 'Fable']) expect(text).toContain(`${name} · Claude Code`);
+    expect(screen.queryByRole('textbox', { name: 'Search all models' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Manage models/ }));
+    expect(onManage).toHaveBeenCalled();
   });
 });
 

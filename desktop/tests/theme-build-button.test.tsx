@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// ThemeScreen's "Build New Theme with Claude" — the M3 handoff calls this "the
+// ThemeScreen's "Build new theme with Claude" — the M3 handoff calls this "the
 // single most visible instance of the gap M3 closes" (§2.3).
 //
 // It called onSendInput, which App wired straight to guardedPtySend, which
@@ -41,7 +41,8 @@ function renderScreen(props: Partial<React.ComponentProps<typeof ThemeScreen>>) 
   return render(
     <SkillProvider>
       <MarketplaceProvider>
-        <ThemeScreen onClose={() => {}} {...props} />
+        // WHY defaults: onClose and showInfo are required Props; the old call left showInfo unset (falsy), so false keeps behaviour.
+        <ThemeScreen {...props} onClose={props.onClose ?? (() => {})} showInfo={props.showInfo ?? false} />
       </MarketplaceProvider>
     </SkillProvider>,
   );
@@ -73,37 +74,8 @@ describe('ThemeScreen build button', () => {
   });
 });
 
-// Roadmap (themes, bug 5 of the 2026-07-19 input-migration family): a particle
-// preset not in the list showed as unset ("Select…") and was lost on the next
-// pick. The theme's own value is now offered as-is, so it stays selected.
-describe('particleSelectOptions', () => {
-  it('keeps an unlisted preset as a choice, exactly as written', async () => {
-    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
-    const opts = particleSelectOptions('sakura');
-    expect(opts.map((o) => o.value)).toEqual(['none', 'rain', 'dust', 'ember', 'snow', 'custom', 'sakura']);
-    expect(opts.at(-1)).toEqual({ value: 'sakura', label: 'sakura' });
-  });
-  it('adds nothing for a listed preset or no preset', async () => {
-    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
-    expect(particleSelectOptions('snow')).toHaveLength(6);
-    expect(particleSelectOptions(undefined)).toHaveLength(6);
-    expect(particleSelectOptions('')).toHaveLength(6);
-  });
-});
-
-describe('particle Select renders an unlisted preset as selected', () => {
-  it('shows "sakura", not the empty "Select…" placeholder', async () => {
-    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
-    const { Select } = await import('../src/renderer/components/ui/Select');
-    render(<Select options={particleSelectOptions('sakura')} value="sakura" onChange={() => {}} aria-label="Particles" />);
-    const trigger = screen.getByLabelText('Particles');
-    expect(trigger.textContent).toContain('sakura');
-    expect(trigger.textContent).not.toContain('Select…');
-  });
-  it('before the fix (listed options only) the same value rendered as the placeholder', async () => {
-    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
-    const { Select } = await import('../src/renderer/components/ui/Select');
-    render(<Select options={particleSelectOptions('snow')} value="sakura" onChange={() => {}} aria-label="Particles" />);
-    expect(screen.getByLabelText('Particles').textContent).toContain('Select…');
-  });
-});
+// The particle-dropdown tests that lived here (roadmap themes, bug 5: an unlisted
+// preset showed as unset and was lost on the next pick) went with the per-theme editor
+// (appearance-questions AQ-1, 2026-10-01). Particles are now an every-theme choice that
+// never writes the theme file, so a theme's own preset can't be lost; the override's
+// rules are pinned in look-overrides.test.ts.

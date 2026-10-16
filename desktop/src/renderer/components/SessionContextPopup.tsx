@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Dialog, SettingRow, SegmentedTabs, Callout, Button } from './ui';
+import { Dialog, SettingRow, SegmentedTabs, Callout, Button, SectionLabel, FoldRow } from './ui';
 import { UnifiedDiff } from './diff/UnifiedDiff';
 import MarkdownContent from './MarkdownContent';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
@@ -42,7 +42,9 @@ interface Props {
   sessionId: string;
 }
 
-const EYEBROW = 'block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+// WHY SectionLabel, not a hand-typed eyebrow class (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Every heading below used to share
+// this constant; SectionLabel is now the shared spelling instead.
 
 /** Dot + neutral text is the app's badge shape (design guide G-14): the colour
  *  never carries meaning on its own, the words beside it do. */
@@ -128,8 +130,12 @@ const MD_SCALE = `text-2xs text-fg-2
  *  quote stops reading as a detail of the row above it. */
 function Md({ text, flush = false }: { text: string; flush?: boolean }) {
   return (
-    <div className={`max-h-64 overflow-y-auto bg-well p-3 ${flush ? '' : 'rounded-lg border border-edge-dim'} ${MD_SCALE}`}>
+    // WHY the fill and border on an outer box (2026-10-15, the one scroll fade): the fade is a
+    // mask, so on the filled box itself it would fade the fill and border too; only the text fades.
+    <div className={`bg-well overflow-hidden ${flush ? '' : 'rounded-lg border border-edge-dim'}`}>
+    <div className={`scroll-mask max-h-64 overflow-y-auto p-3 ${MD_SCALE}`}>
       <MarkdownContent content={text} />
+    </div>
     </div>
   );
 }
@@ -142,7 +148,9 @@ function DetailCard({ header, children }: { header: React.ReactNode; children: R
   return (
     <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
       {header}
-      <div className="border-t border-edge-dim">{children}</div>
+      {/* WHY no border-t (final review F17; decisions "Card levels": no full-width line inside
+          a card) — the header's own padding separates it from the body. */}
+      <div>{children}</div>
     </div>
   );
 }
@@ -150,13 +158,8 @@ function DetailCard({ header, children }: { header: React.ReactNode; children: R
 /** An expand-in-place row: SettingRow's own `expanded` mode, the shape Destin
  *  picked on 2026-09-05 ("I HATE the bare dropdowns with a chevron"). */
 function ExpandRow({ title, description, body }: { title: string; description?: string; body: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <SettingRow variant="item" title={title} description={description} expanded={open} onClick={() => setOpen((o) => !o)} />
-      {open && <div className="pt-1.5">{body}</div>}
-    </div>
-  );
+  // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+  return <FoldRow title={title} description={description} flush>{body}</FoldRow>;
 }
 
 /** The got/cut switch. Destin kept the red/green comparison over a plain list of
@@ -188,13 +191,14 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
           </p>
         )}
       </div>
-      <div className="border-t border-edge-dim">
+      {/* WHY no border-t (final review F17): no full-width line inside a card. */}
+      <div>
         {view === 'cut'
           // fill: this wrapper is already the scroll surface (max-h-64
           // overflow-y-auto) — without fill, UnifiedDiff stacked its own
           // 15-line cap + button inside it, a second scrollbar hiding the
           // rest of the cut text (review round 1, 2026-09-18).
-          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div>
+          ? <div className="bg-well overflow-hidden"><div className="scroll-mask max-h-64 overflow-y-auto"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div></div>
           : <Md text={supplied} flush />}
       </div>
     </>
@@ -278,19 +282,8 @@ function SkillCard({ skill, sessionId, openFile }: { skill: SessionContextSkill;
   const fetched = useSessionContextText(sessionId, 'skill', skill.id, open);
   const path = fetched?.state === 'ready' ? fetched.value.path : null;
   return (
-    <DetailCardCollapsible
-      open={open}
-      header={(
-        <SettingRow
-          variant="item"
-          className="rounded-none bg-transparent"
-          title={skill.label}
-          description={skill.description}
-          expanded={open}
-          onClick={() => setOpen((o) => !o)}
-        />
-      )}
-    >
+    // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+    <FoldRow title={skill.label} description={skill.description} open={open} onToggle={setOpen} flush>
       {!fetched || fetched.state === 'loading' ? <p className="p-3 text-2xs text-fg-muted">Reading…</p>
         : fetched.state === 'error' ? <p className="p-3 text-2xs text-fg-muted">This skill couldn’t be read.</p>
           : (
@@ -307,18 +300,7 @@ function SkillCard({ skill, sessionId, openFile }: { skill: SessionContextSkill;
                 : <Md text={fetched.value.text} flush />}
             </>
           )}
-    </DetailCardCollapsible>
-  );
-}
-
-/** DetailCard whose body is hidden until its header is pressed. Same container,
- *  same hairline — the divider goes with the body so a closed card is one row. */
-function DetailCardCollapsible({ open, header, children }: { open: boolean; header: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
-      {header}
-      {open && <div className="border-t border-edge-dim">{children}</div>}
-    </div>
+    </FoldRow>
   );
 }
 
@@ -405,10 +387,11 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
       subtitle="Its instructions, skills and tools for this chat."
       screen="chat/session-context"
     >
-      <div className="space-y-5">
+      {/* WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4; guide "Spacing") — was 20px. */}
+      <div className="space-y-4">
         {/* The tab strip scrolls sideways rather than squeezing, so no label is
             ever cut in half on a phone (review-5 S-3). */}
-        <div className="-mx-1 px-1 overflow-x-auto">
+        <div className="scroll-mask scroll-mask--chips -mx-1 px-1 overflow-x-auto">
           <SegmentedTabs
             variant="contained"
             aria-label="What the assistant was given"
@@ -452,7 +435,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
             {trimmed && (
               <section>
-                <h3 className={EYEBROW}>What was left out</h3>
+                <SectionLabel className="mb-2">What was left out</SectionLabel>
                 <div className="space-y-1.5">
                   {projectFiles.some(f => f.truncated) && (
                     <SettingRow
@@ -483,7 +466,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
             )}
 
             <section>
-              <h3 className={EYEBROW}>This chat</h3>
+              <SectionLabel className="mb-2">This chat</SectionLabel>
               <div className="space-y-1.5">
                 <SettingRow variant="item" title="Model" value={context.modelLabel ?? 'Unknown'} />
                 <SettingRow
@@ -508,7 +491,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'system' && (
           <section>
-            <h3 className={EYEBROW}>System instructions</h3>
+            <SectionLabel className="mb-2">System instructions</SectionLabel>
             {/* Destin, review-5 G-2: this tab carries BOTH the preset and the
                 general instructions, so what a model "loads in with" is all in
                 one place. Project rules keep their own tab because they are
@@ -543,7 +526,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                 Code chat shows your own rules here too, and "This project's
                 rules" over a card labelled "You, in every project" is a heading
                 that contradicts the thing underneath it. */}
-            <h3 className={EYEBROW}>Rules it was given</h3>
+            <SectionLabel className="mb-2">Rules it was given</SectionLabel>
             <p className="text-2xs text-fg-muted leading-snug mb-2">
               {userRules
                 ? 'Written by you, and read when the chat started.'
@@ -586,7 +569,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'skills' && (
           <section>
-            <h3 className={EYEBROW}>Skills</h3>
+            <SectionLabel className="mb-2">Skills</SectionLabel>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
             {skillsHidden && (
               <Callout tone="warning" title="The assistant wasn’t told about these">
@@ -609,7 +592,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
         {tab === 'tools' && (
           <section className="space-y-3">
             <div>
-              <h3 className={EYEBROW}>Tools</h3>
+              <SectionLabel className="mb-2">Tools</SectionLabel>
               <p className="text-2xs text-fg-muted leading-snug mb-2">Actions the assistant can take in this chat. Open one to see what it does.</p>
               {tools.length === 0 ? (
                 <p className="text-2xs text-fg-2 leading-relaxed">

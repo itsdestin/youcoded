@@ -2,6 +2,7 @@ import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { asString } from '../utils/tool-input';
 import { useDelegatedModels, useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import type { SpecialistDefinitionView, ToolCallState } from '../../shared/types';
+import { Callout } from './ui';
 
 /** ToolCard's entry: resolves the roster + target for the awaiting Task card.
  *  Task 10: cwd is computed HERE (not inside SpecialistEnvelope) because
@@ -151,7 +152,8 @@ export function SpecialistEnvelope({ input, definition, targetTitle, targetRunni
         {capability && <li>{capability}</li>}
         <li>{modelLine}</li>
       </ul>
-      {trust && <div className="text-amber-700">{trust}</div>}
+      {/* A caveat about this run is a warning notice, words in the text colour (small-fixes-3#SF3-10). */}
+      {trust && <Callout tone="warning" compact>{trust}</Callout>}
       <div className="text-fg-muted">{footer}</div>
     </div>
   );

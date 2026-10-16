@@ -105,7 +105,10 @@ export function createReconnectingWs(hooks: ReconnectingWsHooks): ReconnectingWs
       // Liveness ping — the DO answers pong; also keeps intermediaries from idling us out.
       pingTimer = setInterval(() => { try { sock.send(JSON.stringify({ type: 'ping' })); } catch { /* mid-close */ } }, PING_INTERVAL_MS);
     });
-    sock.on('message', (data) => { hooks.onMessage(data); });
+    // WHY the supersede guard on frames too (final review F25): a late frame from a socket already
+    // replaced (e.g. the visible one closed by an incognito switch) reached the NEW socket's state —
+    // presence read it as the hidden socket's "not confirmed" first frame and tore that one down.
+    sock.on('message', (data) => { if (ws !== sock) return; hooks.onMessage(data); });
     sock.on('close', (code, reason) => {
       if (ws !== sock) return; // superseded socket — its lifecycle no longer drives state
       handleDown({ code, reason: reason === undefined ? undefined : String(reason) });

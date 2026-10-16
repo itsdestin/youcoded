@@ -15,6 +15,7 @@
 // plus the radius and font scale, i.e. what the style kit is written against.
 
 import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+import { PAGE_KIT_JS } from './page-kit';
 import { MAX_PAGE_SESSION_PROMPT, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 
 const PAGE_THEME_TOKENS: readonly string[] = [
@@ -558,7 +559,11 @@ export function prepareHostedDocument(
     `<style id="youcoded-kit">${kitCss}</style>` +
     // Only an APPROVED session line gives the page startSession. A page waiting
     // for a yes is never framed anyway; this keeps the bootstrap honest alone.
-    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved))}</script>`;
+    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved))}</script>` +
+    // WHY here, before the author's head: the kit's dropdown (page-kit.ts PAGE_KIT_JS) must
+    // register its listeners before the page's own, so an open list owns its keys and no page
+    // ever shows the browser's own white dropdown list (design guide, "Building a Page").
+    `<script id="youcoded-kit-js">${PAGE_KIT_JS}</script>`;
   const a = splitAuthorDocument(html);
   // WHY the attribute is baked in: set from first paint, the page never flashes
   // an opaque canvas before the host's first message arrives.

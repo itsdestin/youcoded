@@ -29,10 +29,11 @@ export default function GameOverlay({ connection }: Props) {
   if (outcome && !draw) {
     if (youWon) {
       headline = 'You Win!';
-      // Retheme (§5.4): was `text-red-400`/`text-yellow-400`, picked to match
-      // whichever disc you were playing. Now the winner's headline is the
-      // accent for the same reason your discs are — it is YOUR result.
-      headlineClass = 'text-accent';
+      // WHY the normal text colour (guide principle 2; decisions "Status colours out of
+      // words, app-wide", small-fixes-3#SF3-10): colour never goes in words, and the accent
+      // headline was coloured text. The words already say who won; "You Lose!" keeps its
+      // dimmer weight so the two still read differently.
+      headlineClass = 'text-fg';
     } else {
       headline = 'You Lose!';
       headlineClass = 'text-fg-dim';
@@ -66,7 +67,10 @@ export default function GameOverlay({ connection }: Props) {
           )}
         </div>
 
-        <div className="flex flex-col gap-2 w-40">
+        {/* WHY w-full, not a fixed w-40 column (guide Buttons; decisions "Button arrangement
+            by width" + "Single button": stacked buttons in a narrow surface span its full
+            width, filled on top). */}
+        <div className="flex flex-col gap-2 w-full">
           {/* Rematch is the main action here, so it's the shared `primary` button.
               The old hand-rolled classes had `hover:bg-accent` on top of a
               `bg-accent` base — i.e. the hover did nothing. The primitive fades
@@ -78,7 +82,8 @@ export default function GameOverlay({ connection }: Props) {
             disabled={state.rematchRequested}
             className="w-full"
           >
-            {state.rematchRequested ? 'Rematch Requested' : 'Rematch'}
+            {/* Sentence case (decisions "Feature names in Title Case" → sentence case). */}
+            {state.rematchRequested ? 'Rematch requested' : 'Rematch'}
           </Button>
           {/* Filled-grey (`bg-inset`) was a second, unofficial secondary style —
               it collapses into the primitive's outlined `secondary`. */}
@@ -88,7 +93,7 @@ export default function GameOverlay({ connection }: Props) {
             onClick={() => { connection.leaveGame(); dispatch({ type: 'RETURN_TO_LOBBY' }); }}
             className="w-full"
           >
-            Back to Lobby
+            Back to lobby
           </Button>
         </div>
       </OverlayPanel>

@@ -25,7 +25,7 @@ describe('central-index', () => {
     await upsertProject(claudeDir, {
       id: 'p1', name: 'a', path: '/p/a',
       lastIndexed: '2026-01-01T00:00:00Z',
-      lastSession: null, contentTypes: ['artifacts'],
+      lastSession: null, contentTypes: ['artifacts'] as ('artifacts' | 'conversations')[],
       stats: { artifactCount: 0 },
     });
     const idx = await readIndex(claudeDir);
@@ -37,7 +37,7 @@ describe('central-index', () => {
     const base = {
       id: 'p1', name: 'a', path: '/p/a',
       lastIndexed: '2026-01-01T00:00:00Z',
-      lastSession: null, contentTypes: ['artifacts'] as const,
+      lastSession: null, contentTypes: ['artifacts'] as ('artifacts' | 'conversations')[],
       stats: { artifactCount: 0 },
     };
     await upsertProject(claudeDir, base);

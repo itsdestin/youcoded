@@ -1,0 +1,49 @@
+import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
+import { readSource } from './helpers/guard-scope';
+
+const components = join(__dirname, '..', 'src', 'renderer', 'components', 'marketplace');
+const preview = join(__dirname, '..', 'src', 'renderer', 'dev', 'workbench', 'mockups');
+
+describe('Marketplace Details outer shell', () => {
+  // WHY (detail redesign 2026-10-04, redesign-backlog row 9): every detail page —
+  // plugin, skill, connection, theme, integration — is the shared popup (Dialog: its
+  // one-line title, the ✕, the tapered line, Escape), never a hand-made panel with its
+  // own header. The integration page had drifted into a second copy once before; this
+  // pins that both pages go through the one shell, without pinning any measurement.
+  it('builds every detail page on the shared popup', () => {
+    const shell = readSource(join(components, 'DetailPage.tsx'));
+    // Imports the shared popup from ui (the exact import list grows: InstallFailed's Button + Callout).
+    expect(shell).toMatch(/import \{[^}]*\bDialog\b[^}]*\} from '\.\.\/ui';/);
+    expect(shell).toMatch(/<Dialog open onClose=\{onClose\} title=\{title\} size="wide"/);
+    for (const file of ['MarketplaceDetailOverlay.tsx', 'IntegrationDetailOverlay.tsx']) {
+      const source = readSource(join(components, file));
+      expect(source).toContain('<DetailPage');
+      expect(source).not.toContain('OverlayPanel');
+    }
+  });
+
+  it('closes with the ✕, never the words "Esc · Close"', () => {
+    // decisions B-1: Marketplace's "Esc · Close" text conforms to the drawn ✕.
+    for (const file of ['DetailPage.tsx', 'MarketplaceDetailOverlay.tsx', 'IntegrationDetailOverlay.tsx', 'FileViewerOverlay.tsx']) {
+      expect(readSource(join(components, file))).not.toContain('Esc · Close');
+    }
+  });
+
+  it('keeps Today as the original header and bare body only in the Workbench', () => {
+    const css = readSource(join(preview, 'MarketplaceDetailHeaderDemo.css'));
+    expect(css).toMatch(/\[data-treatment="today"\].*header:first-child\s*\{[^}]*border-bottom:\s*1px solid var\(--edge-dim\)/);
+    expect(css).toMatch(/\[data-treatment="today"\].*header:first-child h2\s*\{[^}]*font-size:\s*18px;[^}]*font-weight:\s*600/);
+    expect(css).toMatch(/\[data-treatment="today"\].*header:first-child \+ div\s*\{[^}]*mask-image:\s*none/);
+  });
+
+  it('gives the scrolling chip row vertical room so chip borders are not clipped', () => {
+    // A sideways-scrolling row clips vertically at its content edge; at a 1.5× screen
+    // scale the chips' bottom border fell outside it (marketplace-detail-5#M5-3). The fix
+    // is padding inside the clip, cancelled by a negative margin outside. jsdom has no
+    // layout, so this pins the cause; the geometry was checked in shoot at 1× and 1.5×.
+    // The row moved to FactChips.tsx so the item cards share it (decisions "Item card chips").
+    const shell = readSource(join(components, 'FactChips.tsx'));
+    expect(shell).toMatch(/data-detail-chips[^>]*className="[^"]*overflow-x-auto[^"]*\bpy-1 -my-1\b/s);
+  });
+});

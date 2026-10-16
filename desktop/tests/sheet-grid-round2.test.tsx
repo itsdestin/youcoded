@@ -194,6 +194,7 @@ describe('building a big sheet', () => {
     const p = b.get(ws);
     await expect(p).rejects.toThrow('cancelled');
     const counted = calls;
+    // settle: a NEGATIVE check — work that kept going after the cancel would read more rows here.
     await new Promise((r) => setTimeout(r, 80));
     expect(calls).toBe(counted);                       // nothing ran after the cancel
     expect(counted).toBeLessThan(2000);                // and it never finished

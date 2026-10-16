@@ -58,9 +58,11 @@ All popups, modals, drawers, and floating menus share a single set of theme-driv
 |-------|------|---------|-----------|----------|
 | L0 | Content | — | — | App chrome (chat, header, input, status) |
 | L1 | Drawer | 40 | 50 | SettingsPanel, CommandDrawer, ResumeBrowser |
-| L2 | Popup | 60 | 61 | PreferencesPopup, ModelPickerPopup, ShareSheet, ThemeShareSheet, SkillEditor, StatusBar WidgetConfigPopup, ShortcutsPopup |
+| L2 | Popup | 60 | 61 | PreferencesPopup, ModelPickerPopup, ShareSheet, ThemeShareSheet, StatusBar WidgetConfigPopup, ShortcutsPopup |
 | L3 | Critical | 70 | 71 | Destructive confirmations (DiscardConfirmDialog, DonateConfirm, ProjectView delete, ModelProvidersPopup, SyncPanel, ModelPickerPopup) |
 | L4 | System | 100 | 100 | Toasts, always-visible indicators |
+
+**A popup over a popup** (same layer) is lifted 2 per depth (`useOverlayDepth` / `stackLift` in `Overlay.tsx`, capped at 4 so it never reaches the next layer): its scrim then sits above the popup beneath, so the blur and dim cover it too (final-review#CT-8). `Dialog` does this for its scrim and panel; a bare `<Scrim>` registers its own depth. Pinned by `tests/dialog-shell.test.tsx`.
 
 **Exception:** `SessionStrip` dropdown lives at `z-[9000]`. It's load-bearing — `.header-bar`'s `backdrop-filter` creates a stacking context that would trap lower z-index values. Don't "fix" it. `OverflowMenu` also uses `z-[9000]`; `ProjectHero` moved to L4 and `ProjectView` is a `z-40` screen layer (the `z-[8000]` comment in App.tsx is stale).
 

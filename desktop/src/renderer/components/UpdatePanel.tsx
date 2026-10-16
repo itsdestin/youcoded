@@ -1,6 +1,6 @@
 // UpdatePanel.tsx — L2 overlay opened from the StatusBar version pill.
 // Two modes driven by updateStatus.update_available:
-//   - true  → "Update available" + Update Now button + changelog entries since current version
+//   - true  → "Update available" + Update now button + changelog entries since current version
 //   - false → "What's new" + full changelog, no button
 // Cache lives main-side (see changelog-service.ts).
 
@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
-import { Button, Dialog, LoadingState, ProgressBar } from './ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
 import { BetaChannelRow } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
@@ -49,11 +49,23 @@ function downloadErrorCode(e: unknown): string {
 // instead of the generic launch error.
 function updateErrorMessage(code: string): string {
   if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
-  if (code === 'verify-failed') return 'The download looked corrupted — Retry';
+  // WHY a plain sentence (Destin, small-fixes-1#SF-1, 2026-10-12): "Download failed — Try again"
+  // put the failure inside the button's own label. The reason is a sentence in the notice box;
+  // the button beside it reads only "Try again".
+  if (code === 'verify-failed') return "The download was damaged, so it wasn't installed.";
+  if (code === 'disk-full') return "There isn't enough free space on this computer for the update.";
   // Installing a Linux system package needs an administrator password (2026-09-20).
   if (code === 'install-cancelled') return 'The password prompt was closed, so nothing was installed.';
   if (code === 'install-failed') return "Your package manager wouldn't install the update.";
   return 'Launch failed';
+}
+
+/** The one sentence a failed update shows in its notice: the code's own words when it has
+ *  some, else which step stopped — never a guessed cause. */
+function updateFailureSentence(code: string, stage: 'download' | 'launch'): string {
+  const own = updateErrorMessage(code);
+  if (own !== 'Launch failed') return own;
+  return stage === 'launch' ? "The installer didn't start." : "The update didn't download.";
 }
 
 interface UpdateStatus {
@@ -152,7 +164,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const activeJobIdRef = useRef<string | null>(null);
   // Aborted-close guard: if the user closes the popup mid-download and the
   // download() promise still resolves afterwards (cancel didn't race in time),
-  // we must NOT setInstallState(ready) — that would leave stale "Launch Installer"
+  // we must NOT setInstallState(ready) — that would leave stale "Launch installer"
   // state showing on next open.
   const abortedRef = useRef(false);
 
@@ -245,7 +257,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
       const result = await window.claude.update.download();
       // Guard: if the popup closed during the download, don't leave stale
-      // "Launch Installer" state showing on next open.
+      // "Launch installer" state showing on next open.
       if (abortedRef.current) return;
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
@@ -274,11 +286,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   //   otherwise       → full markdown, rendered as one block
   let body: React.ReactNode;
   if (data?.error || (!loading && data !== null && !data.markdown && !data.entries?.length)) {
+    // WHY the notice box (guide: a problem is the one tinted box, its button inside at the
+    // right; never underlined text as a button): was a centred grey line with an underlined link.
     body = (
-      <div className="text-fg-dim text-sm py-8 text-center">
-        Couldn't load changelog.{' '}
-        <button onClick={handleOpenOnGithub} className="underline hover:text-fg">Open on GitHub</button>
-      </div>
+      <Callout tone="danger" actions={<Button size="sm" variant="secondary" onClick={handleOpenOnGithub}>Open on GitHub</Button>}>
+        Couldn't load the release notes.
+      </Callout>
     );
   } else if (loading || !data) {
     body = <LoadingState what="changelog" />;
@@ -302,21 +315,31 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     } else {
       shown = data.entries.slice(0, currentIdx);
     }
+    // WHY a labelled card per version (Destin, close-session-4#CS4-1; guide: nothing bare on
+    // the popup — a group is a small label and a card): the notes sat bare on the popup under
+    // an 18px heading the guide's three levels don't have. The version and date are the label;
+    // the notes are reading text in a first-level card (About's Disclaimer / Privacy cards).
     body = (
-      <div className="space-y-6">
+      <>
         {shown.map(e => (
           <section key={e.version}>
-            <h2 className="text-lg font-semibold mb-2">
-              v{e.version}
-              {e.date && <span className="text-fg-dim font-normal ml-2">{e.date}</span>}
-            </h2>
-            <MarkdownContent content={e.body} />
+            <SectionLabel className="mb-2">v{e.version}{e.date ? ` · ${e.date}` : ''}</SectionLabel>
+            {/* text-fg text-sm: the notes set no colour of their own (in chat they inherit
+                the bubble's); here they inherited the page default, near-invisible on dark
+                themes like Halftone Dimension (seen on close-session-5's preview). */}
+            <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={e.body} /></div>
           </section>
         ))}
-      </div>
+      </>
     );
   } else if (data.markdown) {
-    body = <MarkdownContent content={data.markdown} />;
+    // The whole changelog (no update waiting): one card under one label, the same recipe.
+    body = (
+      <section>
+        <SectionLabel className="mb-2">Release notes</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 text-fg text-sm`}><MarkdownContent content={data.markdown} /></div>
+      </section>
+    );
   }
 
   return createPortal(
@@ -327,22 +350,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         onClose={onClose}
         size="document"
         title={updateStatus.update_available ? 'Update available' : "What's new"}
-        scrollBody={false}
-      >
-        {/* The beta switch rides at the END of the scrolling body, so it appears
-            in BOTH modes — under "what's new" when you are current, and under the
-            release notes when an update is waiting (Destin, 2026-09-13 deck, S-1:
-            "should also appear somewhere on the version chip popup modal with the
-            changelog"). It renders nothing where the channel is unavailable —
-            Android and a remote browser refuse the call — so no gate is needed
-            here. Inside the scroll rather than the footer: the footer only exists
-            in the update-available mode, and it belongs to the Update button. */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-          {body}
-          <BetaChannelRow separated />
-        </div>
-        {updateStatus.update_available && (
-          <footer className="px-5 py-3 border-t border-edge-dim flex flex-col items-end">
+        // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
+        // notes with no fade and drew a full-width line above its footer (guide: no full-width
+        // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
+        // in view and the notes fade see-through under it.
+        footer={updateStatus.update_available ? (
+          // WHY full width (Destin, close-session-4#CS4-1: "the button should be full width as
+          // well"; guide: a lone button is full width): it hugged its label at the right.
+          <div className="flex flex-col">
             {/* Change 46: download progress gets a real bar. It used to live only
                 as a percentage inside the (disabled, therefore dimmed) button
                 label, which is the one place a user is least likely to watch.
@@ -357,8 +372,31 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 className="w-full mb-2"
               />
             )}
+            {/* A failed update (all but a blocked one): the notice box in the button's place —
+                its sentence, then "Open in browser instead" where that is safe, and "Try again"
+                where a fresh attempt can help (guide "A failed action replaces the buttons it
+                came from"; small-fixes-1#SF-1). No browser fallback for a damaged download:
+                that file is the one the check refused (2026-09-10 #7 review). */}
+            {installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
+              <Callout
+                tone="danger"
+                actions={(
+                  <>
+                    {installState.code !== 'verify-failed' && (
+                      <Button size="sm" variant="secondary" onClick={handleFallbackBrowser}>Open in browser instead</Button>
+                    )}
+                    {isRetriableErrorCode(installState.code) && (
+                      <Button size="sm" onClick={handleUpdate}>Try again</Button>
+                    )}
+                  </>
+                )}
+              >
+                {updateFailureSentence(installState.code, installState.stage)}
+              </Callout>
+            ) : (
             <Button
               size="lg"
+              className="w-full"
               onClick={handleUpdate}
               disabled={
                 installState.kind === 'downloading' ||
@@ -370,27 +408,20 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
               }
             >
-              {installState.kind === 'idle' && `Update Now: v${updateStatus.current} → v${updateStatus.latest}`}
+              {installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
               {installState.kind === 'downloading' && (
                 installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
               )}
-              {installState.kind === 'ready' && 'Launch Installer'}
+              {installState.kind === 'ready' && 'Launch installer'}
               {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
-              {installState.kind === 'error' && (
-                // A blocked/unverifiable update and a corrupt download read differently
-                // (security review #7, 2026-09-10). Every other failure names the step
-                // that failed. WHY the stage picks the WORD (error inventory 2026-09-10,
-                // false message 17): retriability alone chose between "Download failed —
-                // Retry" and "Launch failed", so a download that retry could not fix
-                // (busy, url-rejected) was reported as a launch that never happened.
-                installState.code === 'signature-invalid' ? 'Update blocked'
-                  : installState.code === 'verify-failed' ? 'Retry download'
-                  : installState.stage === 'launch'
-                    ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Retry' : 'Launch failed')
-                    : (isRetriableErrorCode(installState.code) ? 'Download failed — Retry' : 'Download failed')
-              )}
+              {/* Only a blocked update still reaches here in the error state; every other failure
+                  is the notice above. WHY the stage picks the sentence there (error inventory
+                  2026-09-10, false message 17): a download that retry could not fix (busy,
+                  url-rejected) was once reported as a launch that never happened. */}
+              {installState.kind === 'error' && 'Update blocked'}
             </Button>
+            )}
             {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser
                 opens download_url — the raw installer binary — which for a
                 verify-failed (sha256/size mismatch, i.e. the installer was swapped
@@ -420,25 +451,31 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                     Run in terminal
                   </Button>
                 </div>
-                {terminalError && <p className="text-xs text-red-600 mt-1">{terminalError}</p>}
+                {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+                {terminalError && <FieldError as="p" size="2xs" className="mt-1">{terminalError}</FieldError>}
               </div>
             )}
-            {installState.kind === 'error' && installState.code !== 'verify-failed' && (
+            {installState.kind === 'error' && installState.code === 'signature-invalid' && (
               <div className="text-xs mt-2">
-                {installState.code === 'signature-invalid' ? (
-                  <p className="text-amber-700">{updateErrorMessage('signature-invalid')}</p>
-                ) : (
-                  <button
-                    onClick={handleFallbackBrowser}
-                    className="text-fg-dim underline hover:text-fg"
-                  >
-                    Open in browser instead
-                  </button>
-                )}
+                {/* WHY FieldError (guide: no red/coloured body text for messages —
+                    amber sentences are in scope too). Other failures carry "Open in browser
+                    instead" inside their notice above. */}
+                <FieldError as="p" size="2xs">{updateErrorMessage('signature-invalid')}</FieldError>
               </div>
             )}
-          </footer>
-        )}
+          </div>
+        ) : undefined}
+      >
+        {/* The beta switch rides at the END of the scrolling body, so it appears
+            in BOTH modes — under "what's new" when you are current, and under the
+            release notes when an update is waiting (Destin, 2026-09-13 deck, S-1:
+            "should also appear somewhere on the version chip popup modal with the
+            changelog"). It renders nothing where the channel is unavailable —
+            Android and a remote browser refuse the call — so no gate is needed
+            here. Inside the scroll rather than the footer: the footer only exists
+            in the update-available mode, and it belongs to the Update button. */}
+        {body}
+        <BetaChannelRow card />
       </Dialog>
     </>,
     document.body,

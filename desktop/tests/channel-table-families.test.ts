@@ -286,6 +286,8 @@ describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () =
   it('a real field written by a phone is read by the computer', async () => {
     expect((await overRemote('settings:set', { field: 'r31Probe.nested', value: 'yes' })).answer).toBe(true);
     expect(await overIpc('settings:get', { field: 'r31Probe.nested' })).toBe('yes');
+    // The write landed in this group's own home, not the suite's shared one.
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('r31Probe');
     await overIpc('settings:set', { field: 'r31Probe', value: undefined });
   });
 });

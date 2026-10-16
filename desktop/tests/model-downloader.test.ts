@@ -24,7 +24,7 @@ function fetchServing(bodies: Record<string, Buffer>): typeof fetch {
     const range = init?.headers?.Range as string | undefined;
     if (range) start = Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0);
     const body = buf.subarray(start);
-    return new Response(new Blob([body]).stream(), {
+    return new Response(new Blob([new Uint8Array(body)]).stream(), {
       status: start > 0 ? 206 : 200,
       headers: { 'content-length': String(body.length) },
     });
@@ -108,7 +108,9 @@ describe('ModelDownloader', () => {
     const dl = new ModelDownloader(dir, fetchImpl);
     const events: DownloadProgress[] = [];
     const id = dl.start('unsloth/M-GGUF', quantOpt(false), (p) => events.push(p));
-    await new Promise((r) => setTimeout(r, 60));
+    // WHY a signal, not a 60 ms sleep (final review F55): the cancel must land MID-download;
+    // the first progress event is the proof that it started, however busy the machine is.
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
     dl.cancel(id);
     await expect(dl.wait(id)).rejects.toThrow(/cancel/i);
     expect(events[events.length - 1].state).toBe('cancelled');

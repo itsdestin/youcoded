@@ -203,6 +203,9 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
     <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col${backdrop ? ' preview-backdrop' : ''}`}>
       {/* overflow-anchor: none — the prepend is anchored by hand above; the
           browser's own anchoring would move it a second time. */}
+      {/* NO .scroll-mask — a deliberate exception (tests/scroll-mask.test.ts), the same as the chat:
+          the preview's message bubbles are frosted glass, and a mask makes the scroller a backdrop
+          root, so they would stop blurring what is behind them (measured 2026-10-15). */}
       <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto py-3" style={{ overflowAnchor: 'none' }}>
         {/* WHY: this pane deliberately has NO header/close of its own — each
             host's top bar supplies the title and the single close button (the

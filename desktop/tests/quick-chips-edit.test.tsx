@@ -62,6 +62,9 @@ async function mount() {
 
 const openEditor = () => fireEvent.click(screen.getByLabelText('Edit quick chips'));
 const row = (i: number) => document.querySelector(`[data-chip-idx="${i}"]`) as HTMLElement;
+// Editing opens from the chip's pencil (pick-menus-4#PM4-1), not the chip itself — the
+// chip is the drag handle.
+const pencil = (label: string) => screen.getByLabelText(`Edit ${label}`);
 
 // jsdom implements neither pointer-capture method, and the drag path calls
 // setPointerCapture on every pointerdown — without these the drag test still
@@ -76,19 +79,19 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe('quick chips — editing an existing chip', () => {
   beforeEach(() => setupWindowClaude(CHIPS));
 
-  it('tapping a row opens it with the chip\'s current label and prompt', async () => {
+  it('the pencil opens the chip\'s edit page with its current label and prompt', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(1));
-    expect(screen.getByLabelText('Chip label')).toHaveValue('Git Status');
-    expect(screen.getByLabelText('Chip prompt')).toHaveValue('run git status');
+    fireEvent.click(pencil('Git Status'));
+    expect(screen.getByLabelText('Chip name')).toHaveValue('Git Status');
+    expect(screen.getByLabelText('Chip message')).toHaveValue('run git status');
   });
 
   it('saving writes the new prompt back and keeps every other chip', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(1));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), {
+    fireEvent.click(pencil('Git Status'));
+    fireEvent.change(screen.getByLabelText('Chip message'), {
       target: { value: 'run git status --short and summarize' },
     });
     fireEvent.click(screen.getByText('Save'));
@@ -104,8 +107,8 @@ describe('quick chips — editing an existing chip', () => {
   it('editing a skill-backed chip preserves its skillId', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(0));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: 'journal with me' } });
+    fireEvent.click(pencil('Journal'));
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: 'journal with me' } });
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
     expect(setChips.mock.calls[0][0][0]).toEqual({
@@ -116,44 +119,64 @@ describe('quick chips — editing an existing chip', () => {
   it('Cancel discards the edit and writes nothing', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(1));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: 'clobbered' } });
+    fireEvent.click(pencil('Git Status'));
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: 'clobbered' } });
     fireEvent.click(screen.getByText('Cancel'));
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
     expect(setChips).not.toHaveBeenCalled();
   });
 
-  // Rows are also drag handles. A pointer run that passes the 5px threshold sets
-  // suppressClick, and the click that follows a drop must NOT open the row it
-  // just moved — otherwise every reorder ends in an accidental edit form.
-  it('a drag does not open the row it dropped', async () => {
+  // Chips are drag handles. A pointer run that passes the 5px threshold must not
+  // also count as a click on the chip's pencil — every reorder would end in an
+  // accidental edit page.
+  it('a drag does not open the chip it dropped', async () => {
     await mount();
     openEditor();
     const r = row(1);
     fireEvent.pointerDown(r, { button: 0, clientX: 0, clientY: 0 });
     fireEvent.pointerMove(r, { clientX: 0, clientY: 40 });
-    fireEvent.pointerUp(r);
+    fireEvent.pointerUp(r, { clientX: 0, clientY: 40 });
     fireEvent.click(r);
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
   });
 
-  // Chips are identified by array position, so anything that shifts positions
-  // must close the open row rather than risk saving onto a different chip.
-  it('removing a chip closes an open edit row', async () => {
+  // Remove asks first, in place, as the Tags card's Delete tag does (final-review#CH-5/CH-6).
+  it('Remove on the edit page asks first, then deletes that chip and returns to the shelves', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(0));
-    expect(screen.getByLabelText('Chip prompt')).toBeTruthy();
-    fireEvent.click(screen.getAllByLabelText('Remove chip')[0]);
-    expect(screen.queryByLabelText('Chip prompt')).toBeNull();
+    fireEvent.click(pencil('Journal'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByText('Remove “Journal” from your quick chips?')).toBeInTheDocument();
+    expect(setChips).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' })); // the confirm
+    await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
+    expect(setChips.mock.calls[0][0]).toEqual([CHIPS[1]]);
+    expect(screen.queryByLabelText('Chip message')).toBeNull();
   });
 
-  it('an empty label or prompt cannot be saved', async () => {
+  it('Keep it backs out of removing and writes nothing', async () => {
     await mount();
     openEditor();
-    fireEvent.click(row(1));
-    fireEvent.change(screen.getByLabelText('Chip prompt'), { target: { value: '   ' } });
-    expect(screen.getByText('Save')).toBeDisabled();
+    fireEvent.click(pencil('Journal'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(setChips).not.toHaveBeenCalled();
+  });
+
+  // Like the tag box's Create, Save never greys out: pressed with a box empty, it says why under
+  // that box and saves nothing (guide: "a disabled control says why").
+  it('an empty name or message is not saved, and says why', async () => {
+    await mount();
+    openEditor();
+    fireEvent.click(pencil('Git Status'));
+    fireEvent.change(screen.getByLabelText('Chip message'), { target: { value: '   ' } });
+    expect(screen.getByText('Save')).toBeEnabled();
+    fireEvent.click(screen.getByText('Save'));
+    expect(screen.getByText('Write what the chip sends first.')).toBeInTheDocument();
+    expect(screen.queryByText('Give the chip a name first.')).toBeNull();
+    expect(screen.getByLabelText('Chip message')).toBeInTheDocument(); // still on the page
+    expect(setChips).not.toHaveBeenCalled();
   });
 });
 
@@ -177,6 +200,74 @@ describe('quick chips — the row shows the store, not a hardcoded fallback', ()
     // The editor and the row now agree — both show nothing.
     openEditor();
     expect(document.querySelector('[data-chip-idx]')).toBeNull();
-    expect(screen.getByText('+ Add Chip')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Add a chip' })).toBeTruthy();
+  });
+
+  // vocab-chips-2#D-3: "Add a chip" is a titled box inside the shown shelf, like "Add a tag";
+  // Enter opens the add page with the typed name filled in.
+  it('the "Add a chip" box sits inside the shown shelf and Enter opens the add page with its name', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    const shown = document.querySelector('[data-shelf="shown"]')!;
+    const box = screen.getByRole('textbox', { name: 'Add a chip' });
+    expect(shown).toContainElement(box);
+    fireEvent.change(box, { target: { value: 'Standup' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByLabelText('Chip name')).toHaveValue('Standup');
+  });
+});
+
+// pick-menus-4#PM4-1: a chip can be kept but "set aside" — saved, off the row.
+describe('quick chips — set aside', () => {
+  it('a set-aside chip stays in the editor but not on the row above the message box', async () => {
+    setupWindowClaude([CHIPS[0], { ...CHIPS[1], hidden: true }]);
+    await mount();
+    expect(screen.getByText('Journal')).toBeTruthy();
+    expect(screen.queryByText('Git Status')).toBeNull();
+    openEditor();
+    const aside = document.querySelector('[data-shelf="aside"]')!;
+    expect(aside.textContent).toContain('Git Status');
+  });
+
+  it('switching "Show above the message box" off saves the chip as set aside', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    fireEvent.click(pencil('Git Status'));
+    fireEvent.click(screen.getByRole('switch', { name: 'Show above the message box' }));
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
+    expect(setChips.mock.calls[0][0][1]).toEqual({ label: 'Git Status', prompt: 'run git status', hidden: true });
+  });
+
+  it('dragging a chip onto the Set aside shelf sets it aside', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    const aside = document.querySelector('[data-shelf="aside"]') as HTMLElement;
+    // jsdom has no layout: say the drop point is over the empty Set aside shelf.
+    (document as any).elementFromPoint = () => aside;
+    const r = row(0);
+    fireEvent.pointerDown(r, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(r, { clientX: 0, clientY: 60 });
+    fireEvent.pointerUp(r, { clientX: 0, clientY: 60 });
+    await waitFor(() => expect(setChips).toHaveBeenCalledTimes(1));
+    expect(setChips.mock.calls[0][0]).toEqual([CHIPS[1], { ...CHIPS[0], hidden: true }]);
+  });
+
+  // Final review F42: a press, a move past 5px and a release on the chip's own spot jumped it to
+  // the end of its shelf, saved at once.
+  it('dropping a chip back on itself moves nothing and saves nothing', async () => {
+    setupWindowClaude(CHIPS);
+    await mount();
+    openEditor();
+    const r = row(0);
+    (document as any).elementFromPoint = () => r;
+    fireEvent.pointerDown(r, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(r, { clientX: 0, clientY: 10 });
+    fireEvent.pointerUp(r, { clientX: 0, clientY: 10 });
+    await act(async () => {}); // let any save the drop started run
+    expect(setChips).not.toHaveBeenCalled();
   });
 });

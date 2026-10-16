@@ -1,0 +1,7 @@
+/* Design-guide review (2026-09-24): LIST ROWS "PLAIN ROWS".
+   Every list of choices (Settings, menus, switchers, dropdowns) uses one row
+   treatment: flat rows with no box and no line; only hover and selection show them. Hover still highlights the row under the pointer.
+   Workbench-only: ?proposal=shape-round,cards-raised,lists-plain. */
+@layer proposal {
+:is(.stepped-hover[class*="bg-inset/50"], [role=menu] [role=menuitem], [role=listbox] [role=option], [role=dialog] button.w-full.rounded-md.border, .group\/row):not(.border-accent) { background: transparent !important; border-color: transparent !important; border-radius: var(--radius-md) !important; }
+}

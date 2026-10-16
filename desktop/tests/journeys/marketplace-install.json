@@ -29,7 +29,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Inbox Likely safe @destin Triage captured notes into something useful.",
+        "labelStarts": "Inbox Likely safe @destin",
         "nth": 1
       }
     },

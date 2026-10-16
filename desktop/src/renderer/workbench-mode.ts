@@ -165,3 +165,28 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     ? (raw as ChromeStyleOverride)
     : null;
 }
+
+/** `?liked=1` — a theme page opens with its heart already liked (marketplace-detail friction,
+ *  proposal 10): the practice backend has no per-user like, so the liked state could never be
+ *  photographed. False outside the workbench and the photo-only build. */
+export function workbenchThemeLiked(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('liked') === '1';
+}
+
+/** Games-social redesign (redesign backlog row 11): every choice is settled (decks
+ *  games-social-1…4), so no variant switches remain — only the practice states below. */
+
+/** Practice states, not choices. `?friendsOpen=1` opens the friends card (it starts folded, so
+ *  its rows could not be photographed). `?network=offline` makes the app believe the computer has
+ *  no network connection (the browser's own online flag), for the offline state. Both false
+ *  outside the workbench and the photo-only build. */
+export function workbenchFriendsOpen(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('friendsOpen') === '1';
+}
+export function workbenchNetworkOffline(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('network') === 'offline';
+}
+

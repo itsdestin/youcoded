@@ -20,6 +20,7 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { ErrorState } from '../src/renderer/components/ui/states';
+import { Callout } from '../src/renderer/components/ui/Callout';
 
 afterEach(cleanup);
 
@@ -28,7 +29,7 @@ describe('ErrorState — the shapes that already ship', () => {
     const onRetry = vi.fn();
     render(<ErrorState message="Could not read the file." onRetry={onRetry} />);
     expect(screen.getByText('Could not read the file.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
@@ -50,7 +51,7 @@ describe('ErrorState — the shapes that already ship', () => {
     expect(screen.getByRole('button', { name: 'Diagnose with the assistant' }).className)
       .toContain('bg-accent');
     expect(screen.getByRole('button', { name: 'Report bug' }).className)
-      .toContain('border-edge-dim');
+      .toMatch(/(^| )border-edge-strong( |$)/); // outlined (secondary) button — round 2, 2026-09-28
   });
 });
 
@@ -69,10 +70,10 @@ describe('ErrorState — what the widening adds', () => {
     const names = screen.getAllByRole('button').map(b => b.textContent);
     // Destin, batch 1 deck (E-1c): "switch retry/bug positions" — Retry, the primary, sits
     // last, at the right-hand end of the row.
-    expect(names).toEqual(['Report bug', 'Retry']);
-    expect(screen.getByRole('button', { name: 'Retry' }).className).toContain('bg-accent');
-    expect(screen.getByRole('button', { name: 'Report bug' }).className).toContain('border-edge-dim');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(names).toEqual(['Report bug', 'Try again']);
+    expect(screen.getByRole('button', { name: 'Try again' }).className).toContain('bg-accent');
+    expect(screen.getByRole('button', { name: 'Report bug' }).className).toMatch(/(^| )border-edge-strong( |$)/); // outlined (secondary) button — round 2, 2026-09-28
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     fireEvent.click(screen.getByRole('button', { name: 'Report bug' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onReportBug).toHaveBeenCalledTimes(1);
@@ -89,7 +90,7 @@ describe('ErrorState — what the widening adds', () => {
       />,
     );
     expect(screen.getAllByRole('button').map(b => b.textContent))
-      .toEqual(['Report bug', 'Diagnose with the assistant', 'Retry']);
+      .toEqual(['Report bug', 'Diagnose with the assistant', 'Try again']);
   });
 
   it('renders only the actions it was given', () => {
@@ -110,11 +111,72 @@ describe('ErrorState — where the buttons sit (G-28)', () => {
   });
 
   it('keeps a one-line error’s action inline with its text', () => {
-    // The other permitted placement: the action belongs to that line, on its right.
+    // The other permitted placement: the action belongs to that line, on its right —
+    // the buttons' row sits beside the words in the same line of the notice box.
     const { container } = render(<ErrorState message="Could not read the file." onRetry={() => {}} />);
     const row = container.querySelector('button')!.parentElement!;
-    expect(row.className).not.toContain('justify-end');
-    expect(row.textContent).toContain('Could not read the file.');
+    expect(row.className).toContain('ml-auto'); // pushed to the right-hand end
+    expect(row.parentElement!.textContent).toContain('Could not read the file.');
+    expect(row.parentElement!.className).toContain('flex'); // same line as the words
+  });
+});
+
+describe('ErrorState — it IS the notice box (error-notices-1)', () => {
+  // WHY this guard (2026-10-12): ErrorState was a neutral grey box with a red dot
+  // ("Option C") while the design guide made every error the one red-tinted notice
+  // box. The two drifted for weeks because nothing tied them together: new screens
+  // followed the component, not the guide. These pins compare ErrorState with the
+  // shared notice box itself, so the two cannot drift again — change the box and
+  // every error follows; hand-draw a box here and this fails.
+  const outer = (el: React.ReactElement) => {
+    const { container, unmount } = render(el);
+    const box = container.firstElementChild as HTMLElement;
+    const out = { tag: box.tagName, className: box.className };
+    unmount();
+    return out;
+  };
+
+  it('a one-line error draws the danger notice box, buttons inside it', () => {
+    const err = outer(<ErrorState message="Could not read the file." onRetry={() => {}} />);
+    const box = outer(<Callout tone="danger" actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('an inline error draws the slim one-line notice box', () => {
+    const err = outer(<ErrorState variant="inline" message="Could not read the file." onRetry={() => {}} />);
+    const box = outer(<Callout tone="danger" compact actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('a general error draws the notice box with its buttons on their own line', () => {
+    const err = outer(<ErrorState title="Gone" explainer="No idea." onReportBug={() => {}} />);
+    const box = outer(<Callout tone="danger" title="t" actionsPlacement="below" actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('keeps announcing itself, and paints nothing red but the box', () => {
+    const { container } = render(<ErrorState title="Gone" explainer="No idea." onReportBug={() => {}} />);
+    const box = container.firstElementChild as HTMLElement;
+    expect(box.getAttribute('role')).toBe('alert');
+    // No dot, no red words: the guide allows colour in the box's tint and border only.
+    expect(container.querySelector('[class*="bg-destructive"]:not([role="alert"])')).toBeNull();
+    expect(container.querySelector('[class*="text-destructive"]')).toBeNull();
+  });
+
+  it('centres a one-sentence error beside its buttons', () => {
+    // error-notices-1#EN-1 (2026-10-12: "the spacing is very odd"): with the words at the
+    // top edge and the taller button hanging lower, a one-line error looked misaligned.
+    // Only a title + body keeps the buttons level with the title (top-aligned).
+    const one = render(<ErrorState message="Could not read the file." onRetry={() => {}} />);
+    expect(one.container.querySelector('button')!.parentElement!.parentElement!.className).toContain('items-center');
+    one.unmount();
+    const titled = render(<ErrorState mode="recoverable" title="Saving failed" explainer="Not written." onRetry={() => {}} />);
+    expect(titled.container.querySelector('button')!.parentElement!.parentElement!.className).toContain('items-start');
+  });
+
+  it('puts the caller’s spacing on the box itself', () => {
+    const { container } = render(<ErrorState className="mt-2" message="x" onRetry={() => {}} />);
+    expect((container.firstElementChild as HTMLElement).className).toContain('mt-2');
   });
 });
 

@@ -52,7 +52,7 @@ let tmp: string;
 let projectsDir: string;
 let topicsDir: string;
 let store: ConversationStore;
-let mirror: ReturnType<typeof vi.fn>;
+let mirror: ReturnType<typeof vi.fn<(localJsonlPath: string, projectKey: string, sessionId: string) => void>>;
 
 // Anchor everything to a CONSTRUCTED tree: the slug dir name is
 // ccProjectSlug(knownFolderPath), and the known folder's basename is
@@ -71,7 +71,7 @@ beforeEach(() => {
   fs.mkdirSync(projectsDir, { recursive: true });
   fs.mkdirSync(topicsDir, { recursive: true });
   store = createConversationStore(path.join(tmp, 'conversations'));
-  mirror = vi.fn();
+  mirror = vi.fn<(localJsonlPath: string, projectKey: string, sessionId: string) => void>();
 });
 
 afterEach(() => {

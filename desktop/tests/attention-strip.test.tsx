@@ -18,9 +18,13 @@ function summaryFor(attentionState: AttentionState, awaitingApproval = false): A
   };
 }
 
-/** The pill's dot is the first <span>; its background is the status color. */
+/** The pill's dot is the first <span>; its class is the status color.
+ *  WHY a class, not an inline hex (2026-10-13, the guide's buddy deviations): the dot now takes
+ *  the main session strip's own status classes (bg-red-400 / bg-amber-400), so the buddy's red
+ *  and amber are the app's one red and amber rather than a second hand-picked pair. */
 function dotColor(container: HTMLElement): string {
-  return (container.querySelector('span') as HTMLElement).style.background;
+  const cls = (container.querySelector('span') as HTMLElement).className;
+  return cls.includes('bg-red-400') ? 'red' : cls.includes('bg-amber-400') ? 'amber' : cls;
 }
 
 describe('AttentionStrip', () => {
@@ -35,7 +39,7 @@ describe('AttentionStrip', () => {
   it('a parked turn is RED and reads as prose, not the raw state name', () => {
     const { container } = render(<AttentionStrip sessionId={SID} summary={summaryFor('stalled')} />);
     expect(container.textContent).toBe('provider may have stalled');
-    expect(dotColor(container)).toBe('rgb(239, 68, 68)');   // #ef4444
+    expect(dotColor(container)).toBe('red');
   });
 
   // The other half of the rule: amber means "may be wrong, I don't know". The
@@ -43,7 +47,7 @@ describe('AttentionStrip', () => {
   // parked card that follows it 15 seconds later.
   it('the stall warning (stuck) is AMBER, so it is distinguishable from parked', () => {
     const { container } = render(<AttentionStrip sessionId={SID} summary={summaryFor('stuck')} />);
-    expect(dotColor(container)).toBe('rgb(245, 166, 35)');  // #f5a623
+    expect(dotColor(container)).toBe('amber');
   });
 
   // Both terminal states mean "the turn is over, act now" — the same red the
@@ -51,12 +55,12 @@ describe('AttentionStrip', () => {
   // pins the strip to attentionDotColor() rather than to a copy of its table.
   it.each<AttentionState>(['session-died', 'error'])('%s is RED, matching every other dot', (s) => {
     const { container } = render(<AttentionStrip sessionId={SID} summary={summaryFor(s)} />);
-    expect(dotColor(container)).toBe('rgb(239, 68, 68)');
+    expect(dotColor(container)).toBe('red');
   });
 
   it('an awaiting-approval session keeps its own amber pill', () => {
     const { container } = render(<AttentionStrip sessionId={SID} summary={summaryFor('ok', true)} />);
     expect(container.textContent).toBe('awaiting approval');
-    expect(dotColor(container)).toBe('rgb(245, 166, 35)');
+    expect(dotColor(container)).toBe('amber');
   });
 });

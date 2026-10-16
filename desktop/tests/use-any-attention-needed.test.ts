@@ -48,7 +48,8 @@ describe('useAnyAttentionNeeded', () => {
 function mockClaudeBuddy(
   initial: AttentionSummary[]
 ): (s: AttentionSummary) => void {
-  let cb: ((s: AttentionSummary) => void) | null = null;
+  // WHY cast: TS can't see the assignment inside onAttentionSummary and would narrow cb to `never`.
+  let cb = null as ((s: AttentionSummary) => void) | null;
   (global as any).window = (global as any).window ?? {};
   (global as any).window.claude = {
     buddy: {

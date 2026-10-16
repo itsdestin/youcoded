@@ -24,7 +24,7 @@ import React, {
   useCallback,
 } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
-import { Button, CloseButton, Textarea } from '../ui';
+import { Button, CloseButton, FieldError, Textarea } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useAccount } from '../../state/account-context';
 import { REPORT_REASON_MAX } from '../../state/marketplace-constants';
@@ -204,22 +204,22 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
               )}
             </div>
 
-            {/* Inline error message */}
+            {/* Inline error message — WHY FieldError, not a hand-rolled
+                text-destructive-fg line (guide: no red/coloured body text
+                for messages). */}
             {dialogState.phase === 'error' && (
-              <p role="alert" className="text-xs text-destructive-fg -mt-1">
+              <FieldError as="p" size="2xs" className="-mt-1">
                 {dialogState.message}
-              </p>
+              </FieldError>
             )}
 
             {/* Action row */}
             <div className="flex justify-end gap-2">
-              <button
-                onClick={onClose}
-                disabled={inFlight}
-                className="px-3 py-1.5 text-sm text-fg-muted hover:text-fg transition-colors disabled:opacity-60"
-              >
+              {/* WHY outlined (guide: secondary actions are outlined, never
+                  bare text): was a hand-rolled text-fg-muted button. */}
+              <Button variant="secondary" size="lg" onClick={onClose} disabled={inFlight}>
                 Cancel
-              </button>
+              </Button>
               {/* danger-outline replaces the hand-rolled var(--destructive) border/text/hover
                   trio — same intent (signal severity from the theme token, no hex), now
                   spelled once in the primitive. */}

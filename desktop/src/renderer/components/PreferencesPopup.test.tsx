@@ -63,7 +63,7 @@ describe('PreferencesPopup', () => {
 
     // Wait for preferences to load, then verify the button is NOT rendered
     await waitFor(() => {
-      expect(screen.getByText('Default Permission Mode')).toBeInTheDocument();
+      expect(screen.getByText('Default permission mode')).toBeInTheDocument();
     });
 
     const advancedButton = screen.queryByText(/Advanced \(terminal\)/);

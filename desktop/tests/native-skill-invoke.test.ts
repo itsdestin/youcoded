@@ -54,7 +54,9 @@ describe('/skill-name dispatch', () => {
     // "\/journal" means "send this literally", not "run the journal skill".
     const r = dispatchSlashCommand(input('\\/journal'));
     expect(r.nativeAction).toBeUndefined();
-    expect(r.rewritten).toBe('/journal');
+    // WHY: `rewritten` exists only on the handled:false arm of DispatcherResult.
+    expect(r.handled).toBe(false);
+    expect(r.handled === false && r.rewritten).toBe('/journal');
   });
 
   it('a bare slash is not a skill invocation', () => {

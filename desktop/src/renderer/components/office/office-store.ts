@@ -151,7 +151,8 @@ export function watchUnsavedPrompt(): void {
   office.onUnsavedPrompt((p) => {
     setAlerts({ ...alerts, quitRefused: { mode: p.mode === 'close' ? 'close' : 'quit', afterTeardown: p.afterTeardown === true, restartDropped: p.restartDropped === true, confirming: false } });
     // WHY save the Office documents now: each one listed is only waiting for its autosave, so the
-    // list empties by itself a moment later ("Nothing left unsaved here." → Quit).
+    // list empties by itself a moment later, and the held quit then goes on (UnsavedBeforeQuit,
+    // final-review#CH-21: no "all saved" popup).
     flushers.forEach((f) => void f().catch(() => null));
   });
   // The window is closing (main/office/office-journal-sync.ts, fix round 1): every editor sends its

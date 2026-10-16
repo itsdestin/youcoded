@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { ArtifactContext } from '../../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../../src/renderer/state/artifact-tracker';
-import type { ArtifactRecord } from '../../src/shared/artifacts/types';
+import type { ArtifactRecord, ArtifactStatus } from '../../src/shared/artifacts/types';
 
 // theme-context reads localStorage / matchMedia / queryLocalFonts on mount and
 // doesn't export its raw Context, so mock the hook to the fields SessionDrawer
@@ -49,7 +49,9 @@ function htmlArtifact(id: string, path: string): ArtifactRecord {
     kind: 'internal',
     absolutePath: null,
     lastModified: '2026-07-19T00:00:00.000Z',
-    status: 'created',
+    // WHY cast: 'created' is not a real ArtifactStatus ('active' | 'deleted'); the fixture
+    // has always used it and the viewer ignores it, so keep it rather than change what is tested.
+    status: 'created' as unknown as ArtifactStatus,
     versions: [],
     comments: [],
     tags: [],
@@ -83,6 +85,9 @@ function renderDrawer(activeId: string) {
         projectRoot={ROOT}
         projectId="proj-1"
         projectName="proj"
+        // WHY: cwd is required by Props but these tests deliberately render without one
+        // (the missing-file check/hold only engages when a cwd exists); keep that behaviour.
+        cwd={undefined as unknown as string}
       />
     </ArtifactContext.Provider>,
   );
@@ -105,6 +110,14 @@ describe('HTML artifact viewer — stale content across file switches', () => {
       // useTagRegistry() unconditionally on every render, file-viewing or not.
       tags: { list: vi.fn().mockResolvedValue([]) },
     };
+    // WHY: the Session files list now mounts lazy thumbnails beside filenames;
+    // jsdom cannot observe their visibility, and the viewer test does not need to.
+    vi.stubGlobal('IntersectionObserver', class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    });
     // jsdom has no matchMedia; the header's narrow-viewport collapse calls
     // useNarrowViewport() unconditionally too (same stub as
     // use-narrow-viewport.test.tsx).
@@ -145,6 +158,9 @@ describe('HTML artifact viewer — stale content across file switches', () => {
             projectRoot={ROOT}
             projectId="proj-1"
             projectName="proj"
+            // WHY: cwd is required by Props but these tests deliberately render without one
+        // (the missing-file check/hold only engages when a cwd exists); keep that behaviour.
+        cwd={undefined as unknown as string}
           />
         </ArtifactContext.Provider>,
       );

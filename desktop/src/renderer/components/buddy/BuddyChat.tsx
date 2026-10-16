@@ -158,7 +158,7 @@ export function BuddyChat() {
       }}
     >
       {/* Hide the session pill in the empty state — the welcome screen owns
-          the full viewport to match main app's "No Active Session" screen.
+          the full viewport to match main app's "No active session" screen.
           Pill reappears as soon as a session is chosen or created. */}
       {viewedSession ? (
         <SessionPill

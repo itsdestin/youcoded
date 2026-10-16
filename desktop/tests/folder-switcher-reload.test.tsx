@@ -33,7 +33,7 @@ describe('the project picker never stays silently empty', () => {
     await openList();
     expect(screen.getByText("Couldn't load your projects.")).toBeTruthy();
     list.mockResolvedValue(folders);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Try again' })); });
     expect(screen.queryByText("Couldn't load your projects.")).toBeNull();
     expect(screen.getAllByText('proj').length).toBeGreaterThan(0);
   });

@@ -174,7 +174,7 @@ export function HighlightHoverCard({
       {/* Replies scroll inside the card past a few, so a long thread never
           pushes the reply box off screen. */}
       {comment.replies.length > 0 && (
-        <div className="max-h-40 overflow-y-auto">
+        <div className="scroll-mask max-h-40 overflow-y-auto">
           {comment.replies.map((r) => (
             <div key={r.id} className="mt-2 pl-1">
               <Entry

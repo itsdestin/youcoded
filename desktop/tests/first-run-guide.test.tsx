@@ -38,6 +38,7 @@ import {
 } from '../src/renderer/components/guide/guide-state';
 import { dismissTip, resetTipsForSitting, stopAllTips, triggerTip, TIPS } from '../src/renderer/components/guide/tips';
 import GuideTour from '../src/renderer/components/guide/GuideTour';
+import { EscCloseProvider, useEscClose } from '../src/renderer/hooks/use-esc-close';
 import type { GuideStop } from '../src/renderer/components/guide/guide-stops';
 
 beforeEach(() => { resetGuideState(); resetTipsForSitting(); });
@@ -98,14 +99,21 @@ const STOPS: GuideStop[] = [
   { id: 'b', text: 'Second stop.', screen: 'projects', anchor: 'nothing-here', pose: 'inquisitive' },
 ];
 
-describe('the eight stops', () => {
-  it('walk forward through the app in the order Destin approved (S-1, reordered under U6)', async () => {
+describe('the nine stops', () => {
+  it('walk forward through the app in the order Destin approved, the backup warning right after Files', async () => {
     const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
-    expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'models', 'themes', 'help']);
+    expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'backups', 'models', 'themes', 'help']);
     expect(GUIDE_STOPS.map((s) => s.screen)).toEqual([
-      'welcome', 'welcome-form', 'welcome-form', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
+      'welcome', 'welcome-form', 'welcome-form', 'projects', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
     ]);
     for (const s of GUIDE_STOPS) expect(s.text.split(' ').length).toBeLessThan(45);
+  });
+
+  it('the backup stop and Settings → Permissions say the same words, Destin\'s own', async () => {
+    const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
+    const { BACKUP_WARNING } = await import('../src/renderer/components/backup-warning-copy');
+    expect(BACKUP_WARNING).toBe('With your permission, the assistant may create, change, or delete files on your device. Create backups for anything you cannot replace.');
+    expect(GUIDE_STOPS.find((s) => s.id === 'backups')?.text).toBe(BACKUP_WARNING);
   });
 });
 
@@ -132,6 +140,30 @@ describe('GuideTour', () => {
     fireEvent.click(screen.getByText('Next'));
     fireEvent.click(screen.getByText('Done'));
     expect(onExit).toHaveBeenCalledWith(true);
+  });
+
+  it('Escape ends the tour over the screen its stop opened, leaving that screen open', () => {
+    // The stop's screen registers its own Escape when the tour opens it — after the tour
+    // mounted. Escape must still go to the tour, and only close its bubble (`stay`).
+    const screenClosed = vi.fn();
+    function StopScreen({ open }: { open: boolean }) { useEscClose(open, screenClosed); return null; }
+    function Harness() {
+      const [open, setOpen] = React.useState(false);
+      const onOpenScreen = React.useCallback(() => setOpen(true), []);
+      return <><StopScreen open={open} /><GuideTour stops={STOPS} onOpenScreen={onOpenScreen} onExit={onExit} /></>;
+    }
+    const onExit = vi.fn();
+    render(<EscCloseProvider><Harness /></EscCloseProvider>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onExit).toHaveBeenCalledWith(false, true);
+    expect(screenClosed).not.toHaveBeenCalled();
+  });
+
+  it('the ✕ closes only the bubble, the same as Escape', () => {
+    const onExit = vi.fn();
+    render(<GuideTour stops={STOPS} onOpenScreen={() => {}} onExit={onExit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close tour' }));
+    expect(onExit).toHaveBeenCalledWith(false, true);
   });
 
   it('draws no ring for an anchor that is not on screen', () => {

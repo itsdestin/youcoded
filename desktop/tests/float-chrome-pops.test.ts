@@ -162,7 +162,7 @@ describe('the approved float look', () => {
     expect(css).toMatch(/button\.bg-accent,\s*\[data-chrome-style='float'\] \.header-bar \.wide-view-toggle-indicator,[^{]*button\[aria-pressed='true'\]:not\(\.wide-view-toggle \*\) \{\s*background: color-mix\(in srgb, var\(--panel\) 85%/);
   });
 
-  it('floats Session Files / Games, Projects, Pages and the terminal as frosted sheets', () => {
+  it('floats Session files / Games, Projects, Pages and the terminal as frosted sheets', () => {
     const css = floatCSS();
     // WHY bubble density, not the controls' 16%: a file list's text vanished over dark wallpaper.
     expect(css).toContain('--float-sheet-fill: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);');
@@ -179,8 +179,9 @@ describe('the approved float look', () => {
     const css = floatCSS();
     // See-through only while frosted (theme engine); otherwise the normal overlay.
     expect(readSource(join(RENDERER, 'themes/theme-engine.ts'))).toMatch(/\[data-wallpaper\] \[data-chrome-style='float'\] \.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 24%/);
-    // The list's ends fade to clear (a mask), not under a painted panel band.
-    expect(css).toMatch(/\.session-menu \.scroll-fade::after \{\s*display: none/);
+    // The list's ends fade to clear (a mask), not under a painted panel band —
+    // every chrome style (quick-fix batch, LB-5): the list is a .scroll-mask.
+    expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"');
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="session-menu glass-overlay');
     // WHY the fill is restated: Golden Sunbreak's custom_css paints its own gold thumb.
     expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--scrollbar-thumb\)/);

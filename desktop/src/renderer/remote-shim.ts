@@ -2321,7 +2321,7 @@ export function installShim(): void {
       // events flow back via the 'social:presence-event' push (handleMessage below).
       // message is object-wrapped as { message } so the Android SessionService
       // reads it via msg.payload.getJSONObject("message").
-      presenceConnect: (): Promise<{ ok: true }> => invoke('social:presence-connect'),
+      presenceConnect: (opts?: { hidden?: boolean }): Promise<{ ok: true }> => invoke('social:presence-connect', opts ?? {}), // hidden: SessionService reads payload.hidden
       presenceDisconnect: (): Promise<{ ok: true }> => invoke('social:presence-disconnect'),
       // presenceSend returns an honest receipt: { ok:false, status:0, message }
       // when the platform socket isn't connected (frame would silently drop).
@@ -2587,6 +2587,7 @@ export function installShim(): void {
       renameProject: (name: string, displayName: string) =>
         invoke('syncspaces:rename-project', { name, displayName }),
       stopProject: (name: string) => invoke('syncspaces:stop-project', { name }),
+      removeProject: (name: string) => invoke('syncspaces:remove-project', { name }),
       // Synced project description (Task 3) — payload-object shape, matching
       // preload's renameProject/setProjectDescription convention.
       setProjectDescription: (name: string, description: string) =>
@@ -3032,7 +3033,7 @@ export function installShim(): void {
     })(),
     // Multi-window detach is desktop-Electron only. Browser/Android renderers
     // get no-op stubs so SessionStrip's drag handlers, App.tsx's ownership
-    // effect, and the 'Launch in New Window' toggle all degrade cleanly
+    // effect, and the 'Launch in new window' toggle all degrade cleanly
     // without runtime errors. dropResolve resolves to null (no hit) so the
     // source's pointerUp falls through to the local reorder path.
     detach: {

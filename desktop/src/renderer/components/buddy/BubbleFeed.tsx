@@ -303,7 +303,7 @@ export function BubbleFeed({ sessionId }: Props) {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div ref={scrollContainerRef} className="buddy-bubble-feed" style={{ overflowY: 'auto', height: '100%' }}>
+    <div ref={scrollContainerRef} className="buddy-bubble-feed scroll-mask" style={{ overflowY: 'auto', height: '100%' }}>
       {!hasContent ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span style={{ color: 'var(--fg-muted)', fontSize: 13 }}>No messages yet</span>

@@ -1,13 +1,29 @@
 import { useState } from 'react';
 import { memoWhileClosed } from './memo-while-closed';
-import { useEscClose } from '../hooks/use-esc-close';
 import type { TaskState } from '../state/task-state';
-import { Button, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FoldRow, Pill, SectionLabel, SettingRow } from './ui';
 
-// L2 popup opened by OpenTasksChip in the StatusBar. Groups tasks by status:
-// In Progress → Pending → Completed (collapsible). A separate "Marked Inactive"
-// expander at the bottom holds user-hidden tasks. Each active row has a
-// Mark Inactive button; each inactive row has an Unhide button.
+// The Open tasks popup, opened by OpenTasksChip in the status bar: the to-do list Claude (or a
+// native-harness assistant) is keeping for this session (state/task-state.ts derives it).
+//
+// WHY rebuilt from existing pieces only (Destin, small-fixes-1#SF-8: "this whole page needs a
+// rework to align with the new ui guide … this is an old popup"; built without review rounds,
+// per Destin 2026-10-13). Each part follows a guide recipe and a real screen doing the same job:
+// - title and container: the shared popup, narrow `panel` (Session details, Close session);
+// - groups: a small label, then one first-level card (About, Performance — guide "Spacing":
+//   nothing bare on the popup, a label first, every card labelled);
+// - task rows: one nested box per task holding the shared setting row, its button at the right
+//   (Unsaved changes' file rows, the Games friend rows);
+// - row status: the running task's green "Working" pill beside its words (the SF-8 fix, kept);
+//   nothing else marks a row — its group already says it (guide "show a state only once");
+// - folded sections: the shared fold inside the card (About's Privacy and Licenses folds);
+// - empty: one quiet grey line in the card (guide "Empty states"; Unsaved changes' "Everything
+//   is saved." in its card);
+// - buttons: outlined, small, at the right of the row's line (guide "Buttons": less important
+//   actions are outlined, never bare text; a lone button that fits its line sits at its right);
+// - scrolling: the shared popup body and its fade. No footer: nothing here must stay in view.
+// Removed as invented styling: the dots, the "#7" numbers, crossed-out finished tasks, the
+// half-faded "Mark inactive" ghost button, the hand-made "deleted" tag.
 
 interface Props {
   open: boolean;
@@ -26,173 +42,136 @@ function groupOf(t: TaskState): Group {
   return 'pending';
 }
 
-function StatusDot({ group }: { group: Group }) {
-  if (group === 'in_progress') {
-    return (
-      <span
-        className="inline-block w-2 h-2 rounded-full"
-        style={{ background: '#60a5fa', boxShadow: '0 0 0 2px rgba(96,165,250,0.25)' }}
+/** What a task is called: the "-ing" words while it runs ("Fixing the bug"), else its name. */
+function taskTitle(t: TaskState, group: Group): string {
+  return (group === 'in_progress' && t.activeForm) ? t.activeForm : (t.subject ?? 'Untitled task');
+}
+
+/** The running task's words with its live status pill (the SF-8 fix, kept as it was approved). */
+function RunningTitle({ title }: { title: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span>{title}</span>
+      {/* Centred on the title's FIRST line (a long title wraps under it), like the name + pill
+          rows elsewhere (NameWithPill): a box one text line tall, the pill centred in it. */}
+      <span className="self-start flex items-center h-4 shrink-0"><Pill tone="ok" dot>Working</Pill></span>
+    </span>
+  );
+}
+
+/** One open task: its own nested box holding the shared setting row (Unsaved changes' rows). */
+function OpenRow({ t, group, onMarkInactive }: { t: TaskState; group: Group; onMarkInactive: (id: string) => void }) {
+  const title = taskTitle(t, group);
+  return (
+    <li className={`${CARD_LEVEL_2} px-3 py-1`}>
+      <SettingRow
+        header
+        variant="item"
+        title={group === 'in_progress' ? <RunningTitle title={title} /> : title}
+        // The task's longer note, two lines at most (guide "Cards": description, two lines at most).
+        description={t.description ? <span className="line-clamp-2">{t.description}</span> : undefined}
+        control={(
+          <Button variant="secondary" size="sm" onClick={() => onMarkInactive(t.id)} aria-label={`Mark "${title}" inactive`}>
+            Mark inactive
+          </Button>
+        )}
       />
-    );
-  }
-  if (group === 'completed') {
-    return <span className="inline-block w-2 h-2 rounded-full bg-fg-muted" />;
-  }
-  // pending / inactive
-  return <span className="inline-block w-2 h-2 rounded-full border border-fg-muted" />;
-}
-
-function Row({ t, group, onMarkInactive, onUnhide }: {
-  t: TaskState;
-  group: Group;
-  onMarkInactive: (id: string) => void;
-  onUnhide: (id: string) => void;
-}) {
-  const title = group === 'in_progress' && t.activeForm ? t.activeForm : (t.subject ?? `#${t.id}`);
-  const isDeleted = t.status === 'deleted';
-  const showDesc = group !== 'completed' && t.description;
-
-  return (
-    <div className={`group flex gap-2 items-start px-2 py-1.5 rounded ${group === 'completed' ? 'opacity-60' : ''}`}>
-      <div className="pt-1.5"><StatusDot group={group} /></div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-2xs font-mono text-fg-muted">#{t.id}</span>
-          <span className={`text-xs ${group === 'in_progress' ? 'text-blue-400 italic' : 'text-fg'} ${group === 'completed' ? 'line-through' : ''}`}>
-            {title}
-          </span>
-          {isDeleted && <span className="text-3xs px-1 rounded bg-inset text-fg-muted">deleted</span>}
-        </div>
-        {showDesc && <div className="text-2xs text-fg-muted mt-0.5 leading-tight">{t.description}</div>}
-      </div>
-      {group === 'inactive' ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => onUnhide(t.id)}
-          aria-label={`Unhide task #${t.id}`}
-        >
-          Unhide
-        </Button>
-      ) : (
-        // The 40% resting opacity is deliberate (spec decision 74): it's the
-        // standing hint that rows are dismissible, so it is NOT dropped to 0.
-        // Careful: 40% sits BELOW BUTTON_BASE's `disabled:opacity-50`, so if a
-        // `disabled` prop is ever added here a disabled button would render
-        // BRIGHTER than an enabled one — revisit this resting value first.
-        <Button
-          variant="ghost"
-          size="sm"
-          className="opacity-40 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-          onClick={() => onMarkInactive(t.id)}
-          aria-label={`Mark task #${t.id} inactive`}
-        >
-          Mark Inactive
-        </Button>
-      )}
-    </div>
+    </li>
   );
 }
 
-function SectionHeader({ label }: { label: string }) {
+/** A task inside a fold: a plain row in the fold's one shared box (guide "Card levels": lists of
+ *  short names are plain rows inside one shared box). A hidden task keeps its Unhide button. */
+function FoldedRow({ t, onUnhide }: { t: TaskState; onUnhide?: (id: string) => void }) {
+  const title = taskTitle(t, groupOf(t));
   return (
-    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1">
-      {label}
-    </div>
+    <li>
+      <SettingRow
+        header
+        variant="item"
+        title={title}
+        control={onUnhide ? (
+          <Button variant="secondary" size="sm" onClick={() => onUnhide(t.id)} aria-label={`Unhide "${title}"`}>
+            Unhide
+          </Button>
+        ) : undefined}
+      />
+    </li>
   );
 }
+
+const countWords = (n: number) => `${n} ${n === 1 ? 'task' : 'tasks'}`;
 
 function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
-  // ESC routing through the central LIFO stack — same pattern as other L2 popups (AboutPopup, etc.)
-  useEscClose(open, onClose);
+  // WHY no useEscClose here any more: the shared popup already takes Escape (Dialog.tsx), and a
+  // second entry on the Escape stack is what that file says a caller must not add.
 
   // Compute initial open states from the first render's tasks, then let the user
   // fully control. Avoids fighting user intent when the completed count crosses 5
   // mid-popup.
-  const initialCompleted = tasks.filter(t => !t.markedInactive && (t.status === 'completed' || t.status === 'deleted'));
-  const initialInactive = tasks.filter(t => t.markedInactive);
+  const initialCompleted = tasks.filter(t => groupOf(t) === 'completed');
+  const initialInactive = tasks.filter(t => groupOf(t) === 'inactive');
   const [completedOpen, setCompletedOpen] = useState(() => initialCompleted.length > 0 && initialCompleted.length <= 5);
   const [inactiveOpen, setInactiveOpen] = useState(() => initialInactive.length > 0 && initialInactive.length <= 5);
 
   if (!open) return null;
 
-  const running = tasks.filter(t => groupOf(t) === 'in_progress');
-  const pending = tasks.filter(t => groupOf(t) === 'pending');
+  // The running task first, then what is waiting, each in Claude's own order.
+  const openTasks = [
+    ...tasks.filter(t => groupOf(t) === 'in_progress'),
+    ...tasks.filter(t => groupOf(t) === 'pending'),
+  ];
   const completed = tasks.filter(t => groupOf(t) === 'completed');
   const inactive = tasks.filter(t => groupOf(t) === 'inactive');
-  const openCount = running.length + pending.length;
 
   return (
-    <>
-      <Dialog screen="chat/open-tasks" open onClose={onClose} title="Open Tasks" size="panel">
-        <>
-          {/* Empty state: nothing at all */}
-          {openCount === 0 && completed.length === 0 && inactive.length === 0 && (
-            <div className="px-3 py-4 text-xs text-fg-muted text-center">No open tasks.</div>
-          )}
-
-          {/* Empty state: only completed or inactive remain */}
-          {openCount === 0 && (completed.length > 0 || inactive.length > 0) && (
-            <div className="px-3 py-3 text-xs text-fg-muted italic">No open tasks.</div>
-          )}
-
-          {/* In Progress section — no count suffix, the rows are visible right below. */}
-          {running.length > 0 && (
-            <>
-              <SectionHeader label="In Progress" />
-              {running.map(t => (
-                <Row key={t.id} t={t} group="in_progress" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
+    <Dialog screen="chat/open-tasks" open onClose={onClose} title="Open tasks" size="panel">
+      {/* WHY one "To do" group, not "In progress" + "Pending": the running task already says so
+          with its Working pill, and the guide shows a state once and asks for fewer sections
+          (principle 4). The label never repeats the popup's title (guide "Spacing"). */}
+      <section>
+        <SectionLabel className="mb-2">To do</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3`}>
+          {openTasks.length === 0 ? (
+            <p className="text-sm text-fg-muted">No open tasks.</p>
+          ) : (
+            <ul className="flex flex-col gap-2" aria-label="Open tasks">
+              {openTasks.map(t => (
+                <OpenRow key={t.id} t={t} group={groupOf(t)} onMarkInactive={onMarkInactive} />
               ))}
-            </>
+            </ul>
           )}
+        </div>
+      </section>
 
-          {/* Pending section — no count suffix, the rows are visible right below. */}
-          {pending.length > 0 && (
-            <>
-              <SectionHeader label="Pending" />
-              {pending.map(t => (
-                <Row key={t.id} t={t} group="pending" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
-              ))}
-            </>
-          )}
-
-          {/* Completed section — collapsible. Keep the count on the toggle itself
-              so a collapsed section signals "there are N items hidden here." */}
-          {completed.length > 0 && (
-            <>
-              <button
-                aria-expanded={completedOpen}
-                className="w-full text-left text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg"
-                onClick={() => setCompletedOpen(v => !v)}
-              >
-                <span>Completed</span>
-                <span>{completed.length} {completedOpen ? '▾' : '▸'}</span>
-              </button>
-              {completedOpen && completed.map(t => (
-                <Row key={t.id} t={t} group="completed" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
-              ))}
-            </>
-          )}
-
-          {/* Marked Inactive section — same collapsed-toggle-with-count pattern. */}
-          {inactive.length > 0 && (
-            <>
-              <button
-                aria-expanded={inactiveOpen}
-                className="w-full text-left text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg border-t border-edge-dim mt-1"
-                onClick={() => setInactiveOpen(v => !v)}
-              >
-                <span>Marked Inactive</span>
-                <span>{inactive.length} {inactiveOpen ? '▾' : '▸'}</span>
-              </button>
-              {inactiveOpen && inactive.map(t => (
-                <Row key={t.id} t={t} group="inactive" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
-              ))}
-            </>
-          )}
-        </>
-      </Dialog>
-    </>
+      {/* WHY the shared fold for both sections (Destin, submit-ticket-5#ST5-Q2: no hard line; one
+          fold-out look that opens inside itself), now inside a labelled card like About's
+          Privacy folds, so nothing sits bare on the popup. The count stays in the fold's hint
+          so a closed section still says how much is inside. */}
+      {(completed.length > 0 || inactive.length > 0) && (
+        <section>
+          <SectionLabel className="mb-2">Other tasks</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+            {completed.length > 0 && (
+              <FoldRow title="Completed" description={countWords(completed.length)}
+                open={completedOpen} onToggle={setCompletedOpen}>
+                <ul className="flex flex-col">
+                  {completed.map(t => <FoldedRow key={t.id} t={t} />)}
+                </ul>
+              </FoldRow>
+            )}
+            {inactive.length > 0 && (
+              <FoldRow title="Marked inactive" description={countWords(inactive.length)}
+                open={inactiveOpen} onToggle={setInactiveOpen}>
+                <ul className="flex flex-col">
+                  {inactive.map(t => <FoldedRow key={t.id} t={t} onUnhide={onUnhide} />)}
+                </ul>
+              </FoldRow>
+            )}
+          </div>
+        </section>
+      )}
+    </Dialog>
   );
 }
 

@@ -457,6 +457,7 @@ describe('createHolderTakeover', () => {
 
     // Nothing appends after the handoff (the queue was cleared, the stream aborted).
     const afterHandoff = appends.length;
+    // settle (negative assertion): no stray stream chunk may append after the handoff.
     await new Promise((r) => setTimeout(r, 120)); // room for any stray stream chunk
     expect(appends.length).toBe(afterHandoff);
 

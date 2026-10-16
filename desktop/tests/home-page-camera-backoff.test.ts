@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Live video when Google says "too many requests" (HA's error text: 429 / RESOURCE_EXHAUSTED / Rate limited): the page
 // (which is what re-asks; main never retries) leaves that camera alone for 60 s, then 120 s, then 300 s, shared by every
-// tile and card of the camera, says so calmly, and still lets a person press Retry. The Cameras tab also starts its
+// tile and card of the camera, says so calmly, and still lets a person press Try again. The Cameras tab also starts its
 // cameras 1.5 s apart. Real page, fake clocks, a stand-in for the app's `youcoded.video`.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fakeHomeAssistantNestSignedIn } from '../src/renderer/dev/workbench/fixtures/fake-home-assistant';
@@ -75,14 +75,16 @@ describe('Google limiting live video', () => {
     expect(asked(m, LIVING).length).toBe(base + 1);
   });
 
-  it('lets a person press Retry at once, and a second refusal then makes the wait longer', async () => {
+  it('lets a person press Try again at once, and a second refusal then makes the wait longer', async () => {
     const m = await mount({ data: { view: 'cameras' }, video: true });
     await tick(5000);
     const base = asked(m, LIVING).length;
     refuse(m, LIVING);
     await frame();
     await tick(10_000);
-    tile(LIVING).querySelector<HTMLButtonElement>('[data-cam-act="retry"]')!.click();
+    const retry = tile(LIVING).querySelector<HTMLButtonElement>('[data-cam-act="retry"]')!;
+    expect(retry.textContent).toBe('Try again'); // the guide's one retry word, in practice data too
+    retry.click();
     await frame();
     expect(asked(m, LIVING).length).toBe(base + 1); // allowed, even in the pause
     refuse(m, LIVING); // refused again: now the wait is 120 s
@@ -92,7 +94,7 @@ describe('Google limiting live video', () => {
     expect(asked(m, LIVING).length).toBe(base + 2);
   });
 
-  it('shows no Retry button for a camera that is not limited', async () => {
+  it('shows no Try again button for a camera that is not limited', async () => {
     const m = await mount({ data: { view: 'cameras' }, video: true });
     await tick(5000);
     expect(tile(LIVING).querySelector('[data-cam-act="retry"]')).toBeNull();

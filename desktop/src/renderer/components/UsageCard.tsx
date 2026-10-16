@@ -152,7 +152,9 @@ export default function UsageCard({ snapshot: s }: Props) {
     <div className="flex justify-start px-4 py-1">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-inset border border-edge-dim px-5 py-4 text-fg">
         <div className="flex items-baseline justify-between mb-3">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Session Usage</div>
+          {/* WHY: drop the spaced-caps eyebrow + sentence case (labels batch,
+              guide: no spaced capitals). */}
+          <div className="text-xs font-medium text-fg-muted">Session usage</div>
           <div className="text-xs text-fg-muted">{new Date(s.timestamp).toLocaleTimeString()}</div>
         </div>
 
@@ -255,7 +257,8 @@ export default function UsageCard({ snapshot: s }: Props) {
           <div className="mb-3">
             <div className="flex justify-between text-xs mb-1">
               <span className="text-fg-muted">Context remaining</span>
-              <span className="tabular-nums" style={{ color: contextColor }}>
+              {/* The bar under it carries the colour; the number is the text colour (small-fixes-3#SF3-10). */}
+              <span className="tabular-nums text-fg-2">
                 {Math.round(s.contextPercent)}%
               </span>
             </div>
@@ -267,7 +270,9 @@ export default function UsageCard({ snapshot: s }: Props) {
             card is where a native session goes to see them, because the status
             bar no longer shows them there. */}
         {showSubscription && (
-          <div className="space-y-2 pt-3 border-t border-edge-dim">
+          // WHY spacing, not a border-t (final review F17; decisions "Card levels": no
+          // full-width line inside a card) — 16px between groups (the context block's mb-3 + 4px).
+          <div className="space-y-2 mt-1">
             {/* One recipe for the two windows (plan-windows.tsx) — the Model
                 Providers rows draw the same bars for each plan. */}
             <PlanWindows usage={{
@@ -296,10 +301,12 @@ export default function UsageCard({ snapshot: s }: Props) {
 
         {/* Lines changed — only if non-zero, to avoid clutter on conversational sessions */}
         {showLines && (
-          <div className="mt-3 pt-3 border-t border-edge-dim text-xs text-fg-muted">
-            <span className="text-green-400 tabular-nums">+{s.linesAdded ?? 0}</span>
+          // WHY spacing, not a border-t (final review F17): no full-width line inside a card.
+          <div className="mt-4 text-xs text-fg-muted">
+            {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+            <span className="tabular-nums">+{s.linesAdded ?? 0}</span>
             {' / '}
-            <span className="text-red-500 tabular-nums">−{s.linesRemoved ?? 0}</span>
+            <span className="tabular-nums">−{s.linesRemoved ?? 0}</span>
             {' lines changed'}
           </div>
         )}

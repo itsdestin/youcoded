@@ -14,7 +14,7 @@ const h = vi.hoisted(() => {
   const wc = Object.assign(new EE(), { isDestroyed: () => false, send: () => {} });
   const handlers = new Map<string, (...a: unknown[]) => unknown>();
   const sock = {
-    setDesired: vi.fn(), setSuspended: vi.fn(), setIdle: vi.fn(), send: vi.fn(),
+    setDesired: vi.fn(), setHidden: vi.fn(), setSuspended: vi.fn(), setIdle: vi.fn(), send: vi.fn(),
     isConnected: vi.fn(() => false), repairIfStalled: vi.fn(() => false), destroy: vi.fn(),
   };
   return { powerMonitor, app, wc, handlers, sock };

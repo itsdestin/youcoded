@@ -5,6 +5,7 @@ import SettingsExplainer, { InfoIconButton } from '../SettingsExplainer';
 import { AnchorTip, Dialog, SettingRow } from '../ui';
 import { PAGES, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { browserSupported } from '../../state/browser-store';
 
 // Every page id, for `shoot` (see useScreenOpen below).
 const PAGE_IDS: readonly PageId[] = PAGES.map((p) => p.id);
@@ -160,9 +161,13 @@ export default function AssistantSettingsRow({
   // The same gate the Model Providers row had: provider pages exist only where
   // the native runtime does (false over remote access, false on Android).
   const nativeSupported = (window as any).claude?.native?.supported === true;
+  // The Browser page's own gate: the computer's own window only.
+  const hasBrowser = browserSupported();
   const pages = useMemo(
-    () => PAGES.filter((p) => (platform === 'android' ? p.id === 'general' : !p.needsNative || nativeSupported)),
-    [platform, nativeSupported],
+    () => PAGES.filter((p) => (platform === 'android'
+      ? p.id === 'general'
+      : (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser))),
+    [platform, nativeSupported, hasBrowser],
   );
 
   useEffect(() => {
@@ -233,7 +238,7 @@ export default function AssistantSettingsRow({
         fill
         // The panel owns its two regions (static list, scrolling page), so the
         // shared single scroll body is switched off — and the page region below
-        // takes the same scroll-fade the shared body would have had (G-11:
+        // takes the same scroll fade the shared body would have had (G-11:
         // nothing is ever clipped silently).
         scrollBody={false}
       >
@@ -273,7 +278,11 @@ function PageRail({ pages, current, attention, onPick }: {
   // page in this list is a place you are, not a place you go. One flat list:
   // the Providers / Assistant eyebrows went in round 1 (P-5 note).
   return (
-    <nav aria-label="Assistant settings pages" className="w-44 shrink-0 border-r border-edge px-2 py-3 space-y-0.5 overflow-y-auto">
+    // WHY the divider on an outer box (2026-10-15, the one scroll fade): the list fades at its
+    // scrolled edges, and the fade is a mask — on the nav itself it would fade the full-height
+    // divider line at the top and bottom too. The outer box keeps the line whole.
+    <div className="w-44 shrink-0 border-r border-edge flex flex-col min-h-0">
+    <nav aria-label="Assistant settings pages" className="scroll-mask flex-1 min-h-0 px-2 py-3 space-y-0.5 overflow-y-auto">
       {pages.map((p) => {
         const selected = p.id === current;
         return (
@@ -294,6 +303,7 @@ function PageRail({ pages, current, attention, onPick }: {
         );
       })}
     </nav>
+    </div>
   );
 }
 
@@ -306,7 +316,7 @@ function PageList({ pages, attention, onPick }: {
 }) {
   const ref = useScrollFade<HTMLDivElement>();
   return (
-    <div ref={ref} className="scroll-fade flex-1">
+    <div ref={ref} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
       <div className="px-4 py-4 space-y-2">
         {pages.map((p) => (
           <SettingRow
@@ -335,7 +345,7 @@ function PageBody({ page, ctx, attention, narrow, onInfo }: {
 }) {
   const ref = useScrollFade<HTMLDivElement>();
   return (
-    <div ref={ref} className="scroll-fade flex-1 min-w-0">
+    <div ref={ref} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1 min-w-0">
       <div className="px-4 py-4 space-y-4">
         {/* On the phone the dialog title already names the page. */}
         {!narrow && (
@@ -355,10 +365,11 @@ function PageBody({ page, ctx, attention, narrow, onInfo }: {
 function ExplainerBody({ intro, sections }: { intro: string; sections: NonNullable<PageDef['explainer']>['sections'] }) {
   const ref = useScrollFade<HTMLDivElement>();
   return (
-    <div ref={ref} className="scroll-fade flex-1">
-      {/* space-y-5: the explainer renders bare sections and relies on the
-          dialog body's track for its rhythm; this track stands in for it. */}
-      <div className="px-4 py-4 space-y-5">
+    <div ref={ref} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
+      {/* space-y-4: the explainer renders bare sections and relies on the
+          dialog body's track for its rhythm (16px, the guide's group gap); this
+          track stands in for it. */}
+      <div className="px-4 py-4 space-y-4">
         <SettingsExplainer intro={intro} sections={sections} />
       </div>
     </div>

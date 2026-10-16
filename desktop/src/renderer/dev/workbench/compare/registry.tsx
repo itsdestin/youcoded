@@ -31,7 +31,9 @@ import {
   Toggle,
   fieldClasses, CloseButton } from '../../../components/ui';
 import { TagChip } from '../../../components/tags/TagChip';
-import { TagPicker } from '../../../components/tags/TagPicker';
+// Old rounds drew the retired tag picker; they now run its successor, TagCloud, so the
+// breadcrumb still renders (pick-menus-14, 2026-10-04 retired TagPicker).
+import { TagCloud } from '../../../components/tags/TagCloud';
 import { NoteEditor } from '../../../components/tags/NoteEditor';
 import { useTagRegistry } from '../../../hooks/useTagRegistry';
 // chatsearch-present Round 4: the same responsive/collapse-state hooks
@@ -40,7 +42,9 @@ import { useTagRegistry } from '../../../hooks/useTagRegistry';
 // from THIS branch, not redrawn.
 import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 import { useExpandAllToggle, getInitialExpanded } from '../../../hooks/useExpandAllToggle';
-import { PRIORITY_TAG, PRIORITY_HINT } from '../../../components/tags/built-in-tags';
+// Priority as a tag — how the old rounds drew it, before it became Pin to top
+// (pick-menus-2#PM2-3). Kept here because only these historical candidates use it.
+const PRIORITY_TAG = { id: 'flag:priority', label: 'Priority', color: 'tag-amber' } as const;
 // Shared with the shipping surfaces — a candidate must draw the SAME mark the
 // app does, or the comparison is against something that doesn't exist.
 import { TagGlyph, NotePageGlyph, PencilGlyph } from '../../../components/tags/glyphs';
@@ -91,6 +95,16 @@ import { BuddySleepDemo } from '../mockups/BuddySleep';
 import { MascotFrameRateDemo } from '../mockups/MascotFrameRate';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
+import { SettingsTaperDemo } from '../mockups/SettingsTaperDemo';
+import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
+import { CardAnatomyDemo, ConversationCardDemo } from '../mockups/CardAnatomyDemo';
+import { SettingsAnatomyDemo } from '../mockups/SettingsAnatomyDemo';
+import { PairDialogDemo, SingleDialogDemo, DangerDialogDemo, QuestionCardDemo, PermissionRowDemo } from '../mockups/ButtonPlacementDemo';
+import { FoldDemo, SettingErrorDemo, FollowUpDemo, ItemStatusDemo, InboxButtonDemo, ConsentDemo, StatusCardDemo } from '../mockups/SettingsPiecesDemo';
+import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
+import { MarketplaceFileTaperDemo, TagEditorTaperDemo } from '../mockups/CustomPopupTaperDemo';
+import { MarketplaceDetailHeaderDemo } from '../mockups/MarketplaceDetailHeaderDemo';
+import { ResumeShellDemo } from '../mockups/ResumeShellDemo';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -409,7 +423,7 @@ function SummaryMerged() {
         <CompleteGlyph done={done} className={`w-5 h-5 shrink-0 transition-colors ${done ? 'text-accent' : 'text-fg-faint'}`} />
         <span className="min-w-0 flex-1">
           <span className="block text-xs text-fg">Mark complete</span>
-          <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show Complete.</span>
+          <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show complete.</span>
         </span>
         <Toggle checked={done} onChange={setDone} aria-label="Mark complete" />
       </div>
@@ -424,7 +438,7 @@ function CompleteRow({ done, onChange }: { done: boolean; onChange: (v: boolean)
       <CompleteGlyph done={done} className={`w-5 h-5 shrink-0 transition-colors ${done ? 'text-accent' : 'text-fg-faint'}`} />
       <span className="min-w-0 flex-1">
         <span className="block text-xs text-fg">Mark complete</span>
-        <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show Complete.</span>
+        <span className="block text-3xs text-fg-muted leading-snug">Hides it from the resume list unless you turn on Show complete.</span>
       </span>
       <Toggle checked={done} onChange={onChange} aria-label="Mark complete" />
     </div>
@@ -813,7 +827,7 @@ function GutterCard({ children, onClick }: { children: React.ReactNode; onClick?
 // happens when you act on it — how you get into editing, whether you can still
 // see what is applied while you do, and how you get out.
 //
-// These candidates run the REAL TagPicker and NoteEditor against the mock
+// These candidates run the REAL tag editor (TagCloud since 2026-10-04) and NoteEditor against the mock
 // backend, not stand-ins: an edit flow can only be judged by using it, and a
 // fake picker would hide exactly the friction being compared.
 
@@ -859,12 +873,10 @@ function SummaryBody({ chips, priority, note }: {
 function EditorBody({ d }: { d: ReturnType<typeof useDraft> }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <TagPicker
+      <TagCloud
         appliedIds={d.tagIds}
         onToggle={d.toggleTag}
         registry={d.registry}
-        onManageTags={() => {}}
-        builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
       />
       <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-1">Note</label>
       <NoteEditor value={d.note} onSave={d.setNote} />
@@ -967,12 +979,10 @@ function FlowInline() {
         </div>
         {picking && (
           <div className="border-t border-edge-dim pt-2">
-            <TagPicker
+            <TagCloud
               appliedIds={d.tagIds}
               onToggle={d.toggleTag}
               registry={d.registry}
-              onManageTags={() => {}}
-              builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
             />
           </div>
         )}
@@ -1127,11 +1137,10 @@ function EditTightHeaders({ d, onSave }: { d: ReturnType<typeof useDraft>; onSav
         <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Tags</label>
         <button type="button" className="text-3xs text-fg-muted hover:text-fg transition-colors">Manage tags…</button>
       </div>
-      <TagPicker
+      <TagCloud
         appliedIds={d.tagIds}
         onToggle={d.toggleTag}
         registry={d.registry}
-        builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
       />
       <NoteEditor value={d.note} onSave={d.setNote} placeholder="Add a note…" />
       <SaveButton onClick={onSave} />
@@ -1184,11 +1193,10 @@ function EditOneWell({ d, onSave }: { d: ReturnType<typeof useDraft>; onSave: ()
     <div className="flex flex-col gap-2">
       <div className="rounded-md bg-well border border-edge-dim divide-y divide-edge-dim">
         <div className="p-2">
-          <TagPicker
+          <TagCloud
             appliedIds={d.tagIds}
             onToggle={d.toggleTag}
             registry={d.registry}
-            builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
           />
         </div>
         <div className="p-2">
@@ -4555,6 +4563,34 @@ function PresentRefTable() {
 
 const ALL_SURFACES: CompareSurface[] = [
   {
+    id: 'resume-shell',
+    label: 'Resume Session — popup header and list edge',
+    question: 'Should Resume Session match the approved popup treatment?',
+    frame: 'canvas',
+    paneWidth: { min: 730, max: 1060 },
+    rounds: [
+      { n: 1, basis: 'Actual ResumeBrowser with Workbench session fixture. Review-only proposed CSS scoped to its own shell; first real row selected to show the transcript pane.', candidates: [
+        { id: 'today', label: 'Today', note: '14px bold title, 14% divider taper, painted 36px list-edge fade.', render: () => <ResumeShellDemo treatment="today" /> },
+        { id: 'proposed', label: 'Matching', note: '16px medium title, 8% divider taper and conditional unpainted 42px/4%-side list fade.', render: () => <ResumeShellDemo treatment="proposed" /> },
+      ] },
+    ],
+  },
+  {
+    id: 'marketplace-detail-header',
+    label: 'Marketplace detail — shared outer header',
+    question: 'Should the outer Marketplace Details shell use the same edge treatment as approved popups, for skills and themes?',
+    frame: 'canvas',
+    paneWidth: { min: 620, max: 820 },
+    rounds: [
+      { n: 1, basis: 'Actual MarketplaceDetailOverlay + registry fixtures; Today restores the pre-change shell with dev-only CSS, while Proposed uses production styling selected for skills and themes.', candidates: [
+        { id: 'today-skill', label: 'Today · skill', note: 'Current 18px semibold Details title and full-width divider; real skill content.', render: () => <MarketplaceDetailHeaderDemo kind="skill" treatment="today" /> },
+        { id: 'proposed-skill', label: 'Proposed · skill', note: '16px medium Details title, 8% divider, and conditional 42px/4%-side content fade; real skill content.', render: () => <MarketplaceDetailHeaderDemo kind="skill" treatment="proposed" /> },
+        { id: 'today-theme', label: 'Today · theme', note: 'Current shared header over real theme content.', render: () => <MarketplaceDetailHeaderDemo kind="theme" treatment="today" /> },
+        { id: 'proposed-theme', label: 'Proposed · theme', note: '16px medium title, 8% divider, conditional content fade over real theme content.', render: () => <MarketplaceDetailHeaderDemo kind="theme" treatment="proposed" /> },
+      ] },
+    ],
+  },
+  {
     id: 'mascot-frame-rate',
     label: 'Mascot — frame rate',
     question: 'Does the mascot moving 30 times a second look as good as the old full-refresh motion?',
@@ -7121,6 +7157,343 @@ export const COMPARE_SURFACES: CompareSurface[] = [
           },
         ],
       },
+    ],
+  },
+  // WHY: custom full-screen project overlays do not use the shared Dialog and
+  // have their own heading roles; compare them before extending popup styling.
+  {
+    id: 'project-popup-edge-calibration',
+    label: 'Project detail — header and scroll edge',
+    question: 'Does the approved compact-dialog treatment also fit a larger project detail overlay?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 750 },
+    rounds: [{
+      n: 1,
+      basis: 'Review a real ProjectDetailOverlay with its existing 16px semibold title and bare scrolling body versus the Settings-style line and content fade.',
+      candidates: [
+        { id: 'today', label: 'Today', note: '16px semibold header, edge-to-edge structural border, plain scrolling body.', render: () => <ProjectPopupTaperDemo variant="today" /> },
+        { id: 'selected', label: 'Settings-style treatment', note: '16px medium title, quick 8% divider ends, 42px / 4% masked scroll edge.', render: () => <ProjectPopupTaperDemo variant="selected" /> },
+      ],
+    }],
+  },
+  // WHY: unlike Project or Dialog, file previews have a two-level identity and
+  // the little Tags editor often does not scroll. Show the REAL components and
+  // keep every candidate style in the dev-only mockup until Destin sees them.
+  {
+    id: 'custom-file-popup-edge',
+    label: 'Marketplace file — header and content edge',
+    question: 'Should the file preview keep its context above the filename?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 750 },
+    rounds: [{ n: 1, basis: 'Actual FileViewerOverlay on a sample Markdown file: current header, two-line proposed header, compact one-line proposed header.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'File name beneath plugin/type, 18px semibold, full-width line, bare scroll.', render: () => <MarketplaceFileTaperDemo variant="today" /> },
+        { id: 'two-lines', label: 'Keep both lines', note: 'Keep plugin/type + file name, medium title, 8% divider and 42px content fade.', render: () => <MarketplaceFileTaperDemo variant="two-lines" /> },
+        { id: 'one-line', label: 'One compact line', note: 'File name only at 16px medium; plugin/type no longer shown in header, same divider and fade.', render: () => <MarketplaceFileTaperDemo variant="one-line" /> },
+      ],
+    }],
+  },
+  {
+    id: 'custom-tags-popup-edge',
+    label: 'Tags & note — compact editor header',
+    question: 'Should this small editor have the line, the fade, both or neither?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 700 },
+    rounds: [{ n: 1, basis: 'Actual SessionTagsChip popup with the existing editor, cropped by real viewport height to show its scroll behavior.',
+      candidates: [
+        { id: 'today', label: 'Today', note: '14px bold title, full-width divider and bare scrolling content.', render: () => <TagEditorTaperDemo variant="today" /> },
+        { id: 'divider', label: 'Divider only', note: '16px medium title and 8% divider; bare content edge.', render: () => <TagEditorTaperDemo variant="divider" /> },
+        { id: 'fade', label: 'Divider and fade', note: '16px medium title, 8% divider and 42px content fade only when scrolling.', render: () => <TagEditorTaperDemo variant="fade" /> },
+      ],
+    }],
+  },
+  // WHY: popup dividers have different backdrops and sizes than Settings; review
+  // the real long About dialog before extending any Settings-specific CSS.
+  {
+    id: 'popup-header-fade-calibration',
+    label: 'Popup — header line and scrolling body',
+    question: 'Compare the real About popup at the top and while scrolling.',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 700 },
+    rounds: [{
+      n: 1,
+      basis: 'Compare today against the selected Settings treatment on a real scrolling popup without changing production Dialog.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'Unchanged About popup: 14px bold title, full-width divider and painted scroll edges.', render: () => <PopupTaperDemo variant="today" /> },
+        { id: 'selected', label: 'Settings treatment', note: '16px medium title, 8% tapered divider, 42px/4%-side content fade.', render: () => <PopupTaperDemo variant="selected" /> },
+      ],
+    }, {
+      n: 2,
+      basis: 'Check a shorter row-menu popup using the same real Dialog shell; scroll fade activates only when there is scroll room.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'Unchanged Help & feedback popup (was Development until it was folded in, 2026-09-28).', render: () => <PopupTaperDemo variant="today" kind="help" /> },
+        { id: 'selected', label: 'Settings treatment', note: 'Tapered header and title; content fade only if it scrolls.', render: () => <PopupTaperDemo variant="selected" kind="help" /> },
+      ],
+    }],
+  },
+  // WHY: a live, review-only rendering of the actual Settings drawer lets Destin
+  // scroll through the fade while choosing endpoints; no app-wide rule is shipped.
+  {
+    id: 'settings-taper-calibration',
+    label: 'Settings — header line and scroll edge',
+    question: 'Scroll the drawer to compare where its title line fades and how the top scroll fade meets it.',
+    frame: 'canvas',
+    paneWidth: { min: 660, max: 850 },
+    rounds: [
+      {
+        n: 1,
+        basis: 'Follow-up to ui-guide-calibration-1#C-2: Destin liked the taper but asked to tune its ends and check scrolling.',
+        candidates: [
+          { id: 'quick', label: 'Quick ends', note: 'The line reaches full strength after 8% of its width; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="quick" /> },
+          { id: 'balanced', label: 'Moderate ends', note: 'A 20% taper between the quick and gradual versions; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="balanced" /> },
+          { id: 'gradual', label: 'Gradual ends', note: 'The line reaches full strength after 32% of its width; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="gradual" /> },
+        ],
+      },
+      {
+        n: 2,
+        basis: 'Keep a 20% taper in every pane so only the scroll-edge treatment changes.',
+        candidates: [
+          { id: 'current', label: 'Current top fade', note: 'The shipping 36px top gradient fades in over 150ms after scrolling.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="current" /> },
+          { id: 'quiet', label: 'Quieter top fade', note: 'The same gradient at 45% strength and 220ms; bottom fade unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="quiet" /> },
+          { id: 'none', label: 'No top fade', note: 'The title line stays; content clips at the top without a gradient. Bottom fade unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="none" /> },
+        ],
+      },
+      {
+        n: 3,
+        basis: 'Correction from Destin: the painted fade itself forms a flat full-width strip, and its opaque colour clashes with translucent themes. Hold the moderate line constant while testing content masking across themes.',
+        candidates: [
+          { id: 'painted', label: 'Today: painted strip', note: 'Current opaque overlay on the real Settings drawer. On wallpaper themes it changes the background colour and spans the full width.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="current" /> },
+          { id: 'backdrop', label: 'Content fades into the drawer', note: 'Real Settings content fades toward its own background, tapering the effect at the left and right; no new panel-coloured paint.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" /> },
+        ],
+      },
+      {
+        n: 4,
+        basis: 'Destin found the first content mask too faint and too narrow in coverage. Keep the 20% header-line taper fixed; compare only stronger masks on the same real drawer.',
+        candidates: [
+          { id: 'initial-mask', label: 'Earlier content fade', note: 'The 36px mask with a 20% side taper, for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" /> },
+          { id: 'strong-mask', label: 'Stronger fade', note: '64px deep; the side taper narrows to 12% so the fade covers more of each row.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="strong" /> },
+          { id: 'deep-mask', label: 'Most coverage', note: '84px deep; just 8% is reserved for the side taper.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="deep" /> },
+        ],
+      },
+      {
+        n: 5,
+        basis: 'Destin requested 42px with slightly narrower side margins than option B (64px / 12%). Compare against B without changing the provisional header line.',
+        candidates: [
+          { id: 'reference-b', label: 'B: 64px / 12%', note: 'The previous stronger fade, for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="strong" /> },
+          { id: 'requested-42', label: '42px / 10%', note: 'Destin’s requested shorter fade, with slightly more width covered than B.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" /> },
+        ],
+      },
+      {
+        n: 6,
+        basis: 'Destin asked for more aggressive concealment without extending the 42px depth or changing the 10% side taper. Change only the opacity curve inside that footprint.',
+        candidates: [
+          { id: 'curve-current', label: '42px: current curve', note: 'The previous 42px / 10% treatment, fading linearly.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" /> },
+          { id: 'curve-firmer', label: '42px: firmer', note: 'Same footprint, less row content visible through the middle of the fade.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" /> },
+          { id: 'curve-strongest', label: '42px: strongest', note: 'Same footprint, content disappears more sharply near the title and bottom edge.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="strongest" /> },
+        ],
+      },
+      {
+        n: 7,
+        basis: 'Destin wants the fade closer to the sides. Keep the 42px depth and a provisional firmer opacity curve unchanged while comparing horizontal coverage; the curve is not approved.',
+        candidates: [
+          { id: 'width-10', label: '10% sides', note: 'Same 42px depth and firmer curve; previous side reach for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" /> },
+          { id: 'width-7', label: '7% sides', note: 'Same depth and curve, less untouched area at the left and right.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" maskWidth="wider" /> },
+          { id: 'width-4', label: '4% sides', note: 'Same depth and curve, reaching close to both drawer edges.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" maskWidth="widest" /> },
+        ],
+      },
+      {
+        n: 8,
+        basis: 'Destin selected the 4% side taper for this Settings comparison. Keep its 42px depth and width fixed and resolve the still-unselected fade intensity.',
+        candidates: [
+          { id: 'wide-linear', label: 'Steady fade', note: '42px / 4%; the original linear content-fade curve.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'wide-firmer', label: 'A bit stronger', note: '42px / 4%; the firmer curve used during width selection.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" maskCurve="firmer" /> },
+          { id: 'wide-strongest', label: 'Much stronger', note: '42px / 4%; the stronger curve near the scrolling edges.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" maskCurve="strongest" /> },
+        ],
+      },
+      {
+        n: 9,
+        basis: 'Destin selected the steady 42px / 4%-side content fade for Settings. Keep that fade fixed and now revisit the open header-line taper endpoints against it.',
+        candidates: [
+          { id: 'line-quick', label: 'Quick line ends', note: 'The header line reaches full strength 8% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="quick" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'line-moderate', label: 'Moderate line ends', note: 'The header line reaches full strength 20% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'line-gradual', label: 'Gradual line ends', note: 'The header line reaches full strength 32% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="gradual" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+        ],
+      },
+      {
+        n: 10,
+        basis: 'Before changing production Settings styling, compare its actual unchanged header and painted scroll overlay with the full selected composition: 16px title, 8% title line, steady 42px / 4%-side content fade.',
+        candidates: [
+          { id: 'shipping-today', label: 'Today', note: 'Real shipping Settings header, title and opaque 36px scrolling overlay.', render: () => <SettingsTaperDemo taper="shipping" scrollEdge="current" /> },
+          { id: 'selected-composition', label: 'Your selected composition', note: '16px medium title, header line with quick 8% ends, steady 42px content fade tapered 4% at each side; no painted overlay.', render: () => <SettingsTaperDemo taper="quick" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+        ],
+      },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): Destin's button-placement rule —
+  // filled right, light directly left, single button often full width,
+  // stacked vs side by side — shown on the real Dialog and Button before it
+  // becomes a guide rule. One round per situation; only the action row differs.
+  {
+    id: 'button-placement',
+    label: 'Button placement',
+    question: 'Where do the buttons go?',
+    frame: 'canvas',
+    paneWidth: { min: 460, max: 760 },
+    rounds: [
+      { n: 1, basis: 'A popup with a main action and Cancel.', candidates: [
+        { id: 'today', label: 'Today', note: 'Bare-text Cancel on the left, the filled button stretched across the rest.', render: () => <PairDialogDemo layout="today" /> },
+        { id: 'right', label: 'Pair on the right', note: 'Outlined Cancel directly left of the filled button, both at the right edge.', render: () => <PairDialogDemo layout="right" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Outlined Cancel and the filled button share the width equally, filled on the right.', render: () => <PairDialogDemo layout="halves" /> },
+        { id: 'stacked', label: 'Stacked', note: 'Filled button full width on top, outlined Cancel full width under it.', render: () => <PairDialogDemo layout="stacked" /> },
+      ] },
+      { n: 2, basis: 'A popup with one main action.', candidates: [
+        { id: 'full', label: 'Full width', note: 'The single button spans the popup.', render: () => <SingleDialogDemo layout="full" /> },
+        { id: 'right', label: 'On the right', note: 'The single button hugs its label at the right edge.', render: () => <SingleDialogDemo layout="right" /> },
+        { id: 'center', label: 'Centered', note: 'The single button hugs its label in the middle.', render: () => <SingleDialogDemo layout="center" /> },
+      ] },
+      { n: 3, basis: 'A confirmation that destroys something.', candidates: [
+        { id: 'danger-right', label: 'Red on the right', note: 'Cancel, then the red button last — the same place the filled button always goes.', render: () => <DangerDialogDemo layout="danger-right" /> },
+        { id: 'danger-left', label: 'Red on the left', note: 'The red button first, Cancel last.', render: () => <DangerDialogDemo layout="danger-left" /> },
+      ] },
+      { n: 4, basis: 'A question the assistant asks inside the chat.', candidates: [
+        { id: 'today', label: 'Today', note: 'Filled Submit first on the left, a quiet Dismiss after it.', render: () => <QuestionCardDemo layout="today" /> },
+        { id: 'flipped', label: 'Same as popups', note: 'Outlined Dismiss directly left of a filled Submit, at the right edge.', render: () => <QuestionCardDemo layout="flipped" /> },
+      ] },
+      { n: 5, basis: 'The permission row in the chat.', candidates: [
+        { id: 'today', label: 'Today', note: 'Yes · Always Allow · No from the left.', render: () => <PermissionRowDemo layout="today" /> },
+        { id: 'flipped', label: 'Mirrored', note: 'No · Always Allow · Yes at the right edge, so the yes ends on the right like popups.', render: () => <PermissionRowDemo layout="flipped" /> },
+      ] },
+      // Follow-up to Destin's BP-1: stacked in narrow popups, side by side in wide ones.
+      { n: 6, basis: 'A WIDE popup with a main action and Cancel.', candidates: [
+        { id: 'right', label: 'Pair on the right', note: 'Outlined Cancel directly left of the filled button, at the right edge.', render: () => <PairDialogDemo layout="right" size="document" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Both share the full width, filled on the right.', render: () => <PairDialogDemo layout="halves" size="document" /> },
+      ] },
+      { n: 7, basis: 'A NARROW popup, stacked: which button on top?', candidates: [
+        { id: 'filled-top', label: 'Main on top', note: 'The filled button first, Cancel under it.', render: () => <PairDialogDemo layout="stacked" size="prompt" /> },
+        { id: 'filled-bottom', label: 'Main at the bottom', note: 'Cancel first, the filled button last — nearest the thumb on a phone.', render: () => <PairDialogDemo layout="stacked-bottom" size="prompt" /> },
+      ] },
+    ],
+  },
+  // Same popup at phone width: its own surface because a pane's width comes from
+  // the surface, not from the deck.
+  {
+    id: 'button-placement-phone',
+    label: 'Button placement — phone width',
+    question: 'Where do the buttons go on a phone?',
+    frame: 'canvas',
+    paneWidth: { min: 390, max: 390 },
+    rounds: [
+      { n: 1, basis: 'The two-button popup at 390px.', candidates: [
+        { id: 'right', label: 'Pair on the right', note: 'Kept side by side at the right edge.', render: () => <PairDialogDemo layout="right" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Side by side, each half the width.', render: () => <PairDialogDemo layout="halves" /> },
+        { id: 'stacked', label: 'Stacked', note: 'Filled on top, Cancel under it, both full width.', render: () => <PairDialogDemo layout="stacked" /> },
+      ] },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): Settings layout questions — one
+  // realistic popup (Remote Access-like), only the arrangement varies.
+  // WHY (design-guide review, 2026-09-24): Destin rejected fix batch 1 because
+  // Settings is built from pieces the guide has no rule for. One round per piece.
+  {
+    id: 'settings-pieces',
+    label: 'Settings pieces',
+    question: 'How should each Settings piece look?',
+    frame: 'canvas',
+    paneWidth: { min: 440, max: 480 },
+    rounds: [
+      { n: 1, basis: 'Fold-out sections (Sync log, Advanced, Show details).', candidates: [
+        { id: 'triangle', label: 'Today: triangle', note: 'Small grey text with a triangle (Show details).', render: () => <FoldDemo style="triangle" /> },
+        { id: 'chevron-left', label: 'Today: arrow', note: 'Small grey text with an arrow (Sync log).', render: () => <FoldDemo style="chevron-left" /> },
+        { id: 'row', label: 'Boxed row', note: 'A whole row like a setting, arrow on the right (Local models Advanced).', render: () => <FoldDemo style="row" /> },
+        { id: 'button', label: 'Outlined button', note: 'A small outlined button with an arrow.', render: () => <FoldDemo style="button" /> },
+      ] },
+      { n: 2, basis: 'An error inside a setting (Couldn\'t sync).', candidates: [
+        { id: 'today', label: 'Today', note: 'Red text inside the status card.', render: () => <SettingErrorDemo style="today" /> },
+        { id: 'box-under', label: 'Warning box under it', note: 'The setting stays a normal row; the problem goes in the tinted box, buttons at the right.', render: () => <SettingErrorDemo style="box-under" /> },
+        { id: 'whole-card', label: 'Whole card tinted', note: 'The setting itself turns into the tinted red box.', render: () => <SettingErrorDemo style="whole-card" /> },
+      ] },
+      { n: 3, basis: 'A small follow-up action under a group (Back up all now).', candidates: [
+        { id: 'link', label: 'Today: underlined text', note: 'Underlined words at the bottom left.', render: () => <FollowUpDemo style="link" /> },
+        { id: 'outlined-right', label: 'Small, on the right', note: 'A small outlined button at the right.', render: () => <FollowUpDemo style="outlined-right" /> },
+        { id: 'outlined-full', label: 'Full width', note: 'An outlined button across the whole width.', render: () => <FollowUpDemo style="outlined-full" /> },
+        { id: 'row', label: 'Its own row', note: 'A row with a title and hint, button at the right.', render: () => <FollowUpDemo style="row" /> },
+      ] },
+      { n: 4, basis: 'A problem on one item in a list (Download interrupted, Damaged).', candidates: [
+        { id: 'banner', label: 'Today: strip on top', note: 'A bright coloured strip across the top of the card.', render: () => <ItemStatusDemo style="banner" /> },
+        { id: 'pill', label: 'Pill by the name', note: 'A tinted pill beside the name, like Installed.', render: () => <ItemStatusDemo style="pill" /> },
+        { id: 'box', label: 'Warning box inside', note: 'The tinted warning box inside the card, with a short explanation.', render: () => <ItemStatusDemo style="box" /> },
+      ] },
+      { n: 5, basis: 'The button inside a text box (Set).', candidates: [
+        { id: 'outlined', label: 'Outlined', note: 'A small outlined button (today, when a password is typed).', render: () => <InboxButtonDemo style="outlined" /> },
+        { id: 'filled', label: 'Filled', note: 'A small filled button.', render: () => <InboxButtonDemo style="filled" /> },
+        { id: 'ghost', label: 'Plain word', note: 'The word only, highlighting on hover.', render: () => <InboxButtonDemo style="ghost" /> },
+        { id: 'arrow', label: 'Arrow', note: 'A filled square with an arrow, like the message box send.', render: () => <InboxButtonDemo style="arrow" /> },
+      ] },
+      { n: 6, basis: 'A consent checkbox before a risky action.', candidates: [
+        { id: 'today', label: 'Today', note: 'A small box on the left, text beside it.', render: () => <ConsentDemo style="today" /> },
+        { id: 'boxed-left', label: 'Boxed, box left', note: 'The whole line is a tappable box that lights up when ticked.', render: () => <ConsentDemo style="boxed-left" /> },
+        { id: 'boxed-right', label: 'Boxed, box right', note: 'The same, with the tick box on the right like a setting.', render: () => <ConsentDemo style="boxed-right" /> },
+        { id: 'switch', label: 'Switch', note: 'A setting row with a switch on the right.', render: () => <ConsentDemo style="switch" /> },
+      ] },
+      { n: 7, basis: 'The status at the top of a Settings popup (Remote Access).', candidates: [
+        { id: 'nested', label: 'Today: box in a box', note: 'An outer box with the intro, the status box inside it.', render: () => <StatusCardDemo style="nested" /> },
+        { id: 'plain-intro', label: 'Intro above', note: 'The intro as plain text, then the status box on its own.', render: () => <StatusCardDemo style="plain-intro" /> },
+        { id: 'strip-only', label: 'Intro inside status', note: 'One status box; the intro is its grey second line.', render: () => <StatusCardDemo style="strip-only" /> },
+      ] },
+    ],
+  },
+  {
+    id: 'settings-anatomy',
+    label: 'Settings layout',
+    question: 'How is a Settings popup laid out?',
+    frame: 'canvas',
+    paneWidth: { min: 480, max: 560 },
+    rounds: [
+      { n: 1, basis: 'Where a setting\'s control goes relative to its title and hint.', candidates: [
+        { id: 'below', label: 'Always below', note: 'Title and hint, then the control on its own line, for every setting.', render: () => <SettingsAnatomyDemo layout="below" /> },
+        { id: 'beside', label: 'Always beside', note: 'Title and hint on the left, the control on the right, for every setting.', render: () => <SettingsAnatomyDemo layout="beside" /> },
+        { id: 'mixed', label: 'By control size', note: 'Small controls (switches) beside; wide ones (text boxes, choices) below.', render: () => <SettingsAnatomyDemo layout="mixed" /> },
+      ] },
+      { n: 2, basis: 'How five choices are offered.', candidates: [
+        { id: 'segmented', label: 'Switch strip', note: 'All five side by side in one strip.', render: () => <SettingsAnatomyDemo choice="segmented" /> },
+        { id: 'radios', label: 'Boxed list', note: 'One boxed row per choice, the picked one marked.', render: () => <SettingsAnatomyDemo choice="radios" /> },
+        { id: 'select', label: 'Dropdown', note: 'One box that opens a list.', render: () => <SettingsAnatomyDemo choice="select" /> },
+      ] },
+      { n: 3, basis: 'A group of related settings: box inside a box, or flat.', candidates: [
+        { id: 'nested', label: 'Boxes in a box', note: 'Today\'s Backup & Sync shape: an outer card holding inner cards and a dashed add button.', render: () => <SettingsAnatomyDemo nesting="nested" /> },
+        { id: 'flat', label: 'Flat', note: 'A small label, then the rows directly, then a normal button.', render: () => <SettingsAnatomyDemo nesting="flat" /> },
+      ] },
+      { n: 4, basis: 'How much space between groups.', candidates: [
+        { id: 'compact', label: 'Tighter', note: '16px between groups, 6px between rows.', render: () => <SettingsAnatomyDemo spacing="compact" /> },
+        { id: 'roomy', label: 'Roomier', note: '24px between groups, 8px between rows.', render: () => <SettingsAnatomyDemo spacing="roomy" /> },
+      ] },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): one text order for every "name, who
+  // made it, numbers" card, and one date position for conversation cards.
+  {
+    id: 'card-anatomy',
+    label: 'Card text order',
+    question: 'In what order does a card show its text?',
+    frame: 'canvas',
+    paneWidth: { min: 720, max: 900 },
+    rounds: [
+      { n: 1, basis: 'A plugin, a Library skill and a Page as cards.', candidates: [
+        { id: 'today', label: 'Today (Marketplace)', note: 'Capitals badge, two pills for trust and author, stats split left and right.', render: () => <CardAnatomyDemo anatomy="today" /> },
+        { id: 'quiet-footer', label: 'Details at the bottom', note: 'Title and status, the description, then one grey line: kind · who · numbers.', render: () => <CardAnatomyDemo anatomy="quiet-footer" /> },
+        { id: 'chips', label: 'Chips (your pick)', note: 'Today\'s trust and author chips kept; the footer details as chips too; name and tinted status on top.', render: () => <CardAnatomyDemo anatomy="chips" /> },
+        { id: 'meta-under-title', label: 'Who under the title', note: 'Title with kind · who under it, the description, then the numbers at the bottom right.', render: () => <CardAnatomyDemo anatomy="meta-under-title" /> },
+      ] },
+      { n: 2, basis: 'Conversation cards (Resume, Projects, chat references): where the date goes.', candidates: [
+        { id: 'date-top', label: 'Date top right', note: 'The date on the title line, at the right.', render: () => <ConversationCardDemo anatomy="date-top" /> },
+        { id: 'date-end', label: 'Date with the details', note: 'The date at the end of the grey details line.', render: () => <ConversationCardDemo anatomy="date-end" /> },
+      ] },
+      { n: 3, basis: 'Resume cards also carry tag and done icon buttons: where they go once the date is top right.', candidates: [
+        { id: 'icons-bottom', label: 'Icons bottom right', note: 'Date top right; the icon buttons at the end of the details line.', render: () => <ConversationCardDemo anatomy="icons-bottom" /> },
+        { id: 'icons-hover', label: 'Icons on hover', note: 'Date top right; the icon buttons appear beside it only while the pointer is over the card.', render: () => <ConversationCardDemo anatomy="icons-hover" /> },
+        { id: 'icons-top-date-bottom', label: 'Date bottom right (your pick)', note: 'Tag and note buttons top right; the date at the bottom right.', render: () => <ConversationCardDemo anatomy="icons-top-date-bottom" /> },
+        { id: 'icons-top-date-end', label: 'Icons keep the corner', note: 'Icon buttons top right as today; for these cards the date moves to the details line.', render: () => <ConversationCardDemo anatomy="icons-top-date-end" /> },
+      ] },
     ],
   },
   ...ALL_SURFACES.filter((s) => s.id === ACTIVE_FIRST),

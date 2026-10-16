@@ -445,6 +445,7 @@ describe('TranscriptWatcher', () => {
     // watch started so they arrive in ONE read, but waiting only for "length is
     // 1" would let a regression that DOES emit the dup pass at the instant the
     // count first hits 1.
+    // settle (negative assertion): the duplicate must not be emitted (see the comment above).
     await wait(50);
 
     // Only the first occurrence should be emitted (second uuid-dup is deduplicated)
@@ -765,6 +766,7 @@ describe('TranscriptWatcher read integrity', () => {
       () => expect(events.filter((e) => e.type === 'user-message').length).toBeGreaterThanOrEqual(1),
       { timeout: SETTLE_MS },
     );
+    // settle (negative assertion): a second, racing emit would land here.
     await wait(200);
 
     const userMessages = events.filter((e) => e.type === 'user-message');
@@ -789,10 +791,7 @@ describe('TranscriptWatcher read integrity', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     fs.appendFileSync(jsonlPath, full.subarray(splitAt));
-    for (let i = 0; i < 20 && events.length === 0; i++) {
-      watcher.readNewLinesForSession('desktop-utf8');
-      await new Promise((r) => setTimeout(r, 100));
-    }
+    await vi.waitFor(() => { watcher.readNewLinesForSession('desktop-utf8'); expect(events.length).toBeGreaterThan(0); }, { interval: 100 });
 
     const msg = events.find((e) => e.type === 'user-message');
     expect(msg).toBeDefined();

@@ -113,7 +113,7 @@ describe('SessionPreviewPane', () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false, error: 'EACCES: permission denied, open /x.jsonl' });
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
     expect(await screen.findByText(/EACCES: permission denied/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Report bug' })).toBeNull();
   });
 
@@ -127,7 +127,7 @@ describe('SessionPreviewPane', () => {
     expect(screen.getByText(COPY.errReadUnknownExplainer)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('labels the lane for humans', async () => {
@@ -175,7 +175,7 @@ describe('SessionPreviewPane', () => {
     expect(sentinelObservers()).toHaveLength(0);
 
     (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [56, 57], null));
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.getByText('ask56')).toBeTruthy());
     expect((window as any).claude.chatsearch.read).toHaveBeenLastCalledWith({ provider: 'claude', id: 'abc', before: 500 });
     expect(screen.getByText('ask59')).toBeTruthy();

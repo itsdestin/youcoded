@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CuratedModel, DownloadProgress, FitEstimate, QuantOption } from '../../../shared/model-manager-types';
 import { LocalModelBrowser, RepoCard } from '../LocalModelsSection';
-import { Button, LoadingState } from '../ui';
+import { Button, LoadingState, SectionLabel } from '../ui';
 import { LocalAppConnect } from './LocalAppConnect';
 
 /**
@@ -82,7 +82,9 @@ export function LocalModelSetup({ onBack }: { onBack: () => void }) {
           {/* Round 4 review (B-4): no separate warning above the card — on a small
               computer the row's own amber fit line is the warning. */}
           <div className="w-full text-left">
-            <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Suggested for this computer</p>
+            {/* WHY SectionLabel (fix batch 1 addendum, 2026-09-24): design
+                guide small label — normal case, no letter-spacing. */}
+            <SectionLabel className="mb-2">Suggested for this computer</SectionLabel>
             <RepoCard
               repo={info.suggested.hfRepo}
               label={info.suggested.label}

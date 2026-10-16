@@ -11,7 +11,7 @@
 import { FOCUS_RING } from '../ui/Button';
 
 /** The UNSELECTED state of a control inside a `bg-inset` pill: caption buttons,
- *  Session Files, Games, the chat/terminal toggles, ScreenBand's back button.
+ *  Session files, Games, the chat/terminal toggles, ScreenBand's back button.
  *  A selected (accent-filled) control must NOT carry it — see motion.css. */
 export const ON_INSET_CONTROL = `text-fg-dim on-inset-control ${FOCUS_RING}`;
 

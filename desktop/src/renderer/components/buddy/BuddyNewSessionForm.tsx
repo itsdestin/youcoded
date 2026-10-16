@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import FolderSwitcher from '../FolderSwitcher';
-import { Button, Toggle } from '../ui';
+import { Button, FieldError, Toggle } from '../ui';
 import { SkipPermissionsCaption } from '../SkipPermissionsCaption';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import {
@@ -40,7 +40,7 @@ interface Props {
  * drifted ~2,000 lines. In the gap the main form replaced its four-alias button
  * row with <ModelPicker>, its hand-rolled 32x18 red track with <Toggle
  * tone="danger">, and its inline-styled buttons with <Button>. The buddy kept
- * all three hand-rolled, so its Skip Permissions track was a literal #DD4444
+ * all three hand-rolled, so its Skip permissions track was a literal #DD4444
  * that no theme pack could restyle — and, worse, it hardcoded provider
  * 'claude'. ChatGPT and local models were unreachable from the floater, and a
  * saved non-Claude default was silently swapped for Claude Sonnet with nothing
@@ -151,7 +151,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
     }
   }, [creating, cwd, dangerous, model, runtime, nb.effectiveBinding, preset, onCreated, initialInput]);
 
-  // Skip Permissions is CLAUDE-CODE ONLY — it bypasses the CLI's permission
+  // Skip permissions is CLAUDE-CODE ONLY — it bypasses the CLI's permission
   // flow, and a native session has neither a PTY nor that flow. Same gate as
   // the welcome form, SessionStrip's form and the Resume Browser's per-row one.
   const showSkipPermissions = runtime !== 'native';
@@ -159,8 +159,10 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">
-          Project Folder
+        {/* WHY: field captions drop the spaced-caps eyebrow + sentence case
+            (labels batch, guide: no spaced capitals). */}
+        <label className="text-xs font-medium text-fg-muted mb-1 block">
+          Project folder
         </label>
         {/* No onManageProjects on purpose: the buddy window has no
             ArtifactProvider and so no Project View to send anyone to.
@@ -169,7 +171,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
         <FolderSwitcher value={cwd} onChange={setCwd} onManageProjects={onManageProjects} />
       </div>
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">
+        <label className="text-xs font-medium text-fg-muted mb-1 block">
           Model
         </label>
         <ModelPicker value={modelChoice} onSelect={applyModelChoice} />
@@ -183,8 +185,9 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
       {showSkipPermissions && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-              Skip Permissions
+            {/* WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+            <label className="text-xs font-medium text-fg-muted">
+              Skip permissions
             </label>
             {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state and a
                 literal #fff knob. The shared Toggle on the danger tone lets
@@ -195,31 +198,35 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
               checked={dangerous}
               onChange={setDangerous}
               tone="danger"
-              aria-label="Skip Permissions"
+              aria-label="Skip permissions"
             />
           </div>
           {dangerous && <SkipPermissionsCaption />}
         </>
       )}
-      <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <Button variant="secondary" size={size} onClick={onCancel} disabled={creating}>
-          Cancel
-        </Button>
+      {/* WHY stacked, filled on top (decisions "Applied from earlier rules": the buddy's
+          new-session form stacks its buttons; "Button arrangement by width" + "Stacked order":
+          two actions in a narrow popup stack full width, the filled one on top). The buddy
+          chat is a 320px window. Copies BuddyWelcome's own stacked New session / Resume pair. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
         <Button
           onClick={submit}
           disabled={creating || nb.nativeCreateBlocked}
           variant={dangerous && showSkipPermissions ? 'danger' : 'primary'}
           size={size}
-          className="flex-1"
+          className="w-full"
         >
-          {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (Dangerous)' : 'Create Session'}
+          {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (dangerous)' : 'Create session'}
+        </Button>
+        <Button variant="secondary" size={size} className="w-full" onClick={onCancel} disabled={creating}>
+          Cancel
         </Button>
       </div>
-      {error && (
-        <p className="text-3xs text-fg-muted" style={{ margin: 0, textAlign: 'center' }}>
-          {error}
-        </p>
-      )}
+      {/* WHY FieldError, not a grey line (decisions "Fix batch: error lines, buttons, notices":
+          a short error line is the small tinted box, the danger notice in miniature). The way to
+          try again is the Create session button just above, so it carries no button of its own.
+          Same piece BuddyResumeList already uses for its warning. */}
+      {error && <FieldError as="p">{error}</FieldError>}
     </div>
   );
 }

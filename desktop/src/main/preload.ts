@@ -204,6 +204,7 @@ const IPC = {
   SYNC_SPACES_RENAME_PROJECT: 'syncspaces:rename-project',
   SYNC_SPACES_SET_PROJECT_DESCRIPTION: 'syncspaces:set-project-description',
   SYNC_SPACES_STOP_PROJECT: 'syncspaces:stop-project',
+  SYNC_SPACES_REMOVE_PROJECT: 'syncspaces:remove-project',
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
   SYNC_SPACES_LEASE_TAKEOVER: 'syncspaces:lease-takeover',
   SYNC_SPACES_LEASE_FORCE: 'syncspaces:lease-force',
@@ -1446,8 +1447,8 @@ contextBridge.exposeInMainWorld('claude', {
     // Presence socket (Task 6). connect/disconnect/send return { ok: true };
     // all real data arrives asynchronously via onPresenceEvent. message is
     // passed positionally (matches the ipcMain.handle signature).
-    presenceConnect: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_CONNECT),
+    presenceConnect: (opts?: { hidden?: boolean }): Promise<{ ok: true }> => // hidden = incognito (presence-socket.ts)
+      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_CONNECT, opts ?? {}),
     presenceDisconnect: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_DISCONNECT),
     // presenceSend returns an honest receipt: { ok:false, status:0, message }
@@ -1683,6 +1684,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SYNC_SPACES_RENAME_PROJECT, { name, displayName }),
     stopProject: (name: string) =>
       ipcRenderer.invoke(IPC.SYNC_SPACES_STOP_PROJECT, { name }),
+    // Remove = stop syncing + off every device's lists; files and GitHub untouched (backlog row 10).
+    removeProject: (name: string) =>
+      ipcRenderer.invoke(IPC.SYNC_SPACES_REMOVE_PROJECT, { name }),
     // Synced project description (Task 3) — payload-object shape, same convention
     // as renameProject above.
     setProjectDescription: (name: string, description: string) =>

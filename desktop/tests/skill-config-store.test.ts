@@ -76,11 +76,11 @@ describe('SkillConfigStore dead-favourite cleanup', () => {
 });
 
 describe('SkillConfigStore theme favorites', () => {
-  it('seeds the four built-in theme slugs on first read when missing', async () => {
+  it('seeds the built-in theme slugs on first read when missing', async () => {
     const { SkillConfigStore } = await import('../src/main/skill-config-store');
     const store = new SkillConfigStore();
     const favs = store.getThemeFavorites();
-    expect(favs.sort()).toEqual(['creme', 'dark', 'light', 'midnight']);
+    expect(favs.sort()).toEqual(['creme', 'dark', 'light', 'midnight', 'youcoded', 'youcoded-night']);
   });
 
   it('persists setThemeFavorite across reload', async () => {

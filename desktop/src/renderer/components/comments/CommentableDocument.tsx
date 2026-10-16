@@ -84,7 +84,7 @@ export function CommentableDocument({
       {fill ? (
         <div className="flex-1 min-w-0 h-full flex">{content}{inline}</div>
       ) : (
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div className="scroll-mask flex-1 min-w-0 overflow-auto">
           {/* WHY an inner min-h-full flex row: a scroller's own flex children
               stretch only to the scroller's VISIBLE height, so the marker rail
               (and its divider line) would end one screen down while the text
