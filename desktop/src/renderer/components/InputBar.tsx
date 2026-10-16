@@ -17,6 +17,7 @@ import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { usePopupOpen } from '../hooks/use-esc-close';
 import BrailleBurst from './BrailleBurst';
 import FlowingKeywordsText from './FlowingKeywords';
 import StopButton from './StopButton';
@@ -32,7 +33,6 @@ import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } 
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
-import { useScrollFade } from '../hooks/useScrollFade';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
@@ -308,9 +308,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     };
   }, [releaseSpaceHold]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Drive the same fade-edge treatment on the textarea itself. The mask fades
-  // wrapped text that sits above/below the 3-line max-height viewport.
-  useScrollFade<HTMLTextAreaElement>(inputRef);
+  // The message box's scroll fade (2026-10-15, the one-fade pass; guide: "grows to three
+  // lines, then scrolls under a fade") is CSS on the text's wrapper below, not on the textarea:
+  // the text you see is the mirror layer behind a see-through textarea, so the fade must cover
+  // both. The wrapper follows the textarea's scroll (`scroll-mask--follow` /
+  // `scroll-mask-source`), and the textarea's scroll padding keeps the caret's line clear of
+  // the fade, so what is being typed is never dimmed. The old `.scroll-fade` here never drew
+  // anything (a <textarea> paints no ::before/::after).
   // Mirror content rendered behind the transparent textarea so ultrathink /
   // ultraplan / plan / brainstorm can flow with a gradient while the user types.
   // We translateY the inner div to keep its position in sync with the
@@ -459,6 +463,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
   // into the newly-focused textarea instead of submitting the message.
+  const popupOpen = usePopupOpen();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (disabled) return;
@@ -476,6 +481,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // WHY (Destin, approved in chat 2026-10-12): with a popup open, Enter belongs to the popup.
+      // This listener ran first, sent the draft and marked the key handled, so the popup's own
+      // Enter (Close session) stood down and a message went out behind it.
+      if (e.key === 'Enter' && popupOpen()) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
       // WHY: a key arriving while no text field has focus came from a physical
       // keyboard — an on-screen keyboard only exists while a field is focused.
@@ -496,7 +505,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [disabled]);
+  }, [disabled, popupOpen]);
 
   // Unfocus textarea after idle so global shortcuts (e.g. Shift to open
   // session switcher, Shift+Space to cycle model) work without conflicting.
@@ -894,9 +903,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const maxHeight = lineHeight * 3;
     const clamped = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${clamped}px`;
-    // Always keep native scrollbar hidden — scroll-fade provides the affordance
-    // via mask gradient instead. overflow-y stays on 'auto' so wheel/keyboard
-    // scrolling still works when content exceeds max height.
+    // Always keep native scrollbar hidden (`scrollbar-none` on the textarea).
+    // overflow-y stays on 'auto' so wheel/keyboard scrolling still works when
+    // content exceeds max height.
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
     // Keep the flowing-keyword mirror aligned with the textarea's scroll
     if (mirrorContentRef.current) {
@@ -1014,8 +1023,27 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     }
   }, [addFiles]);
 
+  // WHY (decisions "Applied from earlier rules"): a file dragged in gets the session-tab drop
+  // highlight. Only drags carrying Files light it (a session pill carries none); the depth
+  // counter absorbs the enter/leave pairs each child fires mid-drag.
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const fileDragDepth = useRef(0);
+  const carriesFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!carriesFiles(e)) return;
+    fileDragDepth.current += 1;
+    setFileDragOver(true);
+  }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!carriesFiles(e)) return;
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1);
+    if (fileDragDepth.current === 0) setFileDragOver(false);
+  }, []);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    fileDragDepth.current = 0;
+    setFileDragOver(false);
     const paths = Array.from(e.dataTransfer.files).map((f) => (f as any).path as string).filter(Boolean);
     if (paths.length > 0) addFiles(paths);
   }, [addFiles]);
@@ -1032,10 +1060,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // layer, attachment chips) is not highlightable or copyable (Destin,
       // 2026-09-10). The textarea itself stays selectable: globals.css
       // re-enables text fields.
-      className="input-bar-container shrink-0 select-none"
+      // `relative` holds the file-drag highlight below (nothing else positions against it).
+      className="input-bar-container relative shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
     >
+      {/* The session-tab drop highlight's own look (SessionDropZone.tsx): dashed accent
+          outline over a faint accent tint. No label — the drop needs no words here. */}
+      {fileDragOver && (
+        <div aria-hidden="true" data-file-drop-highlight className="absolute inset-0 z-10 rounded-2xl outline-dashed outline-2 -outline-offset-2 outline-accent/70 bg-accent/10 pointer-events-none" />
+      )}
       {/* Terminal view (minimal) renders the Esc/Tab/Ctrl/arrow helper row in
           the same slot QuickChips occupies in chat view, so both modes share
           the same "pill row above input bar" visual inside one container. */}
@@ -1043,7 +1079,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (
-        <div className="flex gap-2 px-3 py-2 overflow-x-auto">
+        <div className="scroll-mask-x flex gap-2 px-3 py-2 overflow-x-auto">
           {/* Design C (Destin, 2026-08-27, ledger P-19): a 128×96 card with a
               real preview — picture, RENDERED markdown, or mono text — the name
               in a strip along the bottom, and the ✕ always visible. The card
@@ -1094,7 +1130,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               <CompassIcon className="w-5 h-5" />
             </BrailleBurst>
           )}
-          <div className="relative flex-1">
+          <div className="scroll-mask-y scroll-mask--follow relative flex-1">
             {/* Feedback C: meter and clock in the empty line, gone once words arrive. */}
             {voiceListening && voiceStyle.feedback === 'placeholder' && !text && !voiceTail && (
               <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 flex items-center gap-2 text-sm text-fg-muted">
@@ -1322,7 +1358,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // picked slightly different break points — every subsequent line's
             // offset compounded, so the caret drift got worse the longer the
             // message. Both layers now use overflow-wrap: break-word.
-            className="input-bar-textarea scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle break-words"
+            className="input-bar-textarea scroll-mask-source scrollbar-none relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle break-words"
           />
           </div>
           {/* Task 10: stop control moved here from ChatView (beside the

@@ -1,10 +1,12 @@
 import type { AttentionSummary, AttentionState } from '../../../shared/types';
 import { attentionDotColor } from '../../hooks/useSessionAttention';
 
-// Hex for the two dot colors. The DECISION of which one to use is NOT made
+// Classes for the two dot colors. The DECISION of which one to use is NOT made
 // here — attentionDotColor() is the app's single source of truth for that, and
 // the strip now defers to it (see the comment on `color` below).
-const DOT_HEX = { red: '#ef4444', amber: '#f5a623' } as const;
+// WHY classes, not hex (guide principle 2): the main session strip's own dot classes
+// (`DOT_BG` in SessionStrip.tsx), so red and amber here are the app's one red and amber.
+const DOT_HEX = { red: 'bg-red-400', amber: 'bg-amber-400' } as const;
 
 // User-facing text per state. Only 'stalled' is spelled out today; 'stuck',
 // 'session-died' and 'error' fall through to the raw state name, which is what
@@ -70,7 +72,7 @@ export function AttentionStrip({ sessionId, summary }: Props) {
         color: 'var(--fg-dim)',
       }}
     >
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
+      <span className={color} style={{ width: 6, height: 6, borderRadius: '50%' }} />
       <span>{label}</span>
     </div>
   );

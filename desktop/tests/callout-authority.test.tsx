@@ -6,12 +6,15 @@ import '@testing-library/jest-dom/vitest';
 import { Callout } from '../src/renderer/components/ui/Callout';
 import { inScopeFiles, readSource, stripComments } from './helpers/guard-scope';
 
-// Guard for K4 — the callout.
+// Guard for K4 — the callout, THE notice box.
 //
-// A callout is PASSIVE: it states something and offers nothing to press. The
-// moment it grows a button it is a K5 status strip, which is a different role
-// with a different geometry. Keeping the two apart is the entire reason K4 is
-// its own kit entry, so the API is what enforces it: Callout has no action slot.
+// Superseded rule (2026-09-25, decisions.md P-2/P-4): a callout used to be
+// strictly passive, with no action slot, and a notice with a button had to be a
+// K5 status strip. Destin ruled the opposite — every warning/error/info notice
+// is this one tinted box, and a notice's own buttons (Try again, Show details,
+// Resume…) go INSIDE it, at the right. What this guard now pins is that rule:
+// one geometry, the buttons inside the box, and colour only in the box and the
+// title (never red body text).
 
 afterEach(cleanup);
 
@@ -22,6 +25,17 @@ function surface(): HTMLElement {
 }
 
 describe('Callout', () => {
+  // Destin, gt-r1#E-2/#E-3: sentence, then Details, then the buttons — in every shape.
+  it('puts its buttons below the Details fold, whichever shape it is', () => {
+    for (const shape of [{}, { compact: true }, { actionsPlacement: 'below' as const }]) {
+      cleanup();
+      render(<Callout tone="danger" details="ENOSPC" actions={<button>Try again</button>} {...shape}>body</Callout>);
+      const fold = screen.getByText('Details');
+      const button = screen.getByRole('button', { name: 'Try again' });
+      expect(fold.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING, JSON.stringify(shape)).toBeTruthy();
+    }
+  });
+
   it('has one geometry across all three tones', () => {
     const structural = new Set<string>();
     for (const tone of ['info', 'warning', 'danger'] as const) {
@@ -65,9 +79,51 @@ describe('Callout', () => {
     for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-amber-500/10']) expect(details.className).toContain(cls);
   });
 
+  it('body text is the normal grey in every tone, danger included — colour lives in the box', () => {
+    // Design guide "Status and notices": never red or coloured body text. The
+    // danger tone used to write its body in text-destructive-fg.
+    for (const tone of ['info', 'warning', 'danger'] as const) {
+      cleanup();
+      render(<Callout tone={tone} title="Heading">body</Callout>);
+      const body = screen.getByText('body');
+      expect(body.className, tone).toContain('text-fg-2');
+      expect(body.className, tone).not.toMatch(/text-(destructive|red|amber)/);
+    }
+    cleanup();
+  });
+
+  it("a notice's buttons sit INSIDE the box, after the text (at the right)", () => {
+    render(
+      <Callout tone="danger" title="Couldn't sync" actions={<><button>Show details</button><button>Try again</button></>}>
+        body
+      </Callout>,
+    );
+    const box = screen.getByText('body').closest('.rounded-lg') as HTMLElement;
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    expect(box.contains(retry), 'the action is inside the tinted box').toBe(true);
+    // Text first, buttons after it in the same row — i.e. on the right.
+    expect(screen.getByText('body').compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect((retry.parentElement as HTMLElement).className).toContain('ml-auto');
+    // Same geometry as a callout without buttons.
+    for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-destructive/10']) expect(box.className).toContain(cls);
+  });
+
   it('defaults to info', () => {
     render(<Callout>body</Callout>);
     expect(surface().className).toContain('bg-accent/10');
+  });
+
+  // Destin, 2026-10-05 (games-social G3-7, then app-wide): a red title "seems to be unique styling
+  // not used elsewhere". Titles are the normal text colour in EVERY tone — the colour lives in
+  // the box and its border, never in words (guide principle 2).
+  it('a title is the normal text colour in every tone, danger included', () => {
+    for (const tone of ['info', 'warning', 'danger'] as const) {
+      const { unmount } = render(<Callout tone={tone} title={`T-${tone}`}>body</Callout>);
+      const title = screen.getByText(`T-${tone}`);
+      expect(title.className).toContain('text-fg');
+      expect(title.className).not.toMatch(/destructive|red-|amber-/);
+      unmount();
+    }
   });
 
   it('an optional title sits above the body', () => {
@@ -115,11 +171,12 @@ const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-5
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
-  // A REAL hand-rolled warning callout, found 2026-09-16: it wrote its amber as a raw
-  // #FF9800, which this pattern could not see, until the design-check pass moved it onto
-  // the status amber (same colour). Moving it onto <Callout tone="warning"> changes its
-  // look, so it waits for its own review — filed in docs/roadmap (youcoded-dev).
-  'ModelPickerPopup.tsx': { count: 1, why: "Fast mode's \u26a0 Billed Per Token box — a hand-rolled warning callout, follow-up filed" },
+  // 1 -> 0 (guide batch, 2026-09-29): Fast mode's Billed Per Token box moved
+  // onto the real <Callout tone="warning">, closing the follow-up filed
+  // 2026-09-16. Kept at 0 rather than removed so the entry stays in step with
+  // this rule's workspace-side ast-grep ignores: list, and so a future
+  // hand-rolled tint here is still caught.
+  'ModelPickerPopup.tsx': { count: 0, why: "Fast mode's \u26a0 Billed Per Token box — moved onto <Callout tone=\"warning\"> 2026-09-29" },
   'ThemeShareSheet.tsx': { count: 1, why: 'an <a> styled as a button — it has a hover fill' },
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
   'SessionContextBanner.tsx': {
@@ -129,21 +186,19 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
       + '(review-5 Q-1 chose "never" for opening by itself), so it is a K5 status strip rather '
       + 'than passive text',
   },
+  // 3 -> 2 (fix batch 2, 2026-09-26): the Remote access setup banner lost its
+  // outer box — the intro is plain text and the status strip stands alone.
+  // 2 -> 1 (2026-09-28): Package tier's options are the shared radio rows now.
   'SettingsPanel.tsx': {
-    count: 3,
-    why: 'the Remote setup banner and the "Connected to X" banner both carry buttons, so both are K5; '
-      + 'the third is the Package Tier option selected state',
+    count: 1,
+    why: 'the phone\'s "Connected to X" banner (green, with a Disconnect button — not yet moved onto '
+      + '<Callout actions>, outside fix batch 2\'s screens)',
   },
-  'SyncPanel.tsx': {
-    count: 4,
-    why: 'two are K6 backend-row state tints, two are the warnings list (Fix/Dismiss buttons, so K5) '
-      + 'and its context-menu danger hover',
-  },
-  'SpecialistsChip.tsx': {
-    count: 2,
-    why: "StatusPill's Needs-you and Failed variants — rounded-full inline state badges, peers of the "
-      + 'same switch\'s untinted Stopped/Finished pills, not standalone passive text (Callout is rounded-lg/p-3)',
-  },
+  // SyncPanel.tsx: 4 -> 2 (fix batch 2) -> 0 (2026-09-28, nothing-bare-3#N3-2): the
+  // backend rows are the plain nested box in every state now; the status light
+  // carries red/green. No exemption left.
+  // SpecialistsChip.tsx: 2 -> 0 (2026-10-13, small-fixes-3#SF3-10): Needs you and Failed are the
+  // shared Pill now (words in the text colour, the tint carries the state). No exemption left.
 };
 
 /**

@@ -18,6 +18,7 @@ import { Tooltip } from './ui';
 import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
 import { FOCUS_RING } from './ui/Button';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
+import { ProjectsIcon } from './screen-icons';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -267,14 +268,12 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
       type="button"
       className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
       onClick={() => dispatch({ type: active ? 'PROJECT_VIEW_CLOSED' : 'PROJECT_VIEW_OPENED' })}
-      aria-label="Open Projects"
+      aria-label="Open projects"
       aria-pressed={active}
     >
-      {/* Folder icon — matches the document icon style used by ArtifactDrawerButton */}
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-      </svg>
+      {/* Folder icon — matches the document icon style used by ArtifactDrawerButton.
+          Shared with Projects' own band title (screen-icons.tsx). */}
+      <ProjectsIcon />
     </button>
     </Tooltip>
   );
@@ -291,7 +290,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
   // Open/closed is per-session — reflect (and toggle) the ACTIVE session's flag.
   // A narrow selector, so another session's file activity does not redraw it.
   const drawerOpen = useArtifactSelector((s) => (activeSessionId ? (s.drawerOpenBySession[activeSessionId] ?? false) : false));
-  // Count logic shared with the narrow overflow menu's "Session Files" row.
+  // Count logic shared with the narrow overflow menu's "Session files" row.
   const artifactCount = useArtifactCount(activeSessionId, projectRoot);
 
   // Fix: always show the button so users can open the drawer even before any
@@ -301,11 +300,11 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
   // is open, text-fg-dim/hover:text-fg-2 otherwise.
   return (
     <div className="bg-inset rounded-md p-0.5">
-      {/* "Session Files" (Destin, 2026-07-23; was "Session artifacts" from
+      {/* "Session files" (Destin, 2026-07-23; was "Session artifacts" from
           2026-07-20). The "Session" qualifier carries the distinction: this is
           ONE session's activity log (including files merely VIEWED via pills),
           as distinct from Project View's project-wide set. */}
-      <Tooltip text="Session Files" placement="bottom">
+      <Tooltip text="Session files" placement="bottom">
       <button
         type="button"
         onClick={() => {
@@ -323,7 +322,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
         // number "3" whenever any file was tracked, and fell back to `title`
         // only at zero. Naming it here makes it announce the same thing in both
         // states, and lets the hint be a description rather than the name.
-        aria-label="Session Files"
+        aria-label="Session files"
       >
         {/* Document icon — SVG matches the style of the settings gear above */}
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -568,7 +567,7 @@ export default React.memo(function HeaderBar({
         {!narrow && <ProjectsButton />}
         {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && (
-          <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0">
+          <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-fg-2 border border-blue-500/40 shrink-0" title="Connected to another computer">
             REMOTE
           </span>
         )}
@@ -613,7 +612,7 @@ export default React.memo(function HeaderBar({
             conditional (the original hide-at-zero plan was dropped — see the
             ArtifactDrawerButton docblock). Grouped with the game-panel toggle
             since both are panel toggles sharing identical pill styling. */}
-        {/* Session Files is a ||| menu row on narrow, so the button would
+        {/* Session files is a ||| menu row on narrow, so the button would
             be a duplicate entry point. */}
         {!narrow && (
           <ArtifactDrawerButton
@@ -674,7 +673,7 @@ export default React.memo(function HeaderBar({
  *  without a session — the Mac traffic-light pill, the shared gear, the Projects
  *  button (Project View is a full-screen overlay that needs no session) and the
  *  Windows/Linux caption buttons. No OverflowMenu on narrow viewports either:
- *  its rows are session-scoped (Session Files, Connect 4), so the two app-level
+ *  its rows are session-scoped (Session files, Connect 4), so the two app-level
  *  buttons render directly at every width.
  *
  *  Same `.header-bar` class + `WebkitAppRegion: drag` as HeaderBar, so the

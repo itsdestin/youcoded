@@ -58,7 +58,7 @@ describe('mergeClasses padding conflict groups', () => {
 
 describe('buttonClasses end-to-end', () => {
   it('size=lg with a wider px- override keeps vertical padding', () => {
-    // Mirrors App.tsx welcome "New Session": panel-glass w-full px-8 text-base
+    // Mirrors App.tsx welcome "New session": panel-glass w-full px-8 text-base
     const t = tokens(buttonClasses('primary', 'lg', 'panel-glass w-full px-8 text-base'));
     expect(t).toContain('py-2');
     expect(t).toContain('px-8');
@@ -76,13 +76,13 @@ describe('buttonClasses end-to-end', () => {
 });
 
 describe('sizes that carry their own shape (2026-09-16)', () => {
-  // WHY: Tailwind picks between rounded-full and rounded-lg by CSS source order,
-  // and rounded-lg is emitted later — so a size's rounded-full only wins if the
-  // base rounded-lg is REMOVED, not merely listed first. Same for font weight.
+  // WHY: Tailwind picks between rounded-full and the base radius by CSS source order,
+  // so a size's rounded-full only wins if the base radius (rounded-control, the
+  // theme's control corner) is REMOVED, not merely listed first. Same for font weight.
   it('xl is a semibold pill: the base radius and weight are replaced', () => {
     const t = tokens(buttonClasses('secondary', 'xl', 'w-full'));
     expect(t).toContain('rounded-full');
-    expect(t).not.toContain('rounded-lg');
+    expect(t).not.toContain('rounded-control');
     expect(t).toContain('font-semibold');
     expect(t).not.toContain('font-medium');
     expect(t).toEqual(expect.arrayContaining(['text-base', 'px-6', 'py-3', 'w-full']));
@@ -91,7 +91,7 @@ describe('sizes that carry their own shape (2026-09-16)', () => {
   it('icon-xs is round and keeps the touch-size hit area', () => {
     const t = tokens(buttonClasses('raised', 'icon-xs', 'absolute top-1 right-1'));
     expect(t).toContain('rounded-full');
-    expect(t).not.toContain('rounded-lg');
+    expect(t).not.toContain('rounded-control');
     expect(t).toContain('coarse-hit');
     expect(t).toEqual(expect.arrayContaining(['w-4', 'h-4', 'bg-panel', 'border-edge', 'absolute']));
   });
@@ -99,7 +99,8 @@ describe('sizes that carry their own shape (2026-09-16)', () => {
   it('sizes without their own shape still get the base radius and weight', () => {
     for (const size of ['sm', 'md', 'lg', 'icon', 'icon-sm'] as const) {
       const t = tokens(buttonClasses('primary', size));
-      expect(t).toContain('rounded-lg');
+      // The theme's control corner (decisions "Control shape follows the theme").
+      expect(t).toContain('rounded-control');
       expect(t).toContain('font-medium');
     }
   });

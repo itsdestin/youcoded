@@ -1,0 +1,9 @@
+/* Design-guide review (2026-09-24): LIST ROWS "LINES BETWEEN ROWS".
+   Every list of choices (Settings, menus, switchers, dropdowns) uses one row
+   treatment: flat rows split by a thin line, no line after the last row. Hover still highlights the row under the pointer.
+   Workbench-only: ?proposal=shape-round,cards-raised,lists-lines. */
+@layer proposal {
+:is(.stepped-hover[class*="bg-inset/50"], [role=menu] [role=menuitem], [role=listbox] [role=option], [role=dialog] button.w-full.rounded-md.border, .group\/row):not(.border-accent) { background: transparent !important; border-radius: 0 !important; border-width: 0 0 1px 0 !important; border-style: solid !important; border-color: var(--edge-dim) !important; margin-block: 0 !important; }
+:is(.stepped-hover[class*="bg-inset/50"], [role=menu] [role=menuitem], [role=listbox] [role=option], [role=dialog] button.w-full.rounded-md.border, .group\/row):not(.border-accent):last-child { border-bottom-color: transparent !important; }
+:has(> :is(.stepped-hover[class*="bg-inset/50"], [role=menu] [role=menuitem], [role=listbox] [role=option], [role=dialog] button.w-full.rounded-md.border, .group\/row):not(.border-accent)) { gap: 0 !important; }
+}

@@ -8,7 +8,7 @@
 
 import React from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, CloseButton } from "../ui";
+import { Button, CloseButton, FieldError } from "../ui";
 import { useAccount } from "../../state/account-context";
 import { useEscClose } from "../../hooks/use-esc-close";
 
@@ -73,8 +73,9 @@ export default function SignInPromptModal({ open, onClose, title, message }: Pro
             </p>
           )}
           {/* knowledge-debt #6: surface a failed sign-in instead of silently swallowing it. */}
+          {/* WHY FieldError (guide: no red/coloured body text for messages) */}
           {signInError && !signInPending && (
-            <p className="text-xs text-destructive-fg text-center">Sign-in failed: {signInError}. Try again.</p>
+            <FieldError as="p" className="text-center">Sign-in failed: {signInError}. Try again.</FieldError>
           )}
         </div>
       </OverlayPanel>

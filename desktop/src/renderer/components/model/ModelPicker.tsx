@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { Button, ErrorState, fieldClasses, SectionLabel, Tooltip } from '../ui';
 import { FIELD_TRIGGER_STATES } from '../ui/field';
 import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
@@ -48,6 +48,7 @@ import { matchesQuery } from '../../../shared/text-match';
 // shared window every other long list in the app uses (render-cost
 // consolidation 2026-09-18).
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
+import { useScrollFade } from '../../hooks/useScrollFade';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
@@ -260,7 +261,9 @@ function Chip({ active, onClick, children }: {
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{label}</span>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label={label}>{children}</div>
     </div>
   );
@@ -277,7 +280,11 @@ export default function ModelPicker({
   defaultOpen = false,
   layout = 'floating',
   pinSelectedToTop = false,
+  hideSearch = false,
   emptyLabel = 'Choose a model…',
+  triggerClassName,
+  onClear,
+  clearLabel = 'No selection',
 }: {
   value: ModelChoice | null;
   /** What the CLOSED button reads when nothing is picked. Defaults to the
@@ -331,13 +338,42 @@ export default function ModelPicker({
    *  to collapse back to, since the panel has no closed state to return to.
    *  Only ModelPickerPopup uses 'inline', always paired with `defaultOpen`:
    *  without a trigger, `defaultOpen` is the only way the panel ever opens. */
-  layout?: 'floating' | 'inline';
+  layout?: 'floating' | 'inline' | 'flat';
+  // 'flat' (model picker redesign, 2026-09-29; ui-labels-batch#LB-7: "the model
+  // search element feels oddly integrated" and "a lot of wasted space"): like
+  // 'inline', but with no box of its own — the search field, the rows and the
+  // Manage models footer sit straight on the host popup, the way the sessions
+  // menu and Resume lay out search + list. Rows are plain (no side margin), the
+  // current model a light accent tint like the sessions menu, and the list fades
+  // at its edges instead of ending on a ruled line.
   /** Pins the current `value` to the TOP of the favourites view, even when it
    *  isn't favourited — so a menu that opens straight to the list (`layout:
    *  'inline'`) shows what's active first, rather than only ever showing
    *  favourites and leaving the current pick to `search` for. No effect while
    *  searching (the whole catalogue is already the result, unordered). */
   pinSelectedToTop?: boolean;
+  /** No search field; every model is listed (not just favourites). For a list
+   *  that is always short — a Claude Code session only ever has its four models
+   *  (ui-model-picker#MP-1: "for claude code, i don't think we should bother
+   *  showing the search all models menu"). */
+  hideSearch?: boolean;
+  /** Card-levels trial (2026-09-27): overrides the trigger's `bg-well
+   *  border-edge` deepening (see the WHY below, at the className). Pass ''
+   *  to fall back to the shared FIELD default (`bg-inset border-edge-dim`) —
+   *  the level-2 nested-box look — on a host whose OWN card is already the
+   *  translucent level-1 `bg-inset/50` (General page), where the deepening
+   *  isn't needed. Omitted everywhere else so the ~20 other call sites,
+   *  including the ones the deepening was written for, don't move. */
+  triggerClassName?: string;
+  /** Round 4 (2026-09-28) — Destin: Specialists' tier pickers need their own
+   *  clear, in the list rather than a separate button beside it ("each can be
+   *  cleared individually"). Opt-in and additive: omitted, the picker behaves
+   *  exactly as before at every other call site. When set, a row reading
+   *  `clearLabel` is pinned first in the open list; picking it calls `onClear`
+   *  instead of `onSelect` and closes the panel the same way a real pick does. */
+  onClear?: () => void;
+  /** Only used with `onClear`. Defaults to "No selection". */
+  clearLabel?: string;
 }) {
   // WHY (one-core R4-1, seam S9; remote-access roadmap "the model picker offers models the browser cannot run"): the app's own
   // engine runs only where the screen's `nativeSessions` capability says so. Over remote access (and on Android) the picker used
@@ -381,6 +417,12 @@ export default function ModelPicker({
   // The scroll root the reveal window measures against and resets to the top
   // — the `overflow-y-auto` list div, not the outer panel.
   const listRef = useRef<HTMLDivElement>(null);
+  // The list's edge fade is CSS (.scroll-mask, every layout since 2026-10-15); this hook
+  // only feeds it on a browser without scroll-driven animations.
+  useScrollFade(listRef);
+  const flat = layout === 'flat';
+  // 'flat' behaves like 'inline' everywhere but its look: no trigger, no closed state.
+  const embedded = layout === 'inline' || flat;
   const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -398,7 +440,7 @@ export default function ModelPicker({
     // on the panel's clipping.
     // WHY first, before the trigger check (2026-09-26): the 'inline' layout
     // draws no trigger, so this used to be skipped there and "Filter and sort"
-    // in the Model & Effort dialog opened nothing (found by `explore`).
+    // in the Model & effort dialog opened nothing (found by `explore`).
     const pill = pillRef.current?.getBoundingClientRect();
     if (pill) {
       setFilterPos({
@@ -424,7 +466,7 @@ export default function ModelPicker({
     const spaceAbove = r.top - edge;
     const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
     setPanelPos({
-      // WHY: A New Session menu can put this field near the bottom of a short
+      // WHY: A New session menu can put this field near the bottom of a short
       // window. Choose the side with usable room instead of forcing a panel
       // below the field where the viewport clips its search and model rows.
       ...(opensUpward ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
@@ -539,7 +581,7 @@ export default function ModelPicker({
   // layout the list IS the dialog's content, with no closed state (see the
   // trigger below), so there Escape only closes the filter and otherwise
   // reaches the dialog itself.
-  useEscClose(open && (layout !== 'inline' || filterOpen), useCallback(() => {
+  useEscClose(open && (!embedded || filterOpen), useCallback(() => {
     if (filterOpen) setFilterOpen(false); else setOpen(false);
   }, [filterOpen]));
 
@@ -564,7 +606,7 @@ export default function ModelPicker({
     // (Effort, Fast mode, even Close needed two clicks). Found by `explore`.
     // Only the filter popover still closes on an outside press there.
     if (!open) return;
-    const inline = layout === 'inline';
+    const inline = embedded;
     const onDown = (e: Event) => {
       const t = e.target as Node;
       if (triggerRef.current?.contains(t)) return;
@@ -650,7 +692,8 @@ export default function ModelPicker({
   );
 
   const q = search.trim().toLowerCase();
-  const searching = q.length > 0;
+  // hideSearch lists everything, the same as a search that matched all.
+  const searching = q.length > 0 || hideSearch;
 
   // THE view rule: favourites until you type, then the whole catalogue.
   // The local-models tip's moment: the picker opens and nothing in it runs on
@@ -788,7 +831,7 @@ export default function ModelPicker({
     // own text colour. Destin, review deck 2026-08-31 (MB-2), choosing between
     // marks-only, marks-plus-current, and every-row-coloured: a list of tinted
     // names reads as decoration rather than meaning.
-    const markColor = selected ? undefined : brand?.color;
+    const markColor = selected && !flat ? undefined : brand?.color;
     return (
       // Two levels now: the OUTER div keeps the row's original left/right
       // margin (px-2, unhighlighted, same on every row) — the accent fill on
@@ -796,8 +839,8 @@ export default function ModelPicker({
       // (2026-09-07 feedback). The INNER div is what actually carries the
       // fill, sized to the space between those margins, so it covers the
       // favourite star's column too instead of stopping at the name button.
-      <div key={e.key} className="group/model flex items-center px-2">
-        <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${selected ? 'bg-accent' : ''}`}>
+      <div key={e.key} className={`group/model flex items-center ${flat ? '' : 'px-2'}`}>
+        <div className={`flex-1 min-w-0 flex items-center gap-1 rounded-md ${selected ? (flat ? 'bg-accent/15' : 'bg-accent') : ''}`}>
           <Tooltip text={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : ''}>
           <button
             type="button"
@@ -810,14 +853,14 @@ export default function ModelPicker({
             className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
               e.unavailable
                 ? 'text-fg-faint cursor-default'
-                : selected ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'
+                : selected ? (flat ? 'text-fg font-medium' : 'text-on-accent font-medium') : 'text-fg-2 hover:bg-inset'
             }`}
           >
             {/* The company mark. A fixed-width box whether or not a mark resolves,
                 so an unrecognised model's name still lines up with its neighbours'
                 instead of hanging one glyph-width to the left. */}
             <span
-              className={`w-[13px] shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
+              className={`w-3.25 shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
               style={markColor ? { color: markColor } : undefined}
             >
               {brand?.icon
@@ -829,7 +872,7 @@ export default function ModelPicker({
               {/* Divider dot + source, inline per row — this is what replaced the
                   per-provider sections. One flat list reads the same at 4 models
                   or 400. */}
-              <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
+              <span className={selected && !flat ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
             </span>
           </button>
           </Tooltip>
@@ -887,7 +930,7 @@ export default function ModelPicker({
             aria-pressed={fav}
             aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
             className={`shrink-0 w-6 h-6 mr-1 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
-              selected
+              selected && !flat
                 ? 'text-on-accent opacity-100'
                 : fav
                   ? 'text-accent opacity-100'
@@ -909,7 +952,7 @@ export default function ModelPicker({
           collapse back to, so a row that only echoes `value` and toggles
           `open` (to no visible effect worth keeping) is redundant with the
           selected row already highlighted in the list below. */}
-      {layout !== 'inline' && (
+      {!embedded && (
       <button
         ref={triggerRef}
         type="button"
@@ -930,8 +973,11 @@ export default function ModelPicker({
         // on a `bg-inset` card, so the trigger was the same fill as the surface
         // behind it and read as a label rather than a control (reported
         // 2026-07-31 with a screenshot). One step deeper on the surface ladder
-        // fixes it without disturbing the other ~25 fields.
-        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge ${FIELD_TRIGGER_STATES}`)}
+        // fixes it without disturbing the other ~25 fields. `triggerClassName`
+        // (card-levels trial, 2026-09-27) lets a caller on a TRANSLUCENT
+        // level-1 card (`bg-inset/50`, not this opaque `bg-inset` case) opt
+        // back into the shared default instead — see its own doc comment.
+        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between ${triggerClassName ?? 'bg-well border-edge'} ${FIELD_TRIGGER_STATES}`)}
       >
         {/* The current model's company mark, in its brand colour — the same
             pairing the status-bar chip shows, so the control you set it from and
@@ -956,7 +1002,7 @@ export default function ModelPicker({
         // why there are two hosts for the identical content.
         const panelBody = (
           <>
-            <div className="p-2 border-b border-edge-dim">
+            {!hideSearch && <div className={flat ? 'pb-2' : 'p-2 border-b border-edge-dim'}>
               <SearchFilterPill
                 ref={pillRef}
                 value={search}
@@ -967,9 +1013,15 @@ export default function ModelPicker({
                 filterOpen={filterOpen}
                 onToggleFilter={() => setFilterOpen((f) => !f)}
               />
-            </div>
+            </div>}
 
-            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto py-1.5">
+            <div
+              ref={listRef}
+              className={flat ? 'scroll-mask overflow-y-auto scrollbar-none min-h-0 overscroll-contain' : 'scroll-mask flex-1 min-h-0 overflow-y-auto py-1.5'}
+              // WHY 238px: six rows (36px) and a half, so a cut-off row says
+              // "more below" — the sessions menu's rule (ui-quick-fixes#QF-1).
+              style={flat ? { maxHeight: 238 } : undefined}
+            >
               {!loaded ? (
                 <p className="text-xs text-fg-muted text-center py-4">Loading…</p>
               ) : (
@@ -1007,6 +1059,24 @@ export default function ModelPicker({
                       >
                         Add provider
                       </Button>
+                    </div>
+                  )}
+                  {/* "No selection" — round 4, opt-in via `onClear`: a plain row,
+                      same shape as a real pick, pinned above the list so a tier
+                      can be cleared without a separate button. */}
+                  {onClear && (
+                    <div className="group/model flex items-center px-2">
+                      <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${!value ? 'bg-accent' : ''}`}>
+                        <button
+                          type="button"
+                          onClick={() => { onClear(); setOpen(false); setFilterOpen(false); }}
+                          aria-pressed={!value}
+                          className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${!value ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'}`}
+                        >
+                          <span className="w-3.25 shrink-0" />
+                          <span className="truncate block min-w-0">{clearLabel}</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                   {visibleRows.map(row)}
@@ -1069,7 +1139,21 @@ export default function ModelPicker({
                 that does. A flex sibling of the scroll area (not inside it) so
                 it stays pinned as the list scrolls. Omitted when the host has
                 nowhere to send the user. */}
-            {onManageModels && (
+            {onManageModels && flat && (
+              // WHY a row that closes the list (ui-model-picker#MP-1: "i don't
+              // like how manage models is separate from the actual models"): it
+              // reads as the list's last entry — same shape, its icon in the
+              // brand-mark column so the words line up with the model names.
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onManageModels(); }}
+                className="w-full text-left text-xs rounded-md px-2 py-2 flex items-center gap-2 text-fg-muted hover:bg-inset hover:text-fg transition-colors"
+              >
+                <span className="w-3.25 shrink-0 inline-flex items-center justify-center"><ModelIcon className="w-3 h-3" /></span>
+                Manage models…
+              </button>
+            )}
+            {onManageModels && !flat && (
               <div className="border-t border-edge shrink-0">
                 <button
                   type="button"
@@ -1083,6 +1167,7 @@ export default function ModelPicker({
           </>
         );
 
+        if (flat) return <div ref={panelRef} className="flex flex-col">{panelBody}</div>;
         return layout === 'inline' ? (
           // In flow, right under the trigger — pushes whatever the host draws
           // below it (ModelPickerPopup's Effort/Fast sections) down instead of
@@ -1167,11 +1252,16 @@ export default function ModelPicker({
             </Chip>
           </Group>
           {activeFilters > 0 && (
-            <button
-              type="button"
+            // WHY outlined (guide: secondary actions are outlined, never bare
+            // text): was a hand-rolled text-fg-muted button.
+            <Button
+              variant="secondary"
+              size="sm"
+              className="self-start"
               onClick={() => { setSources(new Set()); setLocalOnly(false); }}
-              className="self-start text-3xs text-fg-muted hover:text-fg"
-            >Clear filters</button>
+            >
+              Clear filters
+            </Button>
           )}
         </div>,
         document.body,

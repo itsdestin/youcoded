@@ -15,6 +15,27 @@ export type ScreenEntry = {
   /** A practice session to select before opening (fixtures/sessions.ts ids: wb-2 is the
    *  native-runtime session that seeded conversations, error cards and `stalled` replay into). */
   session?: string;
+  /** Milliseconds to wait after the screen shows before its picture — for a state that
+   *  CHANGES on its own (a notice that used to clear itself after 6s). Keep it rare: it is
+   *  slow by design. */
+  waitMs?: number;
+  /** "Open this first": steps `shoot` replays once the screen shows, before its picture — a
+   *  button label to click (`'Your status: Online'`), or a journey step (`{ do: 'key', key:
+   *  'ArrowDown' }`). WHY (games-social friction, proposal 9): an opened menu or folded card
+   *  otherwise needs a workbench-only switch in production code just to be photographed. */
+  open?: readonly (string | { readonly do: string; readonly [k: string]: unknown })[];
+  /** The screen mark this state ends on, when it is not its own plain name — a dialog that
+   *  hands over to another (the ticket → Contribute) shows the OTHER one's mark. `shoot`
+   *  checks this mark instead (submit-ticket friction, proposal 18). */
+  mark?: string;
+  /** `'after'`: a state that opens something only the new code has (a switch just added), so a
+   *  before/after skips it on the before side instead of reporting it NOT TAKEN (close-session
+   *  friction, proposal 20). Remove it once the before side has the state too. */
+  newIn?: 'after';
+  /** Why Escape here steps back INSIDE the popup instead of closing it (a wizard that owns its
+   *  own ✕ and Escape, inside Backup & sync). `shoot --check` then expects every layer to stay
+   *  open after Escape, rather than the top one to close. */
+  escapeStepsBack?: string;
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };

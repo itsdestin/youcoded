@@ -65,6 +65,14 @@ describe('applyLookOverrides', () => {
       .toBe(GLASS_PRESETS.clear['panels-opacity']);
   });
 
+  it('sets particles for every theme, keeping the theme\'s own particle tuning', () => {
+    // AQ-2 (2026-10-01): particles moved out of the removed per-theme editor.
+    const snowy = { ...wallpaperTheme, effects: { particles: 'snow', 'particle-count': 40 } } as unknown as LoadedTheme;
+    const out = applyLookOverrides(snowy, { particles: 'none' });
+    expect(out.effects).toEqual({ particles: 'none', 'particle-count': 40 });
+    expect(applyLookOverrides(flatTheme, { particles: 'ember' }).effects?.particles).toBe('ember');
+  });
+
   it('never invents a background for a theme without a wallpaper or gradient', () => {
     const out = applyLookOverrides(flatTheme, { glass: 'frosted' });
     expect(out.background).toBeUndefined();
@@ -77,6 +85,9 @@ describe('parseLookOverrides', () => {
       chromeStyle: 'float', glass: 'shiny', bubbleStyle: 'pill', inputStyle: 42, roundness: 3,
       glassCustom: { 'panels-blur': 5, 'panels-opacity': 'x', bogus: 1 },
     })).toEqual({ chromeStyle: 'float', bubbleStyle: 'pill', glassCustom: { 'panels-blur': 5 } });
+    // 'custom' particles need the theme's own picture, so they are not a global choice.
+    expect(parseLookOverrides({ particles: 'snow' })).toEqual({ particles: 'snow' });
+    expect(parseLookOverrides({ particles: 'custom' })).toEqual({});
   });
 
   it('reads anything that is not an object as no overrides', () => {

@@ -37,6 +37,10 @@ export interface ChatMessage {
 export interface GameState {
   connected: boolean;
   partyError: string | null;
+  /** Incognito could not connect hidden, and why (final review F4): 'unsupported' = the server said it
+   *  cannot hide this device (an older server); 'unreachable' = the check could not be made and is being
+   *  retried. null otherwise. Lets the friends card say only what is true. */
+  hiddenBlocked: 'unsupported' | 'unreachable' | null;
   username: string | null;
   onlineUsers: OnlineUser[];
   screen: GameScreen;
@@ -104,6 +108,7 @@ export type GameAction =
   | { type: 'PARTY_DISCONNECTED'; code?: number; reason?: string }
   | { type: 'PARTY_ERROR'; message: string }
   | { type: 'PARTY_ERROR_CLEARED' }
+  | { type: 'PRESENCE_HIDDEN_BLOCKED'; why: 'unsupported' | 'unreachable' }
   | { type: 'PRESENCE_UPDATE'; online: OnlineUser[] }
   | { type: 'USER_JOINED'; user: OnlineUser }
   | { type: 'USER_LEFT'; id: string }
@@ -171,6 +176,7 @@ export function createInitialGameState(): GameState {
   return {
     connected: false,
     partyError: null,
+    hiddenBlocked: null,
     username: null,
     onlineUsers: [],
     screen: 'setup',

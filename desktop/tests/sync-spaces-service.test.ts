@@ -59,6 +59,10 @@ const h = vi.hoisted(() => {
     ensureEntry: vi.fn(),
     setDisplay: vi.fn(),
     setStopped: vi.fn(),
+    removedMarks: [] as string[],
+    markFails: false,
+    remotes: {} as Record<string, string>,
+    readGate: null as null | (() => Promise<void>),
     ensureRemoteFails: false,
     autoAddSpace: false,
     // When true, the fake SpaceManager reports enabled at construction time —
@@ -117,13 +121,15 @@ vi.mock('../src/main/sync-spaces/project-registry', () => ({
   ensureProjectEntry: (_root: string, input: any) => { h.ensureEntry(input); },
   setProjectDisplayName: async (_r: string, name: string, repo: string, dn: string) => { h.setDisplay({ name, repo, dn }); },
   setProjectStopped: async (_r: string, name: string, repo: string) => { h.setStopped({ name, repo }); },
+  markProjectRemoved: async (_r: string, name: string) => { if (h.markFails) throw new Error('EIO'); h.removedMarks.push(name); },
+  readRemovedProjects: async () => { const marks = new Set(h.removedMarks); await h.readGate?.(); return marks; },
 }));
 vi.mock('../src/main/sync-spaces/space-manager', () => ({
   SpaceManager: class {
     private enabled = h.initialEnabled; // read at construction — see h.initialEnabled comment
     isEnabled(): boolean { return this.enabled; }
     setEnabled(v: boolean): void { this.enabled = v; }
-    remoteFor(): string | null { return null; }
+    remoteFor(id: string): string | null { return h.remotes[id] ?? null; }
     // Honest-state-machine (2026-07-22): the service records per-space sync
     // evidence on every real 'synced' broadcast and exposes it on status.
     private lastSync: Record<string, number> = {};
@@ -216,6 +222,7 @@ describe('sync-spaces service transition serialization', () => {
     // Disable while the start is suspended inside addSpace. Serialization
     // means this must NOT stop the engine yet.
     const p2 = svc.syncSpacesEnable(false);
+    // settle (negative assertion): the queued disable must not stop the engine yet.
     await new Promise((r) => setTimeout(r, 10));
     expect(e1.stopped).toBe(false);
     // Release the start; it completes, THEN the queued disable stops it.
@@ -333,8 +340,7 @@ describe('sync-spaces service transition serialization', () => {
 
     let resolved = false;
     const p = svc.syncSpacesSyncNowAwaited('project:beta', 10_000).then(() => { resolved = true; });
-    await new Promise((r) => setTimeout(r, 20)); // let the call reach the engine
-    expect(engine.syncSpace).toHaveBeenCalled();
+    await vi.waitFor(() => expect(engine.syncSpace).toHaveBeenCalled());
     expect(resolved).toBe(false); // parked awaiting the push — must not have resolved
 
     releaseSync();
@@ -605,6 +611,7 @@ describe('sync-spaces service transition serialization', () => {
     h.registry = [{ schemaVersion: 1, name: 'alpha', repoName: 'r-alpha', displayName: 'alpha', state: 'active', updatedAt: 1 }];
     const before = [...h.projects];
     h.hub.opts.onEvent({ type: 'connected' });
+    // settle (negative assertion): reconnecting must not create a project.
     await new Promise((r) => setTimeout(r, 20));
     expect(h.projects).toEqual(before); // no new create
     void svc;
@@ -669,6 +676,91 @@ describe('sync-spaces service transition serialization', () => {
     expect(h.engines[0].synced).toContain('personal'); // pushed
   });
 
+  it('syncSpacesRemoveProject stops it everywhere, marks it removed, and keeps the folder', async () => {
+    h.autoAddSpace = true; h.projects = ['app']; h.removedMarks = [];
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    const engine = h.engines[0];
+    expect(svc.isRemovedProject('app')).toBe(false);
+    await svc.syncSpacesRemoveProject('app');
+    expect(h.setStopped).toHaveBeenCalledWith(expect.objectContaining({ name: 'app' })); // stop on every device
+    expect(h.removedMarks).toEqual(['app']);                    // off every device's lists
+    expect(svc.isRemovedProject('app')).toBe(true);             // this device's lists, at once
+    expect(engine.removed).toContain('project:app');            // detached here, folder kept
+    expect(engine.synced).toContain('personal');                // pushed to the other devices
+    const st = await svc.syncSpacesStatus();
+    expect(st.removed.map((r: any) => r.name)).toEqual(['app']);
+  });
+
+  // Final review F7: a marker that cannot be written must not leave the stop half-done.
+  it('when the removed marker cannot be written, the stop is still pushed and this device detached, and it says so', async () => {
+    h.autoAddSpace = true; h.projects = ['app']; h.removedMarks = []; h.markFails = true;
+    try {
+      const svc = await freshService();
+      await svc.syncSpacesEnable(true);
+      const engine = h.engines[0];
+      const res = await svc.syncSpacesRemoveProject('app');
+      expect(res).toEqual({ ok: false, error: "Syncing stopped on all your devices, but the project couldn't be taken off your lists. Try again." });
+      expect(engine.removed).toContain('project:app');   // not left attached here
+      expect(engine.synced).toContain('personal');       // the stop reaches the other devices
+      expect(svc.isRemovedProject('app')).toBe(false);
+      h.markFails = false;                               // Remove again finishes the job
+      expect(await svc.syncSpacesRemoveProject('app')).toEqual({ ok: true });
+      expect(svc.isRemovedProject('app')).toBe(true);
+    } finally { h.markFails = false; }
+  });
+
+  it('a name sync cannot use is refused before anything is written', async () => {
+    h.autoAddSpace = true; h.projects = ['app'];
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    h.setStopped.mockClear();
+    const res = await svc.syncSpacesRemoveProject('../escape');
+    expect(res.ok).toBe(false);
+    expect(h.setStopped).not.toHaveBeenCalled();
+    expect(h.engines[0].removed).toEqual([]);
+  });
+
+  // Final review F31: a marker read that began before a remove must not bring the project back.
+  it('a slow read of the markers that started before a remove does not undo it', async () => {
+    h.autoAddSpace = true; h.projects = ['app']; h.removedMarks = [];
+    let release!: () => void;
+    h.readGate = () => new Promise<void>((r) => { release = r; });
+    try {
+      const svc = await freshService();           // its startup read of the markers is now held open
+      h.readGate = null;
+      await svc.syncSpacesEnable(true);
+      await svc.syncSpacesRemoveProject('app');
+      expect(svc.isRemovedProject('app')).toBe(true);
+      release();                                  // the old read (no 'app' in it) lands last
+      await new Promise((r) => setTimeout(r, 0));
+      expect(svc.isRemovedProject('app')).toBe(true);
+    } finally { h.readGate = null; }
+  });
+
+  // Final review F32: no guessed GitHub address — it 404s when the backup was never made.
+  it('a removed project links to GitHub only when this device knows its backup', async () => {
+    h.autoAddSpace = true; h.projects = ['app', 'notes']; h.removedMarks = [];
+    h.remotes = { personal: 'https://github.com/me/youcoded-personal.git', 'project:app': 'https://github.com/me/yc-app.git' };
+    try {
+      const svc = await freshService();
+      await svc.syncSpacesEnable(true);
+      await svc.syncSpacesRemoveProject('app');
+      await svc.syncSpacesRemoveProject('notes');
+      const st = await svc.syncSpacesStatus();
+      expect(st.removed).toEqual([
+        { name: 'app', displayName: 'app', githubUrl: 'https://github.com/me/yc-app' },
+        { name: 'notes', displayName: 'notes', githubUrl: null },
+      ]);
+    } finally { h.remotes = {}; }
+  });
+
+  it('a project removed on another device is picked up at startup', async () => {
+    h.projects = ['app']; h.removedMarks = ['app'];
+    const svc = await freshService();
+    await vi.waitFor(() => expect(svc.isRemovedProject('app')).toBe(true));
+  });
+
   it('status spaces carry displayName + state for synced projects', async () => {
     h.autoAddSpace = true; h.projects = ['app'];
     h.registry = [{ schemaVersion: 1, name: 'app', repoName: 'r-app', displayName: 'Cool App', state: 'active', updatedAt: 1 }];
@@ -676,8 +768,8 @@ describe('sync-spaces service transition serialization', () => {
     await svc.syncSpacesEnable(true);
     const st = await svc.syncSpacesStatus();
     const row = st.spaces.find((s: any) => s.id === 'project:app');
-    expect(row.displayName).toBe('Cool App');
-    expect(row.state).toBe('active');
+    expect(row!.displayName).toBe('Cool App');
+    expect(row!.state).toBe('active');
   });
 
   // ---- Lease bridge (Task 8): hubLeaseRequest passthrough + lease-event facade ----

@@ -410,7 +410,7 @@ describe.skipIf(!hasGit())('git-service (integration, real git)', () => {
   // work" convention). locate() used to resolve the repo root from the fixed
   // projectRoot, so `git status`/`git rev-list` always ran against the OUTER
   // repo — which can never see a path it gitignores — silently hiding real
-  // changes (and the Review Changes button) for every file under a worktree.
+  // changes (and the Review changes button) for every file under a worktree.
   it('fileStatus: a file inside a gitignored linked worktree resolves against the WORKTREE\'s own repo, not the outer project repo', async () => {
     await fs.promises.writeFile(path.join(root, '.gitignore'), 'worktrees/\n');
     sh(root, ['add', '.gitignore']);

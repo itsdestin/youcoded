@@ -138,7 +138,7 @@ describe('friendlyToolDisplay — malformed (non-string) inputs never leak [obje
 
   it('TaskUpdate: object-valued taskId is treated as absent, not interpolated', () => {
     const d = friendlyToolDisplay(tool('TaskUpdate', { status: 'completed', taskId: { bad: true } }));
-    expect(d.label).toBe('Task Completed');
+    expect(d.label).toBe('Task completed');
     expect(d.detail).toBe('');
   });
 

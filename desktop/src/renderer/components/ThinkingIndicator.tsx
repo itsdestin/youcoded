@@ -290,7 +290,7 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
   const label = stallWarning
     ? `This is taking a while, something may be wrong...${
         stallWarning.willRetry
-          ? secondsLeft > 0 ? ` Retrying in ${secondsLeft}s...` : ' Retrying...'
+          ? secondsLeft > 0 ? ` Trying again in ${secondsLeft}s...` : ' Trying again...'
           : ''
       }`
     : smoothedPrefill

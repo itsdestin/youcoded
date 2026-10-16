@@ -30,7 +30,7 @@ export type ResumeHandler = (
 export function useResumeOptions(defaultModel?: string, defaultSkipPermissions?: boolean) {
   const [model, setModel] = useState<string>(defaultModel || 'sonnet');
   const [dangerous, setDangerousRaw] = useState(defaultSkipPermissions || false);
-  // First-time Skip Permissions warning (spec §5).
+  // First-time Skip permissions warning (spec §5).
   const { gate, dialog } = useFirstTimeGate('skip-permissions');
   // A native resume ALWAYS goes through the model picker (Destin's ruling:
   // never auto-launch a binding). OWNED by the conversation it was picked for:
@@ -55,7 +55,7 @@ export function useResumeOptions(defaultModel?: string, defaultSkipPermissions?:
   };
 
   /** Fresh choices for `s` (or the app defaults with no row): its own model,
-   *  the default Skip Permissions, same window, no native pick. */
+   *  the default Skip permissions, same window, no native pick. */
   const resetFor = (s: PastSession | null) => {
     setModel(s ? modelForRow(s) : (defaultModel || 'sonnet'));
     setDangerousRaw(defaultSkipPermissions || false);
@@ -79,12 +79,12 @@ export function useResumeOptions(defaultModel?: string, defaultSkipPermissions?:
     else setModel(c.alias);
   };
 
-  // Turning Skip Permissions ON goes through the first-time warning; Cancel
+  // Turning Skip permissions ON goes through the first-time warning; Cancel
   // there leaves it off. Turning it off never asks.
   const setDangerous = (next: boolean) => (next ? gate(() => setDangerousRaw(true)) : setDangerousRaw(false));
 
   /** Resume `s` through `onResume`; resolves to whether it launched. Native
-   *  sessions ignore the Claude model and Skip Permissions (no PTY), but the
+   *  sessions ignore the Claude model and Skip permissions (no PTY), but the
    *  row's provider and its picked binding route App down the native path. */
   const resume = async (s: PastSession, onResume: ResumeHandler): Promise<boolean> => {
     setResumingId(s.sessionId);
@@ -126,7 +126,9 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
         {/* ONE model control for both runtimes, SCOPED to the row's own
             runtime — a resume cannot move a conversation across runtimes. */}
         <div onClick={(e) => e.stopPropagation()}>
-          <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+          {/* WHY: field captions drop the spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals). */}
+          <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
           <ModelPicker
             // One picker per conversation: it fills in `prefill` only once per
             // mount, so without the key only the FIRST conversation shown got
@@ -142,17 +144,18 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
           />
         </div>
 
-        {/* Skip Permissions is Claude-Code-only — a native session has no PTY
+        {/* Skip permissions is Claude-Code-only — a native session has no PTY
             permission flow. */}
         {s.provider !== 'native' && (
           <>
             <div className="flex items-center justify-between">
-              <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
-                Skip Permissions
+              {/* WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+              <label className="text-xs font-medium text-fg-muted inline-flex items-center">
+                Skip permissions
                 <SkipPermissionsInfoTooltip />
               </label>
               {/* "danger" tone, so themes can restyle the red. */}
-              <Toggle checked={options.dangerous} onChange={options.setDangerous} tone="danger" aria-label="Skip Permissions" />
+              <Toggle checked={options.dangerous} onChange={options.setDangerous} tone="danger" aria-label="Skip permissions" />
             </div>
             {options.dangerous && <SkipPermissionsCaption />}
           </>
@@ -160,8 +163,9 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
 
         {detachAvailable && (
           <div className="flex items-center justify-between">
-            <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Launch in New Window</label>
-            <Toggle checked={options.newWindow} onChange={options.setNewWindow} aria-label="Launch in New Window" />
+            {/* WHY "Launch in new window": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+            <label className="text-xs font-medium text-fg-muted">Launch in new window</label>
+            <Toggle checked={options.newWindow} onChange={options.setNewWindow} aria-label="Launch in new window" />
           </div>
         )}
 
@@ -174,7 +178,7 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
           disabled={nativeNeedsPick || busy}
           className="w-full py-1.5"
         >
-          {busy ? 'Resuming…' : dangerous ? 'Resume (Dangerous)' : 'Resume Session'}
+          {busy ? 'Resuming…' : dangerous ? 'Resume (dangerous)' : 'Resume session'}
         </Button>
       </div>
     </div>

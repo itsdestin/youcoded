@@ -7,13 +7,15 @@ import { ChatProvider, useChatDispatch, useChatStore, useChatState } from '../st
 import { SkillProvider } from '../state/skill-context';
 import InputBar, { InputBarHandle } from './InputBar';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
+import { EscCloseProvider } from '../hooks/use-esc-close';
+import { Dialog } from './ui/Dialog';
 import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 
 // jsdom (per this repo's vitest.config.ts) has no global setupFiles/polyfills —
-// useScrollFade (mounted unconditionally by InputBar's textarea) reaches for
-// ResizeObserver, which jsdom doesn't implement. A no-op stub is enough since
-// this test never asserts on the fade behavior itself.
+// parts of InputBar (the quick-chip row's skill picker uses useScrollFade) reach
+// for ResizeObserver, which jsdom doesn't implement. A no-op stub is enough since
+// this test never asserts on that behavior itself.
 class NoopResizeObserver {
   observe() {}
   unobserve() {}
@@ -70,6 +72,20 @@ describe('InputBar — context-menu image paste', () => {
     );
     return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
   }
+
+  // WHY (decisions "Applied from earlier rules"): dragging a file in shows the session-tab drop
+  // highlight; a drag carrying no files (a session pill) does not, and the drop clears it.
+  it('lights the file-drag highlight only for drags carrying files', () => {
+    const box = renderComposer();
+    const container = box.closest('.input-bar-container') as HTMLElement;
+    const files = { types: ['Files'], files: [] };
+    fireEvent.dragEnter(container, { dataTransfer: { types: ['text/plain'] } });
+    expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
+    fireEvent.dragEnter(container, { dataTransfer: files });
+    expect(container.querySelector('[data-file-drop-highlight]')).not.toBeNull();
+    fireEvent.drop(container, { dataTransfer: files });
+    expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
+  });
 
   it('stages the saved image path as a visible attachment', async () => {
     saveClipboardImage.mockResolvedValue('/tmp/context-paste.png');
@@ -813,6 +829,42 @@ describe('InputBar — voice prompting (T9)', () => {
     fireEvent.keyDown(document.body, { key: 'Enter' });
     expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
     expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+
+  /** The composer under the app's overlay stack, optionally with a popup open over it. */
+  async function renderUnderStack(popup: boolean) {
+    render(
+      <EscCloseProvider>
+        <ChatProvider>
+          <SkillProvider>
+            <InputBar sessionId="sess-1" provider="native" />
+          </SkillProvider>
+        </ChatProvider>
+        {popup && <Dialog open onClose={() => {}} title="Session details" noScreen="test"><p>a popup</p></Dialog>}
+      </EscCloseProvider>,
+    );
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
+    fireEvent.change(textarea, { target: { value: 'a draft' } });
+    textarea.blur();
+    return textarea;
+  }
+
+  it('with no popup open, Enter on an empty spot still sends the draft', async () => {
+    await renderUnderStack(false);
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalledTimes(1));
+  });
+
+  it('with a popup open, Enter on an empty spot belongs to the popup: nothing is sent', async () => {
+    // Destin, approved in chat 2026-10-12. It used to send the draft behind the popup and mark
+    // the key handled, so the popup's own Enter (Close session) never ran.
+    const textarea = await renderUnderStack(true);
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('a draft');
   });
 
   it('the Send BUTTON still sends while the mic is open — it never becomes a stop', async () => {

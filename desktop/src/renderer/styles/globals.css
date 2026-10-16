@@ -3,6 +3,9 @@
 @import "./mascot.css";
 @import "./motion.css";
 @import "./float-chrome.css";
+@import "./scroll-mask.css"; /* WHY here, once: every screen using .scroll-mask gets it, and the design lint knows the class. */
+@import "./frame-outline.css";
+@import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */
 
 @source "../../";
 
@@ -36,14 +39,27 @@
   --link-hover: #1E4395;
   --hl-theme: light;
   color-scheme: light;
+  /* WHY the "Round" level (decisions "Default roundness level", ui-element-review-roundness#R-1;
+     "Control shape follows the theme", button-shapes#P-3/#P-5): built-in themes use Round —
+     cards 18px, popups 24px — and every button, tab strip, filter chip and search box takes
+     --radius-control (14px here), which is derived from the theme's own medium corner so it
+     moves with a theme's shape setting and the Appearance roundness choice instead of a fixed
+     pill. Values copied from the approved preview (dev/workbench/proposals/shape-round.css).
+     A theme without its own shape gets this level too (themeRoundness reads it as 0.75). */
   --radius: 4px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 30px;
   --radius-full: 9999px;
   --radius-toggle: calc(var(--radius-md) - 2px);
+  --radius-control: calc(var(--radius-md) + 2px);
+  --radius-control-group: calc(var(--radius-control) + 3px);
+  /* WHY (decisions "Card shadow", ui-element-review-final#F-3): the one raised-card shadow,
+     "Medium" — between the soft proposal and the deep 0 8px 32px Marketplace shadow. Set once
+     here (:root), read by .card-raised. */
+  --shadow-card: 0 4px 20px rgb(0 0 0 / 0.16), 0 1px 3px rgb(0 0 0 / 0.08);
   /* Custom session-tag palette (design §"Color palette"). Fixed mid-tone hues
      that read legibly on both light and dark themes; TagChip tints them via
      color-mix so they sit on any theme surface without per-theme overrides. */
@@ -99,13 +115,15 @@
   --hl-theme: dark;
   color-scheme: dark;
   --radius: 4px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 30px;
   --radius-full: 9999px;
   --radius-toggle: calc(var(--radius-md) - 2px);
+  --radius-control: calc(var(--radius-md) + 2px);
+  --radius-control-group: calc(var(--radius-control) + 3px);
 
   /* Provider brand identity colors — vibrant dark-theme values. */
   --brand-claude:     #FB923C;
@@ -147,13 +165,15 @@
   --hl-theme: dark;
   color-scheme: dark;
   --radius: 4px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 30px;
   --radius-full: 9999px;
   --radius-toggle: calc(var(--radius-md) - 2px);
+  --radius-control: calc(var(--radius-md) + 2px);
+  --radius-control-group: calc(var(--radius-control) + 3px);
 
   /* Provider brand identity colors — vibrant dark-theme values. */
   --brand-claude:     #FB923C;
@@ -169,6 +189,56 @@
   --brand-perplexity: #2DD4BF;
 
   /* Status chips contrast tokens (Midnight) */
+  --status-auto:   #F2B33D;
+  --status-bypass: #FA8072;
+}
+
+/* ─── YouCoded / YouCoded Night ─── the default pair for new installs (theme questions
+   deck, Destin 2026-10-04). The picture, glass and font come from their JSON; this block
+   is the first paint and must match the JSON tokens (theme-builtin-sources.test.ts). */
+[data-theme="youcoded"] {
+  --canvas: #F7F0FB;
+  --panel: #EFE3F6;
+  --inset: #DCC5EB;
+  --well: #FAF5FD;
+  --accent: #8B47B8;
+  --on-accent: #FFFFFF;
+  --fg: #21152C;
+  --fg-2: #43354E;
+  --fg-dim: #50415C;
+  --fg-muted: #5D4D69;
+  --fg-faint: #887695;
+  --edge: #C9B0DB;
+  --edge-dim: #B597CCA0;
+  --scrollbar-thumb: #B596CC;
+  --scrollbar-hover: #8B47B8;
+  --link: #6A2FB0;
+  --link-hover: #4F1F8A;
+  --hl-theme: light;
+  color-scheme: light;
+  --status-auto:   #B45309;
+  --status-bypass: #BE123C;
+}
+[data-theme="youcoded-night"] {
+  --canvas: #140B1E;
+  --panel: #1F1329;
+  --inset: #2B1B39;
+  --well: #1A1024;
+  --accent: #C99BF0;
+  --on-accent: #1A0F24;
+  --fg: #F3EAF9;
+  --fg-2: #B3A8BC;
+  --fg-dim: #A397AC;
+  --fg-muted: #95899F;
+  --fg-faint: #6B5D76;
+  --edge: #45305A;
+  --edge-dim: #5A3F75A0;
+  --scrollbar-thumb: #5A3F75;
+  --scrollbar-hover: #7A5A9A;
+  --link: #CDA8FF;
+  --link-hover: #E2CCFF;
+  --hl-theme: dark;
+  color-scheme: dark;
   --status-auto:   #F2B33D;
   --status-bypass: #FA8072;
 }
@@ -207,13 +277,15 @@
   --hl-theme: light;
   color-scheme: light;
   --radius: 4px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 30px;
   --radius-full: 9999px;
   --radius-toggle: calc(var(--radius-md) - 2px);
+  --radius-control: calc(var(--radius-md) + 2px);
+  --radius-control-group: calc(var(--radius-control) + 3px);
 
   /* Provider brand identity colors — warm, rich light-theme values for Crème. */
   --brand-claude:     #C2410C;
@@ -232,7 +304,6 @@
   --status-auto:   #9A3412;
   --status-bypass: #9F1239;
 }
-
 /* ─── Provider brand colours for COMMUNITY themes ───────────────────────────
    The four blocks above key off `data-theme="<slug>"`, so they only ever match
    the four built-in themes. A community theme's slug matches none of them, so
@@ -299,7 +370,8 @@
   /* Borders */
   --color-edge: var(--edge);
   --color-edge-dim: var(--edge-dim);
-
+  --color-edge-strong: var(--edge-strong);
+  --color-edge-card: var(--edge-card);
   /* Border radius scale — maps Tailwind rounded-* utilities to theme variables */
   --radius: var(--radius);
   --radius-sm: var(--radius-sm);
@@ -308,6 +380,10 @@
   --radius-xl: var(--radius-xl);
   --radius-2xl: var(--radius-2xl);
   --radius-full: var(--radius-full);
+  /* rounded-control: the one control corner (buttons, tabs, filters, search boxes). */
+  --radius-control: var(--radius-control);
+  /* rounded-control-group: a strip that holds controls (a tab pill), concentric with them. */
+  --radius-control-group: var(--radius-control-group);
 
   /* Inline code text color */
   --color-code: var(--code);
@@ -346,10 +422,18 @@
   /* Type scale below Tailwind's text-xs (12px). The renderer had ~538 raw
      `text-[11px]` / `text-[10px]` / `text-[9px]` sites; these name the three
      real sizes so the scale is enumerable and greppable. Same pixel values —
-     naming them is a no-op visually. New rule: no arbitrary `text-[Npx]`. */
+     naming them is a no-op visually. New rule: no arbitrary `text-[Npx]`.
+     WHY 3xs is 11px, not 10px (2026-09-26): Destin approved "smallest text
+     11px" on the real screens (ui-element-review-pieces#T-1/#T-2, decisions.md
+     "Smallest text"): nothing a user has to read is smaller than 11px. It keeps
+     its own name rather than being folded into 2xs so the ~460 sites stay
+     greppable if the step ever needs to move again.
+     WHY 4xs is 11px too (2026-10-13, final review F14): the same rule — "nothing a user has
+     to read is smaller than 11px, the status bar included" (guide "Text and numbers") —
+     covers the ~20 tag, status-pill, timestamp and status-bar sites that were still 9px. */
   --text-2xs: 11px;
-  --text-3xs: 10px;
-  --text-4xs: 9px;
+  --text-3xs: 11px;
+  --text-4xs: 11px;
 
   /* 13px — the one real step Tailwind's scale is missing, sitting between
      text-xs (12) and text-sm (14). Named rather than folded because all 22
@@ -957,7 +1041,7 @@ body[data-mode="buddy-chat"] #theme-bg {
   .switch-arrival { animation: none; }
 }
 
-/* Reduce Visual Effects — the app's own toggle, set on <html> by
+/* Reduce visual effects — the app's own toggle, set on <html> by
    theme-engine.ts. Honoured alongside the OS preference, never instead of it. */
 [data-reduced-effects] .switch-arrival { animation: none; }
 
@@ -1116,114 +1200,11 @@ body[data-mode="buddy-chat"] #theme-bg {
   background-color: transparent;
 }
 
-/* Scroll-fade affordance. Applied via useScrollFade hook — hides the scrollbar
-   and overlays a panel-colored gradient at whichever edge still has hidden
-   scroll room. The hook toggles data-fade-top / data-fade-bottom based on
-   scrollTop; the pseudo-element overlays fade in/out via opacity.
-   History notes:
-   - We tried mask-image on the scroll container to match the background
-     automatically. Worked in some places (Settings, CommandDrawer) but failed
-     silently on descendants of .layer-surface OverlayPanels (ResumeBrowser,
-     StatusBar widget editor) — Chromium has clipping/repaint quirks when
-     mask-image sits under a stacking context with backdrop-filter + overflow.
-   - We tried reading the container's computed background so the fade color
-     matched translucent surfaces in wallpaper themes. Made the fade so weak
-     it was visually missing. Reverted.
-   The sticky panel-colored overlay is visible in every theme (opaque strip
-   against either opaque or translucent surrounds), and the slight color
-   mismatch on wallpaper themes is a better tradeoff than invisibility.
-   Padding-compensation: sticky pseudos default to sticking at the content-box
-   edge (inside padding). overflow clipping happens at the padding-box edge,
-   so content scrolls visibly through the padding band. --scroll-fade-pad-*
-   (set by the hook) extends the pseudo upward/downward through that band so
-   the fade starts flush with the container's outer scroll edge. */
-.scroll-fade {
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  position: relative;
-  /* min-height: 0 is REQUIRED for .scroll-fade to function when used as a flex-1 child
-     in a flex column. Chromium's flex algorithm resolves `min-height: auto` to the
-     item's content min-size in some configurations (particularly when the parent has
-     only `max-height`, not `height`), even though CSS spec says overflow != visible
-     should make min-height: auto resolve to 0. Without this rule, a flex-1 scroll-fade
-     grows to fit all its content — clientHeight == scrollHeight, overflow-y never
-     engages, and the fade pseudo-elements never activate. Symptom: scroll-fade appears
-     broken (no fade) in popups whose OverlayPanel uses max-h-[Xvh] flex flex-col
-     directly (e.g. ResumeBrowser, StatusBar widget editor). For non-flex callsites
-     (explicit max-h, natural sizing) min-height: 0 is a no-op.
-     overflow-x: hidden clips the fade pseudos to the scroll-fade's own rounded corners
-     (for callsites that give the scroll-fade element itself a border-radius, like the
-     SyncPanel log box's rounded-lg). */
-  min-height: 0;
-}
-.scroll-fade::-webkit-scrollbar { display: none; }
-
-.scroll-fade::before,
-.scroll-fade::after {
-  content: '';
-  display: block;
-  position: sticky;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-.scroll-fade::before {
-  top: 0;
-  height: 36px;
-  margin-bottom: -36px;
-  background: linear-gradient(to bottom, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade::after {
-  bottom: 0;
-  height: 36px;
-  margin-top: -36px;
-  background: linear-gradient(to top, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade[data-fade-top="true"]::before { opacity: 1; }
-.scroll-fade[data-fade-bottom="true"]::after { opacity: 1; }
-
-/* Sideways twin of .scroll-fade for a single row of chips (design guide §4.8:
-   a chip row that does not fit scrolls sideways behind an edge fade). Same hook
-   (useScrollFade sets data-fade-left / data-fade-right), same sticky-pseudo
-   trick turned 90°. First home: the Resume browser's filter chips, where at
-   390px the third chip was simply cut off with nothing saying the row moved. */
-.scroll-fade-x {
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  position: relative;
-}
-.scroll-fade-x::-webkit-scrollbar { display: none; }
-.scroll-fade-x::before,
-.scroll-fade-x::after {
-  content: '';
-  display: block;
-  position: sticky;
-  align-self: stretch;
-  flex: 0 0 24px;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-.scroll-fade-x::before {
-  left: 0;
-  margin-right: -24px;
-  background: linear-gradient(to right, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade-x::after {
-  right: 0;
-  margin-left: -24px;
-  background: linear-gradient(to left, var(--panel) 0%, transparent 100%);
-}
-.scroll-fade-x[data-fade-left="true"]::before { opacity: 1; }
-.scroll-fade-x[data-fade-right="true"]::after { opacity: 1; }
+/* The painted .scroll-fade / .scroll-fade-x bands lived here (a panel-coloured strip over the
+   edge). Retired 2026-10-15 for the one masked fade, styles/scroll-mask.css — Destin: "scrollable
+   areas should always have a scroll-fade applied that matches the fade used elsewhere in the app".
+   The history the old comment carried — mask-image once failed under .layer-surface panels in
+   2026 — was re-checked on every popup the screenshots cover before the band was removed. */
 
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */
@@ -1327,6 +1308,7 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-wallpaper] .layer-surface {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
+[data-wallpaper] .game-panel.bg-panel { /* Games pane = the popups' panel tier (final-review#GM-1, GamePanel.tsx); no blur */ background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent); }
 
 /* Marketplace rail cards — tighter shadow scoped to the rail scroll
    container. The default 0 8px 32px shadow needs ~40px of bottom
@@ -1339,6 +1321,16 @@ body[data-mode="buddy-chat"] #theme-bg {
    box-shadow declaration invalid and falling back to the default. */
 .mp-rail-scroll .layer-surface {
   box-shadow: 0 3px 10px rgba(0, 0, 0, var(--shadow-strength, 0.15));
+}
+
+/* The raised card (decisions "Card look", "Card shadow"): anything you open, install or pick
+   from a grid — Library and Marketplace cards, Project files, Pages, the skills drawer's tiles,
+   Resume's conversation cards — carries the one medium shadow. Unlayered and after
+   .layer-surface so it replaces that surface's popup shadow on a card. The rail rule above
+   still wins inside a Marketplace rail (more specific): its scroll box clips anything taller
+   (a known deviation, listed in the design guide). */
+.card-raised {
+  box-shadow: var(--shadow-card);
 }
 
 /* Opt-in panel-tier glass for elements that ARE the surface (e.g. buttons on
@@ -1390,6 +1382,11 @@ body[data-mode="buddy-chat"] #theme-bg {
 .layer-surface .bg-inset {
   background-color: var(--inset);
 }
+
+/* Surface levels (2026-09-28): a first-level box inside another is level 2 — takes its fill; a status line in a card takes the nested outline. */
+.surface-1 .surface-1 { background-color: var(--inset); }
+.surface-1 .surface-1:hover { background-color: color-mix(in srgb, var(--inset) 92%, var(--fg)); }
+.surface-1 .status-strip { box-shadow: inset 0 0 0 1px var(--edge-card); }
 
 .layer-surface .bg-accent:not(:hover) {
   background-color: var(--accent);
@@ -1561,7 +1558,7 @@ pre.yc-code code {
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:
    blur(<panels-blur>px) ... }`, and change 22 moved every drawer tile (skill
-   cards, command cards, Add Skills) onto .layer-surface. That turns a full
+   cards, command cards, Add skills) onto .layer-surface. That turns a full
    drawer into 20-40 live blur regions, each its own Chromium compositing layer,
    inside a box that is overflow-hidden AND animating `transform` — so they all
    re-rasterize per frame. On Windows Electron the compositor drops their paint
@@ -1743,7 +1740,8 @@ pre.yc-code code {
 [data-statusbar-style="minimal"] .status-bar {
   background: transparent;
   border-top: none;
-  font-size: 9px;
+  /* WHY 11px, not 9px: the text floor covers the status bar (guide "Text and numbers"). */
+  font-size: 11px;
 }
 
 /* Floating chrome — elevate all chrome bars into detached, rounded cards.
@@ -1849,7 +1847,7 @@ pre.yc-code code {
 
 .tooltip-in { animation: tooltip-in 110ms ease-out both; }
 
-/* Both gates, per the design guide: the app's own Reduce Visual Effects toggle
+/* Both gates, per the design guide: the app's own Reduce visual effects toggle
    AND the OS preference. */
 [data-reduced-effects] .tooltip-in { animation: none; }
 
@@ -1999,6 +1997,9 @@ pre.yc-code code {
 :root {
   --frame-edge: 10px;
   --frame-corner: 12px;
+  /* WHY --edge-card: fills barely differ between layers on every theme (measured), so the outline carries it; theme --edge-dim vanished on glass themes. Less fg than --edge-strong so cards never read as buttons. */
+  --edge-card: color-mix(in srgb, var(--edge) 82%, var(--fg) 18%);
+  --edge-strong: color-mix(in srgb, var(--edge) 65%, var(--fg) 35%); /* outline border visible on every theme — glass packs' own --edge can near-vanish over their wallpaper */
   /* ── Motion vocabulary (2026-08-31; Destin picked "Soft" 2026-09-02) ──
      Three curves and three durations, so related motion in the session
      strip and on session switch reads as one decision instead of six.

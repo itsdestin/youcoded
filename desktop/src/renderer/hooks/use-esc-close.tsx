@@ -38,6 +38,8 @@ type Closer = {
   /** A panel entry that already took its one Escape while the keyboard was
    *  elsewhere — see activeTop. */
   spent?: boolean;
+  /** Takes Escape but is not a popup: the app under it stays usable (the guided tour's bubble). */
+  notPopup?: boolean;
 };
 
 type StoreListener = () => void;
@@ -86,6 +88,11 @@ class EscStore {
     if (!c.layeredWhile) return;
     const inside = !!c.layeredWhile.current?.();
     if (c.spent !== !inside) { c.spent = !inside; this.emit(); }
+  }
+
+  /** A popup (not a panel beside the chat) is open somewhere. */
+  hasPopup(): boolean {
+    return this.stack.some((c) => !c.layeredWhile && !c.notPopup);
   }
 
   /** The real top, spent or not — what the Android Back button acts on. */
@@ -154,26 +161,62 @@ export function useEscClose(
   onClose: () => void,
   // For a panel that stays open beside the chat: true while its layered
   // peeling should apply (keyboard focus inside it). See EscStore.activeTop.
-  opts?: { layeredWhile?: () => boolean },
-): void {
+  opts?: { layeredWhile?: () => boolean;
+    // WHY (final review F40): the guided tour's corner bubble takes Escape (it ends the tour) but
+    // covers nothing — its "do it now" steps ask the user to use the app under it, sending a
+    // message with Enter among them. Counted as a popup, it made the message box and the chat
+    // cards stand down on Enter for the whole tour.
+    notPopup?: boolean },
+): () => boolean {
   const store = useContext(EscStoreContext);
   const ref = useRef(onClose);
   useLayoutEffect(() => { ref.current = onClose; }, [onClose]);
   const layeredRef = useRef(opts?.layeredWhile);
   useEffect(() => { layeredRef.current = opts?.layeredWhile; });
   const isPanel = !!opts?.layeredWhile;
+  const notPopup = !!opts?.notPopup;
 
   // WHY useLayoutEffect (2026-09-24): registered in a passive effect, a popup
   // was on screen for a moment before it joined the Esc stack, so an Esc in
   // that gap closed the layer UNDER it (seen as a load-only failure of
   // ModelSwitchPrompt.test "Esc closes only the question"). Registering in the
   // same commit that shows it closes the gap.
+  // The entry's id, so the caller can ask "am I the top overlay?" (useEnterToConfirm).
+  const idRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (!store || !open) return;
     const id = nextId++;
-    store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}) });
-    return () => store.remove(id);
-  }, [open, store, isPanel]);
+    idRef.current = id;
+    store.push({ id, ref, ...(isPanel ? { layeredWhile: layeredRef } : {}), ...(notPopup ? { notPopup } : {}) });
+    return () => { store.remove(id); if (idRef.current === id) idRef.current = null; };
+  }, [open, store, isPanel, notPopup]);
+
+  // WHY returned (close-session-friction proposal 2): a popup's Enter-to-confirm must not fire
+  // while another overlay sits on top of it (the rename popup over the close prompt, a menu
+  // opened inside it). The stack already knows the order, so it answers that question — no
+  // second registry to drift. Stable identity; true without a provider (nothing to be under).
+  return useCallback(() => {
+    if (!store) return true;
+    return idRef.current !== null && store.top()?.id === idRef.current;
+  }, [store]);
+}
+
+/**
+ * A stable `() => boolean`: is a popup open right now? For window-level key listeners that act
+ * on the chat — the chat's permission/question cards and the message box — so an Enter meant for
+ * a popup never answers a card or sends a message behind it.
+ *
+ * WHY (Destin, approved in chat 2026-10-12, close-session-friction): with a popup open, Enter
+ * pressed on an empty spot reached the message box's window listener first, which sent the draft
+ * and marked the key handled — so the popup's own Enter stood down — and a waiting chat card
+ * could answer the same key. The files drawer beside the chat is a PANEL, not a popup: it stays
+ * open through a reply, so it does not count. Read at key time, never subscribed: a listener
+ * needs the answer only when a key arrives, and nothing re-renders for it (performance rule 3).
+ * False without a provider (isolated tests render no stack).
+ */
+export function usePopupOpen(): () => boolean {
+  const store = useContext(EscStoreContext);
+  return useCallback(() => !!store?.hasPopup(), [store]);
 }
 
 export function useEscStackEmpty(): boolean {

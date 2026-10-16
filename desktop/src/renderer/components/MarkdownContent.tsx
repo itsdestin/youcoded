@@ -439,11 +439,16 @@ const mdComponents = {
       // yc-code-block carries content-visibility so the browser can skip layout
       // and paint for blocks scrolled out of view — see globals.css. A document
       // with hundreds of fences is otherwise laid out in full before it paints.
-      <div className="yc-code-block relative group my-3">
+      // WHY the frame (border, fill, corners) moved from the <pre> to this wrapper
+      // (2026-10-15, the one scroll fade): the fade is a mask, and a mask on the box
+      // itself would fade its border and fill along with the code. The wrapper frames;
+      // the <pre> scrolls sideways and only the code fades, on a side with more. It is
+      // CSS-only (no listener per block), so a long chat of code blocks costs nothing.
+      <div className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden">
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}
-        <pre className="yc-code rounded-md bg-canvas border border-edge p-3 overflow-x-auto text-sm text-fg" {...props}>
+        <pre className="yc-code scroll-mask-x p-3 overflow-x-auto text-sm text-fg" {...props}>
           {children}
         </pre>
         {/* A fence still being typed draws its finished head separately (FrozenFence),
@@ -489,7 +494,7 @@ const mdComponents = {
   },
   table({ children, ...props }: any) {
     return (
-      <div className="overflow-x-auto my-3">
+      <div className="scroll-mask-x overflow-x-auto my-3">
         <table className="border-collapse border border-edge text-sm w-full" {...props}>
           {children}
         </table>
@@ -555,7 +560,8 @@ function ConversationsFence({ body }: { body: string }) {
   const ids = React.useMemo(() => parseConversationRefs(body), [body]);
   // Not enabled here: fall back to what the text says on its own, rather than
   // silently swallowing the block.
-  if (!enabled) return <pre className="yc-code rounded-md bg-canvas border border-edge p-3 overflow-x-auto text-sm text-fg">{body}</pre>;
+  // Framed by a wrapper so only the text fades (see the main code block above).
+  if (!enabled) return <div className="rounded-md bg-canvas border border-edge overflow-hidden"><pre className="yc-code scroll-mask-x p-3 overflow-x-auto text-sm text-fg">{body}</pre></div>;
   // WHY: the fenced IDs become a live reference CARD with asynchronously
   // resolved titles, not message words. Those labels cannot be source-indexed.
   return <span data-message-find-ignore className="contents"><ChatsearchRefBlock shortIds={ids} /></span>;
@@ -568,9 +574,12 @@ const mdPreviewComponents = {
   ...mdComponents,
   pre({ children, node: _node, ...props }: any) {
     return (
-      <pre className="yc-code rounded-md bg-canvas border border-edge p-3 overflow-x-auto text-sm text-fg my-3" {...props}>
-        {children}
-      </pre>
+      // Framed by a wrapper so only the code fades (see the main code block above).
+      <div className="my-3 rounded-md bg-canvas border border-edge overflow-hidden">
+        <pre className="yc-code scroll-mask-x p-3 overflow-x-auto text-sm text-fg" {...props}>
+          {children}
+        </pre>
+      </div>
     );
   },
   a({ href: _href, children, ...props }: any) {

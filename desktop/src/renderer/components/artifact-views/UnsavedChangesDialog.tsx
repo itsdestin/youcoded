@@ -1,13 +1,11 @@
-// Unsaved-changes prompt (D3, decided 2026-07-20): Save / Discard / Cancel —
+// Unsaved-changes prompt (D3, decided 2026-07-20): Save / Discard / Keep editing —
 // NOT auto-save, which would write real source files with no explicit user
 // action and race the agent on the same file. Hosts gate every navigation away
 // from a dirty editor (selection change, close, Esc) through useUnsavedGuard.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActiveArtifactHandle } from './ActiveArtifactView';
 import { registerDirtyEditorGuard, unregisterDirtyEditorGuard } from './dirty-editor-guard';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { Scrim, OverlayPanel } from '../overlays/Overlay';
-import { Button } from '../ui';
+import { Button, CARD_LEVEL_1, Dialog } from '../ui';
 
 function UnsavedChangesDialog({
   fileName,
@@ -20,48 +18,35 @@ function UnsavedChangesDialog({
   onDiscard: () => void;
   onCancel: () => void;
 }) {
-  // Esc = Cancel (stay in the editor), via the app's shared LIFO Esc stack.
-  // WHY: this used to be a raw capture-phase window listener with
-  // stopPropagation(), but stopPropagation cannot stop OTHER capture listeners
-  // on the same target — and the useEscClose provider's Esc handler is exactly
-  // that. Depending on mount order, one Esc press could cancel this dialog AND
-  // pop the top of the app's Esc stack underneath (closing a drawer/popup the
-  // user didn't ask to close). Joining the stack makes this dialog the topmost
-  // entry while mounted, so one Esc = cancel this dialog only; the provider
-  // preventDefaults the event, which also keeps the chat PTY-interrupt
-  // passthrough from firing. Always open: the host only mounts this component
-  // while a navigation is pending.
-  useEscClose(true, onCancel);
-
-  // L3 via the shared overlay primitives (react-renderer rule: never a
-  // hand-rolled bg-black/40 — <Scrim> gives the theme-tinted var(--scrim)
-  // backdrop and Overlay.tsx owns the z-index). Same layer as its sibling
-  // DiscardConfirmDialog: a blocking confirm that can lose work must sit
-  // above L1 drawers and L2 popups, because the guarded navigation can be
-  // triggered FROM them (drawer toggle, session switch). No `destructive`
-  // ring though — unlike the git revert dialog, the headline action here is
-  // Save, not destroy.
+  // WHY the shared popup (final review F13; decisions "Popup and side-panel titles", "Closing
+  // popups", "Unsaved changes: main button" CS6-4): this was a hand-built panel with no ✕ and
+  // three FILLED buttons (Button defaults to primary). It now copies the approved "Unsaved
+  // changes" popup before quitting (UnsavedBeforeQuit.tsx): the shared title and ✕, the text in
+  // one card, and the buttons stacked full width in the narrow popup's footer — Save filled on
+  // top (the one main action), Discard outlined in red (it throws edits away), "Keep editing"
+  // outlined as the way back ("Cancel" could be read either way). Esc and the ✕ are Keep
+  // editing; the Dialog joins the shared Esc stack itself, so one Esc closes only this popup.
+  // Layer 3, as before: the guarded navigation can start from a drawer or popup below.
   return (
-    <Scrim layer={3} onClick={onCancel} className="flex items-center justify-center">
-      <OverlayPanel
-        layer={3}
-        role="alertdialog"
-        aria-modal
-        aria-label="Unsaved changes"
-        className="p-4 max-w-sm w-full mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-sm font-medium text-fg mb-1">Unsaved changes</div>
-        <div className="text-sm text-fg-2 mb-4 break-all">
-          {fileName} has edits that are not saved yet.
+    <Dialog
+      open
+      onClose={onCancel}
+      title="Unsaved changes"
+      size="prompt"
+      layer={3}
+      noScreen="Only opens while leaving a file with unsaved edits; covered by unsaved-dialog-esc-stack.test.tsx."
+      footer={(
+        <div className="flex flex-col gap-2">
+          <Button variant="primary" className="w-full" onClick={onSave}>Save</Button>
+          <Button variant="danger-outline" className="w-full" onClick={onDiscard}>Discard</Button>
+          <Button variant="secondary" className="w-full" onClick={onCancel}>Keep editing</Button>
         </div>
-        <div className="flex gap-2 justify-end">
-          <Button onClick={onCancel}>Cancel</Button>
-          <Button onClick={onDiscard}>Discard</Button>
-          <Button onClick={onSave}>Save</Button>
-        </div>
-      </OverlayPanel>
-    </Scrim>
+      )}
+    >
+      <div className={`${CARD_LEVEL_1} p-3`}>
+        <p className="text-sm text-fg-2 break-all">{fileName} has edits that are not saved yet.</p>
+      </div>
+    </Dialog>
   );
 }
 

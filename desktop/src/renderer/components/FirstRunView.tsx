@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FirstRunState, PrerequisiteState } from '../../shared/first-run-types';
 import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
-import { canRetry, describeStep } from './first-run/describe-step';
+import { describeStep, isStopped, stoppedSentence } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button } from './ui';
+import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
+import { BrandWordmark } from './brand/BrandLockup';
+import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
@@ -21,65 +23,18 @@ function isChatGptSupported(): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/*  StatusIcon                                                        */
-/* ------------------------------------------------------------------ */
-
-function StatusIcon({ status }: { status: PrerequisiteState['status'] }) {
-  switch (status) {
-    case 'installed':
-      return <span className="text-accent">&#10003;</span>;
-    case 'installing':
-    case 'checking':
-      return <BrailleSpinner size="sm" />;
-    case 'failed':
-      // Status colors stay theme-independent per CLAUDE.md.
-      return <span className="text-red-500">&#10007;</span>;
-    case 'skipped':
-      return <span className="text-fg-faint">&#8212;</span>;
-    case 'waiting':
-    default:
-      return <span className="text-fg-faint">&#9675;</span>;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/*  statusLabel                                                       */
-/* ------------------------------------------------------------------ */
-
-function statusLabel(status: PrerequisiteState['status'], version?: string): string {
-  switch (status) {
-    case 'installed':
-      return version ? `installed (${version})` : 'installed';
-    case 'installing':
-      return 'installing...';
-    case 'checking':
-      return 'checking...';
-    case 'failed':
-      return 'failed';
-    case 'skipped':
-      return 'skipped';
-    default:
-      return 'waiting';
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /*  ProgressBar                                                       */
 /* ------------------------------------------------------------------ */
 
 function ProgressBar({ percent }: { percent: number }) {
   const clamped = Math.min(100, Math.max(0, percent));
+  // WHY no percentage (first-run deck L-1, "one line and a bar"): the step line says
+  // where setup is; a number beside it only invited reading 23% as "stuck".
   return (
-    <div className="w-full flex items-center gap-3">
-      <div className="flex-1 h-1.5 rounded-full bg-inset overflow-hidden">
-        <div
-          className="h-full rounded-full bg-accent transition-all duration-500"
-          style={{ width: `${clamped}%` }}
-        />
-      </div>
-      <span className="text-xs text-fg-muted tabular-nums w-10 text-right">
-        {Math.round(clamped)}%
-      </span>
+    <div className="brand-track w-full" role="progressbar" aria-valuenow={Math.round(clamped)} aria-valuemin={0} aria-valuemax={100}>
+      {/* WHY a 4% floor: setup reports 0 while its first download starts, and an empty
+          track read as "nothing is happening". */}
+      <div className="brand-bar-fill transition-all duration-500" style={{ width: `${Math.max(4, clamped)}%` }} />
     </div>
   );
 }
@@ -120,7 +75,9 @@ function AuthScreen({
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
-  const card = 'mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4';
+  // Brand rebuild (2026-10-04): the app's first-level card, so setup's boxes are the same
+  // boxes the app opens onto.
+  const card = 'brand-card w-full p-6 flex flex-col items-center gap-4';
 
   if (authMode === 'oauth' && claudeInstalling) {
     return (
@@ -161,54 +118,58 @@ function AuthScreen({
     );
   }
 
+  const pick = (w: WayIn) => {
+    if (w === 'claude') onOAuth();
+    else if (w === 'chatgpt') onChatGpt();
+    else if (w === 'openrouter') onOpenRouter();
+    else if (w === 'local') setLocalOpen(true);
+    else setKeyOpen(true);
+  };
   return (
-    <div className={card}>
-      <p className="text-sm text-fg-dim text-center leading-relaxed">
-        Sign in with the plan you already pay for — no API key or credit card needed.
-      </p>
-      {/* First-run guide design 2026-09-10 §1.1: the one warning nobody can
-          skip. It lives on the sign-in step because every install passes
-          through here; the app's own dialogs only warn the first time a
-          permission switch flips. */}
-      {/* Wording is Destin's (review deck 2026-09-10, Z-1). */}
-      <p className="text-sm text-fg-dim text-center leading-relaxed">
-        With your permission, the assistant may create, change, or delete files on your device.
-        Create backups for anything you cannot replace.
-      </p>
-
-      {/* Documented pill exception: first-run hero CTAs are the Button's xl size
-          (rounded-full, larger padding, semibold) — a shared size since 2026-09-16
-          instead of the same five hand-set className overrides. Only the hover and
-          the focus ring normalize — hover:opacity-90 faded the label along with the fill.
-          WHY every way in is the same outlined button (Destin, review of the
-          first-run local models mockups, 2026-09-14): "log in with claude should
-          not be a unique button" — no way in is presented as the default, and
-          G-4 allows a view with no filled button at all. */}
-      {/* Full-width pills, one per way in. Side by side the outlined labels
-          wrapped onto two lines at the card's width. */}
-      <div className="flex flex-col items-stretch gap-3 w-full">
-        <Button variant="secondary" onClick={onOAuth} size="xl" className="w-full">
-          Log in with Claude
-        </Button>
-        {isChatGptSupported() && (
-          <Button variant="secondary" onClick={onChatGpt} size="xl" className="w-full">
-            Log in with ChatGPT
-          </Button>
-        )}
-        <Button variant="secondary" onClick={onOpenRouter} size="xl" className="w-full">
-          Log in with OpenRouter
-        </Button>
-        <Button variant="secondary" onClick={() => setLocalOpen(true)} size="xl" className="w-full">
-          Use a local model
-        </Button>
-        {/* WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
-            key should be the same as the other buttons, not a link thing". It
-            opens its own page (ApiKeySetup), like Use a local model (A-7). */}
-        <Button variant="secondary" onClick={() => setKeyOpen(true)} size="xl" className="w-full">
-          Use an API key
-        </Button>
-      </div>
+    <div className="w-full flex flex-col gap-3">
+      <SignInChoices chatGpt={isChatGptSupported()} onPick={pick} />
+      {/* WHY the backup warning is gone from here (deck first-run-4 P4-2, Destin: "remove
+          the copy at the bottom about backups. this is a weird place for that warning").
+          The line about changing it later takes its place. */}
+      <p className="text-sm text-fg-muted text-center">You can change this at any time.</p>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SetupStopped                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A failed step (deck first-run-1 R-2, "we can make this feel more polished"): one card
+ * with the stop sign, a plain sentence, Retry, and the raw message folded under
+ * "Show details" (E-2). The raw text is never the headline — it names URLs and tools a
+ * new user can't act on — but it stays one click away for support.
+ */
+function SetupStopped({ sentence, detail, busy, onRetry }: { sentence: string; detail: string; busy: boolean; onRetry: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="brand-card w-full p-6 flex flex-col gap-5" role="alert">
+      {/* P2-2 (Destin, deck first-run-2): "square exclamation/error icon, directly to the
+          left of the setup stopped / git couldn't be installed message". */}
+      {/* P3-3: the mark and its two lines centred as one group in the card. */}
+      <div className="flex items-center justify-center gap-4">
+        <span className="brand-stop" aria-hidden>
+          <svg viewBox="0 0 24 24" width={22} height={22} fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 6v7.5M12 18h.01" /></svg>
+        </span>
+        <div className="min-w-0">
+          <h2 className="brand-heading text-xl text-fg">Setup stopped</h2>
+          <p className="text-sm text-fg-dim">{sentence}</p>
+        </div>
+      </div>
+      <Button variant="primary" size="lg" className="brand-primary w-full" onClick={onRetry} disabled={busy}>
+        {busy ? 'Trying again…' : 'Try again'}
+      </Button>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="self-center text-sm text-fg-muted hover:text-fg transition-colors">
+        {open ? 'Hide details' : 'Show details'}
+      </button>
+      {open && <p className="w-full text-left text-xs text-fg-dim leading-relaxed select-text break-words bg-well rounded-lg p-3">{detail}</p>}
+    </section>
   );
 }
 
@@ -218,12 +179,12 @@ function AuthScreen({
 
 function CompletionCard() {
   return (
-    <div className="w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg text-center">You're all set.</h2>
+    <div className="flex flex-col items-center gap-2 text-center">
+      <h2 className="brand-heading text-2xl text-fg">You're all set</h2>
       {/* First-run guide design 2026-09-10 §1.2: the three "try this first"
           bullets are gone — the buddy's tour covers them once the app opens,
           so listing them here would say everything twice. */}
-      <p className="text-sm text-fg-dim text-center">Your assistant will show you around once the app opens.</p>
+      <p className="text-sm text-fg-dim">Your assistant will show you around once the app opens.</p>
       <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
         <BrailleSpinner size="sm" />
         <span>Opening YouCoded…</span>
@@ -245,13 +206,14 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   useScreenOpen('first-run', () => {});
   const [state, setState] = useState<FirstRunState | null>(null);
 
-  // First launch has no user theme — lock the screen to Creme so the app's
-  // theme tokens resolve to a designed onboarding palette. ThemeProvider
+  // First launch has no user theme. The screen itself paints the brand palette
+  // (.brand-surface); the page underneath is held on Light so nothing outside it
+  // (scrollbars, the window's own colour scheme) shows a different theme. ThemeProvider
   // overrides this once the main app mounts after completion.
   useEffect(() => {
     const root = document.documentElement;
     const prev = root.getAttribute('data-theme');
-    root.setAttribute('data-theme', 'creme');
+    root.setAttribute('data-theme', 'light');
     return () => {
       if (prev) root.setAttribute('data-theme', prev);
       else root.removeAttribute('data-theme');
@@ -321,10 +283,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (p) => p.status === 'installing' || p.status === 'checking',
   );
 
-  // One predicate, shared with describeStep(), so the button and the
-  // "something went wrong" headline always appear together or not at all.
-  const retryable = !!state?.lastError && canRetry(state);
-
   const handleRetry = useCallback(() => {
     if (busy) return;
     (window as any).claude.firstRun.retry();
@@ -357,105 +315,90 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const launching =
     state?.currentStep === 'LAUNCH_WIZARD' || state?.currentStep === 'COMPLETE';
 
+  const stopped = !!state && isStopped(state);
+  const { heading, line } = state ? describeStep(state) : { heading: '', line: null };
+  const installing = state?.currentStep === 'DETECT_PREREQUISITES' || state?.currentStep === 'INSTALL_PREREQUISITES';
+
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-canvas text-fg">
+    // WHY brand-surface (first-run deck B-2, "brand lavender, always"): setup has no
+    // theme yet, so it wears the brand's own palette; the app's primitives inside it
+    // read the brand colours through the same tokens they use everywhere else.
+    <div className="brand-surface absolute inset-0">
+    {/* WHY an inner scroller (2026-10-15, the one scroll fade): the fade is a mask, and on the
+        brand surface itself it would fade the lavender background away at the edges too. The
+        surface stays put; only the setup content fades as it scrolls. */}
+    <div className="scroll-mask absolute inset-0 overflow-y-auto">
       {state && <ScreenMark name="first-run" />}
-      <h1 className="text-4xl font-semibold tracking-tight mb-6 text-fg">YouCoded</h1>
+      {/* WHY a fixed top and not centred (deck first-run-3 P3-2, Destin: "the brand stuff
+          can be bigger and sit at a fixed upwards of center position, then the
+          loading/action menus a bit further below it"): centring moved the logo every time
+          a step's content changed height. It now holds one place above the middle on every
+          step, and each step's content starts a fixed distance below it. */}
+      <div className="brand-stage">
+        {/* The name with the tagline stacked under it, no icon (deck first-run-5 P5-3 "bigger",
+            first-run-6 P6-2: "drop the icon. i thought i picked the stacked option"). */}
+        {/* The size follows the window (deck first-run-7: "make sure these windows all resize
+            properly and fit the pages"): 88px on a normal window, down to 44px on a short or
+            narrow one, so each step's content stays in view. */}
+        <BrandWordmark size="clamp(44px, min(9.5vh, 17vw), 88px)" tagline="stack" />
 
-      {launching ? (
-        <CompletionCard />
-      ) : (
-        <div className="flex flex-col items-center gap-5 w-full max-w-md px-4">
-          {state && (
-            <p className="text-sm text-fg-dim text-center max-w-md leading-relaxed">
-              {describeStep(state)}
-            </p>
-          )}
+        {launching ? (
+          <CompletionCard />
+        ) : (
+          <div className="flex flex-col items-center gap-4 w-full max-w-md">
+            {state && (
+              <div className="text-center">
+                {/* P4-1/P5-1: the app's own spinner, exactly as everywhere else (Destin: "the
+                    spinner should be the same one we use everywhere else"), beside the heading. */}
+                {heading && (
+                  <h1 className="brand-heading text-3xl max-sm:text-2xl text-fg inline-flex items-center gap-3">
+                    {installing && !stopped && <BrailleSpinner size="3xl" />}
+                    {heading}
+                  </h1>
+                )}
+                {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
+              </div>
+            )}
 
-          {/* Prerequisite checklist — rounded pills */}
-          {state && (
-            <ul className="w-full space-y-2">
-              {state.prerequisites
-                // Round 3 review (B-9, "two separate installing cards?"): Claude
-                // Code's on-demand install is shown once, on the sign-in card —
-                // this checklist no longer lists it on the sign-in step.
-                // Nor while it waits or was skipped: setup no longer installs it
-                // for everyone (Q-5), so a "waiting" Claude Code row would never move.
-                // Node.js joined it (Destin, 2026-10-02): it installs with Claude
-                // Code now, so it is shown only on a machine that already has it
-                // (or is installing it for an already-signed-in Claude user).
-                .filter((p) => !((p.name === 'claude' || p.name === 'node') && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
-                .map((p) => {
-                const active = p.status === 'installing' || p.status === 'checking';
-                return (
-                  <li
-                    key={p.name}
-                    className={[
-                      'flex items-center gap-3 rounded-full px-4 py-2.5 border transition-colors',
-                      active
-                        ? 'bg-inset border-edge'
-                        : 'bg-panel border-edge-dim',
-                    ].join(' ')}
-                  >
-                    <StatusIcon status={p.status} />
-                    <span className="text-sm text-fg">{p.displayName}</span>
-                    <span className="ml-auto text-xs text-fg-muted">
-                      {statusLabel(p.status, p.version)}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+            {/* L-2: while setup is stopped the bar goes away, so nothing on screen
+                still looks busy. (P6-1: the grey line stays above the bar, under the heading.) */}
+            {state && installing && !stopped && <ProgressBar percent={state.overallProgress} />}
 
-          {/* Progress bar (percent rendered inline) */}
-          {state && <ProgressBar percent={state.overallProgress} />}
+            {state?.currentStep === 'AUTHENTICATE' && (
+              <AuthScreen
+                authMode={state.authMode}
+                onOAuth={handleOAuth}
+                onChatGpt={handleChatGpt}
+                onOpenRouter={handleOpenRouter}
+                onApiKey={handleApiKey}
+                onCancel={handleCancelAuth}
+                claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
+              />
+            )}
 
-          {/* Auth screen */}
-          {state?.currentStep === 'AUTHENTICATE' && (
-            <AuthScreen
-              authMode={state.authMode}
-              onOAuth={handleOAuth}
-              onChatGpt={handleChatGpt}
-              onOpenRouter={handleOpenRouter}
-              onApiKey={handleApiKey}
-              onCancel={handleCancelAuth}
-              claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
-            />
-          )}
-
-          {/* Error display. The message is always shown; the Try Again button
-              only when a PREREQUISITE actually failed. WHY: "Try Again" here
-              re-runs the whole Node/Git/Claude install pass, and a refused
-              OpenRouter key or sign-in sets an error message without any
-              prerequisite having failed — offering to reinstall
-              the app's plumbing in answer to that is both confusing and slow.
-              The sign-in failures (ChatGPT timed out, Claude login timed out)
-              DO mark the 'auth' prerequisite failed, so they keep their
-              button — and the three sign-in buttons are back on screen too. */}
-          {state?.lastError && (
-            <div className="flex flex-col items-center gap-2 mt-2">
-              {/* Status colors stay theme-independent per CLAUDE.md. */}
-              <p className="text-xs text-destructive-fg text-center max-w-md">
+            {/* E-2: a failure is the app's standard error card — one plain sentence and
+                Retry — with the raw text behind "Show details". Retry appears only when
+                re-running the install pass is the right answer (canRetry: a refused key
+                or a sign-in message must not offer to reinstall the app's plumbing). */}
+            {stopped && state?.lastError && <SetupStopped
+              sentence={stoppedSentence(state)}
+              detail={state.lastError}
+              busy={busy}
+              onRetry={handleRetry}
+            />}
+            {state?.lastError && !stopped && (
+              <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
-              </p>
-              {retryable && (
-              <button
-                onClick={handleRetry}
-                disabled={busy}
-                className="px-3 py-1.5 rounded-full bg-well border border-edge hover:bg-inset text-fg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {busy ? 'Working…' : 'Try Again'}
-              </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+              </FieldError>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* The "Skip setup (I installed via terminal)" link is gone — review
           2026-09-05 P-6. Three sign-ins and a key/local route cover every way
           in; the skip left people on a screen with nothing signed in. */}
+    </div>
     </div>
   );
 }

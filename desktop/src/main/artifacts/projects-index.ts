@@ -21,6 +21,7 @@ import { isAbsoluteRecorded } from './write-authorization';
 import { discoverProjectFiles, discoveredFileRecord } from './project-file-discovery';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { readFolders, type SavedFolder } from '../saved-folders';
+import { isRemovedFromLists } from '../folders-service';
 import { getManagedRoots } from '../sync-spaces/service';
 import { listPastSessions } from '../session-browser';
 import { ccProjectSlug } from '../slug-encoding';
@@ -122,6 +123,10 @@ export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promis
   // for the same path wins (keeps the user's nickname).
   const managed = getManagedRoots()?.listProjects() ?? [];
   for (const p of managed) saved.push({ path: p.path, nickname: p.name, addedAt: 0 });
+  // A synced project removed on any device stays out of Project View exactly as it stays out
+  // of the new-session picker (folders-service.ts, backlog row 10) — unless re-added here.
+  const savedOnly = saved;
+  saved = saved.filter((f) => !isRemovedFromLists(f.path, savedOnly));
   const indexProjects = await listProjects(CLAUDE_DIR);
   const projects = buildSavedFolderProjects(saved, indexProjects);
 
@@ -163,8 +168,13 @@ export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promis
       artifactCount = trackedCount;
     }
 
+    // WHY (backlog row 10): a saved folder that was moved or deleted outside YouCoded still
+    // listed like any other, so the project switcher could not say why opening it showed
+    // nothing — and that is exactly the project someone wants to remove. One existsSync each.
+    const missing = await fs.promises.access(p.path).then(() => false, () => true);
     return {
       ...p,
+      ...(missing ? { missing: true } : {}),
       stats: { ...p.stats, artifactCount },
       ...(fileCount !== undefined ? { fileCount } : {}),
       ...(fileCountTruncated ? { fileCountTruncated } : {}),

@@ -44,7 +44,7 @@ export interface DocumentTabsProps {
 
 export function DocumentTabs({ tabs, activeId, onSelect, onClose, label, className = '', shrink = false, boxed = false }: DocumentTabsProps) {
   return (
-    <div role="tablist" aria-label={label} className={`flex items-center gap-1 min-w-0 overflow-x-auto select-none ${className}`}>
+    <div role="tablist" aria-label={label} className={`scroll-mask-x scroll-mask--chips flex items-center gap-1 min-w-0 overflow-x-auto select-none ${className}`}>
       {tabs.map((t) => {
         const current = t.id === activeId;
         const closable = t.closable !== false;

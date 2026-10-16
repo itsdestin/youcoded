@@ -69,7 +69,7 @@ describe('Assistant Settings — Step guard', () => {
     expect(await screen.findByText(/positive whole number/i)).toBeInTheDocument();
     expect(input()).toHaveValue('20');
     expect(save).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('failed read remains disabled and Retry can load it', async () => {
@@ -80,7 +80,7 @@ describe('Assistant Settings — Step guard', () => {
     render(<StepGuardRow />);
     await screen.findByText(/couldn't be loaded/i);
     expect(input()).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(input()).toHaveValue('40'));
     expect(input()).toBeEnabled();
   });
@@ -103,7 +103,7 @@ describe('Assistant Settings — Step guard', () => {
     commit('50');
     await screen.findByText(/previous setting is kept/i);
     await waitFor(() => expect(input()).toHaveValue('20'));
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(input()).toHaveValue('50'));
     expect(save.mock.calls).toEqual([[50], [50]]);
   });
@@ -155,6 +155,6 @@ describe('Assistant Settings — Step guard', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(save.mock.calls).toEqual([[30], [40]]);
     await waitFor(() => expect(input()).toHaveValue('40'));
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });

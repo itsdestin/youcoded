@@ -3,7 +3,7 @@
 // actually needed (Destin, 2026-09-11: "password screen occasionally flickering before
 // loading back into the thing without actually needing a password").
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteGate, type RemoteGateShim } from '../src/renderer/remote-gate';
 
@@ -67,9 +67,12 @@ describe('RemoteGate', () => {
   it('with a saved key, says it is connecting and never draws the password box', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
+    // settle (negative assertion): past the grace timer the password box must still not appear.
     await act(async () => { await new Promise((r) => setTimeout(r, 1600)); });
-    expect(screen.getByText('Connecting to your computer…')).toBeTruthy();
     expect(passwordBox()).toBeNull();
+    // WHY waited for (final review F55): the "Connecting…" line comes from a 1.5 s timer, so
+    // seeing it after a 1.6 s sleep was a guess a busy machine could outrun.
+    await waitFor(() => expect(screen.getByText('Connecting to your computer…')).toBeTruthy());
     f.setState('connecting');
     f.setState('authenticating');
     expect(passwordBox()).toBeNull();

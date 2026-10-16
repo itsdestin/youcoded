@@ -17,6 +17,10 @@ import LibraryScreen from '../src/renderer/components/library/LibraryScreen';
 import { MarketplaceProvider } from '../src/renderer/state/marketplace-context';
 import { MarketplaceStatsProvider } from '../src/renderer/state/marketplace-stats-context';
 import { SkillProvider } from '../src/renderer/state/skill-context';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
 // Minimal window.claude stub — every list call resolves empty so the provider
 // boots with nothing installed, nothing favorited, no themes.
@@ -70,7 +74,7 @@ async function renderLibrary(props: Partial<React.ComponentProps<typeof LibraryS
       <SkillProvider>
         <MarketplaceProvider>
           <MarketplaceStatsProvider>
-            <LibraryScreen onExit={() => {}} {...props} />
+            <ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><LibraryScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} {...props} /></ArtifactProvider>
           </MarketplaceStatsProvider>
         </MarketplaceProvider>
       </SkillProvider>,
@@ -121,9 +125,10 @@ describe('LibraryScreen empty state', () => {
     const tablist = screen.getByRole('tablist', { name: 'Library sections' });
     // Pill container recipe shared with ProjectView's header switcher.
     expect(tablist.className).toContain('layer-surface');
-    expect(tablist.className).toContain('!rounded-full');
+    // The theme's control corner, not a fixed pill (decisions "Control shape follows the theme").
+    expect(tablist.className).toContain('!rounded-control-group');
     const skills = screen.getByRole('tab', { name: /Plugins/ });
-    expect(skills.className).toContain('rounded-full');
+    expect(skills.className).toContain('rounded-control');
     // Count of installed skills — 0 with an empty marketplace.
     expect(skills).toHaveTextContent('Plugins0');
     expect(screen.getByRole('tab', { name: /Themes/ })).toHaveTextContent('Themes0');

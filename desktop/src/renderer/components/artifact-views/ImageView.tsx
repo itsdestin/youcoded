@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ArtifactViewProps } from './types';
-import { BinaryContent, CenterNote } from './BinaryContent';
+import { BinaryContent, CenterLoading } from './BinaryContent';
 import { ZoomPill } from '../ui';
 import { Loupe, pointInRect, useZoomPan } from './zoom';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -118,7 +118,8 @@ function ImageContent({ bytes, absolutePath, findBarOpen }:
     return pointInRect(cx, cy, el.getBoundingClientRect()) ? { el } : null;
   }, []);
 
-  if (!url) return <CenterNote>Loading image…</CenterNote>;
+  // WHY CenterLoading: the shared LoadingState (guide "File viewers" known deviation, 2026-10-13).
+  if (!url) return <CenterLoading what="image" />;
 
   return (
     <div

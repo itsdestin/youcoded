@@ -4,14 +4,19 @@
 // identical-looking header tools, matching the prototype's renderDetail() buttons
 // (one accent primary + neutral bordered secondaries).
 import React from 'react';
+import { buttonClasses } from '../ui';
 
+// WHY the shared Button's own classes (guide "File viewers" known deviation, 2026-10-13; design
+// rule G-1 "one primitive, one look" and decisions "Secondary buttons" — outlined, never a
+// different box): these two strings were hand-made buttons (rounded-md, hover:opacity-90, a
+// grey-filled secondary) that matched no other button in the app. They now ARE the shared
+// Button's filled `primary` and outlined `secondary` at size md, so every call site in the
+// Projects detail overlays reads like the rest of the app without each one being rewritten.
 // Accent primary action (Edit / Save / Resume / Confirm).
-export const TOOL_BTN_ACCENT =
-  'px-3 py-1.5 rounded-md bg-accent text-on-accent text-xs inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50';
+export const TOOL_BTN_ACCENT = buttonClasses('primary', 'md');
 
-// Neutral bordered secondary (Reveal / Copy path / Cancel / Open transcript / Exclude).
-export const TOOL_BTN_NEUTRAL =
-  'px-3 py-1.5 rounded-md bg-inset text-fg-2 hover:text-fg border border-edge-dim hover:border-edge text-xs inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-default';
+// Outlined secondary (Reveal / Copy path / Cancel / Open transcript / Exclude).
+export const TOOL_BTN_NEUTRAL = buttonClasses('secondary', 'md');
 
 function Svg({ size = 13, children }: { size?: number; children: React.ReactNode }) {
   return (

@@ -1032,9 +1032,14 @@ export class SyncService extends EventEmitter {
 
         // If a specific backend was requested (manual push), use just that one.
         // Otherwise, push to all sync-enabled backends (the daily-snapshot poll).
-        const instances = opts?.backendId
+        // WHY github-type backups are left out HERE (final review F33): they copy nothing on a computer
+        // any more (see the loop below), but a cycle whose only backups were GitHub ones still ran to
+        // the end, returned success and wrote backup-meta.json and the sync marker — so Backup & sync
+        // could read a fresh "last backup" for a cycle that copied nothing. With nothing that can run,
+        // the cycle ends exactly as one with no backups at all: nothing is stamped.
+        const instances = (opts?.backendId
           ? [this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
-          : this.getSyncEnabledBackends();
+          : this.getSyncEnabledBackends()).filter((i) => i.type !== 'github');
 
         if (instances.length === 0) return { success: true, errors: 0, backends: [] };
 
@@ -1064,6 +1069,11 @@ export class SyncService extends EventEmitter {
         const pushedIds: string[] = [];
 
         for (const instance of instances) {
+          // WHY skip it outright (small-fixes-2): a github-type backup copies nothing on a computer
+          // (below), yet it was counted as pushed and its "last backed up" marker touched, so
+          // Backup & sync read "Backed up 5m ago" for a backup that never ran. Its settings stay;
+          // the panel says it is no longer supported and offers Remove.
+          if (instance.type === 'github') continue;
           try {
             let backendErrors = 0;
             switch (instance.type) {
@@ -1211,7 +1221,7 @@ export class SyncService extends EventEmitter {
     // GitHub sync spaces, keeps its own state file and is invisible to it, so a
     // machine syncing happily to GitHub with no Drive/iCloud backend got a
     // danger-level, NON-dismissible "No sync configured — your backups aren't
-    // set up", which the StatusBar renders as a red "Sync Failing" chip. Seen on
+    // set up", which the StatusBar renders as a red "Sync failing" chip. Seen on
     // a fresh macOS install running 1.3.0-beta.9. Long-lived installs hid the bug
     // via autoDetectBackend(): it probes `rclone lsd gdrive:…`/the iCloud folder
     // and, on a machine that used the legacy backups years ago, silently succeeds

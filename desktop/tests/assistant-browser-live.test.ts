@@ -354,12 +354,17 @@ describe('Browser, live', () => {
     service.on('frame', onFrame);
     try {
       service.watch('s-wide');
-      await page.evaluate(() => { document.body.style.background = '#eee'; });
-      await vi.waitFor(() => expect(frames.some((f) => f.width === 1800)).toBe(true), { timeout: 15_000 });
       // The picture's own pixel width (the JPEG's frame header): the test service
       // draws at density 2, so 1800 page pixels arrive as 3600 — over the 2560 cap, so 2560.
-      const f = frames.filter((x) => x.width === 1800).at(-1)!;
-      expect(jpegWidth(Buffer.from(f.data, 'base64'))).toBe(2560);
+      // WHY repaint-and-wait rather than read the first 1800 frame: under load the
+      // screencast can label a frame painted just before the resize (1024 x 2 = 2048
+      // pixels) with the new 1800 width (seen 2026-10-16, load 52 on 32 threads); the
+      // settled picture is what must be 2560, exactly as the narrow half below waits.
+      await vi.waitFor(async () => {
+        await page.evaluate(() => { document.body.style.background = `#${Math.floor(Math.random() * 900 + 100)}`; });
+        const f = frames.filter((x) => x.width === 1800).at(-1);
+        expect(f && jpegWidth(Buffer.from(f.data, 'base64'))).toBe(2560);
+      }, { timeout: 15_000 });
       // At 100% a narrower panel lays the page out at its own width.
       service.setZoom('s-wide', 1);
       service.setViewSize('s-wide', 600, 500);

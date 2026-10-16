@@ -8,7 +8,7 @@
 // interop with the native store (round trip both directions), a fresh
 // invocation with no prior list() call, and the docx/xlsx pending-mutation
 // queue's bounded-timeout behaviour when nothing is applying requests.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -515,7 +515,8 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     const callPromise = client.callTool('ReplyToComment', { path: 'report.docx', commentId: 'w-1', text: 'a reply' }, 8000);
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
     let requestFile: string | null = null;
-    for (let i = 0; i < 40 && !requestFile; i++) {
+    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
+    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
       if (fs.existsSync(pendingDir)) {
         const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
         if (files.length) requestFile = path.join(pendingDir, files[0]);
@@ -540,15 +541,12 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     await fs.promises.writeFile(path.join(root, 'report.docx'), 'stands in for an open document');
     const callPromise = client.callTool('ResolveComment', { path: 'report.docx', commentId: 'w-1' }, 8000);
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    for (let i = 0; i < 200 && !requestFile; i++) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(requestFile).not.toBeNull();
+    // WHY vi.waitFor (not a 200 x 10 ms counted loop): a loaded machine outran the count.
+    const requestFile = await vi.waitFor(() => {
+      const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
+      expect(files.length).toBeGreaterThan(0);
+      return path.join(pendingDir, files[0]);
+    });
     const id = path.basename(requestFile!, '.json');
     fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
     fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, queued: true }));
@@ -564,7 +562,12 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
 
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
     let requestFile: string | null = null;
-    for (let i = 0; i < 40 && !requestFile; i++) {
+    // WHY a 7 s deadline, not 40 × 25 ms (2026-10-09): the client is a spawned process, and at
+    // load average ~38 it took longer than 1 s to start and write its request — the test failed
+    // in a full run and passed alone. It returns as soon as the file appears; the call's own
+    // timeout above is 8 s.
+    const deadline = Date.now() + 7000;
+    while (!requestFile && Date.now() < deadline) {
       if (fs.existsSync(pendingDir)) {
         const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
         if (files.length) requestFile = path.join(pendingDir, files[0]);
@@ -610,7 +613,8 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
 
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
     let requestFile: string | null = null;
-    for (let i = 0; i < 40 && !requestFile; i++) {
+    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
+    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
       if (fs.existsSync(pendingDir)) {
         const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
         if (files.length) requestFile = path.join(pendingDir, files[0]);
@@ -638,7 +642,8 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
 
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
     let requestFile: string | null = null;
-    for (let i = 0; i < 40 && !requestFile; i++) {
+    // Same 7 s deadline as the symlink case below (a spawned client, slow to start under load).
+    for (const deadline = Date.now() + 7000; !requestFile && Date.now() < deadline;) {
       if (fs.existsSync(pendingDir)) {
         const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
         if (files.length) requestFile = path.join(pendingDir, files[0]);

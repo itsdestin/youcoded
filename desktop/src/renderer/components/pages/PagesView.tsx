@@ -15,7 +15,7 @@
 import React, { useEffect, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
+import { Button, CloseButton, LoadingState, ScreenError, SectionLabel, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -45,7 +45,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
   // Photo-only build: `shoot` opens a page's connections, or its editor (fixture pages).
   useScreenOpen('pages/library/connections', () => setConnectionsFor('page-headlines'));
-  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-week-planner') ?? pages[0]; if (p) onEditPage(p); });
+  useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-paint') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
@@ -92,12 +92,14 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
         />
       </header>
 
-      <main className="flex-1 overflow-y-auto min-h-0">
+      <main className="scroll-mask flex-1 overflow-y-auto min-h-0">
         <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 flex flex-col gap-6">
           {!loaded && <LoadingState what="pages" />}
           {loaded && failed && (
-            <ErrorState
-              message="The list of pages could not be read."
+            // WHY ScreenError (gt-r1#B-3): the whole Pages screen is this list.
+            <ScreenError
+              title="Your pages couldn't load"
+              message="Nothing was removed."
               onRetry={() => reloadAfterOfficeSave()}
             />
           )}
@@ -129,10 +131,14 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-1">{label}</div>
+      {/* Padding on a wrapper — SectionLabel owns only margin/layout
+          (design lint no-restyle). */}
+      <div className="px-1"><SectionLabel>{label}</SectionLabel></div>
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
     </section>
   );
@@ -150,7 +156,8 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
-      className="relative bg-panel border border-edge rounded-lg p-4 text-left flex flex-col gap-3 cursor-pointer card-interactive focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
+      // WHY card-raised (decisions "Card look" K-6, "Card shadow" F-3): a page card is a raised card.
+      className="relative bg-panel border border-edge rounded-lg p-4 text-left flex flex-col gap-3 cursor-pointer card-interactive card-raised focus:outline-none focus-visible:ring-2 focus-visible:ring-accent select-none"
     >
       <div className="flex items-start gap-3">
         <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">

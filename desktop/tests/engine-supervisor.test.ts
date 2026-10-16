@@ -499,8 +499,7 @@ describe('EngineSupervisor', () => {
     const changed: any[] = [];
     sup.on('models-changed', (m) => changed.push(m));
     await sup.ensureRunning();
-    await new Promise((r) => setTimeout(r, 30)); // let the initial poll tick resolve
-    expect(changed.length).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(changed.length).toBeGreaterThan(0));
     expect(changed[changed.length - 1][0]).toMatchObject({ id: 'a', state: 'loaded' });
   });
 
@@ -1369,8 +1368,7 @@ describe('EngineSupervisor — router rescan', () => {
     const { fetchImpl, calls } = routerWith(['a-Q4_K_M']);
     sup = makeSupervisor(fetchImpl, { modelPollMs: 5, modelPollLoadingMs: 5 });
     await sup.ensureRunning();
-    await new Promise((r) => setTimeout(r, 60)); // several poll ticks
-    expect(calls.filter((c) => c.includes('/models')).length).toBeGreaterThan(1); // it really did poll
+    await vi.waitFor(() => expect(calls.filter((c) => c.includes('/models')).length).toBeGreaterThan(1)); // it really did poll
     expect(reloadCalls(calls)).toEqual([]);
   });
 

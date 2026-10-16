@@ -14,7 +14,7 @@
 // site routes the ACTION through the gate rather than the state change.
 
 import React, { useCallback, useRef, useState, type ReactNode } from 'react';
-import { Button, Checkbox, Dialog } from './ui';
+import { Button, ConsentRow, Dialog, OneJobCard, OneJobText, Tooltip } from './ui';
 import { memoWhileClosed } from './memo-while-closed';
 import {
   hasAcknowledged,
@@ -45,57 +45,52 @@ function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWar
 
   return (
     // "panel", not "prompt": at prompt width (340px) the header truncates
-    // "Before you turn on Skip Permissions" to "…Permissi…" beside its close
+    // "Before you turn on Skip permissions" to "…Permissi…" beside its close
     // button (seen in the workbench 2026-09-10), and the design guide calls a
     // truncated title a bug. 420px fits every title and keeps the three
     // paragraphs at a comfortable measure.
     <Dialog open={open} onClose={() => close(onCancel)} title={copy.title} size="panel" screen={`chat/first-time-warning/${kind}`}>
-      {/* Paragraph style matches the Permissions page's mode definitions, so the
-          Full auto warning reads as the same voice as the page it echoes. */}
-      <div className="space-y-2">
-        {copy.body.map((paragraph, i) => (
-          <React.Fragment key={i}>
-            <p className="text-2xs text-fg-2 leading-relaxed">{paragraph}</p>
-            {i === 0 && copy.bullets && (
-              <ul className="text-2xs text-fg-2 leading-relaxed list-disc pl-4 space-y-1">
-                {copy.bullets.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            )}
-          </React.Fragment>
-        ))}
-      </div>
-      {copy.checkbox && (
-        // Same row shape as ProjectView's delete-consent checkbox (the
-        // primitive's intended site): a clickable div, because a <label> cannot
-        // associate with a button-role checkbox, and a stopPropagation span so
-        // the box's own click toggles exactly once instead of twice via the row.
-        <div
-          className="flex items-start gap-2 text-2xs text-fg cursor-pointer"
-          onClick={() => setChecked((v) => !v)}
-        >
-          <span className="mt-0.5" onClick={(e) => e.stopPropagation()}>
-            <Checkbox checked={checked} onChange={setChecked} aria-label={copy.checkbox} />
-          </span>
-          <span className="leading-relaxed">{copy.checkbox}</span>
-        </div>
-      )}
-      {/* Footer: a decision to confirm, so Cancel + one primary (design guide
-          G-4, §4.3). Continue is disabled, not hidden, until the box is ticked
-          so the person can see what the checkbox unlocks — and one muted line
-          says so (UX tester run 1, U26: a greyed button with no hint). */}
-      {needsConsent && !checked && (
-        <p className="text-2xs text-fg-muted text-right">Tick the box to continue</p>
-      )}
-      <div className="flex gap-2 justify-end">
+      {/* WHY one card holding the explanation, the tick box and the buttons (final-review#PR-7,
+          #ST-12, #ST-21 — one popup rule): a popup's body sits in a card, as About's does, and its
+          tick box is the shared "I understand" box (ConsentRow), the same one Skip permissions
+          and Remove project use. It was a bare 12px square beside a sentence on the popup.
+          One card, so no label (the guide's single-card exception). Paragraph style matches the
+          Permissions page's mode definitions, so the Full auto warning reads in that voice. */}
+      {/* WHY the shared one-job card (popup-cards-2#A-2, Destin: "think these could be more
+          consistent too"): the same 12px words and stacked buttons (main on top) as Skip
+          permissions' own confirm and the other one-job popups. Was 11px words and two buttons
+          side by side at the right. The hover hint on the grey Continue (final-fixes#ST-12)
+          stays: the shared Tooltip passes the card's full width through to the button. */}
+      <OneJobCard actions={<>
+        <Tooltip text={canContinue ? '' : 'Tick the box to continue'}>
+          <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
+            {copy.continueLabel}
+          </Button>
+        </Tooltip>
         <Button variant="secondary" onClick={() => close(onCancel)}>
           Cancel
         </Button>
-        <Button variant="primary" disabled={!canContinue} onClick={() => close(onContinue)}>
-          {copy.continueLabel}
-        </Button>
-      </div>
+      </>}>
+        <OneJobText>
+          {copy.body.map((paragraph, i) => (
+            <React.Fragment key={i}>
+              <p>{paragraph}</p>
+              {i === 0 && copy.bullets && (
+                <ul className="list-disc pl-4 space-y-1">
+                  {copy.bullets.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </React.Fragment>
+          ))}
+        </OneJobText>
+        {copy.checkbox && (
+          <ConsentRow checked={checked} onChange={setChecked}>
+            {copy.checkbox}
+          </ConsentRow>
+        )}
+      </OneJobCard>
     </Dialog>
   );
 }

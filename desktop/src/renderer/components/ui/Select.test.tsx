@@ -109,3 +109,30 @@ describe('Select cross-portal mousedown tolerance', () => {
     expect(queryByRole('listbox', { name: 'First' })).not.toBeNull();
   });
 });
+
+describe('Select trigger width', () => {
+  // WHY (games-social friction, proposal 11): the trigger's own `w-full` and a caller's
+  // `w-32` both reached the class list, so Tailwind's CSS source order picked `w-full` and
+  // the dropdown silently filled its row — in round 2 it covered the friends card's summary
+  // line. A caller's width now REPLACES the default, the same conflict-group rule Button uses.
+  it('is full width by default', () => {
+    const { getByRole } = render(<Select options={OPTIONS} value="a" onChange={() => {}} aria-label="Default" />);
+    expect(getByRole('button', { name: 'Default' }).className.split(/\s+/)).toContain('w-full');
+  });
+
+  it("takes the caller's width instead of full width", () => {
+    const { getByRole } = render(<Select options={OPTIONS} value="a" onChange={() => {}} aria-label="Sized" className="w-32 shrink-0" />);
+    const cls = getByRole('button', { name: 'Sized' }).className.split(/\s+/);
+    expect(cls).toContain('w-32');
+    expect(cls).not.toContain('w-full');
+    expect(cls).toContain('shrink-0');          // a class in no conflict group is kept
+    expect(cls).toContain('justify-between');   // and the trigger's own layout survives
+  });
+
+  it("a caller's display or gap replaces the trigger's, never doubles it", () => {
+    const { getByRole } = render(<Select options={OPTIONS} value="a" onChange={() => {}} aria-label="Gap" className="gap-1" />);
+    const cls = getByRole('button', { name: 'Gap' }).className.split(/\s+/);
+    expect(cls).toContain('gap-1');
+    expect(cls).not.toContain('gap-2');
+  });
+});

@@ -70,6 +70,14 @@ export function markTipSeen(id: string): void {
   if (!list.includes(id)) write(TIPS_SEEN, JSON.stringify([...list, id]));
 }
 
+// Photo-only build: shoot's `tour/<stop>` screens open the tour on one stop. The
+// opener (shoot-app-screens.ts) leaves the stop here and the tour takes it once
+// as it mounts — kept out of App.tsx, which has a line budget. A person's tour
+// never sets it, so it always starts at stop 1.
+let startAt: string | undefined;
+export function setTourStart(stopId: string | undefined): void { startAt = stopId; }
+export function takeTourStart(): string | undefined { const s = startAt; startAt = undefined; return s; }
+
 /** Test and workbench reset. */
 export function resetGuideState(): void {
   for (const k of [GUIDE_PENDING, GUIDE_DONE, TIPS_ARMED, TIPS_SEEN, 'youcoded-guide-count-launches', 'youcoded-guide-count-sessions-started']) write(k, null);

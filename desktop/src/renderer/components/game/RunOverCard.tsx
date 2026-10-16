@@ -12,7 +12,7 @@
 // a subtitle; the number you got is the headline, because that is the thing a
 // high-score game is asking you to beat.
 
-import { Button } from '../ui';
+import { Button, Pill } from '../ui';
 
 interface Props {
   /** Why the run ended, in the game's own words — "You hit a pipe", "No moves
@@ -48,20 +48,23 @@ export default function RunOverCard({
       <span className="text-2xl font-semibold text-fg tabular-nums leading-tight">{score}</span>
 
       {isBest ? (
-        <span className="text-2xs font-medium px-2 py-0.5 rounded-md bg-accent text-on-accent">
-          New best
-        </span>
+        // WHY the shared Pill, not a solid accent block (guide "Status and notices"; decisions
+        // "Status labels": a status is a small tinted pill, words in the normal text colour).
+        // `info` is the accent-tinted tone, the nearest to the old accent fill.
+        <Pill tone="info">New best</Pill>
       ) : best ? (
         // Not a scolding — a target. "Your best is 31" is why you press again.
         <span className="text-2xs text-fg-muted">Your best: {best}</span>
       ) : null}
 
       {/* G-4: one primary per view. Retry is it; leaving is secondary. */}
+      {/* WHY Back to games first, Play again last (decisions "Button arrangement by width":
+          side by side, the filled button on the right, the outlined one directly left of it). */}
       <div className="flex items-center gap-2 pt-2">
-        <Button variant="primary" size="sm" onClick={onRetry}>Play again</Button>
         {onExit && (
           <Button variant="secondary" size="sm" onClick={onExit}>Back to games</Button>
         )}
+        <Button variant="primary" size="sm" onClick={onRetry}>Play again</Button>
       </div>
 
       {retryKeyHint && (

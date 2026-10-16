@@ -75,7 +75,7 @@ describe('UpdatePanel — the version pill popup', () => {
   });
 
   describe('UpdatePanel — update available', () => {
-    it('renders "Update available" header and Update Now button', async () => {
+    it('renders "Update available" header and Update now button', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       await waitFor(() => expect(screen.getByText(/update available/i)).toBeInTheDocument());
       expect(screen.getByRole('button', { name: /update now.*1\.1\.1.*1\.1\.2/i })).toBeInTheDocument();
@@ -86,9 +86,9 @@ describe('UpdatePanel — the version pill popup', () => {
       await waitFor(() => expect((window as any).claude.update.changelog).toHaveBeenCalledWith({ forceRefresh: true }));
     });
 
-    it('Update Now button kicks off download then shows Launch Installer', async () => {
+    it('Update now button kicks off download then shows Launch installer', async () => {
       // Behavior changed from Task 11: clicking no longer opens the browser directly —
-      // it starts the download flow. After download() resolves the button shows "Launch Installer".
+      // it starts the download flow. After download() resolves the button shows "Launch installer".
       const onClose = vi.fn();
       render(<UpdatePanel open={true} onClose={onClose} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       const btn = await screen.findByRole('button', { name: /update now/i });
@@ -138,7 +138,7 @@ describe('UpdatePanel — the version pill popup', () => {
   });
 
   describe('UpdatePanel — up to date', () => {
-    it('renders "What\'s new" header and no Update Now button', async () => {
+    it('renders "What\'s new" header and no Update now button', async () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
       await waitFor(() => expect(screen.getByText(/what'?s new/i)).toBeInTheDocument());
       expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
@@ -165,7 +165,7 @@ describe('UpdatePanel — the version pill popup', () => {
       expect((window as any).claude.shell.openChangelog).toHaveBeenCalled();
     });
 
-    it('Update Now button stays visible even when changelog failed to load', async () => {
+    it('Update now button stays visible even when changelog failed to load', async () => {
       (window as any).claude.update.changelog.mockResolvedValue(CHANGELOG_ERROR);
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();
@@ -189,7 +189,9 @@ describe('UpdatePanel — the version pill popup', () => {
       render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
       fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
-      const retry = await screen.findByRole('button', { name: /retry download/i });
+      // small-fixes-1#SF-1: the reason is a sentence; the button reads exactly "Try again".
+      expect(await screen.findByText("The download was damaged, so it wasn't installed.")).toBeInTheDocument();
+      const retry = screen.getByRole('button', { name: 'Try again' });
       expect(retry).toBeEnabled();
       // The "Open in browser instead" link opens the raw installer — the very file
       // that failed verification — so it must be absent here.
@@ -261,19 +263,21 @@ describe('UpdatePanel — the update button after a failure', () => {
       (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('network-failed', 'getaddrinfo ENOTFOUND github.com'));
       await clickUpdate();
 
-      const button = await screen.findByRole('button', { name: 'Download failed — Retry' });
-      expect(button).toBeEnabled();
-      expect(screen.queryByText(/launch failed/i)).toBeNull();
+      // small-fixes-1#SF-1: the failure is a sentence in the notice box, the button just "Try again".
+      expect(await screen.findByText("The update didn't download.")).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+      expect(screen.queryByText(/installer didn't start/i)).toBeNull();
     });
 
     it('a download refused for a reason retry cannot fix still does not claim a launch', async () => {
       (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('busy', 'another download is already active'));
       await clickUpdate();
 
-      // Exactly "Download failed", disabled — a loose /download failed/ also matched the
-      // ENABLED "Download failed — Retry", a retry that cannot help (code review F3).
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Download failed' })).toBeDisabled());
-      expect(screen.queryByText(/launch failed/i)).toBeNull();
+      // The sentence names the download; no Try again — a retry that cannot help (code review F3).
+      expect(await screen.findByText("The update didn't download.")).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Open in browser instead' })).toBeInTheDocument();
+      expect(screen.queryByText(/installer didn't start/i)).toBeNull();
     });
 
     it('a launch that failed is still called a launch failure', async () => {
@@ -281,7 +285,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       await clickUpdate();
       fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
 
-      expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
+      expect(await screen.findByText("The installer didn't start.")).toBeInTheDocument();
     });
   });
 
@@ -314,21 +318,21 @@ describe('UpdatePanel — the update button after a failure', () => {
       await launchWith({ success: false, error: 'install-cancelled', command: COMMAND });
 
       // Retry raises the password dialog again — dismissing it was a choice.
-      expect(await screen.findByRole('button', { name: /retry/i })).toBeEnabled();
+      expect(await screen.findByRole('button', { name: /try again/i })).toBeEnabled();
       expect(screen.getByText(COMMAND)).toBeInTheDocument();
     });
 
     it('a refused package install says so and still offers the command', async () => {
       await launchWith({ success: false, error: 'install-failed', command: COMMAND });
 
-      expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
+      expect(await screen.findByText("Your package manager wouldn't install the update.")).toBeInTheDocument();
       expect(screen.getByText(COMMAND)).toBeInTheDocument();
     });
 
     it('shows no command block on platforms that never send one', async () => {
       await launchWith({ success: false, error: 'dmg-corrupt' });
 
-      expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
+      expect(await screen.findByText("The installer didn't start.")).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /run in terminal/i })).toBeNull();
     });
   });

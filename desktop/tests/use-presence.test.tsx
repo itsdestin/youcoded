@@ -53,9 +53,9 @@ beforeEach(() => {
 });
 
 describe('usePresence — desired state', () => {
-  it('connects when signed in and not incognito', async () => {
+  it('connects visibly when signed in and not incognito', async () => {
     renderHook(() => usePresence());
-    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalled());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: false }));
     expect((window as any).claude.social.presenceDisconnect).not.toHaveBeenCalled();
   });
 
@@ -72,11 +72,21 @@ describe('usePresence — desired state', () => {
     expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
   });
 
-  it('stored incognito=true disconnects instead of connecting', async () => {
+  // Incognito connects HIDDEN (round 5): this device still sees friends, they never see it.
+  it('stored incognito=true connects hidden, never visibly', async () => {
     (window as any).claude.getIncognito = vi.fn().mockResolvedValue(true);
     renderHook(() => usePresence());
-    await waitFor(() => expect((window as any).claude.social.presenceDisconnect).toHaveBeenCalled());
-    expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true }));
+    expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalledWith({ hidden: false });
+  });
+
+  it('while incognito, a status change or a challenge never leaves the device', async () => {
+    (window as any).claude.getIncognito = vi.fn().mockResolvedValue(true);
+    const { result } = renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true }));
+    act(() => { result.current.updateStatus('in-game'); result.current.challengePlayer('github:2', 'chess', 'X'); });
+    expect((window as any).claude.social.presenceSend).not.toHaveBeenCalled();
+    expect(h.dispatch).toHaveBeenCalledWith({ type: 'CHALLENGE_FAILED', target: 'github:2' });
   });
 });
 
@@ -149,6 +159,52 @@ describe('usePresence — incognito after a remote reconnect', () => {
     await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
     expect(getIncognito).toHaveBeenCalledTimes(3);
     expect(result.current.incognito).toBe(true);
+  });
+});
+
+// Final review F5: a choice that could not be read must never count as "not incognito".
+describe('usePresence — the incognito choice cannot be read', () => {
+  it('connects nothing until an answer arrives, then honours it', async () => {
+    vi.useFakeTimers();
+    try {
+      const getIncognito = vi.fn().mockRejectedValueOnce(new Error('ipc down')).mockResolvedValueOnce(true);
+      (window as any).claude.getIncognito = getIncognito;
+      renderHook(() => usePresence());
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); }); // the retry
+      expect(getIncognito).toHaveBeenCalledTimes(2);
+      expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true });
+      expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalledWith({ hidden: false });
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+// Final review F27: a switch made in another window (or a phone) reaches the window holding the connection.
+describe('usePresence — a switch made elsewhere', () => {
+  it('a relayed incognito switch reconnects hidden; a local switch is relayed to the others', async () => {
+    let onSync: (prefs: unknown) => void = () => {};
+    const broadcast = vi.fn();
+    (window as any).claude.appearance = { onSync: (cb: (p: unknown) => void) => { onSync = cb; return () => {}; }, broadcast };
+    const { result } = renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: false }));
+    act(() => onSync({ incognito: true }));
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenLastCalledWith({ hidden: true }));
+    expect(result.current.incognito).toBe(true);
+    act(() => onSync({ theme: 'creme' })); // an appearance change is not an incognito one
+    expect(result.current.incognito).toBe(true);
+    act(() => result.current.toggleIncognito());
+    expect(broadcast).toHaveBeenCalledWith({ incognito: false });
+  });
+});
+
+// Final review F4: the reason incognito is not connected is kept, so the card can say what is true.
+describe('usePresence — why incognito is not connected', () => {
+  it.each([['hidden-unsupported', 'unsupported'], ['hidden-check-failed', 'unreachable']])('%s → PRESENCE_HIDDEN_BLOCKED %s', async (type, why) => {
+    renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.onPresenceEvent).toHaveBeenCalled());
+    act(() => eventCb({ type }));
+    expect(h.dispatch).toHaveBeenCalledWith({ type: 'PRESENCE_HIDDEN_BLOCKED', why });
   });
 });
 

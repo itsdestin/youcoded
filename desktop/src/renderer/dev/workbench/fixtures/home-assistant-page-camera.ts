@@ -566,8 +566,10 @@ export const HOME_CAMERA_JS = `
       : '<span class="cam-msg">' + (na ? 'Not responding' : cm && cm.href ? 'Signed out' : esc(cm ? cm.text : 'Looking for a picture\u2026')) + '</span>';
     return '<div class="cam-tile" data-eid="' + eid + '"><button class="cam-view cam-open" data-cam-act="open" data-id="' + eid + '" aria-label="Open ' + esc(it.name) + ' and its recordings">' + body + badge +
       '<span class="cam-cap"><span>' + esc(it.name) + '</span><span class="sub">' + (na ? 'Not responding' : esc(it.model || '')) + '</span></span></button>' +
-      // A person's own Retry is always allowed, even before the page's own try (a sibling of the tile button: buttons cannot nest).
-      (cm && cm.nest && live && live.state === 'stopped' && live.limited && !na ? '<button class="cam-x cam-retry" data-cam-act="retry" data-id="' + eid + '">Retry</button>' : '') +
+      // A person's own Try again is always allowed, even before the page's own try (a sibling of the tile button: buttons cannot nest).
+      // WHY "Try again" (final review F41; guide "Every retry button reads exactly 'Try again'"): practice data is
+      // what Page builders copy, so it uses the app's one retry word too.
+      (cm && cm.nest && live && live.state === 'stopped' && live.limited && !na ? '<button class="cam-x cam-retry" data-cam-act="retry" data-id="' + eid + '">Try again</button>' : '') +
       // Over the cap: one press swaps this camera in for the last one streaming (the same corner as Retry).
       (over ? '<button class="cam-x cam-retry" data-cam-act="swap" data-id="' + eid + '">Watch live instead</button>' : '') + '</div>';
   }

@@ -1,0 +1,179 @@
+<!doctype html>
+<!-- Generated from PRIVACY.md by docs/tools/gen-legal-pages.mjs. Do not edit legal prose here. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>YouCoded Privacy Policy — YouCoded Assistant</title>
+<meta name="description" content="How YouCoded handles your data, and your rights and choices.">
+<link rel="icon" type="image/png" href="legal-assets/brand.png">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body id="top">
+<a class="skip-link" href="#policy-content">Skip to policy</a>
+<nav class="site-nav" aria-label="Main navigation">
+  <a class="logo" href="index.html" aria-label="YouCoded home"><img src="legal-assets/brand.png" width="36" height="36" alt=""><span class="wordmark"><span>you</span>coded</span></a>
+  <div class="policy-nav"><a href="privacy.html" aria-current="page">Privacy</a>
+<a href="terms.html">Terms</a></div>
+</nav>
+<main>
+  <div class="document-layout">
+    <aside class="toc-desktop" aria-label="On this page"><div class="toc-panel"><h2>On this page</h2><ol><li><a href="#1-the-short-version"><span>1. The short version</span></a></li>
+<li><a href="#website-analytics"><span>Website analytics</span></a></li>
+<li><a href="#2-what-youcoded-does-not-collect"><span>2. What YouCoded does NOT collect</span></a></li>
+<li><a href="#3-what-youcoded-does-collect-when-and-why"><span>3. What YouCoded DOES collect, when, and why</span></a></li>
+<li><a href="#4-third-parties"><span>4. Third parties</span></a></li>
+<li><a href="#5-your-rights-and-choices"><span>5. Your rights and choices</span></a></li>
+<li><a href="#6-security"><span>6. Security</span></a></li>
+<li><a href="#7-changes-to-this-policy"><span>7. Changes to this policy</span></a></li>
+<li><a href="#8-contact"><span>8. Contact</span></a></li></ol><a class="toc-home" href="index.html">← Back to home</a></div></aside>
+    <div class="reading-column">
+      <header class="hero">
+        <p class="eyebrow">Legal</p>
+        <h1 id="youcoded-privacy-policy" tabindex="-1">YouCoded Privacy Policy</h1>
+        <div class="policy-meta">
+          <div class="effective-date"><p><strong>Effective date:</strong> September 15, 2026</p></div>
+          <a class="source-link" href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md">View source ↗</a>
+        </div>
+      </header>
+      <!-- WHY: native details works with keyboards and with JavaScript disabled;
+           a separate desktop TOC avoids forcing the mobile disclosure open. -->
+      <details class="toc-mobile"><summary><span>On this page</span><svg class="toc-chevron" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></summary><nav aria-label="Policy sections"><ol><li><a href="#1-the-short-version"><span>1. The short version</span></a></li>
+<li><a href="#website-analytics"><span>Website analytics</span></a></li>
+<li><a href="#2-what-youcoded-does-not-collect"><span>2. What YouCoded does NOT collect</span></a></li>
+<li><a href="#3-what-youcoded-does-collect-when-and-why"><span>3. What YouCoded DOES collect, when, and why</span></a></li>
+<li><a href="#4-third-parties"><span>4. Third parties</span></a></li>
+<li><a href="#5-your-rights-and-choices"><span>5. Your rights and choices</span></a></li>
+<li><a href="#6-security"><span>6. Security</span></a></li>
+<li><a href="#7-changes-to-this-policy"><span>7. Changes to this policy</span></a></li>
+<li><a href="#8-contact"><span>8. Contact</span></a></li></ol></nav></details>
+      <article class="policy-content" id="policy-content" tabindex="-1" aria-label="YouCoded Privacy Policy">
+<p>YouCoded is made and published by <strong>Destin&#x27;s Adventures, LLC</strong>, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This policy explains in plain language what data the YouCoded software touches, what gets sent to servers operated by the project, and what doesn&#x27;t.</p>
+<p>If anything here conflicts with what the app actually does, <strong>the app is wrong and should be fixed.</strong> Please report mismatches to support@youcoded.ai.</p>
+<hr/>
+<h2 id="1-the-short-version" tabindex="-1">1. The short version</h2>
+<ul>
+<li><strong>YouCoded does not receive the content you send to an AI model.</strong> Claude Code conversations go directly to Anthropic under your own account. Native cloud conversations go to the provider you choose, such as OpenRouter and its selected underlying provider, Anthropic, OpenAI/ChatGPT, Google, or another endpoint you configure.</li>
+<li><strong>Cloud providers have their own data policies.</strong> They may retain, log, review, or otherwise handle content under their own terms, account settings, plan, model, and legal or safety obligations. YouCoded cannot change or delete records held by those providers.</li>
+<li><strong>Local-model inference stays on your device.</strong> When a model runs entirely on your device, YouCoded does not send that inference request to a cloud model provider, so a cloud model provider does not receive it to retain or train on.</li>
+<li><strong>Your sign-in tokens and API keys never reach YouCoded servers.</strong> They are stored locally on your device.</li>
+<li><strong>Your personal files, journal entries, encyclopedia notes, and other user data created in the app stay on your device unless you choose a feature that sends them elsewhere.</strong> For example, a cloud-model prompt, sync or backup, web tool, integration, marketplace skill, or remote MCP server can each have its own data flow.</li>
+<li><strong>Backup and sync use <em>your</em> accounts.</strong> YouCoded supports backing up local state to Google Drive, GitHub, or iCloud — those are your accounts; YouCoded servers are never the destination.</li>
+<li><strong>In the app, there are three narrow data flows that DO touch YouCoded-operated servers:</strong> anonymous usage analytics (opt-out at any time), marketplace plugin discovery (anonymous reads, optional GitHub sign-in for ratings), and multiplayer games (only while a game lobby is open). Each is described in detail below.</li>
+</ul>
+<hr/>
+<h2 id="website-analytics" tabindex="-1">Website analytics</h2>
+<p>The top-level landing page at <code>https://youcoded.ai/</code> sends a visit and cumulative counts of instruction opens and final installer-link clicks to <code>api.youcoded.ai</code>. Opening iOS instructions counts as an instruction open, not a download. Installer variants are grouped into Windows, macOS, Linux, and Android. Clicks do not prove download completion or installation. There is no periodic website heartbeat.</p>
+<p>Attribution uses an owner-registered source/campaign pair from the link and a referring hostname, never the full referring URL or other query parameters. Invalid or unregistered pairs are untagged. Website analytics do not send message content, app device hashes, account identifiers, inferred visitor platform, or geography. Hosting and security providers still process network requests and may keep operational logs under their own policies; this is not a promise of no server logs.</p>
+<p>Each page creates a random identifier in JavaScript memory. It is transmitted for initial admission, but the server stores only a secret-keyed HMAC-derived page key, not the raw random identifier. An opaque server capability lets the same open page update its cumulative counts without double-counting retries. This correlates updates from that page, including across midnight, but does not identify returning visitors across reloads or tabs. Reloading creates a new identifier; restoring the same document from the browser&#x27;s back/forward cache retains the same visit. No website journey identifier is saved in cookies, localStorage, sessionStorage, or a URL.</p>
+<p>All website visitor analytics records in the active database — daily aggregates, per-page deduplication snapshots, and supporting daily records — share a rolling <strong>90 UTC-date history including today</strong>. Scheduled cleanup removes expired records; outages can delay physical deletion. Reports and updates independently enforce the retained window. Cloudflare backups/Time Travel and operational logs have separate retention. Cloudflare documents a Time Travel recovery window of 7 days on Workers Free and 30 days on Workers Paid; see <a href="https://developers.cloudflare.com/d1/platform/limits/">Cloudflare D1 limits</a>. The 90-day active-database window does not promise instantaneous deletion from backups or operational logs. Owner-created campaign configuration is retained separately so shared links continue to work; it is not visitor history.</p>
+<p>The website has no visitor preference or opt-out control. Blocking scripts or requests, connection failures, bots, and collection limits affect coverage. Counts describe accepted page snapshots, not every person who visits. The app&#x27;s analytics opt-out remains separate and is described in Section 3.1.</p>
+<hr/>
+<h2 id="2-what-youcoded-does-not-collect" tabindex="-1">2. What YouCoded does NOT collect</h2>
+<p>To make the boundaries explicit, YouCoded servers do <strong>not</strong> receive:</p>
+<ul>
+<li>The contents of your conversations or prompts sent to a model. Those go to the cloud provider you choose, if any, rather than YouCoded servers.</li>
+<li>Your Claude Pro/Max sign-in token, ChatGPT sign-in tokens, OAuth tokens for any other service, API keys, or passwords.</li>
+<li>Files on your device, the contents of your projects, or the contents of any Claude Code transcript file.</li>
+<li>Your name, email, real address, or other personal identifiers — except where you voluntarily sign in with GitHub for the marketplace (Section 3.2 below) or contact us by email.</li>
+<li>Anything you type into the chat box, the terminal, the journaling plugin, the encyclopedia, or any other in-app surface.</li>
+<li>Plugin or theme usage telemetry — we do not record which skills you run, which themes you switch to, or how often you open the app.</li>
+</ul>
+<p>If you discover a code path that contradicts any of the above, treat it as a privacy bug and report it.</p>
+<hr/>
+<h2 id="3-what-youcoded-does-collect-when-and-why" tabindex="-1">3. What YouCoded DOES collect, when, and why</h2>
+<h3 id="31-privacy-preserving-device-analytics-opt-out" tabindex="-1">3.1 Privacy-preserving device analytics (opt-out)</h3>
+<p><strong>What it is:</strong> A daily heartbeat ping from each device that has the app open at least once that day, telling YouCoded <em>which version</em> of the app is in active use <em>on roughly how many devices</em> in <em>which countries and regions</em>. That&#x27;s the entire purpose. It is a daily-attendance counter — there are no session counts, no message counts, no plugin usage events, no in-app behavior tracking. The device hash is a stable pseudonymous identifier, not an anonymous one: it lets us recognize the same device without receiving its raw hardware ID.</p>
+<p><strong>What we send:</strong></p>
+<ul>
+<li>An <strong>irreversible hash of your device&#x27;s hardware ID.</strong> YouCoded reads a hardware identifier from your device (Windows MachineGuid, macOS IOPlatformUUID, Linux <code>/etc/machine-id</code>, or Android <code>Settings.Secure.ANDROID_ID</code>), combines it with a secret salt baked into the app source, and runs HMAC-SHA256 over the result. <strong>The raw hardware ID never leaves your device.</strong> Only the 64-character hex hash is transmitted. The hash cannot be reversed back into the original ID.</li>
+<li>The installed app version (e.g. <code>1.3.0</code>).</li>
+<li>The platform (<code>desktop</code> or <code>android</code>).</li>
+<li>On desktop, the OS family (<code>win</code>, <code>mac</code>, or <code>linux</code>). Android omits this.</li>
+</ul>
+<p><strong>What our server adds (server-side, from your IP at request time):</strong></p>
+<ul>
+<li>Your country (from Cloudflare&#x27;s <code>CF-IPCountry</code> header).</li>
+<li>Your approximate region (US state, Canadian province, etc., from <code>CF-IPRegionCode</code> — ISO 3166-2).</li>
+</ul>
+<p><strong>Your IP address itself is read once per request and immediately discarded.</strong> It is not stored, logged, or associated with the heartbeat in our analytics database.</p>
+<p><strong>Where it goes:</strong> Cloudflare Analytics Engine, a Cloudflare-hosted columnar analytics store. <strong>Retention is 90 days</strong> (Cloudflare&#x27;s free-tier default — older rows age out automatically). Aggregated counts pulled from this data are used internally to understand active-user counts, version adoption, and rough geographic distribution; aggregates are not sold or shared with third parties.</p>
+<p><strong>Why we collect it:</strong> With fewer than a hundred users at the time of writing, knowing whether anyone is actually using the app — and which versions they&#x27;re on — is the difference between maintaining the project well and flying blind. The anonymous-by-construction design is a deliberate floor: we wanted a usable signal without ever getting access to identifiable per-user behavior.</p>
+<p><strong>Your control:</strong> This is <strong>opt-out at any time</strong>, with no penalty or feature loss, in <strong>Settings → About → Privacy</strong> in the app. When opt-out is set to off, no analytics events fire and no hash is computed.</p>
+<p><strong>What we cannot do:</strong> Because the data is keyed by an irreversible hash and your IP is never stored, we cannot identify which row in the analytics database is yours. As a result, we <strong>cannot delete an individual user&#x27;s analytics history on request</strong> — we genuinely don&#x27;t know which row is yours. The mitigations are (a) the 90-day automatic retention limit and (b) the opt-out toggle.</p>
+<h3 id="32-marketplace-plugin-discovery-and-ratings" tabindex="-1">3.2 Marketplace plugin discovery and ratings</h3>
+<p><strong>Anonymous use (default):</strong> Browsing the marketplace, viewing plugin metadata, and downloading plugins make HTTP requests to a Cloudflare Worker backend and to <code>raw.githubusercontent.com</code>. Those requests do not require sign-in; they are subject to standard server logs (IP address, user agent, requested URL) for routing and abuse-prevention purposes only. The marketplace Worker does record install <strong>counts</strong> (incremented on each install) — those counts are aggregate numbers, not tied to a user identifier.</p>
+<p><strong>Signed-in use (optional):</strong> If you choose to <strong>rate</strong> a plugin or <strong>submit</strong> a plugin to the marketplace, you sign in with <strong>GitHub OAuth</strong>. In that case YouCoded&#x27;s marketplace Worker records:</p>
+<ul>
+<li>Your GitHub user ID and login name (so ratings persist across sessions and submissions can be attributed).</li>
+<li>Your rating value(s) and the plugins they apply to.</li>
+<li>(For plugin submitters) The pull request you opened to the marketplace registry repository.</li>
+</ul>
+<p>This data is stored in a Cloudflare D1 database. <strong>You can delete this data on request</strong> by emailing support@youcoded.ai from the GitHub address associated with the account (or otherwise demonstrating ownership), and YouCoded will remove your ratings and any associated metadata within 30 days.</p>
+<h3 id="33-multiplayer-games" tabindex="-1">3.3 Multiplayer games</h3>
+<p>YouCoded includes multiplayer Connect 4 and chess backed by PartyKit (running on Cloudflare Durable Objects). When you are <strong>in an active game lobby or game</strong>:</p>
+<ul>
+<li>Your GitHub login name (used as your in-game username) is shared with the room.</li>
+<li>Your moves and any in-game chat are relayed through the room to the other player(s) in real time.</li>
+</ul>
+<p>When you leave the lobby or the game ends, the room shuts down and game state is discarded. <strong>No game traffic is retained server-side beyond the active room.</strong> No game data is written to long-term storage.</p>
+<h3 id="34-announcements" tabindex="-1">3.4 Announcements</h3>
+<p>Once an hour while the app is running, YouCoded fetches a small text file (<code>announcements.txt</code>) from the YouCoded GitHub repo via <code>raw.githubusercontent.com</code> to display any pending in-app announcement. The fetch is anonymous from a YouCoded perspective — we do not see who fetched it. GitHub may log the request as it does any public CDN request.</p>
+<h3 id="35-theme-registry-and-bundled-plugins" tabindex="-1">3.5 Theme registry and bundled plugins</h3>
+<p>Theme metadata and the bundled-plugin manifest are also fetched from public GitHub URLs (<code>raw.githubusercontent.com</code>). These fetches are anonymous from YouCoded&#x27;s perspective and are subject to GitHub&#x27;s own logging.</p>
+<h3 id="36-remote-access-optional-off-by-default" tabindex="-1">3.6 Remote access (optional, off by default)</h3>
+<p>The app can serve its UI to a web browser over your local network or via Tailscale. This is <strong>off by default</strong>. When enabled, traffic flows directly between your device and the browser you connect from — <strong>none of it touches YouCoded-operated servers.</strong> The connection is <strong>not TLS-encrypted</strong> at the YouCoded layer; we strongly recommend Tailscale (which encrypts end-to-end with WireGuard) for sensitive sessions.</p>
+<hr/>
+<h2 id="4-third-parties" tabindex="-1">4. Third parties</h2>
+<p>YouCoded relies on the following third-party services. Each has its own privacy policy that governs what they do with the data described above:</p>
+<ul>
+<li><strong>Cloudflare</strong> — hosts the marketplace Worker, the Analytics Engine analytics store, the D1 database, and the PartyKit multiplayer rooms. Cloudflare receives the network requests that carry the data described in Section 3, including your IP address (which Cloudflare&#x27;s edge network uses to serve content and to derive country/region for our analytics). See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare&#x27;s privacy policy</a>.</li>
+<li><strong>GitHub</strong> — hosts the YouCoded source code, the marketplace registry, the theme registry, and the OAuth flow used for marketplace ratings/submissions. GitHub receives the network requests that carry the data described in Section 3.2 and 3.5. See <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub&#x27;s privacy statement</a>.</li>
+<li><strong>Anthropic</strong> — operates Claude Code and can also be selected as a direct cloud provider. Content sent through either route is governed by the account, plan, and Anthropic policies that apply to it. See <a href="https://www.anthropic.com/privacy">Anthropic&#x27;s privacy policy</a> and <a href="https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data">data-retention information</a>.</li>
+<li><strong>OpenAI</strong> — operates ChatGPT and can be selected as a direct cloud provider. Content sent through a ChatGPT-plan or direct OpenAI route is governed by the account, plan, and OpenAI policies that apply to it. See <a href="https://openai.com/consumer-privacy/">OpenAI&#x27;s privacy information</a>.</li>
+<li><strong>OpenRouter and its underlying providers</strong> — OpenRouter routes requests to a selected model provider. OpenRouter documents its own handling separately from the underlying provider&#x27;s retention and training rules; both matter for a request you send through OpenRouter. See <a href="https://openrouter.ai/docs/guides/privacy/data-collection">OpenRouter&#x27;s data collection guide</a> and <a href="https://openrouter.ai/docs/guides/privacy/provider-logging">provider logging guide</a>.</li>
+<li><strong>Other cloud providers or endpoints you configure</strong> — if you add a direct provider, an OpenAI-compatible endpoint, an MCP server, or another integration, that service receives the data needed to answer your request or perform the work you authorize. Review its policy before using it with sensitive information.</li>
+<li><strong>Termux package mirrors (Android only)</strong> — during initial setup, the Android app downloads runtime packages over HTTPS (with SHA256 verification) from <code>packages.termux.dev</code>. See <a href="https://termux.dev/">Termux&#x27;s project pages</a> for their policies.</li>
+</ul>
+<p>YouCoded does not sell data, run ads, or have commercial partners. The app does not send your model conversations or credentials to YouCoded-operated servers; third parties receive data only through the model, sync, backup, marketplace, integration, remote-access, or other features you choose to use.</p>
+<hr/>
+<h2 id="5-your-rights-and-choices" tabindex="-1">5. Your rights and choices</h2>
+<ul>
+<li><strong>Opt out of analytics</strong> at any time in <strong>Settings → About → Privacy</strong>. This stops all heartbeat pings immediately.</li>
+<li><strong>Delete marketplace ratings and OAuth data</strong> by emailing support@youcoded.ai from your GitHub-associated email; we&#x27;ll remove the data within 30 days.</li>
+<li><strong>Stop using YouCoded</strong> at any time. Uninstalling the app stops all data flows; existing analytics rows continue to age out under the 90-day retention window described in Section 3.1.</li>
+<li><strong>Right to access</strong> — for the data described in Section 3.2, we will provide a copy of what we have on file on request.</li>
+<li><strong>Children</strong> — YouCoded is not directed at children under 13 and we do not knowingly collect data from them. If you believe a child has used the app, contact us and we&#x27;ll work with you to handle it.</li>
+<li><strong>International users</strong> — YouCoded&#x27;s servers are hosted on Cloudflare&#x27;s edge network. By using the app you agree that your data may be processed by Cloudflare and GitHub in jurisdictions outside your home country.</li>
+</ul>
+<p>If you are in the EU, UK, California, or another jurisdiction with a comprehensive privacy law (GDPR, UK GDPR, CCPA/CPRA, etc.), the rights described here are intended to satisfy the spirit of those laws. If you believe more is owed, please contact us — YouCoded is a small project and we are not equipped for adversarial regulatory disputes, but we will respond in good faith.</p>
+<hr/>
+<h2 id="6-security" tabindex="-1">6. Security</h2>
+<p>We do our best to handle data carefully — analytics is anonymous by construction, secrets are stored in Cloudflare&#x27;s secret store rather than in source, and the marketplace Worker auto-deploys via GitHub Actions with vetted secrets. We are not, however, a security-resourced organization. If you have security concerns, see <a href="https://github.com/itsdestin/youcoded/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+<hr/>
+<h2 id="7-changes-to-this-policy" tabindex="-1">7. Changes to this policy</h2>
+<p>If we change this policy, we&#x27;ll update the <strong>Effective date</strong> at the top, push the new file to the YouCoded repository, and — for material changes — note the change in the in-app announcement system. The current version always lives at <code>https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md</code>. We recommend re-reading it occasionally if the project&#x27;s data flows matter to you.</p>
+<p>We will not retroactively expand what&#x27;s collected from data already in our systems without first updating this policy and giving users a chance to opt out.</p>
+<hr/>
+<h2 id="8-contact" tabindex="-1">8. Contact</h2>
+<p>Destin&#x27;s Adventures, LLC, Arizona, United States.</p>
+<ul>
+<li><strong>Email:</strong> support@youcoded.ai</li>
+<li><strong>Subject line for privacy questions:</strong> <code>[YouCoded Privacy] &lt;short description&gt;</code></li>
+<li><strong>Source code:</strong> https://github.com/itsdestin/youcoded</li>
+<li><strong>Issue tracker (non-sensitive):</strong> https://github.com/itsdestin/youcoded/issues</li>
+</ul>
+<p>For security issues specifically, see <a href="https://github.com/itsdestin/youcoded/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+      </article>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <a href="index.html">← Back to home</a>
+  <nav class="policy-nav" aria-label="Legal pages"><a href="privacy.html" aria-current="page">Privacy</a>
+<a href="terms.html">Terms</a></nav>
+  <a href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md">Source Markdown ↗</a>
+</footer>
+</body>
+</html>

@@ -1,0 +1,7 @@
+/* Design-guide review (2026-09-24): LIST ROWS "BOXED ROWS".
+   Every list of choices (Settings, menus, switchers, dropdowns) uses one row
+   treatment: each row is its own soft tinted box with a small gap — the Settings list look, everywhere. Hover still highlights the row under the pointer.
+   Workbench-only: ?proposal=shape-round,cards-raised,lists-boxed. */
+@layer proposal {
+:is(.stepped-hover[class*="bg-inset/50"], [role=menu] [role=menuitem], [role=listbox] [role=option], [role=dialog] button.w-full.rounded-md.border, .group\/row):not(.border-accent) { background: color-mix(in srgb, var(--inset) 60%, transparent) !important; border-color: transparent !important; border-radius: var(--radius-md) !important; margin-block: 2px !important; }
+}

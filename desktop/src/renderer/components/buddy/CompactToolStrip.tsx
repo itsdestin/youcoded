@@ -7,15 +7,16 @@ interface Props {
   sessionId: string;
 }
 
-// Maps tool status to a color dot — hardcoded per project convention
-// (status colors stay theme-independent, matching the rule in CLAUDE.md).
+// Maps tool status to a dot class. WHY the main session strip's classes (`DOT_BG` in
+// SessionStrip.tsx), not hand-picked hex (guide principle 2; the guide's buddy deviation "grey hex
+// dots"): the fixed status hues are the app's one set, and the idle grey was a stray #888.
 const toolDot = (status: ToolCallState['status']): string => {
   switch (status) {
-    case 'running': return '#60a5fa';        // blue
-    case 'complete': return '#4ade80';       // green
-    case 'failed': return '#ef4444';         // red
-    case 'awaiting-approval': return '#f5a623'; // amber
-    default: return '#888';
+    case 'running': return 'bg-blue-400';
+    case 'complete': return 'bg-green-400';
+    case 'failed': return 'bg-red-400';
+    case 'awaiting-approval': return 'bg-amber-400';
+    default: return 'bg-gray-500';
   }
 };
 
@@ -92,7 +93,8 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
           padding: '4px 14px',
           borderRadius: 999,
           fontFamily: 'Cascadia Code, monospace',
-          fontSize: 10.5,
+          // WHY 11px, not 10.5 (decisions "Smallest text": nothing a user reads is under 11px).
+          fontSize: 11,
           letterSpacing: 0.3,
           cursor: 'pointer',
           border: 'none',
@@ -105,7 +107,8 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
   }
 
   return (
-    <div className="layer-surface ring-state" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
+    // WHY no borderRadius: a hand-set 10px overrode .layer-surface's theme corner (guide principle 2).
+    <div className="layer-surface ring-state" style={{ padding: 6, alignSelf: 'stretch' }}>
       {/* Collapse toggle */}
       <button
         onClick={() => { if (awaiting.length === 0) setExpanded((e) => !e); }}
@@ -116,7 +119,8 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
           textAlign: 'center',
           background: 'transparent',
           border: 'none',
-          fontSize: 10,
+          // WHY 11px (decisions "Smallest text": 11px replaces 10px everywhere).
+          fontSize: 11,
           color: 'var(--fg-dim)',
           cursor: awaiting.length > 0 ? 'default' : 'pointer',
           opacity: awaiting.length > 0 ? 0.5 : 1,
@@ -132,7 +136,7 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
           tool={t}
           sessionId={sessionId}
           target={targetFor(t)}
-          dotColor={toolDot(t.status)}
+          dotClass={toolDot(t.status)}
           dispatch={dispatch}
         />
       ))}
@@ -145,13 +149,13 @@ function ToolRow({
   tool,
   sessionId,
   target,
-  dotColor,
+  dotClass,
   dispatch,
 }: {
   tool: ToolCallState;
   sessionId: string;
   target: string;
-  dotColor: string;
+  dotClass: string;
   dispatch: ReturnType<typeof useChatDispatch>;
 }) {
   const [responding, setResponding] = useState(false);
@@ -216,17 +220,17 @@ function ToolRow({
         alignItems: 'center',
         gap: 6,
         padding: '5px 8px',
-        borderRadius: 6,
+        borderRadius: 'var(--radius-sm)',
         fontSize: 11,
       }}
     >
       {/* Status dot */}
       <span
+        className={dotClass}
         style={{
           width: 5,
           height: 5,
           borderRadius: '50%',
-          background: dotColor,
           flexShrink: 0,
         }}
       />
@@ -324,7 +328,8 @@ function ToolRow({
     </div>
     {/* Same sentence as ToolCard's permission buttons: the answer's fate is unknown. */}
     {unconfirmed && (
-      <div role="alert" style={{ padding: '0 8px 4px 19px', fontSize: 10, color: 'var(--fg-dim)' }}>
+      // WHY 11px: ToolCard says this same sentence at text-3xs (11px; decisions "Smallest text").
+      <div role="alert" style={{ padding: '0 8px 4px 19px', fontSize: 11, color: 'var(--fg-dim)' }}>
         YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
       </div>
     )}

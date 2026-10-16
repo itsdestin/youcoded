@@ -18,7 +18,7 @@ describe('a model switch updates the session the All Sessions menu reads', () =>
     expect(fn).toContain('setSessionModels((prev) => new Map(prev).set(sid, m))');
     expect(fn).toMatch(/setSessions\(\(prev\) => prev\.map\(\(s\) => \(s\.id === sid \? \{ \.\.\.s, model: m \} : s\)\)\)/);
   });
-  it('every Claude Code switch goes through it: the shared switch, its revert, and the Model & Effort pick', () => {
+  it('every Claude Code switch goes through it: the shared switch, its revert, and the Model & effort pick', () => {
     expect(body('const switchSessionModel = useCallback(')).toContain('rememberSessionModel(sid, target)');
     expect(body('const actual = MODELS.find(', 600)).toContain('rememberSessionModel(sessionId, actual)');
     expect(body('onSelectModel={(m) => {', 800)).toContain('rememberSessionModel(sessionId, m)');

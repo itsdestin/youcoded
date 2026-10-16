@@ -132,7 +132,7 @@ describe('<FirstTimeWarning>', () => {
     const onContinue = vi.fn();
     render(React.createElement(FirstTimeWarning, { kind: 'skip-permissions', open: true, onCancel, onContinue }));
 
-    expect(screen.getByRole('dialog', { name: 'Before you turn on Skip Permissions' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Before you turn on Skip permissions' })).toBeTruthy();
     for (const line of WARNING_COPY['skip-permissions'].body) expect(screen.getByText(line)).toBeTruthy();
 
     const go = screen.getByRole('button', { name: 'Turn it on' }) as HTMLButtonElement;

@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
  * K5 — the status strip. "What is this subsystem doing right now", plus the one
  * action that resolves it.
  *
- * Replaces Remote Access's ELEVEN ad-hoc setup branches (the spec said eight),
+ * Replaces Remote access's ELEVEN ad-hoc setup branches (the spec said eight),
  * which between them used loose <p> tags, centred green text, centred muted
  * text, a bare button with no message at all, and full-width buttons stacked
  * mid-scroll. The words were mostly fine — the shape was eleven shapes.
@@ -45,7 +45,7 @@ export type StatusStripProps = {
 
 export function StatusStrip({ tone = 'idle', children, detail, action, className = '' }: StatusStripProps) {
   return (
-    <div className={`px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
+    <div className={`status-strip px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
       <span className="shrink-0 flex items-center justify-center w-2">
         {tone === 'busy' ? (
           <BrailleSpinner size="xs" />

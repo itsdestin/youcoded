@@ -15,7 +15,7 @@
 
 import React, { useState } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
-import { Button } from "../ui";
+import { Button, FieldError } from "../ui";
 
 // Used only when the updater failed WITHOUT saying why. Deliberately states
 // what happened and guesses no cause — see docs/error-message-standards.md.
@@ -27,9 +27,15 @@ interface Props {
   kind: "skill" | "theme";
   /** `pill` for the card corner, `button` for a detail-overlay header action. */
   variant?: "pill" | "button";
+  /** `button` only: fill the width it is given (a detail page's lone or stacked button —
+   *  guide "Buttons": one button is full width, stacked buttons are full width). */
+  block?: boolean;
+  /** `button` only: the filled main action. A detail page whose only other button is
+   *  Uninstall makes Update the main one (guide: one filled button per view). */
+  primary?: boolean;
 }
 
-export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
+export default function UpdateButton({ id, kind, variant = "pill", block = false, primary = false }: Props) {
   const mp = useMarketplace();
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,12 +63,12 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
     // stopPropagation on the wrapper too, so clicking the error text inside a
     // card doesn't open the detail overlay.
     <span
-      className="inline-flex flex-col items-end gap-0.5 min-w-0"
+      className={block ? "flex flex-col gap-1 min-w-0" : "inline-flex flex-col items-end gap-0.5 min-w-0"}
       onClick={(e) => e.stopPropagation()}
     >
       {variant === "button" ? (
         <Button
-          variant="secondary"
+          variant={primary ? "primary" : "secondary"}
           size="lg"
           onClick={run}
           disabled={updating}
@@ -79,18 +85,18 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
           // Accent-tinted pill: it must read as something you can press, unlike
           // the inert "Installed" text it replaces. Tokens, not raw colours, so
           // it re-tints on every theme.
-          className="relative z-10 shrink-0 text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-60 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          // WHY: this is a status/action pill — normal case, no letter-spacing
+          // (labels batch, guide: "Status and notices").
+          className="relative z-10 shrink-0 text-3xs px-2 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-60 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           {label}
         </button>
       )}
+      {/* WHY FieldError (guide: no red/coloured body text for messages) */}
       {error && (
-        <span
-          role="status"
-          className="text-2xs text-destructive-fg text-right leading-snug max-w-[16rem] break-words"
-        >
+        <FieldError as="span" size="2xs" className={block ? "break-words" : "text-right max-w-[16rem] break-words"}>
           {error}
-        </span>
+        </FieldError>
       )}
     </span>
   );

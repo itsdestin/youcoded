@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // friends-screen.test.tsx
-// Render tests for the friends list UI (FriendsScreen inside GameLobby.tsx).
+// Render tests for the friends UI: the friends panel at the top of the Games list
+// (FriendsPanel.tsx — add a friend, requests, unfriend/block) and a game's lobby
+// (GameLobby.tsx — people, status, Challenge). Split 2026-10-05, redesign backlog
+// row 11: "no add friend in game panels".
 // game-context and account-context are mocked (same style as use-presence.test.tsx)
 // so we can drive game state + signed-in status directly; window.claude.social is
 // a vi.fn mock so we observe exactly which social IPC calls the UI makes.
@@ -12,9 +15,11 @@ import { render, act, cleanup, fireEvent, waitFor } from '@testing-library/react
 // Hoisted shared handles the mock factories close over.
 const h = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  toggleIncognito: vi.fn(),
   state: {
     connected: true,
     partyError: null as string | null,
+    hiddenBlocked: null as 'unsupported' | 'unreachable' | null,
     username: 'Me',
     onlineUsers: [] as Array<{ id: string; name: string; handle: string | null; status: 'idle' | 'in-game' }>,
     screen: 'lobby' as string,
@@ -34,8 +39,18 @@ vi.mock('../src/renderer/state/account-context', () => ({
 }));
 
 import GameLobby from '../src/renderer/components/game/GameLobby';
+import FriendsPanel from '../src/renderer/components/game/FriendsPanel';
 
 const ok = <T,>(value: T) => ({ ok: true as const, value });
+
+// The friends card starts folded (games-social round 2, GS-2): open it, and when asked
+// open the add box too — the steps a person takes.
+async function openPanel(opts: { add?: boolean } = {}) {
+  const u = render(<FriendsPanel social="online" onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+  fireEvent.click(await u.findByRole('button', { name: /^Show all/ }));
+  if (opts.add) fireEvent.click(u.getByRole('button', { name: 'Add a friend' }));
+  return u;
+}
 const err = (status: number, message = 'nope') => ({ ok: false as const, status, message });
 
 // A no-op connection; challengePlayer is spied where a test needs it.
@@ -70,6 +85,8 @@ function makeSocial(over: Record<string, any> = {}) {
 
 beforeEach(() => {
   h.dispatch.mockClear();
+  h.state.connected = true;
+  h.state.hiddenBlocked = null;
   h.state.onlineUsers = [];
   h.state.username = 'Me';
   h.state.challengeFrom = null;
@@ -91,7 +108,7 @@ const friend = (over: Partial<{ id: string; display_name: string; handle: string
   created_at: 0,
 });
 
-describe('FriendsScreen — friends list', () => {
+describe('Lobby — friends list', () => {
   it('renders merged rows online-first with plain-word statuses', async () => {
     // Alice offline, Bob online (live presence). mergeFriends should put Bob first.
     h.state.onlineUsers = [{ id: 'github:2', name: 'Bob', handle: 'bob', status: 'idle' }];
@@ -107,8 +124,8 @@ describe('FriendsScreen — friends list', () => {
     // Wait for refresh() to populate the list.
     await findByText('Alice');
     expect(getByText('Bob')).toBeTruthy();
-    // Word statuses — never glyphs. 'Online' appears twice: the player bar
-    // (word status replaced the old green dot) and Bob's row (live presence).
+    // Word statuses — never glyphs — as pills (row 11: "online status should be
+    // a status pill").
     expect(getAllByText('Online').length).toBeGreaterThan(0);
     expect(getByText('Offline')).toBeTruthy();  // Alice (no lastSeenAt)
 
@@ -143,30 +160,54 @@ describe('FriendsScreen — friends list', () => {
   });
 });
 
-describe('FriendsScreen — add a friend', () => {
+describe('Lobby — no social controls', () => {
+  it('has no add-a-friend box, no requests and no friend menu', async () => {
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend()])),
+      listRequests: vi.fn().mockResolvedValue(ok({
+        incoming: [{ id: 'req-1', from: { id: 'github:9', display_name: 'Zed', handle: 'zed', avatar_url: null }, created_at: 0 }],
+        outgoing: [],
+      })),
+    });
+    const { findByText, queryByLabelText, queryByText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
+    await findByText('Alice');
+    expect(queryByLabelText("Friend's handle")).toBeNull();
+    expect(queryByText('Zed')).toBeNull();
+    expect(queryByLabelText('Friend options')).toBeNull();
+  });
+
+  it('an empty lobby sends you back to the Games list to add a friend', async () => {
+    const onAddFriend = vi.fn();
+    const { findByRole } = render(<GameLobby connection={makeConnection()} gameId="connect-four" onAddFriend={onAddFriend} />);
+    fireEvent.click(await findByRole('button', { name: 'Add a friend' }));
+    expect(onAddFriend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Friends panel — add a friend', () => {
   it('maps a 404 to "No one has that handle"', async () => {
     const sendRequest = vi.fn().mockResolvedValue(err(404));
     (window as any).claude.social = makeSocial({ sendRequest });
 
-    const { findByPlaceholderText, getByText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
-    const input = (await findByPlaceholderText("friend's handle")) as HTMLInputElement;
+    const { findByLabelText, getByRole, getByText } = await openPanel({ add: true });
+    const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: 'ghost' } });
-    fireEvent.click(getByText('Send request'));
+    fireEvent.click(getByRole('button', { name: 'Send friend request' }));
 
     await waitFor(() => expect(getByText('No one has that handle')).toBeTruthy());
     expect(sendRequest).toHaveBeenCalledWith('ghost');
   });
 
   it('lowercases the handle as the user types', async () => {
-    const { findByPlaceholderText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
-    const input = (await findByPlaceholderText("friend's handle")) as HTMLInputElement;
+    const { findByLabelText } = await openPanel({ add: true });
+    const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'AlIcE' } });
     expect(input.value).toBe('alice');
   });
 });
 
-describe('FriendsScreen — in-flight mutation guards', () => {
+describe('Friends panel — in-flight mutation guards', () => {
   it('double-clicking Accept fires acceptRequest once', async () => {
     // Hold the mutation open across both clicks so the second click hits the
     // in-flight guard rather than a completed (re-enabled) button.
@@ -182,7 +223,7 @@ describe('FriendsScreen — in-flight mutation guards', () => {
       acceptRequest,
     });
 
-    const { findByText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
+    const { findByText } = await openPanel();
     const accept = await findByText('Accept');
 
     fireEvent.click(accept);
@@ -204,11 +245,11 @@ describe('FriendsScreen — in-flight mutation guards', () => {
     );
     (window as any).claude.social = makeSocial({ sendRequest });
 
-    const { findByPlaceholderText, getByText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
-    const input = (await findByPlaceholderText("friend's handle")) as HTMLInputElement;
+    const { findByLabelText, getByRole, getByText } = await openPanel({ add: true });
+    const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'zed' } });
 
-    const send = getByText('Send request') as HTMLButtonElement;
+    const send = getByRole('button', { name: 'Send friend request' }) as HTMLButtonElement;
     fireEvent.click(send);
     // Enter while the first request is still in flight must not double-send.
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -220,31 +261,112 @@ describe('FriendsScreen — in-flight mutation guards', () => {
   });
 });
 
-describe('FriendsScreen — block is consequence-gated', () => {
-  it('requires the confirm step before calling block()', async () => {
+describe('Friends panel — block is consequence-gated', () => {
+  it('requires the confirm step in the friend details popup before calling block()', async () => {
     const blockFn = vi.fn().mockResolvedValue(ok(undefined));
     (window as any).claude.social = makeSocial({
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice', handle: 'alice' })])),
       block: blockFn,
     });
-
-    const { findByLabelText, getByRole, getByText, queryByText } = render(<GameLobby connection={makeConnection()} gameId="connect-four" />);
-
-    // Open the row menu.
-    const menuBtn = await findByLabelText('Friend options');
-    fireEvent.click(menuBtn);
-
-    // The menu shows Unfriend + Block; consequence copy is NOT yet visible.
-    expect(getByText('Unfriend')).toBeTruthy();
-    expect(queryByText(/Blocking removes this friend/)).toBeNull();
-
-    // Click the Block menu item → swaps to the confirm; block() not called yet.
-    fireEvent.click(getByRole('menuitem', { name: 'Block' }));
-    expect(getByText(/Blocking removes this friend/)).toBeTruthy();
+    const u = await openPanel();
+    fireEvent.click(await u.findByRole('button', { name: 'Alice — details' }));
+    // The popup names the friend and shows the handle; no warning yet.
+    expect(await u.findByText('@alice')).toBeTruthy();
+    expect(u.queryByText(/Blocking removes this friend/)).toBeNull();
+    fireEvent.click(u.getByRole('button', { name: 'Block…' }));
+    expect(u.getByText(/Blocking removes this friend/)).toBeTruthy();
     expect(blockFn).not.toHaveBeenCalled();
-
-    // Confirm — now block() fires with the account id.
-    fireEvent.click(getByRole('button', { name: 'Block' }));
+    fireEvent.click(u.getByRole('button', { name: 'Block Alice' }));
     await waitFor(() => expect(blockFn).toHaveBeenCalledWith('github:1'));
+  });
+});
+
+describe('Friends panel — folded summary and request order', () => {
+  it('starts folded to one line that counts who is online, and opens on click', async () => {
+    h.state.onlineUsers = [{ id: 'github:2', name: 'Bob', handle: 'bob', status: 'idle' }];
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' }), friend({ id: 'github:2', display_name: 'Bob', handle: 'bob' })])),
+    });
+    const u = render(<FriendsPanel social="online" onRetry={vi.fn()} />);
+    await u.findByText('1 of 2 friends online');
+    expect(u.queryByText('Alice')).toBeNull();
+    fireEvent.click(u.getByRole('button', { name: /^Show all/ }));
+    expect(await u.findByText('Alice')).toBeTruthy();
+  });
+
+  it('puts the filled Accept to the RIGHT of Decline', async () => {
+    (window as any).claude.social = makeSocial({
+      listRequests: vi.fn().mockResolvedValue(ok({
+        incoming: [{ id: 'req-1', from: { id: 'github:9', display_name: 'Zed', handle: 'zed', avatar_url: null }, created_at: 0 }],
+        outgoing: [],
+      })),
+    });
+    const u = await openPanel();
+    const accept = await u.findByRole('button', { name: 'Accept' });
+    const decline = u.getByRole('button', { name: 'Decline' });
+    // Guide "Buttons": two side by side, the filled one on the right.
+    expect(decline.compareDocumentPosition(accept) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('no internet and an unreachable server replace the whole card with the error card', async () => {
+    const off = render(<FriendsPanel social="offline" onRetry={vi.fn()} />);
+    expect(await off.findByText(/^No internet connection\./)).toBeTruthy();
+    expect(off.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    off.unmount();
+    const onRetry = vi.fn();
+    const srv = render(<FriendsPanel social="server" onRetry={onRetry} />);
+    expect(await srv.findByText(/^Can't reach the game server\./)).toBeTruthy();
+    expect(srv.queryByText(/No internet connection/)).toBeNull();
+    fireEvent.click(srv.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Friends panel — your status pill and the handle', () => {
+  it('your status is a pill you click; its menu switches to Incognito', async () => {
+    h.toggleIncognito.mockClear();
+    const u = render(<FriendsPanel social="online" onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    fireEvent.click(await u.findByRole('button', { name: 'Your status: Online' }));
+    fireEvent.click(u.getByRole('menuitemradio', { name: /Incognito/ }));
+    expect(h.toggleIncognito).toHaveBeenCalledTimes(1);
+  });
+
+  it('rows show the name only; the @handle is in the friend details popup', async () => {
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice', handle: 'alice' })])),
+    });
+    const u = await openPanel();
+    await u.findByText('Alice');
+    expect(u.queryByText('@alice')).toBeNull();
+    fireEvent.click(u.getByRole('button', { name: 'Alice — details' }));
+    expect(await u.findByText('@alice')).toBeTruthy();
+  });
+});
+
+describe('Friends panel — incognito', () => {
+  it('connected hidden: shows the real online count and that friends cannot see you', async () => {
+    h.state.onlineUsers = [{ id: 'github:1', name: 'Alice', handle: 'alice', status: 'idle' }];
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' }), friend({ id: 'github:2', display_name: 'Bo' })])),
+    });
+    const u = render(<FriendsPanel social="incognito" incognito onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    expect(await u.findByText("1 of 2 friends online · they can't see you")).toBeTruthy();
+  });
+
+  // Final review F4: each not-connected line says what actually happened — never a number, and never
+  // "who's online is hidden", which read as a choice when it was a failure.
+  it.each([
+    ['unsupported', "1 friend · the game server can't hide you yet, so who's online isn't shown"],
+    ['unreachable', "1 friend · couldn't check who's online — trying again"],
+    [null, '1 friend · connecting…'],
+  ] as const)('not connected (%s): says only what is true, never a number', async (why, text) => {
+    h.state.connected = false;
+    h.state.hiddenBlocked = why;
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' })])),
+    });
+    const u = render(<FriendsPanel social="incognito" incognito onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    expect(await u.findByText(text)).toBeTruthy();
+    expect(u.queryByText(/who's online is hidden/)).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → Buddy Floater, in each of the four states the desktop can report
+// Settings → Buddy floater, in each of the four states the desktop can report
 // (docs/active/design/2026-09-04-linux-buddy-helper/ §4's table).
 //
 // WHAT THIS FILE IS REALLY GUARDING. The buddy works today on Windows, macOS,
@@ -96,13 +96,13 @@ async function openPopup(): Promise<void> {
   render(<BuddyButton />);
   // The platform lookup and the helper lookup both resolve on microtasks; the
   // popup must be opened after them or every assertion reads the loading state.
-  await waitFor(() => expect(screen.getByText('Buddy Floater')).toBeInTheDocument());
-  fireEvent.click(screen.getByText('Buddy Floater'));
+  await waitFor(() => expect(screen.getByText('Buddy floater')).toBeInTheDocument());
+  fireEvent.click(screen.getByText('Buddy floater'));
   await waitFor(() => expect(screen.getByText('Show buddy floater')).toBeInTheDocument());
 }
 
 const toggleSwitch = () => screen.queryByRole('switch', { name: 'Show buddy floater' });
-const removeButton = () => screen.queryByRole('button', { name: 'Remove helper' });
+const removeButton = () => screen.queryByRole('button', { name: 'Remove KDE helper' });
 const UNSUPPORTED_ROW = /Not yet supported on this desktop/;
 const CONSENT_CARD = 'Let the buddy be moved?';
 
@@ -291,8 +291,8 @@ describe('the two gates that would otherwise survive deletion', () => {
     const calls = fakeClaude(HELPER_IN_PLACE);
     render(<BuddyButton />);
     fireEvent.click(screen.getByRole('button', { name: /buddy floater/i }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /remove helper/i })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: /remove helper/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /remove kde helper/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /remove kde helper/i }));
     await waitFor(() => expect(calls.remove).toBe(1));
     await waitFor(() => expect(calls.hide).toBe(1));
     expect(localStorage.getItem('youcoded-buddy-enabled')).toBe('0');

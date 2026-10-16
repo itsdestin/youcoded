@@ -4,6 +4,7 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { nativeStoreSlug, ccProjectSlug } from '../src/main/slug-encoding';
 
 // Mock electron before importing ipc-handlers: the families it wires import electron at module scope. (It no
@@ -42,6 +43,39 @@ const phoneCreate = (opts: any) => findChannel('session:create')!.handler(opts, 
 import * as conversationsService from '../src/main/conversations/service';
 import { startConversationStore, stopConversationStore, getConversationStore, pruneNativePhantomRecords } from '../src/main/conversations/service';
 import { startTagRegistry } from '../src/main/conversations/tag-registry-service';
+
+// WHY no test here may touch the network: every registerIpcHandlers call starts the app's update
+// check, a real request to GitHub. Its reply landing mid-test changed the status payload and failed
+// the status-push dedupe test on a loaded machine, and a unit test must not depend on GitHub's
+// timing or availability. Any socket or fetch a test opens is recorded and fails the file in afterAll.
+const networkAttempts: string[] = [];
+let releaseChecks = 0;
+beforeAll(async () => {
+  // The update check's https.get answers with a network error, as if offline: the app keeps its
+  // "no update known" status, exactly as it does on a machine with no connection.
+  const https = await import('node:https');
+  vi.spyOn(https.default, 'get').mockImplementation((() => {
+    releaseChecks++;
+    const req = new EventEmitter() as EventEmitter & { destroy: () => void };
+    req.destroy = () => {};
+    queueMicrotask(() => req.emit('error', new Error('offline (stubbed in ipc-handlers.test.ts)')));
+    return req;
+  }) as any);
+  const net = await import('node:net');
+  vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: any, ...args: any[]) {
+    const o = args[0];
+    networkAttempts.push(typeof o === 'object' && o ? `${o.host ?? o.path ?? '?'}:${o.port ?? ''}` : String(o));
+    throw new Error('ipc-handlers.test.ts: a test opened a network socket');
+  } as any);
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
+    networkAttempts.push(`fetch ${String(input?.url ?? input)}`);
+    throw new Error('ipc-handlers.test.ts: a test called fetch');
+  });
+});
+afterAll(() => {
+  expect(networkAttempts, 'a test in this file reached for the network').toEqual([]);
+  expect(releaseChecks, 'the update check no longer goes through https.get: the stub above is not standing in for it').toBeGreaterThan(0);
+});
 
 describe('IPC Handlers', () => {
   it('registers all expected IPC channels', () => {
@@ -227,7 +261,7 @@ describe('session:create resumed admission', () => {
       const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
       await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       acquire.mockClear();
-      const exit = manager.on.mock.calls.findLast((c: any) => c[0] === 'session-exit')[1];
+      const exit = [...manager.on.mock.calls].reverse().find((c: any) => c[0] === 'session-exit')![1];
       exit(info.id);
       const retry = open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: info.id });
       expect(release).not.toHaveBeenCalled();
@@ -781,31 +815,29 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
   let usageJson: string | null;
   let readFile: ReturnType<typeof vi.spyOn>;
   let stat: ReturnType<typeof vi.spyOn>;
-  let httpsGet: ReturnType<typeof vi.spyOn>;
   let updateStatus: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    // WHY pinned: the payload carries the update status, held by ONE shared update service that every
+    // registerIpcHandlers call in this file asks to check for a release. When those checks were real,
+    // a reply landing mid-test changed the payload between two ticks with no file changed ("expected
+    // 2 to be 1" on a loaded machine). The file-wide stub now answers them offline; the gate's dedupe is
+    // what these tests pin, so the update status is also held still here, whatever a check answers.
+    const { getUpdateService } = await import('../src/main/update-service');
+    updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus').mockReturnValue(
+      { current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any,
+    );
     usageJson = null;
     readFile = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p: any) => {
       if (String(p).endsWith('.usage-cache.json') && usageJson != null) return usageJson;
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
     stat = vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    // The build kicks a release check; keep it off the network.
-    const https = await import('node:https');
-    httpsGet = vi.spyOn(https.default, 'get').mockImplementation((() => ({ on: () => ({ on: () => ({}) }) })) as any);
-    // WHY (flaky "sends a changed payload once…"): the update service is a module-level singleton, and
-    // the EARLIER describes in this file call registerIpcHandlers with the real https.get. Whenever
-    // GitHub's reply lands (slow under a loaded full run), it swaps the cached update status from a
-    // 4-key fallback to a 7-key object — the status payload changes between two ticks and the dedupe
-    // correctly sends it twice. Pin the status so a stray reply cannot change what these tests compare.
-    const { getUpdateService } = await import('../src/main/update-service');
-    updateStatus = vi.spyOn(getUpdateService(), 'getUpdateStatus')
-      .mockReturnValue({ current: '0.0.0-test', latest: '0.0.0-test', update_available: false, download_url: null } as any);
+    // (The release check the build kicks is answered offline by the file-wide stub at the top.)
   });
   afterEach(() => {
-    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore(); updateStatus.mockRestore();
+    readFile.mockRestore(); stat.mockRestore(); updateStatus.mockRestore();
     vi.useRealTimers();
   });
 
@@ -1472,10 +1504,10 @@ describe('Welcome back tracking hooks', () => {
   it('the first user-message transcript event tracks a brand-new session, once', async () => {
     const { TranscriptWatcher } = await import('../src/main/transcript-watcher');
     const listeners: Record<string, Array<(...args: any[]) => void>> = {};
-    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string, cb: any) {
-      (listeners[event] ??= []).push(cb);
+    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string | symbol, cb: any) {
+      (listeners[event as string] ??= []).push(cb);
       return this;
-    });
+    } as any); // WHY cast: a `this`-returning stub cannot satisfy the EventEmitter overload
     try {
       const ipc = { handle: vi.fn(), on: vi.fn() };
       const hookRelay = { on: vi.fn(), start: vi.fn() };

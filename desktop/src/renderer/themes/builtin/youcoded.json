@@ -1,0 +1,40 @@
+{
+  "name": "YouCoded",
+  "slug": "youcoded",
+  "dark": false,
+  "source": "youcoded-core",
+  "tokens": {
+    "canvas": "#F7F0FB",
+    "panel": "#EFE3F6",
+    "inset": "#DCC5EB",
+    "well": "#FAF5FD",
+    "accent": "#8B47B8",
+    "on-accent": "#FFFFFF",
+    "fg": "#21152C",
+    "fg-2": "#43354E",
+    "fg-dim": "#50415C",
+    "fg-muted": "#5D4D69",
+    "fg-faint": "#887695",
+    "edge": "#C9B0DB",
+    "edge-dim": "#B597CCA0",
+    "scrollbar-thumb": "#B596CC",
+    "scrollbar-hover": "#8B47B8",
+    "link": "#6A2FB0",
+    "link-hover": "#4F1F8A"
+  },
+  "font": {
+    "family": "'Outfit', system-ui, sans-serif",
+    "mono": "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace"
+  },
+  "background": {
+    "average-color": "#D7B3E7",
+    "type": "image",
+    "value": "wallpaper",
+    "terminal-value": "wallpaper-terminal",
+    "opacity": 1,
+    "panels-blur": 16,
+    "panels-opacity": 0.72,
+    "bubble-blur": 10,
+    "bubble-opacity": 0.8
+  }
+}

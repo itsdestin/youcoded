@@ -255,7 +255,7 @@ describe('folder browsing at any size', () => {
     listFolder.mockResolvedValue({ ok: false, error: 'permission-denied' });
     const { findByText, queryByText, getByRole } = renderTab('list');
     expect(await findByText(/permission denied/)).toBeTruthy();
-    expect(getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(getByRole('button', { name: /try again/i })).toBeTruthy();
     expect(queryByText('No files found in this project folder.')).toBeNull();
     expect(queryByText('This folder is empty.')).toBeNull();
   });
@@ -275,7 +275,7 @@ describe('folder browsing at any size', () => {
     await findByTitle('big/f-00000.md');
     for (let i = 0; i < FOLDER_PAGE_SIZE / REVEAL_CHUNK + 1; i++) act(() => io.fireAll());
     expect(await findByText(/Some of this folder isn’t shown/)).toBeTruthy();
-    fireEvent.click(getByRole('button', { name: /retry/i }));
+    fireEvent.click(getByRole('button', { name: /try again/i }));
     await waitFor(() => expect(listFolder.mock.calls.filter((c: any[]) => c[2]?.offset === FOLDER_PAGE_SIZE)).toHaveLength(2));
     for (let i = 0; i < 6; i++) act(() => io.fireAll());
     await waitFor(() => expect(container.querySelectorAll('button[title^="big/f-"]').length).toBeGreaterThan(FOLDER_PAGE_SIZE));

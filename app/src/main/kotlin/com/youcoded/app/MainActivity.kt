@@ -144,7 +144,8 @@ class MainActivity : ComponentActivity(), HostJsBridge.Ui {
             Text(detail, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
             Spacer(Modifier.height(20.dp))
             Button(enabled = !retrying.value, onClick = { retrying.value = true; BackendService.start(applicationContext, restart = true) }) {
-                Text(if (retrying.value) "Retrying…" else "Retry")
+                // WHY "Try again": every retry button in YouCoded reads exactly this (error-notices-1#EN-Q1).
+                Text(if (retrying.value) "Trying again…" else "Try again")
             }
         }
     }

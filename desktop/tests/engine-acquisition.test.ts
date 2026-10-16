@@ -574,6 +574,7 @@ describe.skipIf(!posix)('EngineAcquisition — the lazy backfill', () => {
       expect(JSON.parse(fs.readFileSync(path.join(dir, '.complete'), 'utf8')).devices).toBeDefined();
     });
     for (let i = 0; i < 5; i++) acq.installed();
+    // settle (negative assertion): repeat calls must not record a second install.
     await new Promise((r) => setTimeout(r, 50));
     expect(fs.readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
   });
@@ -650,6 +651,7 @@ describe.skipIf(!posix)('EngineAcquisition — the lazy backfill', () => {
       expect(m.devices).toEqual([]);
     });
     for (let i = 0; i < 5; i++) acq.installed();
+    // settle (negative assertion): repeat calls must not record a second install.
     await new Promise((r) => setTimeout(r, 50));
     expect(fs.readFileSync(counter, 'utf8').trim().split('\n')).toHaveLength(1);
   });

@@ -41,7 +41,7 @@ import { ArtifactThumbnail } from './ArtifactThumbnail';
 import { matchSessionArtifact } from './filepath-match';
 import { asString } from '../utils/tool-input';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
-import { Tooltip } from './ui';
+import { FieldError, Tooltip } from './ui';
 
 export const SENT_FILES_TOOL = 'SendUserFile';
 
@@ -218,9 +218,11 @@ export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 
             Sending…
           </div>
         )}
+        {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+            for messages) */}
         {failed && (
-          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80 text-2xs font-semibold text-red-400">
-            Couldn’t send
+          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80">
+            <FieldError as="span" size="2xs">Couldn’t send</FieldError>
           </div>
         )}
       </div>
@@ -291,9 +293,11 @@ export function SentLinkTile({ link, status, error, narrow, compact = false }: {
     >
       <div className={`relative w-full ${narrow ? 'h-16' : 'h-28'} border-b border-edge bg-canvas flex items-center justify-center text-fg-dim`}>
         <LinkGlyph className={narrow ? 'w-7 h-7' : 'w-10 h-10'} />
+        {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+            for messages) */}
         {failed && (
-          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80 text-2xs font-semibold text-red-400">
-            Couldn’t send
+          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80">
+            <FieldError as="span" size="2xs">Couldn’t send</FieldError>
           </div>
         )}
       </div>
@@ -323,29 +327,6 @@ function FilesGlyph({ className = 'w-3.5 h-3.5' }: { className?: string }) {
       <path d="M14 2v6h6" />
     </svg>
   );
-}
-
-/** Tracks whether a horizontally scrolling element has content hidden past
- *  either edge. Re-measured on scroll and on resize (a bubble that widens can
- *  bring the last tile fully into view, at which point the right fade lies). */
-function useEdgeOverflow(ref: React.RefObject<HTMLDivElement | null>, deps: unknown[]) {
-  const [edges, setEdges] = useState({ left: false, right: false });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const left = el.scrollLeft > 2;
-      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
-      setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
-    };
-    measure();
-    el.addEventListener('scroll', measure, { passive: true });
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => { el.removeEventListener('scroll', measure); ro.disconnect(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return edges;
 }
 
 interface Props {
@@ -447,17 +428,11 @@ export function DeliverablesCard({ tools, sessionId }: Props) {
     [tools],
   );
 
-  const stripRef = useRef<HTMLDivElement>(null);
-  const edges = useEdgeOverflow(stripRef, [open, entries.length, narrow]);
-
   if (entries.length === 0 && captions.length === 0) return null;
 
   // One caption rides the header; several stack under the strip so none is lost.
   const headerCaption = captions.length === 1 ? captions[0] : '';
   const footCaptions = captions.length > 1 ? captions : [];
-  const fade = (side: 'left' | 'right') => ({
-    background: `linear-gradient(to ${side === 'left' ? 'right' : 'left'}, var(--well), transparent)`,
-  });
 
   return (
     <div className="mt-2 rounded-lg border border-edge bg-well overflow-hidden" data-testid="deliverables-card">
@@ -477,7 +452,11 @@ export function DeliverablesCard({ tools, sessionId }: Props) {
       {open && (
         <>
           <div className="relative">
-            <div ref={stripRef} className="flex gap-2 overflow-x-auto px-2 pb-2" data-testid="deliverables-strip">
+            {/* WHY .scroll-mask-x (2026-10-15, the one-fade pass): the strip used to paint two
+                --well-coloured gradient boxes over its ends, measured by a scroll listener and a
+                ResizeObserver in every reply that sent files. The app's one fade is CSS-only and
+                fades the tiles themselves, only on a side with more to see. */}
+            <div className="scroll-mask-x flex gap-2 overflow-x-auto px-2 pb-2" data-testid="deliverables-strip">
               {entries.map((e) => (
                 <div key={e.key} className={`${narrow ? 'w-44' : 'w-56'} shrink-0`}>
                   {e.kind === 'file' ? (
@@ -488,17 +467,16 @@ export function DeliverablesCard({ tools, sessionId }: Props) {
                 </div>
               ))}
             </div>
-            {/* Edge fades: only while something is actually hidden past that
-                edge, so a strip that fits shows none and a fully-scrolled strip
-                shows only the left one. */}
-            {edges.left && <div className="pointer-events-none absolute top-0 bottom-2 left-0 w-10" style={fade('left')} data-testid="deliverables-fade-left" />}
-            {edges.right && <div className="pointer-events-none absolute top-0 bottom-2 right-0 w-10" style={fade('right')} data-testid="deliverables-fade-right" />}
           </div>
           {footCaptions.map((c, i) => (
             <p key={i} className="px-3 pb-2 -mt-0.5 text-2xs text-fg-muted">{c}</p>
           ))}
+          {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+              for messages) */}
           {failures.map((f) => (
-            <p key={f.key} className="px-3 pb-2 -mt-0.5 text-2xs text-red-400 whitespace-pre-line">{f.text}</p>
+            <div key={f.key} className="px-3 pb-2 -mt-0.5">
+              <FieldError as="p" size="2xs" className="whitespace-pre-line">{f.text}</FieldError>
+            </div>
           ))}
         </>
       )}

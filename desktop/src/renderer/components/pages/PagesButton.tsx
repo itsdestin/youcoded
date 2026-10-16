@@ -41,7 +41,7 @@ export function PagesButton({ active = false }: { active?: boolean } = {}) {
         type="button"
         className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
         onClick={toggle}
-        aria-label="Open Pages"
+        aria-label="Open pages"
         aria-pressed={active}
         data-guide-anchor="pages"
       >
@@ -51,7 +51,8 @@ export function PagesButton({ active = false }: { active?: boolean } = {}) {
   );
 }
 
-export function PinnedPageButtons() {
+/** `className` goes on each button — the band hides them at phone width (ScreenBand). */
+export function PinnedPageButtons({ className = '' }: { className?: string } = {}) {
   const dispatch = useArtifactDispatch();
   // Selected BEFORE the early return below — hooks must run on every render.
   const focusedId = useArtifactSelector((s) => (s.pageViewOpen && s.pageFocus ? s.openPageId : null));
@@ -66,7 +67,7 @@ export function PinnedPageButtons() {
           <Tooltip key={p.id} text={active ? 'Back to chat' : p.name} placement="bottom">
             <button
               type="button"
-              className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
+              className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''} ${className}`}
               onClick={() => dispatch(active ? { type: 'PAGE_VIEW_CLOSED' } : { type: 'PAGE_OPENED', pageId: p.id, focus: true })}
               aria-label={`Open ${p.name}`}
               aria-pressed={active}

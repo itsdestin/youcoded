@@ -435,7 +435,10 @@ describe('WebFetch', () => {
     expect(r.isError).toBeFalsy();
     expect(r.text).toMatch(/too large or deeply nested/);
     expect(parseSpy).not.toHaveBeenCalled();
-    expect(elapsed).toBeLessThan(1000); // was 5,518ms before the fix
+    // WHY 2,500 (2026-10-09): a full run at load average ~38 measured 1,410ms of CPU here while
+    // the file passed alone. The regression this guards cost 5,518ms and the fixed path ~3ms,
+    // so the bound still sits far from both; the real proof is parseSpy above.
+    expect(elapsed).toBeLessThan(2500); // was 5,518ms before the fix
     parseSpy.mockRestore();
 
     // <style/> is subject to the identical openImpliesClose-on-<body> escape

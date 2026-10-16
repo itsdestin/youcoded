@@ -74,7 +74,8 @@ describe('Button', () => {
 
   it('uses one control radius', () => {
     // Rule 2. Pills survive only as a documented className override.
-    expect(buttonClasses('primary')).toContain('rounded-lg');
+    // The theme's control corner (decisions "Control shape follows the theme").
+    expect(buttonClasses('primary')).toContain('rounded-control');
     expect(buttonClasses('primary')).not.toContain('rounded-sm');
     expect(buttonClasses('primary')).not.toContain('rounded-full');
   });
@@ -169,7 +170,8 @@ describe('Button', () => {
     });
 
     it('leaves the base untouched when nothing is overridden', () => {
-      expect(buttonClasses('primary', 'lg')).toContain('rounded-lg');
+      // The theme's control corner (decisions "Control shape follows the theme").
+      expect(buttonClasses('primary', 'lg')).toContain('rounded-control');
       expect(buttonClasses('primary', 'lg')).toContain('text-sm');
     });
   });
@@ -203,7 +205,7 @@ describe('Toggle', () => {
   });
 
   it('uses the destructive token for danger toggles, not a raw hex', () => {
-    // Skip Permissions / approve-all were a literal bg-[#DD4444] (change 17).
+    // Skip permissions / approve-all were a literal bg-[#DD4444] (change 17).
     render(<Toggle checked tone="danger" onChange={() => {}} />);
     const cls = screen.getByRole('switch').className;
     expect(cls).toContain('bg-destructive');
@@ -360,7 +362,7 @@ describe('InputGroup (change 77 — the action goes inside the field)', () => {
     );
     const wrapper = container.firstElementChild!;
     expect(wrapper.className).toContain('focus-within:border-accent');
-    expect(wrapper.className).toContain('border-edge-dim');
+    expect(wrapper.className).toContain('border-edge-card');
   });
 
   it('gives the wrapper the surface and the input none of it', () => {
@@ -622,21 +624,23 @@ describe('state family', () => {
     expect(onClick).toHaveBeenCalled();
   });
 
-  it('errors are NEUTRAL cards, not red-tinted boxes', () => {
-    // Option C, chosen explicitly over B ("destructive-tinted callout").
-    // The dot carries the failure; the container does not (rule 6).
+  it('errors are the red-tinted notice box, with no separate mark', () => {
+    // error-notices-1 (2026-10-12) reversed Option C (a neutral grey box with a red
+    // dot): the guide's notice box carries the colour in its tint and border, and
+    // nothing else is red. Full guard: tests/error-state.test.tsx.
     const { container } = render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
     const card = container.firstElementChild as HTMLElement;
-    expect(card.className).toContain('bg-inset/50');
-    expect(card.className).not.toContain('bg-destructive');
-    expect(card.querySelector('.bg-destructive')).not.toBeNull(); // the mark
+    expect(card.className).toContain('bg-destructive/10');
+    expect(card.className).toContain('border-destructive/50');
+    expect(card.className).not.toContain('bg-inset/50');
+    expect(card.querySelector('.bg-destructive')).toBeNull(); // the old dot is gone
   });
 
   it('Retry is a FILLED primary', () => {
     // Explicit review correction from secondary — secondary reads as a dim
     // outline on dark themes.
     render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Retry' }).className).toContain('bg-accent');
+    expect(screen.getByRole('button', { name: 'Try again' }).className).toContain('bg-accent');
   });
 
   it('general errors ship the two documented actions', () => {
@@ -659,12 +663,16 @@ describe('state family', () => {
     expect(onDiagnose).toHaveBeenCalled();
   });
 
-  it('field errors use the destructive token at the named size', () => {
-    // Change 34 (text-red-500 -> text-destructive) and rule 14 (§9.H fixed the
-    // spec's own text-[10px] here).
+  it('field errors are the danger notice box in miniature, at the named size', () => {
+    // fix-batch3#FB-1 (2026-09-29): the red now lives in the box (the danger
+    // Callout's tint + border), the words stay grey — never red body text.
+    // Rule 14 (§9.H fixed the spec's own text-[10px] here) still holds.
     render(<FieldError>Required</FieldError>);
     const el = screen.getByText('Required');
-    expect(el.className).toContain('text-destructive');
+    expect(el.className).toContain('bg-destructive/10');
+    expect(el.className).toContain('border-destructive/50');
+    expect(el.className).toContain('text-fg-2');
+    expect(el.className).not.toContain('text-destructive-fg');
     expect(el.className).toContain('text-3xs');
     expect(el.className).not.toContain('text-red-500');
     expect(el.tagName).toBe('SPAN');

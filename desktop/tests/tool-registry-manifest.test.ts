@@ -23,8 +23,9 @@ import { GrepTool } from '../src/main/harness/tools/grep';
 import { WebSearchTool } from '../src/main/harness/tools/web-search';
 import { mcpToolsFor } from '../src/main/harness/mcp/mcp-tools';
 
-const registered = CORE_TOOLS.map((t) => t.name).sort();
-const advertised = [...NATIVE_TOOL_NAMES].sort();
+// WHY string[]: the tests probe cross-membership with arbitrary names from the other list.
+const registered: string[] = CORE_TOOLS.map((t) => t.name).sort();
+const advertised: string[] = [...NATIVE_TOOL_NAMES].sort();
 
 describe('tool registry ↔ manifest parity', () => {
 

@@ -11,12 +11,12 @@
 // decides — `effective` is what the next check will use; this only renders it.
 //
 // WHY it lives in its own file (Destin's deck answer, S-1, 2026-09-13): it is
-// shown in TWO places — Settings → Development, and the version pill's update
+// shown in TWO places — Settings → Help & feedback (was Development until 2026-09-28), and the version pill's update
 // popup beside the changelog — and a second copy is how the Development list
 // ended up with two versions of itself, only one of which users ever saw.
 import React, { useEffect, useState } from 'react';
 import { Toggle } from './SettingsPanel';
-import { SettingRow } from './ui';
+import { CARD_LEVEL_1, SectionLabel, SettingRow } from './ui';
 
 /** Shared state hook, so the two surfaces cannot drift in what they report. */
 function useBetaChannel(): [boolean | null, () => void] {
@@ -63,9 +63,9 @@ const DESCRIPTION =
 const DESCRIPTION_SHORT = 'Offers pre-release versions as updates';
 
 /**
- * The one row. `separated` adds a rule above it for the update popup, where it
- * follows the changelog rather than a list of other settings; `icon` is passed
- * in Development, where it is one card among four that all carry one.
+ * The one row. `card` puts it under its own "Updates" label in a card, for the update
+ * popup, where it follows the release notes; `icon` is passed in Help & feedback, where it
+ * is one card among four that all carry one.
  *
  * It stays a <SettingRow variant="item"> in both places rather than a compact
  * hand-rolled variant: a label with a switch beside it IS a SettingRow, and
@@ -73,26 +73,37 @@ const DESCRIPTION_SHORT = 'Offers pre-release versions as updates';
  * scripts/ast-grep/rules/) is the guard that keeps it that way.
  */
 export function BetaChannelRow(
-  { separated, icon, variant = 'item' }:
-    { separated?: boolean; icon?: React.ReactNode; variant?: 'nav' | 'item' } = {},
+  { card, icon, variant = 'item' }:
+    { card?: boolean; icon?: React.ReactNode; variant?: 'nav' | 'item' } = {},
 ) {
   const [enabled, flip] = useBetaChannel();
   // Don't render until we know the state — avoids a visible OFF → ON flicker,
   // and renders nothing at all where the host has no channel to offer.
   if (enabled === null) return null;
-  return (
+  const row = (
     <SettingRow
-      // Nothing when it sits in a list that already spaces its own rows
-      // (Destin, 2026-09-13: "remove the header/copy, leave just the card thing").
-      className={separated ? 'mt-4 pt-4 border-t border-edge-dim' : undefined}
       // 'nav' in Development, so it wears the same card as the four rows above
       // it — the icon column there is a fixed 32px and 'item' does not reserve
       // it, which left this one card's icon and text out of line with them.
       variant={variant}
+      header={card}
       icon={icon}
       title="Get beta builds"
       description={variant === 'nav' ? DESCRIPTION_SHORT : DESCRIPTION}
       control={<Toggle enabled={enabled} onToggle={flip} label="Get beta builds" />}
     />
+  );
+  // WHY a labelled card in the update popup (Destin, close-session-4#CS4-1: "make the
+  // spacing/styling of the button and 'get beta builds' toggle match the rest of our ui
+  // styling"): it was a boxed row under a ruled line, set apart from the notes by its own
+  // spacing. Now it is the guide's group — a small label, then one first-level card holding
+  // the setting row as the card's header row (Session details' "In your lists" card,
+  // Settings → Help & feedback).
+  if (!card) return row;
+  return (
+    <section>
+      <SectionLabel className="mb-2">Updates</SectionLabel>
+      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{row}</div>
+    </section>
   );
 }

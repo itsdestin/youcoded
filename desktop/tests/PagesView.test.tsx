@@ -3,7 +3,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 import { PageHost } from '../src/renderer/components/pages/PageHost';
@@ -106,6 +106,36 @@ describe('a page deleted while it is open', () => {
     );
     expect(dispatch).not.toHaveBeenCalledWith({ type: 'PAGE_CLOSED' });
     snapshot.current = { pages: [], loaded: true, failed: false };
+    delete (window as any).claude;
+  });
+});
+
+describe('an open page fades at the edges where it hides more', () => {
+  // The page's kit reports its document's edges (page-kit.ts PAGE_EDGES_MESSAGE); the frame wears the
+  // app's one scroll fade there (scroll-mask.css .scroll-mask-frame), as every other scroll area does.
+  it('sets the frame\'s fade flags from the page, and ignores the same message from anywhere else', async () => {
+    const page = { id: 'personal:long', name: 'Long', description: '', icon: 'page', home: { kind: 'personal' }, updatedAt: '', htmlStamp: 1, connections: [], html: '<p>x</p>', data: null, pinned: false };
+    snapshot.current = { pages: [{ ...page, html: undefined }], loaded: true, failed: false };
+    (window as any).claude = { pages: { get: vi.fn(async () => ({ ok: true, page })), setData: vi.fn(async () => ({ ok: true })), list: vi.fn(async () => []) } };
+    const view = render(
+      <ArtifactProvider value={{ state: { ...state, openPageId: 'personal:long' }, dispatch: vi.fn() }}>
+        <PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={onCreatePage} />
+      </ArtifactProvider>,
+    );
+    await waitFor(() => expect(document.querySelector('iframe')).toBeTruthy());
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    expect(frame).toHaveClass('scroll-mask-frame');
+    const post = (data: unknown, source: Window | null) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, source })); });
+    // The host starts listening once the page's document is ready, so the first report may need a retry.
+    await waitFor(() => {
+      post({ type: 'youcoded:edges', top: false, bottom: true }, frame.contentWindow);
+      expect(frame.dataset).toMatchObject({ fadeTop: 'false', fadeBottom: 'true' });
+    });
+    post({ type: 'youcoded:edges', top: true, bottom: false }, window);
+    expect(frame.dataset).toMatchObject({ fadeTop: 'false', fadeBottom: 'true' });
+    post({ type: 'youcoded:edges', top: true, bottom: false }, frame.contentWindow);
+    expect(frame.dataset).toMatchObject({ fadeTop: 'true', fadeBottom: 'false' });
+    view.unmount();
     delete (window as any).claude;
   });
 });

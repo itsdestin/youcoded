@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload, makeLaunchInstaller, isAllowedUpdateHost } from '../src/main/update-installer';
 import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 import fs from 'fs';
@@ -218,9 +218,9 @@ describe('createUpdateInstaller download engine', () => {
     });
 
     const downloadPromise = installer.startDownload(url);
-    await new Promise(r => setTimeout(r, 50)); // let chunk arrive
+    // WHY waited for, not slept (final review F55): the job exists once the first chunk is in.
+    await vi.waitFor(() => expect(installer.getActiveJobId()).toBeTruthy());
     const jobId = installer.getActiveJobId();
-    expect(jobId).toBeTruthy();
     installer.cancelDownload(jobId!);
 
     await expect(downloadPromise).rejects.toThrow(/network-failed/);

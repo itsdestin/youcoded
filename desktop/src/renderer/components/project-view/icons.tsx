@@ -115,6 +115,20 @@ export function CheckIcon({ size = 15, strokeWidth = 2 }: IconProps) {
   );
 }
 
+// A bin — "remove from the list" on the project switcher's rows (backlog row 10: "a remove
+// icon somewhere"). Not the ✕: the ✕ closes a popup everywhere (guide "Buttons"), so a row's
+// ✕ would read as "close".
+export function TrashIcon({ size = 15, strokeWidth = 2 }: IconProps) {
+  return (
+    <svg {...base(size, strokeWidth)}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
 export function PlusIcon({ size = 15, strokeWidth = 2 }: IconProps) {
   return (
     <svg {...base(size, strokeWidth)}>

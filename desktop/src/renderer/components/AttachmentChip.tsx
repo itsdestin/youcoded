@@ -95,7 +95,9 @@ function GlyphPreview({ path }: { path: string }) {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-0.5 text-fg-muted" data-testid="glyph-preview">
       <FileKindIcon kind={fileKind(path)} size={28} />
-      <span className="text-3xs uppercase tracking-wide">{ext || 'file'}</span>
+      {/* WHY: drop the spaced-caps eyebrow (labels batch); kept text-3xs — a
+          data-label caption under a 28px glyph, no room for 12px. */}
+      <span className="text-3xs">{ext || 'file'}</span>
     </div>
   );
 }

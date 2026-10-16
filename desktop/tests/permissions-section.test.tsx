@@ -104,8 +104,7 @@ describe('PermissionsSection — the overview', () => {
     ]);
     render(<PermissionsSection />);
 
-    // The labels on this screen are the two authored ones — that is what
-    // uppercase is for.
+    // The labels on this screen are the two authored ones.
     expect(await screen.findByRole('heading', { name: 'Always allowed' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Permission modes' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: /MyNotes/i })).toBeNull();
@@ -118,11 +117,16 @@ describe('PermissionsSection — the overview', () => {
     const header = screen.getByRole('button', { name: /MyNotes/ });
     expect(header.textContent).toContain('/home/d/MyNotes');
 
-    // Kind headings inside an open folder ARE genuine labels and keep the
-    // canonical recipe.
+    // Kind headings inside an open folder ARE genuine labels — the shared
+    // `SectionLabel` primitive now, not the old uppercase eyebrow recipe.
+    // WHY updated, not deleted (fix batch 1, 2026-09-24): design guide small
+    // label — normal case, no letter-spacing (decisions.md heading-ladder
+    // rule); this assertion encoded the retired rule.
     fireEvent.click(header);
-    expect(screen.getAllByRole('heading', { name: 'Commands' })[0].className)
-      .toContain('tracking-wider uppercase');
+    const commandsHeading = screen.getAllByRole('heading', { name: 'Commands' })[0];
+    expect(commandsHeading.className).toContain('text-fg-muted');
+    expect(commandsHeading.className).not.toContain('uppercase');
+    expect(commandsHeading.className).not.toContain('tracking-wider');
   });
 
   it('groups an open folder by kind rather than listing everything in one run', async () => {
@@ -207,6 +211,15 @@ describe('PermissionsSection — the modes block is reference content', () => {
     return screen.getByRole('heading', { name: 'Permission modes' })
       .parentElement as HTMLElement;
   }
+
+  it('opens the modes card with the backup warning, before the first mode', async () => {
+    list.mockResolvedValue([]);
+    render(<PermissionsSection />);
+    const block = modesBlock();
+    const text = block.textContent ?? '';
+    expect(text).toContain('Create backups for anything you cannot replace.');
+    expect(text.indexOf('Create backups')).toBeLessThan(text.indexOf('Ask first'));
+  });
 
   it('contains no interactive element at all', async () => {
     // A folder open below it, so the page genuinely HAS buttons — otherwise a

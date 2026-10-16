@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
 import { Workbook } from 'exceljs';
 import type { ArtifactViewProps } from './types';
-import { BinaryContent } from './BinaryContent';
+import { BinaryContent, CenterLoading } from './BinaryContent';
 import {
   colLetter, formatCellNumber, cellRawValue, cellStyleToCss, colWidthToPx, parseMerges,
 } from './exceljs-cell';
@@ -434,7 +434,8 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
   const select = useCallback((r: number, c: number) => setSel({ r, c }), []);
 
   if (parseError) return <Center>Couldn’t open this spreadsheet.</Center>;
-  if (!sheets) return <Center>Loading spreadsheet…</Center>;
+  // WHY CenterLoading: the shared LoadingState (guide "File viewers" known deviation, 2026-10-13).
+  if (!sheets) return <CenterLoading what="spreadsheet" />;
 
   return (
     <div className="flex flex-col h-full" style={{ background: PAPER, color: '#1d1d1d' }}>
@@ -445,7 +446,7 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
         </span>
         <span style={{ color: '#999', fontStyle: 'italic', fontSize: 13, paddingRight: 6, borderRight: `1px solid ${GRID}` }}>fx</span>
         {/* the whole value, wrapped (up to about four lines, then scrolls) — long text used to end in "…" */}
-        <span style={{ fontSize: 13, fontFamily: '"Cascadia Code", Consolas, monospace', color: selInfo.isFormula ? '#1a6dc4' : '#1d1d1d', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 76, overflowY: 'auto', minWidth: 0 }}>
+        <span className="scroll-mask" style={{ fontSize: 13, fontFamily: '"Cascadia Code", Consolas, monospace', color: selInfo.isFormula ? '#1a6dc4' : '#1d1d1d', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 76, overflowY: 'auto', minWidth: 0 }}>
           {selInfo.content}
         </span>
       </div>
@@ -454,7 +455,7 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
           so a cell comment on another tab never lands on this tab's C4
           (use-quote-marks.ts cellSelector), and the right-click menu can name
           the tab when there is more than one (build-menu.ts cellEntries). */}
-      {!sheet ? <div className="flex-1"><Center>Loading sheet…</Center></div> : (
+      {!sheet ? <div className="flex-1"><CenterLoading what="sheet" /></div> : (
       <SheetGrid
         ref={gridRef}
         model={sheet.model}

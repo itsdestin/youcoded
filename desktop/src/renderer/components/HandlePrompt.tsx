@@ -4,9 +4,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useEscClose } from '../hooks/use-esc-close';
 import { useAccount } from '../state/account-context';
-import { Button, Dialog, FieldError, InputGroup } from './ui';
+import { Button, Dialog, FieldError, InputGroup, OneJobCard, OneJobHint, OneJobLabel } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 
 // Persisted "don't nag me again" flag. Set on skip (and on ESC, which is the
@@ -75,8 +74,8 @@ function HandlePromptPopup({
     setOpen(false);
   };
 
-  // ESC dismissal is the same as clicking "Skip for now".
-  useEscClose(true, skip);
+  // ESC dismissal is the same as clicking "Skip for now": the shared popup's own Escape
+  // calls its onClose, which is `skip` (a second useEscClose here made two closers).
 
   const save = async () => {
     setSaving(true);
@@ -98,46 +97,44 @@ function HandlePromptPopup({
   return createPortal(
     <>
       {/* Skip on scrim click so the prompt is genuinely skippable. */}
-      <Dialog open onClose={skip} size="prompt" aria-label="Choose a handle" scrollBody={false} screen="handle-prompt">
-        <div className="p-5 space-y-4">
-          <div className="space-y-1.5">
-            <h3 id="handle-prompt-title" className="text-sm font-semibold text-fg">Pick a handle</h3>
-            <p className="text-2xs text-fg-dim leading-relaxed">
-              Friends will find you by your handle — like a username. You can change it later in Settings → Account.
-            </p>
-          </div>
-
-          {/* Change 77: same migration as Settings → Account's handle field, which
-              this duplicates. Save moves inside the field, so the `py-2` that
-              existed only to height-match the input beside it is gone. "Skip for
-              now" is a cancel, not a submit, so per the sub-rule it stays outside
-              (it already sits below as its own full-width button). */}
-          <InputGroup size="md">
-            <span className="pl-3 text-xs text-fg-muted select-none">@</span>
-            <InputGroup.Field
-              id="handle-prompt-input"
-              aria-label="Handle"
-              className="pl-0"
-              autoFocus
-              value={draft}
-              onChange={(e) => { setDraft(e.target.value); setError(null); }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim().length > 0 && !saving) void save(); }}
-            />
-            <Button
-              size="sm"
-              onClick={() => void save()}
-              disabled={saving || draft.trim().length === 0}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-          </InputGroup>
-          {/* Plain words for status, never glyphs. */}
-          {error && <FieldError as="p">{error}</FieldError>}
-
-          <Button variant="secondary" onClick={skip} className="w-full py-2">
-            Skip for now
+      {/* WHY the shared popup's own title, and a card around the words and the field
+          (final-review#ST-21/#PR-7, the one popup rule; guide "Popups": every popup has the
+          16px title, the ✕ and the tapered line): this had a hand-made 14px heading with no ✕,
+          and its words and field sat bare on the popup. Same words and controls. */}
+      {/* WHY `panel` and the shared one-job card (popup-cards-2#A-1, Destin: these three popups
+          "basically have the same job/size" yet differed in text, box and button positions): the
+          same width, words, named field and stacked buttons as Rename session and Connect
+          OpenRouter. Save left the text box (it was a small button inside it — the one popup of
+          the three that did that) to be the filled button on top; Skip for now stays the outlined
+          one under it. Enter in the box still saves. */}
+      <Dialog open onClose={skip} size="panel" title="Pick a handle" screen="handle-prompt">
+        <OneJobCard actions={<>
+          <Button onClick={() => void save()} disabled={saving || draft.trim().length === 0}>
+            {saving ? 'Saving…' : 'Save'}
           </Button>
-        </div>
+          <Button variant="secondary" onClick={skip}>Skip for now</Button>
+        </>}>
+          <div>
+            <OneJobLabel htmlFor="handle-prompt-input">Handle</OneJobLabel>
+            {/* Change 77's InputGroup kept for the "@" in front, now without a button inside. */}
+            <InputGroup size="md">
+              <span className="pl-3 text-xs text-fg-muted select-none">@</span>
+              <InputGroup.Field
+                id="handle-prompt-input"
+                className="pl-0"
+                autoFocus
+                value={draft}
+                onChange={(e) => { setDraft(e.target.value); setError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim().length > 0 && !saving) void save(); }}
+              />
+            </InputGroup>
+            {/* Plain words for status, never glyphs. */}
+            {error && <FieldError as="p" className="mt-1.5">{error}</FieldError>}
+            {/* WHY under the box (popup-cards-3#B-1, Destin: "the grey subtext should be below the
+                text box in each for consistency"): name, box, then its grey words — Rename's order. */}
+            <OneJobHint>Friends will find you by your handle — like a username. You can change it later in Settings → Account.</OneJobHint>
+          </div>
+        </OneJobCard>
       </Dialog>
     </>,
     document.body,

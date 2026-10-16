@@ -8,12 +8,13 @@ import { inScopeFiles, readStripped } from './helpers/guard-scope';
 
 // Guard for K5 (status strip) and K9 (danger zone).
 //
-// K5 and K4 are the pair most likely to collapse back into each other, because
-// the difference is not visual — it is whether the block offers a way OUT of the
-// state it describes. Callout has no action slot precisely so that a passive
-// block cannot quietly grow a button and become a second status strip. These
-// assertions pin the other half: a status strip HAS the slot, and the branches
-// that used to be eleven hand-rolled shapes go through it.
+// K5 is a subsystem's RUNNING state ("Checking…", "Not set up yet") plus the
+// one action that moves it on. Since 2026-09-25 a PROBLEM notice with buttons
+// is a <Callout actions> instead (decisions.md P-2: every warning/error is the
+// one tinted box, its buttons inside it) — the old split "a callout has no
+// action slot, so a notice with a button must be a strip" is superseded. These
+// assertions pin that a status strip HAS its slot, and that the branches that
+// used to be eleven hand-rolled shapes go through it.
 //
 // Plan B (2026-09-16) moved the source-text halves to workspace ast-grep rules
 // (scripts/ast-grep/rules/): no-centred-status-paragraph and
@@ -48,8 +49,8 @@ describe('StatusStrip', () => {
   });
 
   it('carries the one action that resolves the state', () => {
-    // This is the slot K4's Callout deliberately does NOT have. If a design
-    // needs it, the block is a status strip, not a callout.
+    // A running state's one way forward. (A problem notice's buttons go in
+    // <Callout actions> instead — decisions.md P-2.)
     render(<StatusStrip tone="idle" action={<button>Set up</button>}>message</StatusStrip>);
     expect(screen.getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
@@ -82,12 +83,24 @@ describe('StatusStrip', () => {
 // menu family. Genuine K5 candidates — a status line with nowhere to put the
 // action that resolves it — but on screens this tranche does not touch.
 const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> = {
-  'FirstRunView.tsx': { count: 1, why: 'first-run setup screen, not a settings menu' },
-  'ShareSheet.tsx': { count: 2, why: 'share flow' },
+  // Dropped to 0 (guide batch, 2026-09-29): its one match — a hand-rolled
+  // text-destructive-fg text-center error line — moved to FieldError (guide:
+  // no red/coloured body text for messages). Kept at 0 rather than removed
+  // so the entry stays in step with this rule's workspace-side ast-grep
+  // ignores: list (see the file-level comment on that coordination) and so a
+  // future regression here is still caught.
+  'FirstRunView.tsx': { count: 0, why: 'first-run setup screen, not a settings menu — both matches fixed 2026-09-29' },
+  // Dropped to 0 (guide batch, 2026-09-29): its two matches — linkError and
+  // publishError — both moved to FieldError. Same "kept at 0" reasoning as
+  // FirstRunView.tsx above.
+  'ShareSheet.tsx': { count: 0, why: 'share flow — both matches fixed 2026-09-29' },
+  // Dropped from 2 to 1 (guide batch, 2026-09-29): its publishError line moved
+  // to FieldError. The remaining 1 is the green link-styled-as-a-button below,
+  // which this pattern matches but isn't a status line.
   // 2, not 1, since 2026-09-16: its green link-styled-as-a-button (the same <a> the
   // callout guard exempts) moved from text-emerald-500 to the status text-green-400,
   // which this pattern matches. Same element as before — it is a button, not a status line.
-  'ThemeShareSheet.tsx': { count: 2, why: 'theme share flow; one is the green open-link button' },
+  // ThemeShareSheet.tsx left the list 2026-10-13 (small-fixes-3#SF3-10): its Published link keeps its green tint, words in the text colour.
   // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
   // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
   // approved ticket screen replaced it for every user, so the exemption goes with
@@ -110,12 +123,13 @@ const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> =
   // batch that rewrote that flow was the right place to fix it. It now reports the
   // installer's own reason, or the general error when the installer gave none.
   'SyncPanel.tsx': { count: 1, why: "'Could not remove this device.'" },
-  'SyncSetupWizard.tsx': { count: 6, why: 'six sign-in / install / repo-create branches' },
+  // 6 -> 4 (small-fixes-2): the sign-in step's two "Sign-in failed" fallbacks now say only what is certain.
+  'SyncSetupWizard.tsx': { count: 4, why: 'four install / repo-create branches' },
 };
 
 describe('status adoption', () => {
   it('no status line in the settings family is a centred coloured paragraph', () => {
-    // The shape Remote Access used for four of its eleven branches:
+    // The shape Remote access used for four of its eleven branches:
     // `text-center` on a <p> carrying a status colour. It reads as a banner in
     // a column of left-aligned rows, and it has nowhere to put the action that
     // resolves the state — which is why two branches ended up with a

@@ -1,0 +1,37 @@
+/* Design-guide review proposal A (2026-09-24): RECTANGLES EVERYWHERE.
+   Every button, every "pick one" control and every search box uses the same
+   gentle 8px corner at every size, so a small button no longer turns into a
+   pill just because it is short. Secondary actions are outlined, never bare
+   text. Workbench-only: loaded by ?proposal=buttons-rect, never shipped.
+
+   Wrapped in @layer proposal and PREPENDED to <head> by index.tsx: the app's
+   own `!rounded-full` utilities are important declarations inside Tailwind's
+   layers, and a layered !important beats any unlayered one — only an earlier
+   layer's !important outranks it. */
+@layer proposal {
+
+/* Buttons of every size and origin (shared Button, filter chips, first-run
+   pills, Tags & note Done, Pages sidebar, chat-card Preview/Resume). Toggles,
+   radios, checkboxes, the session strip and the round composer controls keep
+   their own shapes — they are not buttons in the visual sense. */
+button:is(.rounded-lg, .rounded-full, .rounded-xl, .rounded-md, .rounded, .\!rounded-full):not([role=switch], [role=radio], [role=checkbox]):not(.session-strip, .session-strip *):not([aria-label="Send message"], [aria-label="Voice"], [aria-label*="Stop" i]) {
+  border-radius: 8px !important;
+}
+
+/* "Pick one" strips: the trough follows its segments. */
+[role=tablist],
+.layer-surface.\!rounded-full {
+  border-radius: 10px !important;
+}
+
+/* Search boxes shaped like pills. */
+.rounded-full:has(> input), .rounded-full:has(> div > input) {
+  border-radius: 8px !important;
+}
+
+/* Secondary actions are outlined: Add a project's text-only Cancel. */
+[role=dialog] button.text-fg-dim.text-sm:not([class*="border"]) {
+  border: 1px solid var(--edge-dim) !important;
+  color: var(--fg-2) !important;
+}
+}

@@ -97,6 +97,11 @@ function totals(over: Record<string, unknown>) {
 // when the info button's `!reason` gate was removed entirely — it simply could
 // not see the button. Proven by mutation: un-gate the "(i)" at StatusBar.tsx
 // and this file must go red.
+/** The row's switch, or null when the row offers none (fixed or dimmed). */
+function switchFor(label: string): HTMLElement | null {
+  return screen.queryByRole('switch', { name: label });
+}
+
 function rowAround(label: HTMLElement, reason: string): HTMLElement {
   let el: HTMLElement | null = label;
   while (el && !(el.textContent ?? '').includes(reason)) el = el.parentElement;
@@ -104,22 +109,25 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
 }
 
 describe('Always On section and announcement popup', () => {
-  // WHY: these four are the controls the bar always draws; the menu names them
-  // once, at the top, instead of tagging a single row "always on".
-  it('lists Model, Permissions, Tags & Note and Announcements first, with no per-row tag', async () => {
+  // WHY: these four are the controls the bar always draws. final-fixes#PR-7d (Destin: "add a new
+  // "always on" section … with on but greyed toggles that can't be disabled") replaced the one line
+  // under the title (pick-menus#PM-2) with a first section of rows whose switches are on and greyed.
+  it('opens on an "Always on" section: Model, Permissions, Tags & note, Announcements and Version, switched on and locked', async () => {
     await openMenu('claude');
+    expect(screen.queryByText(/are always shown\./)).toBeNull();
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
-    expect(headings[0]).toBe('Always On');
-    for (const label of ['Model', 'Permissions', 'Tags & Note', 'Announcements']) {
-      expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
+    expect(headings[0]).toBe('Always on');
+    for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements', 'Version']) {
+      const sw = switchFor(`${label} (always on)`)!;
+      expect(sw).toBeTruthy();
+      expect(sw.getAttribute('aria-checked')).toBe('true');
+      expect((sw as HTMLButtonElement).disabled).toBe(true);
     }
-    expect(screen.queryByText('always on')).toBeNull();
   });
 
-  it('turns Git Branch off for a fresh install', async () => {
+  it('turns Git branch off for a fresh install', async () => {
     await openMenu('claude');
-    const box = screen.getByText('Git Branch').closest('button')!.querySelector('span')!;
-    expect(box.className).not.toContain('bg-accent');
+    expect(switchFor('Git branch')!.getAttribute('aria-checked')).toBe('false');
   });
 
   it('shows the announcement even when it was hidden before, and opens the full text on click', async () => {
@@ -133,7 +141,7 @@ describe('Always On section and announcement popup', () => {
   });
 });
 
-describe('Customize Status Bar menu', () => {
+describe('Customize status bar menu', () => {
   it('keeps Cost switchable when live work is unpriced, and explains free live work', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
     const { wrapper, store } = makeStoreWrapper(['s1']);
@@ -144,7 +152,7 @@ describe('Customize Status Bar menu', () => {
       usageProgress: progress(false), timestamp: 10, uuid: 'unpriced' }));
     expect(screen.getByText('not listed')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
-    expect(screen.getByText('Session Cost').closest('button')?.disabled).toBe(false);
+    expect(switchFor('Session cost')?.hasAttribute('disabled')).toBe(false);
     act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
       usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
     expect(screen.queryByText('not listed')).toBeNull();
@@ -161,9 +169,9 @@ describe('Customize Status Bar menu', () => {
     expect(screen.getAllByText('Not available in this kind of session').length).toBe(2);
   });
 
-  it('leaves Git Branch unexplained — it is a missing feed, not a relevance rule', async () => {
+  it('leaves Git branch unexplained — it is a missing feed, not a relevance rule', async () => {
     await openMenu('native');
-    const row = screen.getByText('Git Branch').closest('div')!;
+    const row = screen.getByText('Git branch').closest('div')!;
     expect(row.textContent).not.toMatch(/only|not measured|no published/i);
   });
 
@@ -176,17 +184,17 @@ describe('Customize Status Bar menu', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h', 'usage-7d']));
     await openMenu('native', undefined, undefined, 'chatgpt');
     expect(screen.queryByText('Claude Code sessions only')).toBeNull();
-    expect(screen.getByText('5h Usage').closest('button')).toBeTruthy();
-    expect(screen.getByText('7d Usage').closest('button')).toBeTruthy();
+    expect(switchFor('5h usage')).toBeTruthy();
+    expect(switchFor('7d usage')).toBeTruthy();
   });
 
   it('explains nothing in a Claude Code session', async () => {
     await openMenu('claude');
     // Positive control FIRST: the two assertions below are absence checks, and
     // an absence check passes just as happily against a menu that never opened.
-    // The 5h Usage row is the row those reasons would attach to, so finding it
+    // The 5h usage row is the row those reasons would attach to, so finding it
     // proves the menu is open AND that this row carries no reason line.
-    expect(screen.getByText('5h Usage')).toBeTruthy();
+    expect(screen.getByText('5h usage')).toBeTruthy();
     expect(screen.queryByText(/Claude Code sessions only/)).toBeNull();
     expect(screen.queryByText(/Not available in this kind/)).toBeNull();
   });
@@ -212,7 +220,7 @@ describe('Customize Status Bar menu', () => {
     await openMenu('native', totals({ anyUnpriced: true }));
     expect(screen.queryByText('No published price for this model')).toBeNull();
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session Cost').closest('button')).toBeTruthy();
+    expect(switchFor('Session cost')).toBeTruthy();
   });
 
   // Task 20, defect B. A free local parent that delegated to a metered
@@ -222,17 +230,17 @@ describe('Customize Status Bar menu', () => {
   it('never tells a session it is free to run when metered work also ran', async () => {
     await openMenu('native', totals({ anyFree: true, anyUnpriced: true }));
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session Cost').closest('button')).toBeTruthy();
+    expect(switchFor('Session cost')).toBeTruthy();
   });
 
   it('stacks the reason under the label instead of beside it', async () => {
     // Checkpoint #6: the reason used to sit BESIDE the label on the same
-    // single-line flex row, which wrapped "Session Duration" onto two lines and
+    // single-line flex row, which wrapped "Session duration" onto two lines and
     // made that row taller than its neighbours. Structure, not pixels: the
     // reason must not be a direct child of the row that holds the checkbox
     // spacer, and must share a two-child wrapper with the label.
     await openMenu('native');
-    const label = screen.getByText('5h Usage');
+    const label = screen.getByText('5h usage');
     const reason = screen.getAllByText('Claude Code sessions only')[0];
     const stack = label.parentElement!;
     expect(reason.parentElement).toBe(stack);
@@ -245,7 +253,7 @@ describe('Customize Status Bar menu', () => {
 
   it('leaves a dimmed row with zero focusable elements', async () => {
     await openMenu('native');
-    const row = rowAround(screen.getByText('5h Usage'), 'Claude Code sessions only');
+    const row = rowAround(screen.getByText('5h usage'), 'Claude Code sessions only');
     expect(row.querySelectorAll('button, a, input, select, textarea, [tabindex]').length).toBe(0);
   });
 
@@ -324,7 +332,7 @@ describe('the bar and the Customize menu agree about Cost', () => {
 
   for (const shape of shapes) {
     it(`${shape.name}: bar ${shape.chip ? `shows "${shape.chip}"` : 'shows nothing'}, menu row ${shape.rowEnabled ? 'stays a switch' : 'is dimmed'}`, async () => {
-      // Session Cost is defaultVisible:false — switch it on, or the bar would
+      // Session cost is defaultVisible:false — switch it on, or the bar would
       // be silent for a reason that has nothing to do with pricing.
       window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
       await openMenu(shape.provider, shape.totals, shape.sessionStats);
@@ -339,12 +347,12 @@ describe('the bar and the Customize menu agree about Cost', () => {
       }
 
       // --- what the menu offered ---
-      const label = screen.getByText('Session Cost');
-      const rowEnabled = label.closest('button') !== null;
+      const label = screen.getByText('Session cost');
+      const rowEnabled = switchFor('Session cost') !== null;
       expect(rowEnabled).toBe(shape.rowEnabled);
       if (shape.reason === null) {
-        // Nothing but the label on the row — no sentence at all.
-        expect(label.parentElement!.textContent).toBe('Session Cost');
+        // No reason under the label — just the row's own hint, which keeps its Pro/Max caveat.
+        expect(label.nextElementSibling!.textContent).toBe("Estimated cost in US dollars — only an estimate on Pro and Max plans, which aren't billed per token.");
       } else {
         expect(label.nextElementSibling!.textContent).toBe(shape.reason);
       }

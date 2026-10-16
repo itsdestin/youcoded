@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { formatRelativeTime } from '../../utils/format-time';
-import { Button, Textarea, Tooltip } from '../ui';
+import { Button, CheckboxMark, Chip, ErrorState, Pill, Textarea, Tooltip } from '../ui';
 import { GitReviewCard } from './GitReviewCard';
 import type { GitFileReviewResult, GitLogEntry } from '../../../shared/git-types';
 import type { StructuredPatchHunk } from '../../../shared/types';
@@ -31,6 +31,30 @@ function gitApi(): any {
   return (window as any).claude?.git;
 }
 
+/** A failure said the approved way: one plain sentence naming what failed, Try again
+ *  inside the box, and git's own words one click away under Details.
+ *  WHY (known deviations fixed by existing rules, 2026-10-13): a failed commit diff was
+ *  grey text and a failed stage / commit / revert a hand-drawn neutral box, neither with
+ *  anything to press. The shape is the approved failed install's (decisions "Failed
+ *  install on a detail page", small-fixes-1#SF-1; reference `InstallFailed` in
+ *  marketplace/DetailPage.tsx), drawn with ErrorState so the box is the guide's danger
+ *  notice. The raw words are never dropped, only folded. */
+function GitFailure({ sentence, detail, onRetry }: { sentence: string; detail: string; onRetry: () => void }) {
+  return (
+    <div className="space-y-2">
+      {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+      <ErrorState variant="inline" message={sentence} onRetry={onRetry} details={detail} />
+    </div>
+  );
+}
+
+type OpKind = 'include' | 'exclude' | 'commit';
+const OP_FAILED: Record<OpKind, string> = {
+  include: 'This file couldn’t be added to the commit.',
+  exclude: 'This file couldn’t be taken out of the commit.',
+  commit: 'The commit couldn’t be made.',
+};
+
 export function GitReviewView({
   projectRoot, relPath, fileName, onBack, onRequestDiscard,
   externalError, onExternalErrorClear,
@@ -54,7 +78,9 @@ export function GitReviewView({
   const [commitDiffs, setCommitDiffs] = useState<Map<string, StructuredPatchHunk[] | 'loading' | 'empty' | { error: string }>>(new Map());
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [opError, setOpError] = useState<string | null>(null);
+  // Which operation failed travels with git's words, so the notice can name it and its
+  // Try again can run that operation again (GitFailure's WHY).
+  const [opError, setOpError] = useState<{ kind: OpKind; detail: string } | null>(null);
   const aliveRef = useRef(true);
 
   const refresh = useCallback(() => {
@@ -81,9 +107,15 @@ export function GitReviewView({
   });
 
   const expandCommit = (entry: GitLogEntry) => {
+    toggle(entry.sha);
+    if (!commitDiffs.has(entry.sha)) loadCommitDiff(entry);
+  };
+
+  // Split out of expandCommit so a failed fetch's Try again can ask again without
+  // folding the card shut (GitFailure's WHY). Same request, same states.
+  const loadCommitDiff = (entry: GitLogEntry) => {
     const sha = entry.sha;
-    toggle(sha);
-    if (!commitDiffs.has(sha)) {
+    {
       setCommitDiffs((m) => new Map(m).set(sha, 'loading'));
       // WHY entry.pathAtCommit not relPath: git log --follow tracks renames,
       // so a commit before the file's rename lived at a different path —
@@ -145,7 +177,7 @@ export function GitReviewView({
       .catch(() => {});
   };
 
-  const run = async (op: () => Promise<{ ok: boolean; error?: string }>) => {
+  const run = async (kind: OpKind, op: () => Promise<{ ok: boolean; error?: string }>) => {
     // Serialize git ops: without this guard, a second run() while one is
     // in-flight wipes the first's opError and re-enables mid-op (the commit
     // button already checked `busy` via canCommit, but stage/unstage didn't).
@@ -158,7 +190,7 @@ export function GitReviewView({
     try {
       const r = await op();
       // Real stderr passthrough (error-message standard) — never a guessed cause.
-      if (!r.ok) setOpError(r.error ?? 'git operation failed');
+      if (!r.ok) setOpError({ kind, detail: r.error ?? '' });
       else refresh();
       return r.ok;
     } finally { setBusy(false); }
@@ -168,36 +200,53 @@ export function GitReviewView({
   const canCommit = !busy && stagedCount > 0 && message.trim().length > 0;
   const uncommitted = review?.uncommitted ?? null;
 
+  // The two operations as named handlers, so a failed one's Try again runs exactly what the
+  // tick box or the Commit button runs, with what is on screen now (the current message).
+  const toggleInclude = () => {
+    if (!uncommitted) return;
+    void run(uncommitted.staged ? 'exclude' : 'include', () => (uncommitted.staged
+      ? gitApi().unstage(projectRoot, relPath)
+      : gitApi().stage(projectRoot, relPath)));
+  };
+  const commitNow = async () => {
+    const ok = await run('commit', () => gitApi().commit(projectRoot, message));
+    if (ok) setMessage('');
+  };
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* sub-header BENEATH the standard drawer top bar (ledger 10, locked) */}
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-edge-dim bg-well shrink-0">
         <Tooltip text="Back to file view">
-        <button
-          type="button"
-          onClick={onBack}
-          className="w-7 h-7 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors text-fg-dim border-transparent hover:text-fg hover:bg-inset hover:border-edge"
-        >
+        {/* WHY the shared Button (known deviations fixed by existing rules, 2026-10-13): the
+            back arrow hand-set its own corners (rounded-md) and hover border; the guide takes
+            control corners from the theme through the shared piece. Same icon + ghost recipe
+            as the popup ✕ (ui/CloseButton.tsx). */}
+        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back to file view" className="shrink-0">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
             <path d="M19 12H5M11 18l-6-6 6-6" />
           </svg>
-        </button>
+        </Button>
         </Tooltip>
         <span className="text-xs font-medium text-fg-2 truncate">Reviewing changes for “{fileName}”</span>
         <div className="flex-1" />
         {review?.branch && (
-          <span className="flex items-center gap-1 px-2 py-1 rounded-md text-2xs font-mono text-fg-dim border border-edge-dim" title="Current branch">
+          // WHY the shared Chip (same fix): the branch is one fact, and the guide's piece for
+          // "a fact in a chip row" is Chip (Marketplace detail's fact chips). It hand-set
+          // rounded-md and its own padding before. Chip owns its type, so the old font-mono
+          // goes (lint:design no-restyle).
+          <Chip title="Current branch">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
               <circle cx="6" cy="6" r="2.5" /><circle cx="6" cy="18" r="2.5" /><circle cx="18" cy="8" r="2.5" />
               <path d="M6 8.5v7M18 10.5c0 3-4 3.5-7 3.5" />
             </svg>
             {review.branch}
-          </span>
+          </Chip>
         )}
       </div>
 
       {/* card timeline */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+      <div className="scroll-mask flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
         {uncommitted && (
           <GitReviewCard
             accent
@@ -208,15 +257,16 @@ export function GitReviewView({
                 <span className="text-xs font-semibold text-fg">Uncommitted changes</span>
                 {/* Honest mid-merge marker (2026-07-22 bug: conflicted files
                     read as clean). Viewing only — resolution happens in the
-                    editor/terminal, so this is a badge, not a workflow. Amber
-                    = the app-wide warn tone (Callout/ToolBody convention);
-                    copy says "Conflict", not git's "unmerged path". */}
+                    editor/terminal, so this is a badge, not a workflow. WHY
+                    the shared Pill, not a hand-rolled coloured-word badge
+                    (guide: a status label is a small tinted pill, normal
+                    case, and the colour lives in the tint, never the word). */}
                 {uncommitted.conflicted && (
                   <Tooltip text="This file has merge conflicts. Edit the file to fix the marked sections, then commit.">
-                  <span
-                    className="text-3xs font-medium text-amber-700 bg-amber-700/10 border border-amber-700/25 rounded px-1 py-px shrink-0"
-                  >
-                    Conflict
+                  {/* Tooltip clones a real DOM node, and Pill doesn't forward
+                      a ref — the wrapping span is that node. */}
+                  <span className="shrink-0">
+                    <Pill tone="warning">Conflict</Pill>
                   </span>
                   </Tooltip>
                 )}
@@ -225,8 +275,9 @@ export function GitReviewView({
             }
             headerRight={
               <>
-                <span className="text-3xs font-mono text-green-400">+{uncommitted.counts.added}</span>
-                <span className="text-3xs font-mono text-red-400">−{uncommitted.counts.removed}</span>
+                {/* Normal words (small-fixes-3#SF3-10). */}
+                <span className="text-3xs font-mono text-fg-2">+{uncommitted.counts.added}</span>
+                <span className="text-3xs font-mono text-fg-2">−{uncommitted.counts.removed}</span>
               </>
             }
           >
@@ -245,7 +296,7 @@ export function GitReviewView({
               // adds only the height cap, no second border. The action row
               // below stays a sibling of this div, not a child, so it's always
               // visible.
-              <div className="scroll-box-cap overflow-y-auto">
+              <div className="scroll-mask scroll-box-cap overflow-y-auto">
                 <UnifiedDiff oldStr="" newStr="" structuredPatch={uncommitted.hunks} fill />
               </div>
             )}
@@ -257,8 +308,16 @@ export function GitReviewView({
                   plain `git add`, and the mirror refresh flips the card to
                   staged like any other file. */}
               <Tooltip text={uncommitted.conflicted ? 'Resolve the conflict before committing this file' : ''}>
+              {/* WHY role="checkbox" and the shared CheckboxMark (known deviations fixed by
+                  existing rules, 2026-10-13): the tick box was a hand-drawn SVG square, which
+                  turns into a circle on a big-radius theme and reads as a radio. The guide's
+                  piece for ticking items is the checkbox; this whole line is the button, so it
+                  carries the mark without a button of its own — the filter menus' rows
+                  (StatusBar theme cycle, Resume's menus) do the same. */}
               <button
                 type="button"
+                role="checkbox"
+                aria-checked={uncommitted.staged}
                 // WHY conflicted disables this (PR #304 review advisory):
                 // `git add` on an unmerged file marks the conflict RESOLVED
                 // with the <<<<<<< markers staged as content — a non-technical
@@ -267,26 +326,19 @@ export function GitReviewView({
                 // until the conflict is edited away (the mirror refresh flips
                 // this back automatically once the file is no longer unmerged).
                 disabled={busy || uncommitted.conflicted}
-                onClick={() => run(() => (uncommitted.staged
-                  ? gitApi().unstage(projectRoot, relPath)
-                  : gitApi().stage(projectRoot, relPath)))}
+                onClick={toggleInclude}
                 className="flex items-center gap-1.5 text-2xs text-fg-2 hover:text-fg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-                  <rect x="3" y="3" width="18" height="18" rx="3" />
-                  {uncommitted.staged && <path d="m8 12.5 3 3 5.5-6.5" />}
-                </svg>
+                <CheckboxMark checked={uncommitted.staged} />
                 Include in commit
               </button>
               </Tooltip>
               <div className="flex-1" />
-              <button
-                type="button"
-                onClick={() => onRequestDiscard(!uncommitted.inHead)}
-                className="px-2 py-1 rounded-md text-2xs text-destructive-fg hover:bg-destructive/10 transition-colors"
-              >
-                Revert Changes…
-              </button>
+              {/* WHY outlined (guide: secondary actions are outlined, never
+                  bare text): was a hand-rolled text-destructive-fg button. */}
+              <Button variant="danger-outline" size="sm" onClick={() => onRequestDiscard(!uncommitted.inHead)}>
+                Revert changes…
+              </Button>
             </div>
           </GitReviewCard>
         )}
@@ -311,8 +363,8 @@ export function GitReviewView({
                       count at all rather than a misleading +0/−0. */}
                   {entry.counts && (
                     <>
-                      <span className="text-3xs font-mono text-green-400">+{entry.counts.added}</span>
-                      <span className="text-3xs font-mono text-red-400">−{entry.counts.removed}</span>
+                      <span className="text-3xs font-mono text-fg-2">+{entry.counts.added}</span>
+                      <span className="text-3xs font-mono text-fg-2">−{entry.counts.removed}</span>
                     </>
                   )}
                   <span className="text-2xs text-fg-muted whitespace-nowrap">{formatRelativeTime(entry.authorDate)}</span>
@@ -330,12 +382,16 @@ export function GitReviewView({
                   : <div className="text-2xs text-fg-muted py-1">No direct changes to this file in this commit.</div>
               )}
               {body && typeof body === 'object' && !Array.isArray(body) && (
-                <div className="text-2xs text-fg-muted py-1 break-words">{body.error}</div>
+                <GitFailure
+                  sentence="This commit’s changes couldn’t be loaded."
+                  detail={body.error}
+                  onRetry={() => loadCommitDiff(entry)}
+                />
               )}
               {/* Same single-scroll-surface wrapper as the uncommitted card
                   above — see the WHY comment there. */}
               {Array.isArray(body) && (
-                <div className="scroll-box-cap overflow-y-auto">
+                <div className="scroll-mask scroll-box-cap overflow-y-auto">
                   <UnifiedDiff oldStr="" newStr="" structuredPatch={body} fill />
                 </div>
               )}
@@ -343,14 +399,13 @@ export function GitReviewView({
           );
         })}
 
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text — "Show more" is named explicitly): was a hand-rolled
+            text-fg-muted button. */}
         {review?.hasMore && (
-          <button
-            type="button"
-            onClick={showMore}
-            className="text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2 py-1"
-          >
+          <Button variant="secondary" size="sm" onClick={showMore}>
             Show more
-          </button>
+          </Button>
         )}
       </div>
 
@@ -360,11 +415,26 @@ export function GitReviewView({
           no commit affordance should appear. */}
       {uncommitted && (
         <div className="shrink-0 border-t border-edge px-2 py-2 bg-inset">
-          {(opError ?? externalError) && (
-            <div className="mb-1 px-2.5 py-1.5 text-2xs text-fg rounded-md border border-edge bg-well break-all">
-              {opError ?? externalError}
+          {/* ONE error slot, opError first (Task 9). An external error is a failed revert,
+              and its Try again opens the same confirm Revert changes… opens — the revert
+              is destructive, so trying again still asks first. */}
+          {opError ? (
+            <div className="mb-1">
+              <GitFailure
+                sentence={OP_FAILED[opError.kind]}
+                detail={opError.detail}
+                onRetry={opError.kind === 'commit' ? () => void commitNow() : toggleInclude}
+              />
             </div>
-          )}
+          ) : externalError ? (
+            <div className="mb-1">
+              <GitFailure
+                sentence={uncommitted.inHead ? 'The changes couldn’t be reverted.' : 'The file couldn’t be moved to the trash.'}
+                detail={externalError}
+                onRetry={() => onRequestDiscard(!uncommitted.inHead)}
+              />
+            </div>
+          ) : null}
           <Textarea
             size="sm"
             rows={2}
@@ -378,10 +448,7 @@ export function GitReviewView({
             variant="primary"
             disabled={!canCommit}
             className="mt-1 w-full"
-            onClick={async () => {
-              const ok = await run(() => gitApi().commit(projectRoot, message));
-              if (ok) setMessage('');
-            }}
+            onClick={() => void commitNow()}
           >
             {`Commit ${stagedCount} staged file${stagedCount === 1 ? '' : 's'}`}
           </Button>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button } from '../ui';
+import { Button, SectionLabel } from '../ui';
 import { PagesIcon } from './page-icons';
 
 /** First-run explanation in the Pages landing frame, where the Pages button leads. */
@@ -12,7 +12,9 @@ export function PagesEmptyCard({ onMake }: { onMake: () => void }) {
         </span>
         <div className="min-w-0 flex flex-col gap-3 items-center sm:items-start">
           <div>
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1">Pages</div>
+            {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+            <SectionLabel className="mb-1">Pages</SectionLabel>
             <h3 className="text-base font-semibold text-fg leading-snug">Pages are little apps you describe</h3>
           </div>
           {/* Examples that intrigue, not the smallest things a page could be

@@ -28,7 +28,7 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // registry that owns HarnessSessions and their persistence.
 import { NativeHome } from './native-home';
 import type { NativeRuntime } from './create-runtime';
-import { bindAppearance } from './ipc/appearance';
+import { bindAppearance, settleThemeDefault } from './ipc/appearance';
 import { bindWindow } from './ipc/window';
 import { bindShell } from './ipc/shell';
 import { bindApp } from './ipc/app';
@@ -63,7 +63,7 @@ import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
 // WHY (2026-10-02): startSession makes sure Node is there before a Claude Code or Terminal session (setup no longer installs it for everyone).
 import { nodeRefusal } from './prerequisite-installer';
-import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
+import { firstRunStateDir, FirstRunManager, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
@@ -503,6 +503,10 @@ export function registerIpcHandlers(
   // (main/ipc/appearance.ts, window.ts). The theme favourites live in the skill config store and the window controls act on
   // the main window and the window list, which are built here, so they are handed over.
   bindAppearance(skillProvider.configStore);
+  // WHY here (final review F1): record whether this install is new (YouCoded theme by default) or was in use
+  // before (stays on Midnight) as the appearance channels go live — before any window can read the file or the
+  // setup wizard can finish. Not awaited: appearance:get/set wait for it themselves.
+  void settleThemeDefault(FirstRunManager.isFirstRun());
   bindWindow({ getMainWindow: () => mainWindow, getDirectory: () => windowRegistry?.getDirectory((id) => sessionManager.getSession(id)) });
   bindShell({ getMainWindow: () => mainWindow });
 

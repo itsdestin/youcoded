@@ -1,0 +1,163 @@
+/* The YouCoded brand: the logo's font and its fixed colours.
+   Source: the brand identity decisions (workspace
+   docs/active/design/2026-10-01-brand-identity-v2/DECISIONS.md). These colours are
+   the brand's own, NOT theme tokens — the logo looks the same whatever theme is on. */
+
+/* WHY bundled rather than a Google Fonts link: setup runs before the app knows it is
+   online, and the logo must not flash in a fallback font. Latin subset, weights 400–600
+   (variable), SIL Open Font License. */
+@font-face {
+  font-family: 'Outfit';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: block;
+  src: url('../components/brand/outfit-latin.woff2') format('woff2');
+}
+
+.brand-name {
+  font-family: 'Outfit', var(--font-sans);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  white-space: nowrap;
+  color: #21152C;
+}
+/* "you" in the purple-to-pink gradient (round 16, colour c0). */
+.brand-name__you {
+  background: linear-gradient(100deg, #9D5BD0, #D25AA0);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  padding-right: 0.02em;
+}
+.brand-tagline {
+  font-family: 'Outfit', var(--font-sans);
+  /* WHY 600, not the 400 written in DECISIONS: the brand boards loaded Outfit at 600 only,
+     so every tagline Destin approved was drawn semibold (found 2026-10-04 comparing the
+     board with setup's lighter one, which he rejected as cramped). Match what was seen. */
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  color: #8A7B96;
+}
+.brand-icon {
+  display: block;
+  filter: drop-shadow(0 3px 5px rgba(60, 20, 100, 0.22));
+}
+/* Headings on brand surfaces (setup): the logo's font, a step lighter than the name. */
+.brand-heading {
+  font-family: 'Outfit', var(--font-sans);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+/* The brand surface: setup's own palette (first-run deck B-2, "brand lavender, always").
+   WHY it redefines the theme tokens on its own subtree instead of adding a theme: setup
+   runs before any theme is chosen, and the app's normal primitives (cards, buttons,
+   error card) should draw in brand colours here without a second copy of each.
+   --edge-card is set again because :root computes it from --edge once, at the root. */
+.brand-surface {
+  --canvas: #F4ECF8;
+  --panel: #FFFFFF;
+  --inset: #FFFFFF;
+  --well: #FBF7FD;
+  --accent: #8B47B8;
+  --on-accent: #FFFFFF;
+  --fg: #21152C;
+  --fg-2: #3A2C47;
+  --fg-dim: #574A63;
+  --fg-muted: #6B5D78;
+  --fg-faint: #A496B0;
+  --edge: #D9C8E6;
+  --edge-dim: #E6DAEF;
+  --edge-card: #DCCBE8;
+  --edge-strong: #B596CC;
+  /* Tailwind's colour names (bg-panel, text-fg…) are declared on :root as var(--panel)
+     etc., so they resolve once, at the root. Restate them here or every utility
+     inside setup keeps the root theme's greys. */
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-inset: var(--inset);
+  --color-well: var(--well);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-faint: var(--fg-faint);
+  --color-edge: var(--edge);
+  --color-edge-dim: var(--edge-dim);
+  --color-edge-card: var(--edge-card);
+  --color-edge-strong: var(--edge-strong);
+  color-scheme: light;
+  color: var(--fg);
+  background:
+    radial-gradient(70% 55% at 50% 0%, #FBF6FD 0%, rgba(251, 246, 253, 0) 70%),
+    radial-gradient(60% 50% at 85% 100%, rgba(210, 90, 160, 0.10) 0%, rgba(210, 90, 160, 0) 70%),
+    radial-gradient(60% 50% at 10% 90%, rgba(157, 91, 208, 0.12) 0%, rgba(157, 91, 208, 0) 70%),
+    #F4ECF8;
+}
+/* The progress bar's fill: the name's gradient (B-1, "brand colours on buttons and bar"). */
+.brand-bar-fill {
+  background: linear-gradient(90deg, #9D5BD0, #D25AA0);
+}
+
+/* ---- The polished setup look (first-run deck first-run-1: "much more polished/premium"). ---- */
+/* Q-2 "Outfit for all setup text": the whole surface reads in the logo's font. */
+.brand-surface { font-family: 'Outfit', var(--font-sans); }
+/* A soft white card lifted off the lavender by a purple-tinted shadow. WHY not the app's
+   CARD_LEVEL_1: setup is a brand surface (no theme yet); its cards are drawn to sit on the
+   lavender the way the logo boards were approved, not on a theme's canvas. */
+.brand-card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 18px;
+  box-shadow: 0 1px 2px rgba(60, 20, 100, 0.06), 0 12px 32px -8px rgba(60, 20, 100, 0.16);
+}
+.brand-card--press { transition: transform 120ms ease, box-shadow 120ms ease; }
+.brand-card--press:hover { transform: translateY(-1px); box-shadow: 0 1px 2px rgba(60, 20, 100, 0.06), 0 16px 36px -8px rgba(60, 20, 100, 0.22); }
+/* The sign-in button: white, a company logo first, a hairline brand outline. */
+.brand-surface .brand-way {
+  height: 44px;
+  justify-content: flex-start;
+  gap: 12px;
+  border-radius: 12px;
+  background: #FFFFFF;
+  border: 1px solid #E3D5EE;
+  color: var(--fg);
+  font-weight: 500;
+  padding-left: 14px;
+}
+.brand-surface .brand-way:hover { border-color: #B596CC; background: #FDFAFF; }
+/* A small rounded label on a card's top right ("No extra cost"). */
+.brand-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #7A3FA8;
+  background: #F3E8FA;
+}
+/* The overlapping logo discs on option B's rows. */
+.brand-way-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 999px;
+  background: #FFFFFF; border: 1px solid #E3D5EE;
+}
+.brand-way-chip svg { width: 15px; height: 15px; }
+/* The progress bar, thicker and glowing faintly in the name's colours. */
+.brand-track { height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.9); box-shadow: inset 0 0 0 1px #E3D5EE; overflow: hidden; }
+.brand-track .brand-bar-fill { height: 100%; border-radius: 999px; box-shadow: 0 0 12px rgba(210, 90, 160, 0.45); }
+/* The failure card's mark: a soft red rounded square (deck first-run-2 P2-2). Status colours stay fixed across themes. */
+.brand-stop { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: #C2410C; background: #FDEDE4; box-shadow: inset 0 0 0 1px #F8D4C2; }
+/* The one filled button on a setup screen: the name's gradient. */
+.brand-surface .brand-primary { height: 44px; border-radius: 12px; border: 0; color: #FFFFFF; font-weight: 600; background: linear-gradient(100deg, #9D5BD0, #D25AA0); box-shadow: 0 6px 16px -6px rgba(157, 91, 208, 0.6); }
+.brand-surface .brand-primary:hover { filter: brightness(1.05); }
+/* Setup's column: the logo held at a fixed height above the middle (deck first-run-3
+   P3-2), each step's content a fixed gap below it, scrolling only if a step is taller
+   than the window. */
+.brand-stage { min-height: 100%; display: flex; flex-direction: column; align-items: center; gap: 56px; padding: max(40px, 21vh) 16px 40px; }
+/* A short window (laptop at 720px tall and below, a small window): less air above and
+   below the logo, so a step's buttons stay on screen instead of under the fold. */
+@media (max-height: 760px) { .brand-stage { gap: 28px; padding-top: max(24px, 9vh); } }

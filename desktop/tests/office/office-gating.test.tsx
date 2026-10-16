@@ -33,14 +33,14 @@ describe('the Office page', () => {
     withOffice({ status: async () => ({ ...READY, available: false }) });
     const { findByText, queryByRole } = render(<OfficeView />);
     expect(await findByText("Office isn't included in this build.")).toBeTruthy();
-    expect(queryByRole('button', { name: /retry/i })).toBeNull();
+    expect(queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
   it('says the same when the host refuses Office (the remote browser, the phone)', async () => {
     withOffice({ status: () => Promise.reject(new Error('remote-unsupported: office:status')) });
     const { findByText, queryByRole } = render(<OfficeView />);
     expect(await findByText("Office isn't included in this build.")).toBeTruthy();
-    expect(queryByRole('button', { name: /retry/i })).toBeNull();
+    expect(queryByRole('button', { name: /try again/i })).toBeNull();
   });
 
   it("asks for the focused conversation's project", async () => {
@@ -118,7 +118,7 @@ describe('the Office page', () => {
     expect(await findByText("Office can't create files in this protected folder.")).toBeTruthy();
     // Specific and known: Retry, and no bug report.
     expect(queryByRole('button', { name: /report/i })).toBeNull();
-    fireEvent.click(getByRole('button', { name: /retry/i }));
+    fireEvent.click(getByRole('button', { name: /try again/i }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create).toHaveBeenLastCalledWith('document', null);
   });
@@ -142,7 +142,7 @@ describe('the Office page', () => {
     await findByText('Files you open in Office will show up here.');
     fireEvent.click(getByText('Open a file…'));
     expect(await findByText("Office couldn't open the file picker.")).toBeTruthy();
-    expect(getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(getByRole('button', { name: /try again/i })).toBeTruthy();
     quiet.mockRestore();
   });
 
@@ -163,7 +163,7 @@ describe('the Office page', () => {
     const posted = vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(() => {});
     act(() => markFailed(FILE.path, "This file is on a read-only disk, so Office couldn't save it."));
     expect(await findByText("This file is on a read-only disk, so Office couldn't save it.")).toBeTruthy();
-    fireEvent.click(getByRole('button', { name: /retry/i }));
+    fireEvent.click(getByRole('button', { name: /try again/i }));
     expect(posted).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
 });

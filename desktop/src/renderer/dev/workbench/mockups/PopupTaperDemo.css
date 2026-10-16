@@ -1,0 +1,44 @@
+/* WHY: Dialog portals to body, so :has() scopes this dev-only comparison to
+   the selected pane's document rather than changing every dialog in the app. */
+.inline-block.bg-canvas:has(.popup-taper-demo) { background-color: transparent; }
+.popup-taper-demo #theme-bg,
+.popup-taper-demo #theme-pattern { z-index: 0; }
+/* WHY: Dialog now carries the selected treatment in production. Keep the old
+   visual baseline intact so reopening this answered deck compares two designs. */
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-header { border-bottom: 1px solid var(--edge); }
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-header::after { display: none; }
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-header h2 { font-size: 0.875rem; font-weight: 700; }
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-scroll { mask-image: none; }
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-scroll::before,
+body:has(.popup-taper-demo[data-variant='today']) [role='dialog'] > .dialog-scroll::after { display: block; }
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > div:first-child {
+  position: relative;
+  border-bottom: 0;
+}
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > div:first-child h2 {
+  font-size: 1rem;
+  font-weight: 500;
+}
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > div:first-child::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --popup-demo-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --popup-demo-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > .scroll-fade {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--popup-demo-top) / 2), #000 var(--popup-demo-top), #000 calc(100% - var(--popup-demo-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--popup-demo-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --popup-demo-top 150ms ease-out, --popup-demo-bottom 150ms ease-out;
+}
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > .scroll-fade[data-fade-top='true'] { --popup-demo-top: 42px; }
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > .scroll-fade[data-fade-bottom='true'] { --popup-demo-bottom: 42px; }
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > .scroll-fade::before,
+body:has(.popup-taper-demo[data-variant='selected']) [role='dialog'] > .scroll-fade::after { display: none; }

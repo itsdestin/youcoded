@@ -444,7 +444,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).toContain('The model returned an empty response twice. Retrying may help.');
+    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
   });
 
   it('end_turn never renders the empty-response copy', () => {
@@ -465,7 +465,7 @@ describe('AssistantTurnBubble — stop reason footer', () => {
       toolGroups: new Map(),
       toolCalls: new Map(),
     });
-    expect(container.textContent).toContain('The model returned an empty response twice. Retrying may help.');
+    expect(container.textContent).toContain('The model returned an empty response twice. Trying again may help.');
   });
 
   it('the footer-only row carries the timestamp when showTimestamps is on', () => {

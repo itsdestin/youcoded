@@ -37,7 +37,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
 import type { VoicePhase } from '../hooks/useVoiceInput';
-import { Tooltip } from './ui';
+import { ErrorState, FoldRow, Tooltip } from './ui';
 import { getCapabilities } from '../platform';
 import { useScreenOpen } from '../shoot-mode';
 import VocabularyPanel from './voice/VoiceVocabulary';
@@ -101,6 +101,19 @@ function Spinner() {
       <circle cx="12" cy="12" r="9" className="opacity-25" />
       <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
     </svg>
+  );
+}
+
+const firstLine = (t: string) => t.split('\n')[0];
+const restLines = (t: string) => t.split('\n').slice(1).join('\n').trim();
+
+/** The computer's own words, folded (the voice vocabulary popup's and Contribute's shape). */
+function ErrorDetails({ text, className = '' }: { text: string; className?: string }) {
+  if (!text.trim()) return null;
+  return (
+    <FoldRow title="Details" className={className}>
+      <p className="text-2xs text-fg-2 font-mono break-words whitespace-pre-line">{text}</p>
+    </FoldRow>
   );
 }
 
@@ -235,15 +248,32 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
             not ship and could not be tested on Windows or macOS from here. That
             costs 175 MB more and removes the wait to unpack it. */}
         <p className="text-2xs text-fg-muted mt-2">One-time download: about 650 MB.</p>
-        {downloadFailed && (
+        {downloadFailed ? (
           // The computer's OWN words, never a guess about the network —
           // docs/error-message-standards.md.
-          <p className="text-2xs text-fg-2 leading-snug mt-2 whitespace-pre-line">{error}</p>
+          // WHY ErrorState (error-notices-1, 2026-10-12): a failed download is the notice
+          // box in the buttons' place, with Not now and Retry inside it at the right
+          // (guide "Status and notices": a failed action replaces the buttons it came
+          // from). It was a grey line above the same two loose buttons.
+          // WHY a fixed sentence with the computer's words under Details (final review, item 9;
+          // guide "Status and notices": machine words only under a Details fold).
+          <div className="mt-3 space-y-2">
+            <ErrorState
+              message="The voice download didn't finish."
+              moreActions={[{ label: 'Not now', onClick: () => { onClearError(); setOpen(false); } }]}
+              onRetry={onDownload}
+              details={error} // popup-cards-8#Q-1: Details sits inside the error box, everywhere
+            />
+          </div>
+        ) : (
+          // WHY secondary, not ghost (decisions "Secondary buttons", ui-element-review-final#F-2):
+          // the less-important action beside a main one is outlined, never bare text — the same
+          // outlined "Not now" this popover's own failed-download ErrorState already shows above.
+          <div className="flex justify-end gap-2 mt-3">
+            <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
+            <Button variant="primary" size="sm" onClick={onDownload}>Download</Button>
+          </div>
         )}
-        <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
-          <Button variant="primary" size="sm" onClick={onDownload}>{downloadFailed ? 'Retry' : 'Download'}</Button>
-        </div>
       </>
     );
   } else if (state === 'unavailable') {
@@ -255,9 +285,17 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">Voice isn&rsquo;t available</p>
-        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? readiness.reason : 'Still checking whether this computer can listen.'}</p>
+        {/* WHY the reason's first line only, the rest under Details: an unknown failure appends
+            the browser's own words on a second line (useVoiceInput captureFailureReadiness) —
+            machine words never in the sentence (guide "Status and notices"). */}
+        <p className="text-2xs text-fg-2 leading-snug">{readiness?.state === 'unavailable' ? firstLine(readiness.reason) : 'Still checking whether this computer can listen.'}</p>
+        {readiness?.state === 'unavailable' && <ErrorDetails text={restLines(readiness.reason)} className="mt-2" />}
         <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={onRecheck}>Check again</Button>
+          {/* WHY secondary (decisions "Secondary buttons"; guide Buttons — nothing bare-text reads
+              as a button): a lone action here was ghost, i.e. bare words. Outlined, like Not now.
+              WHY "Try again" (final review F41; guide "Every retry button reads exactly 'Try
+              again'"): it asks the computer again — a retry; it read "Check again". */}
+          <Button variant="secondary" size="sm" onClick={onRecheck}>Try again</Button>
         </div>
       </>
     );
@@ -265,9 +303,16 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     card = (
       <>
         <p className="text-xs font-semibold text-fg mb-1.5">Voice stopped</p>
-        <p className="text-2xs text-fg-2 leading-snug">{error}</p>
+        {/* WHY a fixed sentence with the host's words under Details (final review, item 9): the
+            message can carry an exit code and the engine's last line of output. */}
+        <p className="text-2xs text-fg-2 leading-snug">Voice input stopped before it finished.</p>
+        <ErrorDetails text={error} className="mt-2" />
         <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>OK</Button>
+          {/* WHY secondary: same rule as Check again above — never a bare-text button.
+              WHY "Dismiss", not "OK" (final review F52; guide "A button names what it does",
+              close-session-6#CS6-4): it clears the notice and closes the card — the guide's word
+              for that is Dismiss; "OK" could read as agreeing to something. */}
+          <Button variant="secondary" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Dismiss</Button>
         </div>
       </>
     );

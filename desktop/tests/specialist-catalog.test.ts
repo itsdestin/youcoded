@@ -300,6 +300,8 @@ describe('resolveOffered (pure)', () => {
         charter: 'read-only',
         reportBudgetTokens: 2000,
         source,
+        // WHY: SpecialistDefinition requires grantScope; file-defined ones are 'user' (personal) or 'project'.
+        grantScope: source === 'personal' ? 'user' : 'project',
       },
       source,
       path: p,

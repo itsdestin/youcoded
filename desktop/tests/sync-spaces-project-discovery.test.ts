@@ -12,7 +12,7 @@ import { ManagedRoots } from '../src/main/sync-spaces/managed-roots';
 import { GitTransport } from '../src/main/sync-spaces/git-transport';
 import { SpaceSyncEngine } from '../src/main/sync-spaces/engine';
 import {
-  readProjectRegistry, ensureProjectEntry, setProjectStopped,
+  readProjectRegistry, ensureProjectEntry, setProjectStopped, markProjectRemoved, readRemovedProjects,
 } from '../src/main/sync-spaces/project-registry';
 import { planReconcile, activeManagedSpaces } from '../src/main/sync-spaces/materialization-planner';
 import type { SyncSpace } from '../src/main/sync-spaces/types';
@@ -116,6 +116,22 @@ it('device B discovers, materializes, and (after a stop) detaches a project', as
   const plan2 = planReconcile(registry, desktop.listProjects().map(p => p.name), dLiveNames());
   expect(plan2.toMaterialize).toEqual([]);
   expect(plan2.toStop).toEqual([]); // no live space to stop
+
+  // Laptop REMOVES 'app' (backlog row 10: stop + off every device's lists). The marker rides
+  // the same Personal push; the desktop learns it on its next pull — the offline-device path.
+  const appHeadBefore = execFileSync('git', ['--git-dir', appBare, 'rev-parse', 'main']).toString().trim();
+  await markProjectRemoved(laptop.personalRoot, 'app');
+  await lEngine.syncSpace(lPersonal);
+  expect([...await readRemovedProjects(desktop.personalRoot)]).toEqual([]); // not pulled yet
+  await dEngine.syncSpace(dPersonal);
+  expect([...await readRemovedProjects(desktop.personalRoot)]).toEqual(['app']);
+  // An older build reads only ProjectSync/*.json: it still sees one stopped record, so the
+  // marker folder can never make it restart or drop the project.
+  expect(readProjectRegistry(desktop.personalRoot).map(e => [e.name, e.state])).toEqual([['app', 'stopped']]);
+  // Every device keeps its files, and the GitHub copy (the bare repo here) is untouched.
+  expect(fs.readFileSync(path.join(desktop.projectsRoot, 'app', 'CLAUDE.md'), 'utf8')).toBe('# app\n');
+  expect(fs.readFileSync(path.join(laptop.projectsRoot, 'app', 'CLAUDE.md'), 'utf8')).toBe('# app\n');
+  expect(execFileSync('git', ['--git-dir', appBare, 'rev-parse', 'main']).toString().trim()).toBe(appHeadBefore);
 
   await lEngine.stop(); await dEngine.stop();
 // Timeout comes from the file-level vi.setConfig above. It used to be an inline

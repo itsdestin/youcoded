@@ -9,14 +9,14 @@
 //   gray   — idle / nothing to report
 export type SessionStatusColor = 'green' | 'red' | 'amber' | 'blue' | 'gray';
 
-// The words the All Sessions menu's status pill puts next to each color.
+// The words the All sessions menu's status pill puts next to each color.
 // Destin named four of them in the P-8 review (2026-08-28). Amber is not in
 // that list, so it gets the plainest reading of what it means above: the
 // attention banner is up and the turn may have stalled.
 export const STATUS_LABEL: Record<SessionStatusColor, string> = {
   green: 'Working',
-  red: 'Needs Input',
-  amber: 'Needs a Look',
-  blue: 'Response Ready',
+  red: 'Needs input',
+  amber: 'Needs a look',
+  blue: 'Response ready',
   gray: 'Inactive',
 };

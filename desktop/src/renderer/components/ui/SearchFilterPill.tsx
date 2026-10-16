@@ -88,7 +88,9 @@ export const SearchFilterPill = React.forwardRef<HTMLDivElement, SearchFilterPil
         {/* Fix: focus used to render `border-edge-dim` — LESS contrast than the
             resting `border-edge`, i.e. an invisible focus state. `border-accent`
             is the design system's focus token (see InputGroup.tsx / field.ts). */}
-        <div className={`flex items-center gap-2 bg-inset border border-edge rounded-full pl-3 ${hasTrigger ? 'pr-1' : 'pr-3'} py-1 w-full focus-within:border-accent`}>
+        {/* WHY rounded-control (decisions "Control shape follows the theme"): search boxes take
+            the theme's control corner, never a hard-coded pill — the box and its trigger. */}
+        <div className={`flex items-center gap-2 bg-inset border border-edge rounded-control pl-3 ${hasTrigger ? 'pr-1' : 'pr-3'} py-1 w-full focus-within:border-accent`}>
           <span className="text-fg-muted shrink-0"><SearchGlyph /></span>
           <input
             type="text"
@@ -100,7 +102,7 @@ export const SearchFilterPill = React.forwardRef<HTMLDivElement, SearchFilterPil
           />
           {hasTrigger && <button
             type="button"
-            className={`shrink-0 relative w-7 h-7 rounded-full inline-flex items-center justify-center transition-colors ${
+            className={`shrink-0 relative w-7 h-7 rounded-control inline-flex items-center justify-center transition-colors ${
               filterOpen || activeFilters > 0
                 ? 'text-fg bg-well'
                 : 'text-fg-muted hover:text-fg hover:bg-well'

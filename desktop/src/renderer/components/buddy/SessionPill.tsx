@@ -64,9 +64,9 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
 
   const viewed = sessions.find((s) => s.id === viewedSessionId) ?? null;
   const label = viewed ? (viewed.name || basename(viewed.cwd)) : 'no session';
-  const dotColor = viewedSessionId
-    ? attentionColorFromSummary(viewedSessionId, attentionSummary)
-    : 'var(--fg-muted)';
+  const dotClass = viewedSessionId
+    ? attentionDotClass(viewedSessionId, attentionSummary)
+    : 'bg-fg-muted';
 
   return (
     <div style={{ position: 'relative', alignSelf: 'center' }}>
@@ -87,10 +87,11 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
         }}
         onClick={() => setOpen((o) => !o)}
       >
-        {/* Status dot — color comes from attention state, stays hardcoded per project convention */}
-        <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        {/* Status dot — the main session strip's own dot classes (see attentionDotClass). */}
+        <span className={dotClass} style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0 }} />
         <span>{label}</span>
-        <span style={{ opacity: 0.5, fontSize: 10 }}>{open ? '▴' : '▾'}</span>
+        {/* WHY 11px (decisions "Smallest text": 11px replaces 10px everywhere). */}
+        <span style={{ opacity: 0.5, fontSize: 11 }}>{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
@@ -114,7 +115,9 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
               // aren't cramped. 240px is too tight for three model buttons.
               width: formOpen ? 280 : 240,
               padding: formOpen ? 10 : 6,
-              borderRadius: 16,
+              // WHY no borderRadius here: a hand-set 16px overrode .layer-surface's own
+              // corner, var(--radius-xl), the theme's popup corner every other popover uses
+              // (guide principle 2: corners come from the theme's shape setting).
               zIndex: 100,
             }}
           >
@@ -145,17 +148,18 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
                         // Highlight the currently-viewed session with inset background.
                         background: s.id === viewedSessionId ? 'var(--inset)' : 'transparent',
                         border: 'none',
-                        borderRadius: 10,
+                        // WHY the theme token, not a hand-set 10px (guide principle 2).
+                        borderRadius: 'var(--radius-md)',
                         cursor: 'pointer',
                         color: 'var(--fg)',
                       }}
                     >
                       <span
+                        className={attentionDotClass(s.id, attentionSummary)}
                         style={{
                           width: 7,
                           height: 7,
                           borderRadius: '50%',
-                          background: attentionColorFromSummary(s.id, attentionSummary),
                           flexShrink: 0,
                         }}
                       />
@@ -163,7 +167,8 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
                         {s.name || basename(s.cwd)}
                       </span>
                       {tag && (
-                        <span style={{ fontSize: 10, color: 'var(--fg-muted)', flexShrink: 0 }}>
+                        // WHY 11px (decisions "Smallest text": nothing a user reads is under 11px).
+                        <span style={{ fontSize: 11, color: 'var(--fg-muted)', flexShrink: 0 }}>
                           {tag}
                         </span>
                       )}
@@ -171,8 +176,17 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
                   );
                 })}
 
-                {/* Divider */}
-                <div style={{ height: 1, background: 'var(--edge-dim)', margin: '4px 0' }} />
+                {/* WHY a short tapered line, not a full-width rule (decisions "Card levels": never a
+                    full-width line inside a popup; "Header divider colour": --edge-card). Copies
+                    ProjectSwitcher's line above its last "Add a project" row, inset 16px each side. */}
+                <div
+                  aria-hidden
+                  style={{
+                    height: 1,
+                    margin: '4px 16px',
+                    background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)',
+                  }}
+                />
 
                 {/* New session entry — expands the inline form (not a silent
                     create). The form mirrors the main window's session strip
@@ -188,7 +202,7 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
                     fontSize: 12,
                     background: 'transparent',
                     border: 'none',
-                    borderRadius: 10,
+                    borderRadius: 'var(--radius-md)',
                     cursor: 'pointer',
                     color: 'var(--fg)',
                   }}
@@ -212,24 +226,22 @@ function basename(path: string): string {
 }
 
 /**
- * Map a session's status dot to its hex color. We just forward the color
- * the main window's session switcher computed for this session (pushed via
- * AttentionReport.status) so the buddy dot is visually identical to the
- * same session's dot in the main window. Hex values here match the main
- * window's INDICATOR_COLOR map in SessionStrip.tsx — keep them in sync.
- * Default is gray for sessions that haven't reported yet.
- *
- * Colors match main convention and are theme-independent per project rule:
- * status colors (green/red/blue/amber) stay hardcoded across all themes.
+ * A session's status dot, as a class. WHY classes, not hex (guide principle 2; the guide's buddy
+ * deviation "grey hex dots"): this is the SAME map as the main window's session strip (`DOT_BG`
+ * in SessionStrip.tsx), so a session's dot in the buddy is the main window's dot — idle grey
+ * included, which was a hand-picked #666666 here. The status hues stay fixed across themes (the
+ * one allowed exception, and only in a dot); float chrome's per-wallpaper retune does not reach
+ * the buddy window. Keep the two maps in sync.
  */
-function attentionColorFromSummary(sessionId: string, summary: AttentionSummary | null): string {
+const DOT_CLASS: Record<string, string> = {
+  green: 'bg-green-400', // thinking or running tool
+  red: 'bg-red-400', // awaiting approval
+  amber: 'bg-amber-400', // attention banner showing (stuck/session-died)
+  blue: 'bg-blue-400', // has unseen activity
+  gray: 'bg-gray-500', // idle / no report yet
+};
+
+function attentionDotClass(sessionId: string, summary: AttentionSummary | null): string {
   const status = summary?.perSession?.[sessionId]?.status;
-  switch (status) {
-    case 'green': return '#4CAF50';  // thinking or running tool
-    case 'red':   return '#DD4444';  // awaiting approval
-    case 'amber': return '#F5A623';  // attention banner showing (stuck/session-died)
-    case 'blue':  return '#60A5FA';  // has unseen activity
-    case 'gray':
-    default:      return '#666666';  // idle / no report yet
-  }
+  return DOT_CLASS[status ?? 'gray'] ?? DOT_CLASS.gray;
 }

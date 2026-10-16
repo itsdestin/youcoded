@@ -56,7 +56,7 @@ describe('ConversationPreview', () => {
     const onResume = vi.fn();
     render(<ConversationPreview session={{ ...session, provider: 'claude' }} onClose={() => {}} onResume={onResume} />);
     await screen.findByText('why is sync broken');
-    fireEvent.click(screen.getByRole('button', { name: 'Resume Session' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume session' }));
     // App's own resume arguments: id, folder, then the picked launch choices.
     expect(onResume).toHaveBeenCalledWith('sess-1', 'proj', '/home/user/proj', expect.any(String), false, false, 'claude', undefined, 'Fix the sync bug');
   });
@@ -74,7 +74,7 @@ describe('ConversationPreview organize controls', () => {
   it('puts the date in the action card at the foot, with the Resume button', async () => {
     const { container } = render(<ConversationPreview session={{ ...session, lastModified: Date.now() - 3 * 3600_000 }} onClose={() => {}} onResume={() => {}} />);
     await screen.findByText('why is sync broken');
-    const resume = screen.getByRole('button', { name: 'Resume Session' });
+    const resume = screen.getByRole('button', { name: 'Resume session' });
     const date = screen.getByText('3h ago');
     // Same card: the date sits above the Resume button, not under the title.
     const card = resume.closest('.bg-panel');

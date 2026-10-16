@@ -181,7 +181,8 @@ export interface AppChannelTypes {
   'social:block': { request: { userId: string }; response: ApiResult<void> };
   'social:unblock': { request: { userId: string }; response: ApiResult<void> };
   'social:list-blocks': { request: void; response: ApiResult<BlockRow[]> };
-  'social:presence-connect': { request: void; response: { ok: true } };
+  // hidden = incognito on this device (presence-socket.ts HIDDEN MODE); the probe makes it async.
+  'social:presence-connect': { request: { hidden?: boolean } | void; response: { ok: true } };
   'social:presence-disconnect': { request: void; response: { ok: true } };
   'social:presence-send': { request: { message: Record<string, unknown> }; response: { ok: true } | { ok: false; status: number; message: string } };
 }

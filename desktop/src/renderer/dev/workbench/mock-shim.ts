@@ -5,6 +5,8 @@ import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
+// A pure string classifier (no imports but types): the practice Backup & sync shows its real words.
+import { classifyPushError, TIMEOUT_SENTINEL } from '../../../main/sync-error-classifier';
 import type {
   InstalledLocalModel, DownloadProgress, ModelSettingsWrite, StoredModelSettings,
 } from '../../../shared/model-manager-types';
@@ -38,13 +40,18 @@ import { playReply, resolvePermission, parseReplyScript, isControl, splitTurns, 
 // Task 7c: Connect Four's friends/presence layer (window.claude.social) — see
 // fake-party.ts for why this exists and what it stands in for.
 import { JAKE_ID, JAKE_USERNAME } from './fake-party';
-import { arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
+import { MIRA_ID, arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
 import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
+import type {
+  GitFileStatusResult, GitFileReviewResult, GitLogEntry, GitCommitFileDiffResult, GitOpResult,
+} from '../../../shared/git-types';
+import type { StructuredPatchHunk } from '../../../shared/types';
 // The fake splits its scripted sentence with the SAME helper the real engine's
 // worker uses, so what Destin reviews in the workbench is the shipped grey/solid
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog';
+import { WORKBENCH_INTEGRATIONS, type WorkbenchIntegration } from './fixtures/marketplace/integrations';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
@@ -192,14 +199,16 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'artifacts.listAllFiles', 'artifacts.listFolder', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
   'artifacts.readBinary', 'artifacts.save',
-  'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject',
+  'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject', 'syncSpaces.removeProject',
   'syncSpaces.renameProject', 'syncSpaces.setProjectDescription',
   'syncSpaces.listDevices', 'syncSpaces.renameDevice', 'syncSpaces.removeDevice',
   // Legacy rclone half of Backup & Sync. All real preload channels — hand-written
   // because the catch-all's `[]` is a truthy non-status that crashed the panel.
   'sync.getStatus', 'sync.getLog', 'sync.force', 'sync.dismissWarning',
   'sync.pushBackend', 'sync.updateBackend', 'sync.removeBackend', 'sync.addBackend',
-  'folders.list', 'folders.rename', 'folders.setDescription',
+  // The add-a-backup wizard's steps (small-fixes-1), so its two failures can be photographed.
+  'sync.setup.checkPrereqs', 'sync.setup.installRclone', 'sync.setup.authGdrive', 'sync.setup.createRepo',
+  'folders.list', 'folders.rename', 'folders.setDescription', 'folders.remove',
   'project.listConversations', 'project.listContext', 'project.readContextFile',
   'project.writeContextFile', 'project.repoInfo',
   'account.signedIn', 'account.user', 'account.refresh',
@@ -237,6 +246,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
+  // Marketplace integrations (2026-10-04) — real preload channels; faked so the integration
+  // detail popup can be opened and reviewed (fixtures/marketplace/integrations.ts).
+  'integrations.list', 'integrations.status', 'integrations.install', 'integrations.connect', 'integrations.uninstall',
   // The workbench's own seeding (mock-only.ts lists it): no real bridge has it.
   'on.seedChat',
   // Task 9 (status-bar relevance review): the CC scenario needs the 5h/7d
@@ -512,6 +524,7 @@ const NAMESPACES = [
 import { createNamingPreview } from './naming-preview';
 import { createBrowserMock } from './browser-mock';
 import { seedPages } from './fixtures/pages';
+import { kitPiecesPage } from './fixtures/kit-pieces-page';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
@@ -617,7 +630,8 @@ export function createMockShim(store: MockStore): Window['claude'] {
     getHomePath: async () => '/home/destin',
     getFavorites: async () => [],
     setFavorites: async () => undefined,
-    getIncognito: async () => false,
+    // `?incognito=1` (games-social round 2): start hidden from friends, for the incognito state.
+    getIncognito: async () => typeof location !== 'undefined' && new URLSearchParams(location.search).get('incognito') === '1',
     setIncognito: async () => undefined,
     fireRemoteAttentionChanged: () => undefined,
     off: () => {},
@@ -1803,8 +1817,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const SETUP_MS = 2500;
   // Main-process state in the real thing: setup is not owned by the dialog, so
   // closing it cannot cancel setup and reopening can ask where it got to.
-  let setupState: 'idle' | 'running' | 'ready' | 'failed' = 'idle';
-  let setupPath = '';
+  // `?devCopy=ready`: YouCoded's code is already on this computer from an earlier run — the
+  // real app now finds it on disk (dev-tools.ts findManagedWorkspace), so Contribute opens on
+  // "ready" with no download.
+  const copyReady = typeof location !== 'undefined' && new URLSearchParams(location.search).get('devCopy') === 'ready';
+  let setupState: 'idle' | 'running' | 'ready' | 'failed' = copyReady ? 'ready' : 'idle';
+  const ticketHold = () => typeof location !== 'undefined' && new URLSearchParams(location.search).get('ticket') === 'hold';
+  let setupPath = copyReady ? '/home/destin/YouCoded/Development/youcoded-workspace' : '';
   let setupError = '';
   const devMock = {
     // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,
@@ -1824,11 +1843,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       flagged_strings: [] as string[],
     }),
     submitIssue: async (a?: { browserOnly?: boolean }) => {
+      // `?ticket=hold`: the send never answers, so the "Sending your ticket" state can be
+      // photographed (it otherwise flashes past in 0 ms).
+      if (ticketHold()) return new Promise<never>(() => {});
       // The attachment route finishes in the browser whatever the scenario — that is
       // the point of it, not a degraded outcome.
       if (a?.browserOnly) {
         return { ok: false as const, needsBrowser: true as const, truncated: false,
           fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new?title=Settings+text+is+cut+off' };
+      }
+      // `?network=offline`: what the real send answers with no network — the request's own
+      // error, passed through untouched (dev-tools.ts submitIssue's catch). Never a guess.
+      if (new URLSearchParams(location.search).get('network') === 'offline') {
+        return { ok: false as const, error: 'getaddrinfo ENOTFOUND api.github.com',
+          fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new' };
       }
       return activeScenario === 'refused'
         // A failure the user can act on, and one this flow can actually produce:
@@ -1854,10 +1882,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // exact failure the latency knob exists to prevent, one size too small.
     setupWorkspace: () => {
       setupState = 'running';
+      // `?ticket=hold`: setup never finishes, so "Setting up a working copy" can be photographed.
+      if (ticketHold()) return new Promise<never>(() => {});
       return new Promise(resolve => setTimeout(() => {
         if (activeScenario === 'refused') {
           setupState = 'failed';
-          setupError = 'Could not reach github.com to download the project.';
+          // WHY git's own words (submit-ticket-5#ST5-9): the practice failure must read like the
+          // real one — dev-tools.ts keeps the failing step's last lines — so a picture of the
+          // screen shows what a user would actually meet, not a tidied-up sentence.
+          setupError = "git exited with code 128 — fatal: unable to access 'https://github.com/itsdestin/youcoded-dev/': Could not resolve host: github.com";
           resolve({ ok: false as const, error: setupError });
         } else {
           setupState = 'ready';
@@ -1873,6 +1906,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // and the screen can ASK what it is doing when it reopens. A per-step progress
     // feed cannot answer that question — reopening would show nothing.
     setupStatus: async () => ({ state: setupState, path: setupPath, error: setupError }),
+    // `?devOpen=fail`: the new conversation can't start — rejected the way Electron rejects a
+    // failed IPC call, with a real-world reason (the CLI missing), so the screen's wording is
+    // judged against the text a user could really get (submit-ticket-5#ST5-9).
+    openSessionIn: async (_a?: { cwd: string; initialInput?: string }) => {
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('devOpen') === 'fail') {
+        throw new Error("Error invoking remote method 'dev:open-session-in': Error: spawn claude ENOENT");
+      }
+      return { id: 'wb-dev-session' };
+    },
     clearSetupStatus: async () => { if (setupState !== 'running') { setupState = 'idle'; setupPath = ''; setupError = ''; } },
   };
 
@@ -2028,11 +2070,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // catch-all rather than hand-written for no behavioural gain.
   const shell: Ns<'shell'> = {
     openPath: async () => '',
-    // Real open so workbench clicks visibly do something: mirror the remote
-    // shim's browser behaviour (window.open in a new tab) instead of silently
-    // resolving [] through the catch-all. Only called on a user click (never
-    // by the model), so the new tab/popup is not a surprise.
-    openExternal: async (url: string) => { window.open(url, '_blank', 'noopener'); },
+    // WHY nothing opens (small-fixes-1): this used to call window.open, so a practice screen
+    // that pressed "Continue in GitHub" (settings/development/bug-report#browser) opened a real
+    // github.com sign-in page in the screenshot browser — it took the front of the window, hid
+    // the app's tab, and the next screens hung (shoot --check, 2026-10-07; the engine now also
+    // closes such pages). The practice app must never reach the internet on its own: the URL is
+    // remembered on `window.__workbenchOpenedUrls` for a test or a curious reader, and a line
+    // in the console says what would have opened.
+    openExternal: async (url: string) => {
+      const w = globalThis as unknown as { __workbenchOpenedUrls?: string[] };
+      (w.__workbenchOpenedUrls ??= []).push(url);
+      console.info(`[workbench] would open ${url} (the practice app opens no outside pages)`);
+    },
   };
 
   // Specialists 1c — roster, model tiers, and the two card actions. Real
@@ -2121,6 +2170,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     path in descriptions ? descriptions[path] : (seeded ?? null);
 
   const SYNC_NOW = Date.now();
+  // A fixed moment for practice LOG lines, which print absolute times (see sync.getLog).
+  // "Ago" texts keep using SYNC_NOW: they read the same on every run already.
+  const PRACTICE_LOG_CLOCK = Date.UTC(2026, 8, 30, 14, 5, 0);
   const syncSpaces = {
     status: async () => ({
       enabled: true,
@@ -2173,6 +2225,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
             },
           ],
       syncHub: 'connected',
+      // `&sync=removed` (project switcher round 2): two projects removed from every device, so
+      // Backup & sync's "Removed projects" card — the GitHub backup note — can be photographed.
+      ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('sync') === 'removed' ? {
+        removed: [
+          { name: 'old-thesis', displayName: 'Old thesis', githubUrl: 'https://github.com/itsdestin/old-thesis' },
+          { name: 'wedding', displayName: 'Wedding planning', githubUrl: 'https://github.com/itsdestin/wedding' },
+        ],
+      } : {}),
     }),
     // Real channel (syncspaces:set-project-description); the fake stays so the
     // description editor works in the workbench without a synced registry.
@@ -2184,6 +2244,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
+    removeProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
     leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
       ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
@@ -2230,6 +2291,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // failed to start" the moment anyone opened Backup & Sync, including on the
   // public landing page's live demo (reproduced 2026-09-04). Same failure shape
   // the syncSpaces comment above warns about; this is its second instance.
+  const syncSetupMode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('syncSetup') : null;
+  const syncWarnMode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('syncWarn') : null;
   const sync = {
     getStatus: async () => ({
       backends: [
@@ -2239,6 +2302,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           config: { DRIVE_ROOT: 'YouCoded/Backup', rcloneRemote: 'gdrive' },
           lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 300, lastError: null,
         },
+        // `?syncWarn=github` (small-fixes-2): a GitHub backup set up before computers stopped
+        // supporting it — its settings still saved, nothing copied since.
+        ...(syncWarnMode === 'github' ? [{
+          id: 'github-1', type: 'github' as const, label: 'GitHub', syncEnabled: true, connected: true,
+          config: { PERSONAL_SYNC_REPO: 'https://github.com/you/claude-sync' },
+          lastPushEpoch: Math.floor(SYNC_NOW / 1000) - 600, lastError: null,
+        }] : []),
       ],
       lastSyncEpoch: Math.floor(SYNC_NOW / 1000) - 120,
       backupMeta: {
@@ -2246,7 +2316,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         platform: 'linux',
         toolkit_version: '1.3.0',
       },
-      warnings: [],
+      // `?syncWarn=timeout` (small-fixes-2): the Google Drive backup's "timed out" warning,
+      // made by the REAL classifier so its fix button reads whatever main writes ("Try again").
+      warnings: syncWarnMode === 'timeout'
+        ? [classifyPushError(TIMEOUT_SENTINEL, 'drive', { id: 'drive-1', type: 'drive', label: 'Google Drive', syncEnabled: true, config: {} } as never)]
+        : [],
       syncInProgress: false,
       syncingBackendId: null,
       syncedCategories: ['memory', 'conversations', 'encyclopedia', 'skills', 'system-config'],
@@ -2258,10 +2332,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         'machine-mbp': SYNC_NOW - 86_400_000,
       },
     }),
+    // Stamped with the fixed PRACTICE_LOG_CLOCK, not the real clock. WHY (submit-ticket
+    // friction, proposal 21): the printed times changed every run, so every before/after
+    // picture of Backup & sync's Sync log read as "changed" when nothing had.
     getLog: async (n = 30) => [
-      `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pulled personal (3 files)`,
-      `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
-      `[${new Date(SYNC_NOW - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 120_000).toISOString()}] INFO  pulled personal (3 files)`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
     ].slice(0, n),
     // WHY the real shapes (sync-state.ts forceSync/pushBackend/addBackend): since error
     // inventory 2026-09-10 Backup & Sync READS these answers instead of assuming success —
@@ -2273,7 +2350,30 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     pushBackend: async () => ({ success: true, error: '' }),
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),
-    addBackend: async (instance: { type: string; label: string }) => ({ ...instance, id: `${instance.type}-new` }),
+    // `?syncSetup=save-failed`: the new backup can't be saved (small-fixes-1/2).
+    addBackend: async (instance: { type: string; label: string }) => {
+      if (syncSetupMode === 'save-failed') throw new Error("Couldn't save the new backup: the settings file is busy (workbench practice failure).");
+      return { ...instance, id: `${instance.type}-new` };
+    },
+    // The add-a-backup wizard (small-fixes-1). WHY: on the catch-all's `[]` every prerequisite
+    // read as missing and no step past the first could be reached. `?syncSetup=install-failed`
+    // makes Drive's helper tool missing and its install fail; `?syncSetup=save-failed` makes
+    // GitHub's new private repository fail to be made. The reasons are practice words.
+    setup: {
+      checkPrereqs: async (backend: string) => (backend === 'github'
+        ? { ghInstalled: true, ghAuthenticated: true, ghUsername: 'you' }
+        : { rcloneInstalled: syncSetupMode !== 'install-failed', gdriveConfigured: true, gdriveRemoteName: 'gdrive' }),
+      installRclone: async () => (syncSetupMode === 'install-failed'
+        ? { success: false, error: 'The download of the helper tool stopped part way (workbench practice failure).' }
+        : { success: true }),
+      // `?syncSetup=auth-failed`: the sign-in answers with a reason of its own.
+      authGdrive: async () => (syncSetupMode === 'auth-failed'
+        ? { success: false, error: 'Google sign-in was closed before it finished (workbench practice failure).' }
+        : { success: true, remoteName: 'gdrive2' }),
+      createRepo: async (name: string) => (syncSetupMode === 'save-failed'
+        ? { success: false, error: `GitHub refused to make the repository ${name}: name already exists on this account (workbench practice failure).` }
+        : { success: true, repoUrl: `https://github.com/you/${name}` }),
+    },
   };
 
   // Real channel (folders:set-description) — the LOCAL-folder half of the same
@@ -2290,6 +2390,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       { path: '/home/you/code/youcoded', nickname: 'youcoded', addedAt: 0, exists: true },
     ],
     rename: async () => ({ ok: true }),
+    // Project switcher → Remove (backlog row 10): the project leaves the fake index too, so
+    // the switcher can be seen without it — the real folders-service keeps a synced one off.
+    remove: async (path: string) => { removedProjects.add(path); return true; },
     setDescription: async (path: string, description: string) => {
       descriptions[path] = description.trim() || null;
       return { ok: true };
@@ -2509,6 +2612,32 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // arcade switch above documents). This composes with any scenario.
   const noProjectsSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('projects') === 'none';
+  // `&projects=many` (project switcher, backlog row 10): twelve more plain folders, one of
+  // them moved away on disk ("Folder missing"), so a long list and the missing state show.
+  const manyProjectsSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('projects') === 'many';
+  const MANY_PROJECTS = [
+    ['Econ 201', '/home/destin/school/econ-201', 'Problem sets and the midterm study guide.'],
+    ['Thesis (old copy)', '/home/destin/Documents/thesis-old', null, true],
+    ['Budget 2026', '/home/destin/Documents/budget-2026', null],
+    ['Wedding planning', '/home/destin/Documents/wedding', 'Guest list, vendors, the seating chart.'],
+    ['Garden', '/home/destin/Documents/garden', null],
+    ['Job search', '/home/destin/Documents/job-search', 'Cover letters and the tracker.'],
+    ['Photos 2025', '/home/destin/Pictures/2025', null],
+    ['Book club', '/home/destin/Documents/book-club', null],
+    ['Taxes', '/home/destin/Documents/taxes', null],
+    ['Recipes archive', '/home/destin/Documents/recipes-archive', null],
+    ['Side project', '/home/destin/code/side-project', 'A tiny weather app.'],
+    ['Notes', '/home/destin/Documents/notes', null],
+  ] as const;
+  const manyProjects = (withCounts: boolean) => MANY_PROJECTS.map(([name, path, description, missing], i) => ({
+    id: path, name, path, lastIndexed: '', lastSession: null, contentTypes: [] as ('artifacts' | 'conversations')[],
+    stats: { artifactCount: 0 }, description,
+    ...(missing ? { missing: true } : {}),
+    ...(withCounts && !missing ? { fileCount: (i * 7) % 40, conversationCount: i % 4 } : {}),
+  }));
+  // Paths "removed" through folders.remove this page load (see `folders` below).
+  const removedProjects = new Set<string>();
 
   // Promo (model beat): the model picker shows ONLY favourites until you type
   // (components/model/ModelPicker.tsx), and it keeps them in localStorage under
@@ -2629,6 +2758,37 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     id: JAKE_ID, display_name: JAKE_USERNAME, handle: 'jake', avatar_url: null,
     last_seen_at: jakeNowSec, created_at: jakeNowSec - 86_400,
   };
+  // `?friends=` (games-social redesign, backlog row 11): the friends panel's
+  // states. Unset = Jake alone (what the landing page films). `many` = four
+  // friends — Jake online, Mira in a game, Sam last seen 3 hours ago, Ada never
+  // seen — so every status pill shows at once. `requests` = `many` plus one
+  // request each way. `none` = signed in with no friends yet.
+  const friendsSwitch = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('friends');
+  const friendCard = (id: string, name: string, lastSeen: number | null) => ({
+    id, display_name: name, handle: name.toLowerCase(), avatar_url: null,
+    last_seen_at: lastSeen, created_at: jakeNowSec - 86_400,
+  });
+  // `lots` (round 2, GQ-1): twelve friends, so the capped list has to scroll.
+  const LOTS = ['Ana', 'Ben', 'Cleo', 'Dev', 'Eli', 'Fay', 'Gus', 'Hana'].map((n, i) => friendCard(n.toLowerCase(), n, jakeNowSec - (i + 1) * 86_400));
+  const friendList = !signedInSwitch || friendsSwitch === 'none' ? []
+    : friendsSwitch === 'lots'
+      ? [JAKE_FRIEND, friendCard(MIRA_ID, 'Mira', jakeNowSec), friendCard('sam', 'Sam', jakeNowSec - 3 * 3600), friendCard('ada', 'Ada', null), ...LOTS]
+    : friendsSwitch === 'many' || friendsSwitch === 'requests'
+      ? [JAKE_FRIEND, friendCard(MIRA_ID, 'Mira', jakeNowSec), friendCard('sam', 'Sam', jakeNowSec - 3 * 3600), friendCard('ada', 'Ada', null)]
+      : [JAKE_FRIEND];
+  const presenceUsers = friendsSwitch === 'none' ? []
+    : friendsSwitch === 'many' || friendsSwitch === 'requests' || friendsSwitch === 'lots'
+      ? [
+        { id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' },
+        { id: MIRA_ID, display_name: 'Mira', handle: 'mira', status: 'in-game' },
+      ]
+      : [{ id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' }];
+  const requestList = friendsSwitch === 'requests'
+    ? {
+      incoming: [{ id: 'req-zed', from: { id: 'zed', display_name: 'Zed', handle: 'zed', avatar_url: null }, created_at: jakeNowSec }],
+      outgoing: [{ id: 'req-lee', to: { id: 'lee', display_name: 'Lee', handle: 'lee', avatar_url: null }, created_at: jakeNowSec }],
+    }
+    : { incoming: [], outgoing: [] };
   // Holds the one onPresenceEvent callback the app registers (usePresence.ts
   // subscribes exactly once) so presenceConnect can push events into it.
   let presenceListener: ((ev: { type: string; [k: string]: unknown }) => void) | null = null;
@@ -2636,7 +2796,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const social: Ns<'social'> = {
     lookupHandle: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
     sendRequest: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
-    listRequests: async () => ({ ok: true, value: { incoming: [], outgoing: [] } }),
+    listRequests: async () => ({ ok: true, value: requestList }),
     acceptRequest: async () => ({ ok: true, value: undefined }),
     declineRequest: async () => ({ ok: true, value: undefined }),
     cancelRequest: async () => ({ ok: true, value: undefined }),
@@ -2644,12 +2804,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // FriendsScreen has something to show even before presence reports him
     // online (mirrors a real friends list, which loads independently of who's
     // currently connected).
-    listFriends: async () => ({ ok: true, value: signedInSwitch ? [JAKE_FRIEND] : [] }),
+    listFriends: async () => ({ ok: true, value: friendList }),
     unfriend: async () => ({ ok: true, value: undefined }),
     block: async () => ({ ok: true, value: undefined }),
     unblock: async () => ({ ok: true, value: undefined }),
     listBlocks: async () => ({ ok: true, value: [] }),
     presenceConnect: async () => {
+      // `?network=offline`: a computer with no network never connects (the app's own
+      // offline flag comes from workbench-mode.ts; the socket simply stays down).
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('network') === 'offline') return { ok: true };
       presenceLive = true;
       // Fire on a tick, not synchronously — usePresence.ts's onPresenceEvent
       // subscription and its presenceConnect() call happen in the same effect
@@ -2667,10 +2830,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           presenceListener?.({ type: 'error', message: "Can't reach the game server" });
           return;
         }
-        presenceListener?.({
-          type: 'presence',
-          users: [{ id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' }],
-        });
+        presenceListener?.({ type: 'presence', users: presenceUsers });
       }, 150);
       return { ok: true };
     },
@@ -2739,8 +2899,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     // Appearance prefs live in localStorage in the workbench (ThemeProvider
     // already persists there), so the IPC mirror is a no-op rather than a
-    // second source of truth that could disagree with it.
-    get: async () => null,
+    // second source of truth that could disagree with it. The one field it does answer is which default
+    // this "install" is on (final review F1): the workbench is a new install, so a screen with no theme
+    // chosen shows the YouCoded pair whatever keys an earlier run left in this browser.
+    get: async () => ({ defaultTheme: 'youcoded' }),
     set: async () => true,
     broadcast: () => {},
     // ThemeProvider subscribes here for cross-window theme changes and applies
@@ -2805,7 +2967,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // inline editor behaves like the real thing instead of snapping back.
       projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
-        : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
+        : [...(opts?.withCounts ? projectsWithCounts() : artifactProjects()), ...(manyProjectsSwitch ? manyProjects(!!opts?.withCounts) : [])])
+        .filter((p) => !removedProjects.has(p.path))
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
     }),
     // Student mode: every session's drawer lists the Econ 201 session's files
@@ -3053,13 +3216,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // signed in to Claude Code (Destin, 2026-10-02). Without it the checklist is
   // empty, so no review shot showed what setup installs.
   const prereqsPin = firstRunParams.get('prereqs');
-  const setupChecklist = prereqsPin === 'installing' || prereqsPin === 'done'
+  // `?prereqs=failed` (first-run deck R-2): Git's download stopped, with the raw
+  // message a failed download really produces, so "Show details" has something real.
+  const setupChecklist = prereqsPin === 'installing' || prereqsPin === 'done' || prereqsPin === 'failed'
     ? {
         prerequisites: [
           { name: 'node', displayName: 'Node.js', status: 'skipped' },
           prereqsPin === 'installing'
             ? { name: 'git', displayName: 'Git', status: 'installing' }
-            : { name: 'git', displayName: 'Git', status: 'installed', version: 'git version 2.56.0' },
+            : prereqsPin === 'failed'
+              ? { name: 'git', displayName: 'Git', status: 'failed' }
+              : { name: 'git', displayName: 'Git', status: 'installed', version: 'git version 2.56.0' },
           { name: 'claude', displayName: 'Claude Code', status: 'skipped' },
           { name: 'auth', displayName: 'Sign in', status: 'waiting' },
         ],
@@ -3088,6 +3255,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
         : []),
       overallProgress: setupChecklist?.overallProgress ?? 100,
+      ...(prereqsPin === 'failed' ? { lastError: 'Error: HTTP 503 downloading https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-64-bit.7z.exe' } : {}),
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
       // state (design 2026-09-04: the ChatGPT round-trip has its own waiting copy).
@@ -3135,7 +3303,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
-    // Present so `detachAvailable` is true and the "Launch in New Window"
+    // Present so `detachAvailable` is true and the "Launch in new window"
     // toggle renders (SessionStrip.tsx:191, ResumeBrowser.tsx:242 both test
     // `typeof ... === 'function'`). A browser tab cannot actually detach — say
     // so loudly rather than pretending it worked.
@@ -3264,6 +3432,72 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     get: async () => ({ ...modesState }),
     set: async (m: { fast?: boolean; effort?: string }) => { modesState = { ...modesState, ...m }; return { ...modesState }; },
   };
+
+  // Git surface (spec docs/archive/specs/2026-07-22-git-surface.md) — WHY this
+  // exists (capture repair, 2026-09-24): `git` was never in NAMESPACES or
+  // handWritten, so `window.claude.git.fileStatus()` fell through the outer
+  // bridge's catch-all TWICE (once for the unknown namespace, once for the
+  // unknown method — withCatchAll cannot tell a leaf channel from a nested
+  // namespace) and resolved `[]`. `useGitFileStatus` reads `r?.ok` off that as
+  // falsy and silently sets status to null, so the SessionDrawer footer's
+  // "Review Changes" button — the only door into GitReviewView — could never
+  // render in the workbench. Git file review had zero screenshots anywhere
+  // for exactly this reason (completeness-screens.md, 2026-09-23 audit).
+  // Deliberately GENERIC, not per-file: every file the drawer can open reads
+  // as "one uncommitted edit, two commits of history" regardless of path —
+  // real per-file git state would need a second fixture keyed to the
+  // artifacts tree, which is more than a capture needs. Mutations (stage/
+  // unstage/commit) are accepted but not modelled — GitReviewView refreshes
+  // off `onChanged`/the same fixture, so the review stays legible afterward
+  // rather than reflecting the specific action taken.
+  const GIT_HUNK: StructuredPatchHunk = {
+    oldStart: 12, oldLines: 6, newStart: 12, newLines: 7,
+    lines: [
+      ' export function useChatState(sessionId: string) {',
+      '   const store = useChatStore();',
+      '-  return store.get(sessionId);',
+      '+  // WHY: a cached selector avoids re-rendering every session on one update.',
+      '+  return useCachedSelector(store, sessionId);',
+      ' }',
+      ' ',
+    ],
+  };
+  const GIT_LOG: GitLogEntry[] = [
+    {
+      sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e', shortSha: 'a1b2c3d',
+      subject: 'chat: cache the per-session selector', authorDate: new Date(Date.now() - 86_400_000).toISOString(),
+      counts: { added: 4, removed: 1 },
+    },
+    {
+      sha: 'f6e5d4c3b2a1098765432109876543210fedcba', shortSha: 'f6e5d4c',
+      subject: 'chat: initial session store', authorDate: new Date(Date.now() - 7 * 86_400_000).toISOString(),
+      counts: { added: 96, removed: 0 },
+    },
+  ];
+  let gitStagedCount = 0;
+  const gitSubs = new Set<() => void>();
+  const gitFireChanged = () => gitSubs.forEach((cb) => cb());
+  const git = {
+    fileStatus: async (): Promise<GitFileStatusResult> => ({
+      ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
+      counts: { added: 4, removed: 1 }, hasHistory: true, staged: gitStagedCount > 0, conflicted: false,
+    }),
+    fileReview: async (): Promise<GitFileReviewResult> => ({
+      ok: true, isRepo: true, branch: 'session/ui-consistency-audit',
+      uncommitted: {
+        hunks: [GIT_HUNK], counts: { added: 4, removed: 1 }, staged: gitStagedCount > 0,
+        untracked: false, inHead: true, binary: false, conflicted: false,
+      },
+      log: GIT_LOG, hasMore: false, stagedCount: gitStagedCount,
+    }),
+    commitFileDiff: async (): Promise<GitCommitFileDiffResult> => ({ ok: true, hunks: [GIT_HUNK], binary: false }),
+    stage: async (): Promise<GitOpResult> => { gitStagedCount = 1; gitFireChanged(); return { ok: true }; },
+    unstage: async (): Promise<GitOpResult> => { gitStagedCount = 0; gitFireChanged(); return { ok: true }; },
+    commit: async (): Promise<GitOpResult> => { gitStagedCount = 0; gitFireChanged(); return { ok: true }; },
+    watch: async () => ({ ok: true }),
+    unwatch: async () => ({ ok: true }),
+    onChanged: (cb: () => void) => { gitSubs.add(cb); return () => { gitSubs.delete(cb); }; },
+  };
   // Scripted replies: the transcript/hook events a played reply fixture emits
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
@@ -3295,6 +3529,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // registry in fixtures/marketplace/registry.ts.
   const marketplaceEmpty = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('marketplace') === 'empty';
+  // Marketplace detail states nobody could photograph before (marketplace-detail friction,
+  // proposal 10 — five review rounds never saw them):
+  //   ?install=fail   every plugin / theme install answers a failure with a reason
+  //   ?install=slow   every install takes two minutes, so "Installing…" can be seen
+  //   ?mpUpdate=1     the installed Civic Report and Meadow Mist are older than the listing
+  const mpParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const installMode = mpParams.get('install');
+  const mpUpdate = mpParams.get('mpUpdate') === '1';
+  const INSTALL_FAILURE = { ok: false as const, error: "Couldn't download it: the source repository did not answer (workbench practice failure)." };
+  const installGate = async (): Promise<typeof INSTALL_FAILURE | null> => {
+    if (installMode === 'fail') return INSTALL_FAILURE;
+    if (installMode === 'slow') await new Promise((r) => setTimeout(r, 120_000));
+    return null;
+  };
   const theme = {
     list: async () => Object.keys(THEME_FIXTURES),
     readFile: async (slug: string) => THEME_FIXTURES[slug] ?? '{}',
@@ -3308,6 +3556,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // throwing synchronously inside marketplace-context's Promise.all.
     marketplace: {
       list: async () => (marketplaceEmpty ? [] : MARKETPLACE_THEMES.map((t) => ({ ...t }))),
+      // Only the practice failure / slow install is hand-written; a normal install keeps
+      // falling through to the catch-all, exactly as before.
+      ...(installMode ? { install: async () => (await installGate()) ?? { ok: true } } : {}),
       // Real implementations for ThemeShareSheet's two mount-time calls: left to
       // the catch-all, both resolve `[]` (truthy), and `previewPath.replace(...)`
       // on an array crashes the dialog on open (found opening `marketplace/theme-share`).
@@ -3375,6 +3626,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // composer's QuickChips read skills.getChips), so mutating the three lists
     // here is enough. The catalog is untouched: star ratings stay what they are.
     install: async (id: string) => {
+      const gate = await installGate();
+      if (gate) return gate;
       const plugin = MARKETPLACE_PLUGINS.find((p) => p.id === id);
       if (!plugin || installedSkills.some((s) => s.id === id || s.pluginName === id)) return { ok: true };
       const installedAt = new Date(1_756_900_000_000).toISOString();
@@ -3425,7 +3678,22 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
   const marketplace = {
-    getPackages: async () => (marketplaceEmpty ? {} : JSON.parse(JSON.stringify(installedPackages))),
+    getPackages: async () => {
+      if (marketplaceEmpty) return {};
+      const out = JSON.parse(JSON.stringify(installedPackages));
+      if (mpUpdate) {
+        out['civic-report'] = { ...out['civic-report'], version: '0.9.0' };
+        out['theme:meadow-mist'] = { version: '0.0.1', source: 'marketplace', installedAt: '2026-08-01T12:00:00Z', removable: true, components: [], status: 'installed' };
+      }
+      return out;
+    },
+    // WHY: the real file viewer needs a scrolling file for visual review; this
+    // dev-only id is local to the fake backend and never reads or writes disk.
+    readComponent: async (target: { pluginId: string }) => target.pluginId === 'ui-guide-preview'
+      ? { source: 'local', content: ['# Using this skill', '', 'A sample file inside a Marketplace plugin.',
+        ...Array.from({ length: 18 }, (_, i) => `## Section ${i + 1}\nThis section has instructions and context. Scroll to compare the file text passing beneath the popup header and reaching the last line.`),
+        '## End of file', 'You have reached the last line of this sample file.'].join('\n\n') }
+      : [],
   };
 
   // Games arcade (Step 1). Maps the workbench's own scenario switch onto the
@@ -3541,6 +3809,39 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // Integrations (the Marketplace's Integrations rail and its detail popup). WHY hand-written
+  // (2026-10-04): the catch-all's `[]` meant the integration detail popup could never open in
+  // the workbench, so it was never reviewed. Install/connect/uninstall flip the fixture's state
+  // so the popup's buttons show their real next state; `connect` hands back the setup command
+  // the way the real handler does, so the "finish setup" notice can be seen too.
+  let integrationList: WorkbenchIntegration[] = marketplaceEmpty ? [] : WORKBENCH_INTEGRATIONS.map((i) => ({ ...i, state: { ...i.state } }));
+  // `?integration=failed` (small-fixes-1): Google Workspace's install failed, the way the real
+  // installer records it (installed false, the reason in `error`) — so the integration page's
+  // failure notice and its Try again can be photographed.
+  const integrationFailed = mpParams.get('integration') === 'failed';
+  const INTEGRATION_FAILURE = 'Plugin not found in marketplace: google-workspace (workbench practice failure)';
+  if (integrationFailed) {
+    integrationList = integrationList.map((i) => (i.slug === 'google-workspace'
+      ? { ...i, state: { slug: i.slug, installed: false, connected: false, error: INTEGRATION_FAILURE } } : i));
+  }
+  const setIntegration = (slug: string, patch: Partial<WorkbenchIntegration['state']>) => {
+    integrationList = integrationList.map((i) => (i.slug === slug ? { ...i, state: { ...i.state, ...patch } } : i));
+  };
+  const integrations = {
+    list: async () => integrationList.map((i) => ({ ...i, state: { ...i.state } })),
+    status: async (slug: string) => integrationList.find((i) => i.slug === slug)?.state ?? null,
+    install: async (slug: string) => {
+      if (integrationFailed) return { slug, installed: false, connected: false, error: INTEGRATION_FAILURE };
+      setIntegration(slug, { installed: true });
+      return { ok: true, postInstallCommand: integrationList.find((i) => i.slug === slug)?.setup.postInstallCommand };
+    },
+    connect: async (slug: string) => {
+      setIntegration(slug, { connected: true });
+      return { ok: true, postInstallCommand: integrationList.find((i) => i.slug === slug)?.setup.postInstallCommand };
+    },
+    uninstall: async (slug: string) => { setIntegration(slug, { installed: false, connected: false }); return { ok: true }; },
+  };
+
   // The app's own update flow (UpdatePanel). Only reachable with ?update=available — without
   // it no pill renders. WHY hand-written: the catch-all's `[]` from getCachedDownload is
   // TRUTHY, so the panel jumped straight to "Launch Installer" and never downloaded.
@@ -3592,8 +3893,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
-    update, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
+    skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
+    update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
@@ -3785,6 +4086,17 @@ function createPagesMock(empty: boolean): PagesBridge {
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
   let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
+  // `?pagesKit=1`: the Pages kit's showcase page is listed too (fixtures/kit-pieces-page.ts), so every
+  // kit piece can be photographed; any other value opens that section first at phone width
+  // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.
+  const pagesKit = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesKit') : null;
+  if (pagesKit) pages = [...pages, kitPiecesPage(pagesKit === '1' ? null : pagesKit)];
+  // `?pagesMenu=kind` (with `?pagesKit=1`): the Kit pieces page opens with its Meal dropdown open, so
+  // the page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open. WHY the kit
+  // page: the Week planner sample that used to show it was removed (2026-10-16).
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesMenu') === 'kind') {
+    pages = pages.map((p) => (p.id !== 'page-kit-pieces' ? p : { ...p, data: { ...((p.data as Record<string, unknown> | null) ?? {}), demoMenu: 'k-meal' } }));
+  }
   // `?pagesHome=connected` opens the Home page already allowed at the
   // Tailscale address, so its running state is a screen of its own rather
   // than something only a click-through reaches (home-device deck review).

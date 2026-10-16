@@ -53,6 +53,8 @@ describe('buildMetaFile', () => {
     stats: new Map(),
     resolveTranscriptPath: (r: ConversationRecord) => `/local/${r.id}.jsonl`,
     transcriptExists: () => true,
+    // WHY: storeRoot is a required field of buildMetaFile's input; shared here so every call is well-typed.
+    storeRoot: '/tmp/store',
   };
 
   const baseInput = () => ({ ...base, storeRoot: '/tmp/store' });

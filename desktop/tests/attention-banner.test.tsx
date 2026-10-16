@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // attention-banner.test.tsx
-// Covers the provider-config "Open Settings" affordance: the error bubble shows
+// Covers the provider-config "Open settings" affordance: the error bubble shows
 // a jump-to-Model-Providers button ONLY when the provider error is a
 // configuration problem (message contains "Settings → Providers", the phrase
 // emitted by main/providers/provider-registry.ts) AND a handler is wired.
@@ -18,14 +18,14 @@ const RUNTIME_ERROR = 'upstream 502 from the provider';
 
 function openSettingsButton(container: HTMLElement): HTMLButtonElement | null {
   return Array.from(container.querySelectorAll('button')).find(
-    (b) => b.textContent?.trim() === 'Open Settings'
+    (b) => b.textContent?.trim() === 'Open settings'
   ) as HTMLButtonElement | undefined ?? null;
 }
 
-describe('AttentionBanner — provider-config Open Settings jump', () => {
+describe('AttentionBanner — provider-config Open settings jump', () => {
   afterEach(() => cleanup());
 
-  it('shows "Open Settings" and fires the handler for a provider-config error', () => {
+  it('shows "Open settings" and fires the handler for a provider-config error', () => {
     const onOpenProviderSettings = vi.fn();
     const { container } = render(
       <AttentionBanner state="error" errorMessage={CONFIG_ERROR} onOpenProviderSettings={onOpenProviderSettings} />
@@ -59,7 +59,7 @@ describe('AttentionBanner — the plan-limit card', () => {
 
   function planButtons(container: HTMLElement): { switchBtn: HTMLButtonElement | null; upgradeBtn: HTMLButtonElement | null } {
     return {
-      switchBtn: buttonByText(container, 'Switch Providers'),
+      switchBtn: buttonByText(container, 'Switch providers'),
       upgradeBtn: buttonByText(container, 'Upgrade plan'),
     };
   }
@@ -74,7 +74,7 @@ describe('AttentionBanner — the plan-limit card', () => {
     expect(onUpgrade).toHaveBeenCalledTimes(1);
   });
 
-  it('offers BOTH Switch Providers and Upgrade plan side by side', () => {
+  it('offers BOTH Switch providers and Upgrade plan side by side', () => {
     const onSwitch = vi.fn();
     const onUpgrade = vi.fn();
     const { container } = render(
@@ -174,7 +174,7 @@ describe('AttentionBanner — the stalled card', () => {
     const { container } = render(
       <AttentionBanner state="stalled" stalledSince={Date.now()} onRetry={onRetry} onStop={onStop} />,
     );
-    const retry = buttonByText(container, 'Retry');
+    const retry = buttonByText(container, 'Try again');
     const stop = buttonByText(container, 'Stop');
     expect(retry).not.toBeNull();
     expect(stop).not.toBeNull();
@@ -198,7 +198,7 @@ describe('AttentionBanner — errorCode picks the action', () => {
     Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.trim() === label) ?? null;
 
   it.each(['openrouter-key-rejected', 'openrouter-key-expired', 'chatgpt-signin-expired', 'chatgpt-signin-required'])(
-    '%s offers Open Settings', (code) => {
+    '%s offers Open settings', (code) => {
       const { container } = render(
         <AttentionBanner state="error" errorMessage="x" errorCode={code} onOpenProviderSettings={vi.fn()} />,
       );

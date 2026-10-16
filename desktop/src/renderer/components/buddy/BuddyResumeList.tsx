@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '../ui';
+import { Button, ErrorState, FieldError, SectionLabel } from '../ui';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { persistLastBinding } from '../RuntimeBinding';
 import { runLeaseTakeoverGate } from '../../state/resume-lease-gate';
@@ -40,7 +40,7 @@ const MAX_ROWS = 20;
 /**
  * Resume a past conversation from inside the buddy floater.
  *
- * WHY THIS EXISTS (Destin, 2026-09-10). The floater's "Resume Session" button
+ * WHY THIS EXISTS (Destin, 2026-09-10). The floater's "Resume session" button
  * was a placeholder written in July: clicking it printed "Open Resume from the
  * main window for now" and did nothing else. Asked what it should do, Destin
  * chose a short list inside the buddy over bouncing to the main window — the
@@ -74,6 +74,10 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   // Closing the list is a decline, not a suspended handoff that can resume later.
   useEffect(() => () => { takeoverResolveRef.current?.(false); }, []);
 
+  // WHY a load attempt counter: the failed-load notice offers Try again (below), which
+  // re-runs the load effect; bumping this is the whole retry.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
   const [defaultAlias, setDefaultAlias] = useState('sonnet');
   const [defaultDangerous, setDefaultDangerous] = useState(false);
 
@@ -97,10 +101,10 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
       } catch { /* best-effort — the alias below falls back to sonnet */ }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [loadAttempt]);
 
   // Newest first, completed ones hidden. `complete` is the flag the main browser
-  // hides behind its "Show Complete" switch; with no room for that switch here,
+  // hides behind its "Show complete" switch; with no room for that switch here,
   // honour the flag's intent rather than showing conversations the user filed away.
   const visible = useMemo(() => (rows ?? [])
     .filter((s) => !s.flags?.complete)
@@ -180,9 +184,12 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         {copy.consequence && (
           <p className="text-3xs text-fg-muted" style={{ margin: 0, lineHeight: 1.45 }}>{copy.consequence}</p>
         )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
-          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+        {/* WHY stacked, filled on top (decisions "Button arrangement by width" + "Stacked
+            order"; the buddy follows the popup rules): a 320px window is a narrow popup.
+            Same shape as BuddyWelcome's stacked pair and the new-session form above. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Button variant="primary" size="sm" className="w-full" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
+          <Button variant="secondary" size="sm" className="w-full" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
         </div>
       </div>
     );
@@ -191,24 +198,31 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Recent</label>
-        <button
-          onClick={onCancel}
-          className="text-3xs text-fg-muted hover:text-fg transition-colors"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-        >
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel>Recent</SectionLabel>
+        {/* WHY outlined (guide: secondary actions are outlined, never bare
+            text): was a hand-rolled borderless text button. */}
+        <Button variant="secondary" size="sm" onClick={onCancel}>
           Back
-        </button>
+        </Button>
       </div>
 
       {rows === null ? (
         <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>Loading…</p>
       ) : loadFailed ? (
-        <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>Couldn&rsquo;t load your conversations.</p>
+        // WHY ErrorState with Try again (guide: an error with nothing to press is the notice box
+        // with Try again): was a grey line, a dead end. Copies FolderSwitcher's "Couldn't load
+        // your projects." — the same inline box, in the same buddy window's new-session form.
+        <ErrorState
+          variant="inline"
+          message="Couldn't load your conversations."
+          onRetry={() => { setRows(null); setLoadFailed(false); setLoadAttempt((n) => n + 1); }}
+        />
       ) : visible.length === 0 ? (
         <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>No conversations to pick up yet.</p>
       ) : (
-        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
+        <div className="scroll-mask" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0 }}>
           {visible.map((s) => {
             const blocked = s.missingProject || s.notSyncedYet;
             const expanded = expandedId === s.sessionId;
@@ -226,7 +240,8 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
                   }}
                   style={{
                     display: 'flex', width: '100%', alignItems: 'baseline', gap: 6,
-                    padding: '6px 8px', border: 'none', borderRadius: 8,
+                    // WHY the theme token, not a hand-set 8px (guide principle 2).
+                    padding: '6px 8px', border: 'none', borderRadius: 'var(--radius-md)',
                     background: expanded ? 'var(--inset)' : 'transparent',
                     cursor: blocked ? 'default' : 'pointer',
                     opacity: blocked ? 0.55 : 1,
@@ -278,8 +293,12 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         </div>
       )}
 
-      {warning && <p className="text-3xs text-warning-fg" style={{ margin: 0 }}>{warning}</p>}
-      {error && <p className="text-3xs text-fg-muted" style={{ margin: 0 }}>{error}</p>}
+      {/* The notice box in miniature, not amber words (small-fixes-3#SF3-10; guide "a short error
+          line is the notice box in miniature"). */}
+      {warning && <FieldError as="p">{warning}</FieldError>}
+      {/* WHY FieldError, not a grey line (decisions "Fix batch: error lines"): a short error line
+          is the small tinted box. The row's Resume button above is the way to try again. */}
+      {error && <FieldError as="p">{error}</FieldError>}
     </div>
   );
 }
@@ -290,7 +309,11 @@ function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-/** Compact age — the row has room for about six characters. */
+/** Compact age — the row has room for about six characters.
+ *  WHY a short date past 7 days, not `${weeks}w` (bug fix: a session from
+ *  months ago read as "60w", which nobody can place on a calendar): a date
+ *  reads at a glance, same compact shape ModelProvidersPopup already uses for
+ *  "installed on" dates. */
 function relativeTime(ts: number): string {
   const mins = Math.floor((Date.now() - ts) / 60000);
   if (mins < 1) return 'now';
@@ -299,5 +322,5 @@ function relativeTime(ts: number): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
-  return `${Math.floor(days / 7)}w`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

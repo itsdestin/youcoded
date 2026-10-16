@@ -1,194 +1,23 @@
-// Workbench fixtures for YouCoded Pages (Phase 1 shell). Three pages that
+// Workbench fixtures for YouCoded Pages (Phase 1 shell). Sample pages that
 // need nothing from outside their frame — exactly what Phase 1 allows — so the
 // library, the pinned buttons and the host can be reviewed with no backend.
 //
 // Each page is written against the style kit's classes (page-kit.ts) and the
-// tokens page-theme.ts delivers, and each keeps a little working state (a
-// running timer, planned events, strokes on a canvas) so a theme switch can be
-// SEEN to preserve it: switch themes with the timer running and it keeps
-// counting.
+// tokens page-theme.ts delivers, and keeps a little working state (strokes on
+// a canvas) so a theme switch can be SEEN to preserve it.
 //
 // Round 1 of the shell deck (2026-09-16): a notes board and a bare canvas
 // read as "too basic for what i had envisioned". The samples now show what a
-// page can be — a week planner and a paint studio with tools, palette, undo
-// and redo — because the samples are what sets the expectation for the
-// creator skill.
+// page can be — a paint studio with tools, palette, undo and redo — because
+// the samples are what sets the expectation for the creator skill.
+//
+// 2026-10-16 (Destin): the Focus timer and Week planner samples were removed.
+// WHY: they duplicated what the other samples already show; the kit dropdown
+// they demonstrated (and its "Add another…" foot action) now lives on the Kit
+// pieces practice page (kit-pieces-page.ts).
 import type { PageDocument } from '../../../../shared/pages-types';
 import { MONEY_PAGE } from './money/money';
 import { HOME_ASSISTANT_PAGE_HTML, HOME_ASSISTANT_PAGE_JSON } from './home-assistant-page';
-
-const T = '2026-09-14T18:20:00.000Z';
-
-const TIMER_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Focus timer</title>
-<style>
-  .clock { font-family: var(--font-mono); font-size: 64px; font-weight: 500; letter-spacing: .02em; line-height: 1; text-align: center; padding: 24px 0 8px; }
-  .ring { width: 220px; height: 220px; border-radius: 50%; margin: 24px auto 0; display: grid; place-items: center;
-          background: conic-gradient(var(--accent) var(--pct, 0%), var(--inset) 0); }
-  .ring > div { width: 196px; height: 196px; border-radius: 50%; background: var(--panel); display: grid; place-items: center; }
-  .presets { justify-content: center; }
-</style></head>
-<body>
-<div class="yc-page yc-stack">
-  <div class="yc-row yc-row--between">
-    <div><div class="yc-eyebrow">Focus</div><h1>Focus timer</h1></div>
-    <span class="yc-chip" id="state">Ready</span>
-  </div>
-  <div class="yc-card">
-    <div class="ring" id="ring"><div><div class="clock" id="clock">25:00</div></div></div>
-    <div class="yc-row presets" style="margin-top:16px">
-      <button class="yc-button yc-button--sm" data-min="5">5 min</button>
-      <button class="yc-button yc-button--sm" data-min="15">15 min</button>
-      <button class="yc-button yc-button--sm yc-pill--on" data-min="25">25 min</button>
-      <button class="yc-button yc-button--sm" data-min="50">50 min</button>
-    </div>
-    <div class="yc-row yc-row--end" style="margin-top:16px">
-      <button class="yc-button yc-button--ghost" id="reset">Reset</button>
-      <button class="yc-button yc-button--primary" id="go">Start</button>
-    </div>
-  </div>
-  <div class="yc-card yc-card--inset yc-stack" style="gap:6px">
-    <div class="yc-eyebrow">Today</div>
-    <div class="yc-row"><span class="yc-title" id="done">0</span><span class="yc-muted">sessions finished</span></div>
-  </div>
-</div>
-<script>
-  var saved = (window.youcoded && window.youcoded.data) || {};
-  var total = 25*60, left = total, running = false, tick = null, done = saved.done || 0;
-  document.getElementById('done').textContent = done;
-  function persist(){ if (window.youcoded) window.youcoded.save({ done: done }); }
-  var clock = document.getElementById('clock'), ring = document.getElementById('ring'), go = document.getElementById('go'), st = document.getElementById('state');
-  function fmt(s){ var m = Math.floor(s/60), r = s%60; return (m<10?'0':'')+m+':'+(r<10?'0':'')+r; }
-  function paint(){ clock.textContent = fmt(left); ring.style.setProperty('--pct', (100*(1-left/total))+'%'); }
-  function stop(){ running=false; clearInterval(tick); go.textContent='Start'; st.textContent = left===total ? 'Ready' : 'Paused'; }
-  go.onclick = function(){
-    if (running) return stop();
-    running = true; go.textContent = 'Pause'; st.textContent = 'Running';
-    tick = setInterval(function(){ left--; if (left<=0){ left=0; paint(); stop(); done++; document.getElementById('done').textContent=done; persist(); st.textContent='Finished'; left=total; return; } paint(); }, 1000);
-  };
-  document.getElementById('reset').onclick = function(){ stop(); left = total; paint(); st.textContent='Ready'; };
-  document.querySelectorAll('[data-min]').forEach(function(b){ b.onclick = function(){
-    document.querySelectorAll('[data-min]').forEach(function(x){ x.classList.remove('yc-pill--on'); }); b.classList.add('yc-pill--on');
-    stop(); total = left = parseInt(b.dataset.min,10)*60; paint(); st.textContent='Ready';
-  }; });
-  paint();
-</script>
-</body></html>`;
-
-// A week at a glance: seven columns, events with a category colour, an
-// add-event form, and week navigation. Dates are fixed so the review is
-// reproducible; "today" is Wednesday of the shown week.
-const PLANNER_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Week planner</title>
-<style>
-  .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-  .day { background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-lg, 12px); padding: 10px; min-height: 380px; display: flex; flex-direction: column; gap: 8px; }
-  .day--today { border-color: var(--accent); box-shadow: inset 0 3px 0 var(--accent); }
-  .day h3 { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); font-weight: 500; }
-  .day h3 b { font-size: 18px; color: var(--fg); font-weight: 600; letter-spacing: 0; }
-  .ev { border-radius: var(--radius-md, 8px); background: var(--inset); border: 1px solid var(--edge-dim); border-left: 3px solid var(--c); padding: 6px 8px; font-size: 12px; cursor: pointer; }
-  .ev:hover { border-color: var(--edge); }
-  .ev time { display: block; font-size: 11px; color: var(--fg-muted); font-family: var(--font-mono); }
-  .ev.done { opacity: .5; text-decoration: line-through; }
-  .add { display: none; grid-template-columns: 1.4fr .8fr .8fr 1fr auto; gap: 8px; align-items: end; }
-  .add.open { display: grid; }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; }
-  .stat { display: flex; flex-direction: column; gap: 2px; }
-  .stat b { font-size: 22px; font-weight: 600; line-height: 1; }
-</style></head>
-<body>
-<div class="yc-page yc-stack">
-  <div class="yc-row yc-row--between">
-    <div><div class="yc-eyebrow">Personal</div><h1 id="title">Week of 14 September</h1></div>
-    <div class="yc-row">
-      <button class="yc-button yc-button--ghost" id="prev" aria-label="Previous week">‹</button>
-      <button class="yc-button" id="today">Today</button>
-      <button class="yc-button yc-button--ghost" id="next" aria-label="Next week">›</button>
-      <button class="yc-button yc-button--primary" id="addbtn">Add event</button>
-    </div>
-  </div>
-  <form class="yc-card add" id="add">
-    <div><label class="yc-label">What</label><input class="yc-input" id="f-title" placeholder="Dentist, standup, gym…" required></div>
-    <div><label class="yc-label">Day</label><select class="yc-select" id="f-day"></select></div>
-    <div><label class="yc-label">Time</label><input class="yc-input" id="f-time" type="time" value="09:00"></div>
-    <div><label class="yc-label">Kind</label><select class="yc-select" id="f-kind"><option value="work">Work</option><option value="home">Home</option><option value="health">Health</option><option value="social">Social</option></select></div>
-    <div class="yc-row"><button type="button" class="yc-button yc-button--ghost" id="cancel">Cancel</button><button type="submit" class="yc-button yc-button--primary">Save</button></div>
-  </form>
-  <div class="week" id="week"></div>
-  <div class="yc-card yc-row yc-row--between">
-    <div class="legend">
-      <span class="yc-badge" style="--badge:#3070d6">Work</span>
-      <span class="yc-badge" style="--badge:#2f9e5b">Home</span>
-      <span class="yc-badge" style="--badge:#d63a3a">Health</span>
-      <span class="yc-badge" style="--badge:#8c4fd0">Social</span>
-    </div>
-    <div class="yc-row" style="gap:24px">
-      <div class="stat"><b id="n-events">0</b><span class="yc-caption">events this week</span></div>
-      <div class="stat"><b id="n-done">0</b><span class="yc-caption">done</span></div>
-      <div class="stat"><b id="n-left">0</b><span class="yc-caption">still to do</span></div>
-    </div>
-  </div>
-</div>
-<script>
-  var COLORS = { work:'#3070d6', home:'#2f9e5b', health:'#d63a3a', social:'#8c4fd0' };
-  var DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  var base = new Date(2026, 8, 14); // Monday 14 Sep 2026
-  var todayIdx = 2; // Wednesday
-  var offset = 0;
-  var saved = (window.youcoded && window.youcoded.data) || null;
-  var events = saved && saved.events ? saved.events : {
-    0: [ { t:'09:30', n:'Team standup', k:'work' }, { t:'12:30', n:'Lunch with Sam', k:'social' }, { t:'18:00', n:'Gym', k:'health' } ],
-    1: [ { t:'10:00', n:'Design review', k:'work' }, { t:'19:30', n:'Cook for the week', k:'home' } ],
-    2: [ { t:'08:15', n:'Dentist', k:'health', done:true }, { t:'11:00', n:'Sprint planning', k:'work' }, { t:'15:00', n:'Call the landlord', k:'home' }, { t:'18:30', n:'Board games night', k:'social' } ],
-    3: [ { t:'09:00', n:'Deep work block', k:'work' }, { t:'17:30', n:'Run', k:'health' } ],
-    4: [ { t:'13:00', n:'Ship the release', k:'work' }, { t:'20:00', n:'Movie', k:'social' } ],
-    5: [ { t:'10:00', n:'Farmers market', k:'home' } ],
-    6: [ { t:'11:00', n:'Brunch', k:'social' }, { t:'16:00', n:'Plan next week', k:'home' } ]
-  };
-  function persist(){ if (window.youcoded) window.youcoded.save({ events: events }); }
-  var week = document.getElementById('week'), form = document.getElementById('add');
-  DAYS.forEach(function(d,i){ var o=document.createElement('option'); o.value=i; o.textContent=d; document.getElementById('f-day').appendChild(o); });
-  function dayDate(i){ var d = new Date(base); d.setDate(base.getDate() + offset*7 + i); return d; }
-  function render(){
-    var first = dayDate(0);
-    document.getElementById('title').textContent = 'Week of ' + first.getDate() + ' ' + MONTHS[first.getMonth()];
-    week.innerHTML = '';
-    var total=0, done=0;
-    for (var i=0;i<7;i++){
-      var col = document.createElement('div'); col.className = 'day' + (offset===0 && i===todayIdx ? ' day--today' : '');
-      var d = dayDate(i);
-      col.innerHTML = '<h3><span>'+DAYS[i]+'</span><b>'+d.getDate()+'</b></h3>';
-      var list = offset===0 ? (events[i]||[]) : [];
-      list.slice().sort(function(a,b){ return a.t<b.t?-1:1; }).forEach(function(e){
-        total++; if (e.done) done++;
-        var el = document.createElement('div'); el.className = 'ev' + (e.done?' done':''); el.style.setProperty('--c', COLORS[e.k]);
-        el.innerHTML = '<time>'+e.t+'</time>'+e.n.replace(/</g,'&lt;');
-        el.title = e.done ? 'Mark as not done' : 'Mark as done';
-        el.onclick = function(){ e.done = !e.done; persist(); render(); };
-        col.appendChild(el);
-      });
-      if (!list.length) { var em = document.createElement('div'); em.className='yc-caption'; em.textContent = 'Nothing planned'; col.appendChild(em); }
-      week.appendChild(col);
-    }
-    document.getElementById('n-events').textContent = total;
-    document.getElementById('n-done').textContent = done;
-    document.getElementById('n-left').textContent = total - done;
-  }
-  document.getElementById('prev').onclick = function(){ offset--; render(); };
-  document.getElementById('next').onclick = function(){ offset++; render(); };
-  document.getElementById('today').onclick = function(){ offset = 0; render(); };
-  document.getElementById('addbtn').onclick = function(){ form.classList.toggle('open'); if (form.classList.contains('open')) document.getElementById('f-title').focus(); };
-  document.getElementById('cancel').onclick = function(){ form.classList.remove('open'); form.reset(); };
-  form.onsubmit = function(ev){
-    ev.preventDefault();
-    var i = +document.getElementById('f-day').value;
-    (events[i] = events[i] || []).push({ t: document.getElementById('f-time').value || '09:00', n: document.getElementById('f-title').value.trim() || 'Untitled', k: document.getElementById('f-kind').value });
-    offset = 0; form.classList.remove('open'); form.reset(); persist(); render();
-  };
-  render();
-</script>
-</body></html>`;
 
 // A paint studio: tool rail (brush, eraser, line, rectangle, ellipse), a
 // palette with a custom colour, size and opacity, undo/redo/clear, and a
@@ -309,7 +138,6 @@ const PAINT_HTML = `<!doctype html>
 </script>
 </body></html>`;
 
-
 // ── Phase 2: connected pages (questions decks, 2026-09-19) ────────────────
 // Seven pages that each reach something outside, so every approval state is
 // reviewable: a YouCoded sign-in, a saved key offered again, a fresh key with
@@ -373,6 +201,9 @@ function simplePage(eyebrow: string, title: string, rows: Array<[string, string]
 /** Minutes before "now", so the band's "Updated 2 min ago" is always 2 min. */
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 
+// WHY the parenthetical in each placeholder's NAME (Destin, 2026-10-16): these are practice
+// samples, and the name alone did not say which approval or band state each one exists to
+// show. The ids stay the same so screen names and tests keep working.
 function connectedPages(): PageDocument[] {
   const base = { home: { kind: 'personal' as const }, pinned: false, data: null };
   return [
@@ -384,7 +215,7 @@ function connectedPages(): PageDocument[] {
       refresh: { at: minutesAgo(2), failed: false },
     },
     {
-      ...base, id: 'page-trip-board', name: 'Trip board', icon: 'calendar',
+      ...base, id: 'page-trip-board', name: 'Trip board (refresh failed)', icon: 'calendar',
       description: 'Lisbon in October: the forecast for each day beside what is booked.',
       updatedAt: '2026-09-15T11:30:00.000Z', htmlStamp: 1789471800000,
       html: simplePage('Lisbon · 3–9 October', 'Trip board', [['Fri 3', '24° clear · arrive 14:10'], ['Sat 4', '23° clear · Alfama walk'], ['Sun 5', '21° showers · Gulbenkian'], ['Mon 6', '22° cloud · Sintra train 09:41']]),
@@ -393,7 +224,7 @@ function connectedPages(): PageDocument[] {
       refresh: { at: minutesAgo(190), failed: true },
     },
     {
-      ...base, id: 'page-weather', name: 'Weather', icon: 'page',
+      ...base, id: 'page-weather', name: 'Weather (saved key, asks first)', icon: 'page',
       description: 'Today and the next five days for the places you care about.',
       updatedAt: '2026-09-19T07:10:00.000Z', htmlStamp: 1789801800000,
       html: simplePage('Phoenix', 'Weather', [['Now', '38° clear'], ['Tonight', '29°'], ['Sat', '39° clear'], ['Sun', '37° wind']]),
@@ -401,7 +232,7 @@ function connectedPages(): PageDocument[] {
       connections: [{ id: 'weather', kind: 'key', service: 'OpenWeather', address: 'api.openweathermap.org', access: 'lookup', approved: false, savedKey: true }],
     },
     {
-      ...base, id: 'page-task-board', name: 'Task board', icon: 'list',
+      ...base, id: 'page-task-board', name: 'Task board (new key, full access)', icon: 'list',
       description: 'Your Todoist tasks as a board you can drag between columns.',
       updatedAt: '2026-09-19T06:40:00.000Z', htmlStamp: 1789800000000,
       html: simplePage('Todoist', 'Task board', [['Draft fiscal note', 'Today'], ['Reply to Sarah', 'Today'], ['Renew domain', 'Mon']]),
@@ -410,7 +241,7 @@ function connectedPages(): PageDocument[] {
         keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] } }],
     },
     {
-      ...base, id: 'page-headlines', name: 'Headlines', icon: 'notes',
+      ...base, id: 'page-headlines', name: 'Headlines (second website added)', icon: 'notes',
       description: 'A front page built from the feeds you follow.',
       updatedAt: '2026-09-19T05:00:00.000Z', htmlStamp: 1789794000000,
       html: simplePage('This morning', 'Headlines', [['BBC News', '12 stories'], ['Hacker News', '30 stories']]),
@@ -422,7 +253,7 @@ function connectedPages(): PageDocument[] {
       refresh: { at: minutesAgo(12), failed: false },
     },
     {
-      ...base, id: 'page-link-reader', name: 'Link reader', icon: 'page',
+      ...base, id: 'page-link-reader', name: 'Link reader (any website)', icon: 'page',
       description: 'Paste any link and read the article without the clutter.',
       updatedAt: '2026-09-18T20:15:00.000Z', htmlStamp: 1789762500000,
       html: simplePage('Reader', 'Link reader', [['Paste a link to begin', '']]),
@@ -441,7 +272,7 @@ function connectedPages(): PageDocument[] {
       connections: [{ ...(HOME_ASSISTANT_PAGE_JSON.connections[0] as { id: string; service: string; address: string; keyPage: string; keyHelp: { steps: string[] } }), kind: 'device', access: 'full', needsKey: true, approved: false, savedKey: false }],
     },
     {
-      ...base, id: 'page-release-board', name: 'Release board', icon: 'list',
+      ...base, id: 'page-release-board', name: 'Release board (reads GitHub, changed since allowed)', icon: 'list',
       home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
       description: 'Open pull requests and the checks on each, for this project.',
       updatedAt: '2026-09-17T13:00:00.000Z', htmlStamp: 1789650000000,
@@ -455,7 +286,7 @@ function connectedPages(): PageDocument[] {
       // Page start session (spec 2026-10-14): a project page that may open the
       // new-conversation window with a message waiting. Opens on its approval
       // card; after Allow its button calls youcoded.startSession.
-      ...base, id: 'page-weekly-briefing', name: 'Weekly briefing', icon: 'notes',
+      ...base, id: 'page-weekly-briefing', name: 'Weekly briefing (can start a conversation)', icon: 'notes',
       home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
       description: 'What changed this week, and a button that starts the update in a new conversation.',
       updatedAt: '2026-10-14T09:00:00.000Z', htmlStamp: 1791968400000,
@@ -527,30 +358,6 @@ export function seedPages(): PageDocument[] {
     // Finance dashboard, design stage (2026-10-05).
     MONEY_PAGE,
     ...connectedPages(),
-    {
-      id: 'page-focus-timer',
-      name: 'Focus timer',
-      description: 'A 25-minute timer with presets and a count of sessions finished today.',
-      icon: 'timer',
-      home: { kind: 'personal' },
-      pinned: true,
-      updatedAt: T,
-      htmlStamp: 1789450800000,
-      html: TIMER_HTML,
-      data: null,
-    },
-    {
-      id: 'page-week-planner',
-      name: 'Week planner',
-      description: 'Your week in seven columns: events by kind, done or still to do, and a quick add.',
-      icon: 'calendar',
-      home: { kind: 'personal' },
-      pinned: false,
-      updatedAt: '2026-09-12T09:05:00.000Z',
-      htmlStamp: 1789200300000,
-      html: PLANNER_HTML,
-      data: null,
-    },
     {
       id: 'page-paint',
       name: 'Paint studio',

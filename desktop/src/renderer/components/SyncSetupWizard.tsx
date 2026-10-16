@@ -9,10 +9,18 @@
  * "GitHub tools", etc. The user just clicks buttons and signs in via browser.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { Button, CloseButton, FieldError, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
-import { isAndroid as checkIsAndroid } from '../platform';
+import { createContext, useContext, useRef, useState, useEffect, useCallback } from 'react';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, CloseButton, ErrorState, FieldError, FieldRow, LoadingState, Pill, SectionLabel, SettingRow, TextInput, Toggle, Radio, RadioGroup, Callout } from './ui';
+import { isAndroid as checkIsAndroid, isRemoteMode } from '../platform';
+
+/** Whether a GitHub backup copies anything on the backend this screen talks to. Only the phone
+ *  app's own backup service still pushes one; a computer's (or a phone paired to a computer)
+ *  removed it. Shared with Backup & sync's rows. */
+export function githubBackupWorks(): boolean {
+  return checkIsAndroid() && !isRemoteMode();
+}
 import { useEscClose } from '../hooks/use-esc-close';
+import { BackupLogo } from './BackupLogo';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { plainMessage } from '../utils/ipc-error';
 
@@ -31,7 +39,7 @@ function detectDesktopOS(): DesktopOS {
 // --- Types ---
 
 type BackendType = 'drive' | 'github' | 'icloud';
-type WizardStep = 'type' | 'prereqs' | 'auth' | 'configure' | 'done';
+type WizardStep = 'type' | 'prereqs' | 'auth' | 'configure';
 
 interface PrereqStatus {
   rcloneInstalled: boolean;
@@ -51,30 +59,34 @@ const BACKEND_LABELS: Record<BackendType, string> = {
   icloud: 'iCloud',
 };
 
-const BACKEND_STYLE: Record<BackendType, { icon: string; tint: string }> = {
-  drive: { icon: '\u2601', tint: 'bg-blue-500/10 text-blue-400' },
-  github: { icon: '\u2302', tint: 'bg-purple-500/10 text-purple-400' },
-  icloud: { icon: '\u2B21', tint: 'bg-sky-500/10 text-sky-400' },
-};
-
-// --- Reused status icon (same pattern as FirstRunView.tsx) ---
-
-function StatusIcon({ status }: { status: 'checking' | 'ready' | 'missing' | 'installing' | 'error' }) {
-  switch (status) {
-    case 'ready':
-      return <span className="text-green-400">{'\u2713'}</span>;
-    case 'checking':
-    case 'installing':
-      return <span className="text-blue-400 inline-block animate-spin">{'\u25F0'}</span>;
-    case 'error':
-    case 'missing':
-      return <span className="text-red-400">{'\u2717'}</span>;
-  }
-}
+// (The emoji discs and coloured ✓ / ✗ glyphs that lived here went with small-fixes-3: the
+// picker is setting rows and each requirement shows a status pill.)
 
 // --- Sub-view header (reused from SyncPanel) ---
 
+/** What a wizard step puts in the popup's own header: its title and, when it has one, its way back.
+ *
+ *  WHY (small-fixes-3, Destin on the sign-in step: "weird spacing at the top"): every step drew
+ *  its own header — a 14px bold title over a full-width line — inside Backup & sync's popup, the one
+ *  hand-built header left in Settings. Now each step hands its title and back to the shared popup
+ *  (guide "Popups and side panels": the shared title, the tapered line, the ✕; the back arrow is the
+ *  popup's own, as Backup & sync's explainer and Edit views already use). */
+export type WizardHeaderInfo = { title: string; onBack?: () => void };
+export const WizardHeaderContext = createContext<((h: WizardHeaderInfo | null) => void) | null>(null);
+
 function WizardHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
+  const report = useContext(WizardHeaderContext);
+  // The step's back changes identity every render; the popup gets a stable caller, so reporting
+  // the header never loops.
+  const backRef = useRef(onBack);
+  backRef.current = onBack;
+  const hasBack = !!onBack;
+  useEffect(() => {
+    if (!report) return;
+    report({ title, onBack: hasBack ? () => backRef.current?.() : undefined });
+  }, [report, title, hasBack]);
+  useEffect(() => () => { report?.(null); }, [report]);
+  if (report) return null;
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
       <div className="flex items-center gap-2">
@@ -147,6 +159,8 @@ function normalizeRepoUrl(url: string): string {
 export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType }: SyncSetupWizardProps) {
   // Always mounted when open (parent conditionally renders this component) — so open=true is correct here.
   useEscClose(true, onClose);
+  // The GitHub repo this wizard has already created, so Try again reuses it (see handleStartBackup).
+  const createdRepo = useRef<{ name: string; url: string } | null>(null);
   // If a specific backend needs reconnecting, jump straight to auth for that type.
   // iCloud has no auth step (no OAuth flow), so land at 'prereqs' for it instead.
   // Falls back to the initialType behavior (skip type-picker → prereqs) if set,
@@ -165,8 +179,6 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   // directly; the outer prereqs object was stored but never read. Found in
   // the 2026-08-06 unused-code sweep.
   const [error, setError] = useState<string | null>(null);
-  // Set just before the done step renders; null until then.
-  const [firstBackup, setFirstBackup] = useState<FirstBackup | null>(null);
 
   // Config fields — pre-populate label when jumping straight to auth/reconnect
   // so the Configure step has a sensible default even though selectType() was skipped.
@@ -201,7 +213,13 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   if (step === 'type') {
     const types: { type: BackendType; desc: string }[] = [
       { type: 'drive', desc: 'Stores your data in a Google Drive folder. Works on any device.' },
-      { type: 'github', desc: 'Stores your data in a private GitHub repository. Includes full version history.' },
+      // GitHub only where it still backs anything up: the phone app's own backup service
+      // (SyncService.kt pushGithub). WHY (small-fixes-2, Destin "yes, proceed"): on a computer the
+      // GitHub backup was removed (sync-service.ts, sync-legacy-demolition), so the option made a
+      // backup that copied nothing. A computer's GitHub copy is cross-device sync, above.
+      ...(githubBackupWorks()
+        ? [{ type: 'github' as BackendType, desc: 'Stores your data in a private GitHub repository. Includes full version history.' }]
+        : []),
       // iCloud only where an iCloud Drive client exists: macOS, and
       // iCloud-for-Windows on Windows. Linux has no iCloud client at all and
       // Android has no iCloud Drive support — offering it there gave users a
@@ -213,9 +231,14 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
 
     return (
       <div className="flex flex-col h-full">
-        <WizardHeader title="Add a Backup Destination" onClose={onClose} />
-        <div ref={typeStepRef} className="scroll-fade flex-1">
+        <WizardHeader title="Add a backup" onClose={onClose} />
+        <div ref={typeStepRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="px-4 py-4 space-y-3">
+          {/* WHY the round-2 cards again, with logos (small-fixes-3#SF3-1 "this is worse" about
+              setting rows; #SF3-6 pick "logos"): each choice is its own first-level card — mark,
+              name, one line, the arrow — as Destin had approved before, and the emoji in a coloured
+              circle (SF2-8: "i dont like the icon") is the service's own logo, like the sign-in
+              choices carry their provider logos (guide "Sign-in and setup screens"). */}
           {types.map(({ type, desc }) => {
             const existing = existingBackends.filter(b => b.type === type).length;
             // Only Drive supports multiple accounts — rclone gives each its own remote.
@@ -228,28 +251,29 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                 key={type}
                 onClick={() => !disabled && selectType(type)}
                 disabled={disabled}
-                className={`w-full rounded-lg border border-edge-dim p-4 flex items-center gap-3 text-left transition-colors ${
+                // Card-levels sweep (2026-09-27): LEVEL-1 choice card.
+                className={`w-full ${CARD_LEVEL_1} p-4 flex items-center gap-3 text-left transition-colors ${
                   disabled
-                    ? 'bg-inset/10 opacity-50 cursor-not-allowed'
-                    : 'bg-inset/30 hover:bg-inset/50 cursor-pointer'
+                    ? 'opacity-50 cursor-not-allowed'
+                    : 'hover:bg-inset cursor-pointer'
                 }`}
               >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${BACKEND_STYLE[type].tint}`}>
-                  {BACKEND_STYLE[type].icon}
+                <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-inset text-fg">
+                  <BackupLogo type={type} size={20} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-fg font-medium">{BACKEND_LABELS[type]}</div>
                   <div className="text-3xs text-fg-muted mt-0.5">{desc}</div>
                   {existing > 0 && (
-                    <div className="text-4xs text-fg-muted mt-1">
+                    <div className="text-3xs text-fg-muted mt-1">
                       {disabled
                         ? `Already connected — ${BACKEND_LABELS[type]} only supports one backup`
-                        : `(${existing} already connected)`}
+                        : `${existing} already connected`}
                     </div>
                   )}
                 </div>
                 {!disabled && (
-                  <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 )}
@@ -330,15 +354,25 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
       try {
         let finalRepoUrl = repoUrl;
 
-        // If GitHub + create mode, create the repo first
+        // If GitHub + create mode, create the repo first.
+        // WHY remembered per name (final review F34): when the repo was created but saving the backup
+        // then failed, Try again created the same repo again — GitHub refuses a name that exists, and
+        // the person saw a raw error for a repo that was already theirs. A repo this wizard already
+        // made under this name is reused; changing the name makes a new one.
         if (backendType === 'github' && repoMode === 'create') {
-          const result = await claude.sync.setup.createRepo(repoName);
-          if (!result.success) {
-            setError(result.error || 'Failed to create repository');
-            setSaving(false);
-            return;
+          const made = createdRepo.current?.name === repoName ? createdRepo.current.url : null;
+          if (made) {
+            finalRepoUrl = made;
+          } else {
+            const result = await claude.sync.setup.createRepo(repoName);
+            if (!result.success) {
+              setError(result.error || 'Failed to create repository');
+              setSaving(false);
+              return;
+            }
+            finalRepoUrl = result.repoUrl;
+            if (result.repoUrl) createdRepo.current = { name: repoName, url: result.repoUrl };
           }
-          finalRepoUrl = result.repoUrl;
         }
 
         // Assemble the backend config
@@ -352,15 +386,17 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           config.ICLOUD_PATH = icloudPath || '';
         }
 
-        const first = await onComplete({ type: backendType, label, syncEnabled, config });
+        await onComplete({ type: backendType, label, syncEnabled, config });
 
         // Restore-from-backup was removed in Plan 2c (2026-07-14) — the dated
         // Drive/iCloud snapshot reshape orphaned the flat-path readers, so
         // there is no "we found existing data → restore vs start fresh" gate
         // anymore. New backends always start fresh; a redesigned restore will
         // land later around the local-models/accounts/platform work.
-        setFirstBackup(first);
-        setStep('done');
+        // No Done page (small-fixes-3#SF3-5): back to Backup & sync, where the new backup's row
+        // and, if its first upload didn't finish, the error box under it say how it went.
+        onClose();
+        return;
       } catch (e: unknown) {
         // WHY plainMessage: a rejected save arrives as "Error invoking remote method
         // 'sync:add-backend': Error: <reason>" — forty characters of machinery in front
@@ -373,37 +409,34 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
     return (
       <div className="flex flex-col h-full">
         <WizardHeader
-          title={`Set Up ${BACKEND_LABELS[backendType]}`}
+          title={`Set up ${BACKEND_LABELS[backendType]}`}
           onBack={() => setStep(backendType === 'icloud' ? 'prereqs' : 'auth')}
           onClose={onClose}
         />
-        <div ref={configureStepRef} className="scroll-fade flex-1">
+        <div ref={configureStepRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="px-4 py-4 space-y-4">
-          {/* Name */}
+          {/* WHY one labelled card (small-fixes-3): the fields, the switch and the duplicate note sat
+              bare on the popup at their own spacing. The guide: nothing bare on the popup — a group
+              is a small label and a card; a text box is a wide control (its title and hint above,
+              full width below — FieldRow, Remote access's password); a switch sits beside its
+              title and hint (the setting row); a note about the card is a notice inside it. The one
+              main button goes under the card, full width (Submit a ticket's "Review ticket"). */}
           <div>
-            <label className="block text-3xs text-fg-muted mb-1">Give this backup a name</label>
-            {/* Migrated to the shared TextInput (spec change 20): the hand-rolled
-                bg-inset/rounded-md/focus recipe is now the one FIELD surface, so
-                every text box in the app focuses and rounds the same way. The
-                visible label above isn't wired to this input with htmlFor, so
-                aria-label gives screen readers the same name sighted users see. */}
+          <SectionLabel className="mb-2">Your backup</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+          <FieldRow title="Name" hint="Just for you — to tell your backups apart.">
             <TextInput
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder={`My ${BACKEND_LABELS[backendType]}`}
-              aria-label="Give this backup a name"
+              aria-label="Name"
               className="w-full"
               autoFocus
             />
-            <div className="text-3xs text-fg-muted mt-0.5">This is just for you — to tell your backups apart.</div>
-          </div>
+          </FieldRow>
 
-          {/* Drive: folder name */}
           {backendType === 'drive' && (
-            <div>
-              <label className="block text-3xs text-fg-muted mb-1">Folder in Google Drive</label>
-              {/* Shared FIELD surface (spec change 20). aria-label mirrors the
-                  visible label, which isn't linked via htmlFor. */}
+            <FieldRow title="Folder in Google Drive" hint={`Made in your Drive if it isn't there yet: "${driveFolder || 'Claude'}".`}>
               <TextInput
                 value={driveFolder}
                 onChange={(e) => setDriveFolder(e.target.value)}
@@ -411,10 +444,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                 aria-label="Folder in Google Drive"
                 className="w-full"
               />
-              <div className="text-3xs text-fg-muted mt-0.5">
-                We'll create a folder called "{driveFolder || 'Claude'}" in your Drive if it doesn't exist.
-              </div>
-            </div>
+            </FieldRow>
           )}
 
           {/* GitHub: create or existing. Change 39: native radios → the Radio
@@ -493,46 +523,17 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             </RadioGroup>
           )}
 
-          {/* iCloud: show detected path */}
           {backendType === 'icloud' && icloudPath && (
-            <div className="px-3 py-2.5 rounded-lg bg-inset/50 text-2xs text-fg-dim">
-              Your data will be stored in iCloud Drive at:<br />
-              <span className="text-fg font-mono text-3xs">{icloudPath}</span>
-            </div>
+            <SettingRow variant="item" title="Stored in iCloud Drive at" description={<span className="font-mono">{icloudPath}</span>} />
           )}
 
-          {/* Auto-sync toggle */}
-          <div className="pt-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              {/* Migrated to the shared Toggle (spec changes 15/16). Was a hand-rolled
-                  32x16 switch with a hardcoded green-600 on-state and no aria at all;
-                  the primitive is the one 36x20 geometry, paints the on-state in the
-                  user's theme accent, and carries role="switch" + aria-checked. The
-                  aria-label repeats the sentence beside it — the wrapping <label>
-                  can't name a <button>, so without it the switch is unnamed. */}
-              <Toggle
-                checked={syncEnabled}
-                onChange={setSyncEnabled}
-                aria-label="Back up automatically after changes"
-              />
-              <span className="text-xs text-fg">Back up automatically after changes</span>
-            </label>
-            <div className="text-3xs text-fg-muted mt-0.5 ml-10">
-              Turn off to only sync when you choose to.
-            </div>
-          </div>
+          <SettingRow
+            variant="item"
+            title="Back up automatically after changes"
+            description="Turn off to back up only when you choose to."
+            control={<Toggle checked={syncEnabled} onChange={setSyncEnabled} aria-label="Back up automatically after changes" />}
+          />
 
-          {/* Error message */}
-          {error && (
-            <Callout tone="danger">{error}</Callout>
-          )}
-
-          {/* Duplicate destination heads-up — informational only.
-              The sync engine uses a global lock and backend-safe write strategies
-              (rclone --update for Drive, atomic fs.cpSync for iCloud, per-instance
-              clone dirs for GitHub), so two backends pointing to the same location
-              don't actually corrupt data. We still show a neutral note so users
-              who add one by accident notice, but we don't color it as a warning. */}
           {(() => {
             const dupes = existingBackends.filter(b => b.type === backendType);
             let isDup = false;
@@ -555,18 +556,29 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
               isDup = dupes.some(b => (b.config.ICLOUD_PATH || '') === icloudPath);
             }
             return isDup ? (
-              <div className="px-3 py-2 rounded-lg bg-inset/50 text-2xs text-fg-dim">
-                Heads up: you already have a backup pointing to this exact destination (same account and folder). Adding another is safe, but it'll just duplicate what the existing one does. If you meant a different account, cancel and sign into that account first.
-              </div>
+              <Callout tone="info">
+                You already have a backup pointing to this exact destination (same account and folder). Adding another is safe, but it only repeats what that one does. If you meant a different account, go back and sign in to that one first.
+              </Callout>
             ) : null;
           })()}
+          </div>
+          </div>
 
-          {/* Start Backup button */}
+          {/* The failed save, said where Start backup was, with Try again inside it (small-fixes-1:
+              this box had nothing to press; guide "A failed action replaces the buttons it came
+              from", Submit a ticket's failed send). The fields above stay editable, and Try again
+              uses what they say now. */}
+          {/* Start backup button */}
           {/* Was a hardcoded bg-blue-600 family (spec change 55 — the last survivors of a
               blue that ignored the user's theme). `primary` paints it in the theme accent.
               The three-way saving/empty/ready className is gone: both the saving and the
               empty-label states are just `disabled` now (spec decision 72), and the spinner
               goes with the shared busy state later rather than being re-hardcoded here. */}
+          {/* Only while the fields are complete: emptied after a failure, the plain (disabled)
+              button comes back, as before. */}
+          {error && !saving && label.trim() && !(backendType === 'github' && repoMode === 'existing' && !repoUrl.trim()) ? (
+            <ErrorState mode="recoverable" message={error} onRetry={() => void handleStartBackup()} />
+          ) : (
           <Button
             size="lg"
             onClick={handleStartBackup}
@@ -580,68 +592,10 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             {saving && (
               <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
             )}
-            {saving ? 'Setting up...' : 'Start Backup'}
+            {saving ? 'Setting up...' : 'Start backup'}
           </Button>
+          )}
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Step: Done ---
-  if (step === 'done') {
-    return (
-      <div className="flex flex-col h-full">
-        <WizardHeader title="Setup Complete" onClose={onClose} />
-        <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 text-center">
-          {/* Animated checkmark */}
-          <div className="w-16 h-16 rounded-full bg-green-400/10 flex items-center justify-center mb-4">
-            <span className="text-green-400 text-3xl">{'\u2713'}</span>
-          </div>
-          <div className="text-fg font-medium text-sm mb-2">Backup added</div>
-          {/* WHY one sentence per outcome (error inventory 2026-09-10, false message 2):
-              this said "Your first backup is syncing now. Backups happen automatically
-              every 15 minutes." for every outcome. By the time this step renders, the first
-              backup has already finished or failed (onComplete awaits it), auto-backup may
-              be off so nothing ran, and the 15-minute timer was deleted — the service now
-              checks hourly while the app is open (sync-service.ts SNAPSHOT_POLL_INTERVAL_MS).
-              The check mark stays for every outcome: the destination WAS added. */}
-          {firstBackup?.kind === 'finished' && (
-            <div className="text-fg-muted text-2xs mb-6 max-w-xs">
-              Your first backup finished. YouCoded keeps backing up automatically while it's open.
-              You can manage this anytime from the Sync panel.
-            </div>
-          )}
-          {firstBackup?.kind === 'paused' && (
-            <div className="text-fg-muted text-2xs mb-6 max-w-xs">
-              Automatic backup is off for this destination, so nothing has been uploaded yet.
-              Use Upload now in its menu in the Sync panel whenever you want a copy.
-            </div>
-          )}
-          {firstBackup?.kind === 'failed' && (
-            <Callout
-              tone="warning"
-              title={
-                /* An empty reason means the upload never ran — another backup held the lock —
-                   so "didn't finish" would claim it started (code review 2026-09-11, F7). */
-                firstBackup.error ? "Your first backup didn't finish." : "Your first backup hasn't run yet."
-              }
-              className="mb-6 max-w-xs text-left"
-            >
-              {firstBackup.error && <div className="mb-1">{firstBackup.error}</div>}
-              YouCoded will try again automatically, or you can use Upload now in the Sync panel.
-            </Callout>
-          )}
-          {/* null cannot normally reach here (it is set just before this step); if it
-              does, "could not confirm" is the only sentence that is certainly true. */}
-          {(firstBackup === null || firstBackup.kind === 'unknown') && (
-            <Callout tone="warning" className="mb-6 max-w-xs text-left">
-              YouCoded couldn't confirm your first backup finished. The Sync panel shows where it stands.
-            </Callout>
-          )}
-          <Button onClick={onClose} className="px-6 py-2">
-            Done
-          </Button>
         </div>
       </div>
     );
@@ -721,47 +675,46 @@ function PrereqCheckStep({
 
   return (
     <div className="flex flex-col h-full">
-      <WizardHeader title="Checking Setup" onBack={onBack} onClose={onClose} />
-      <div ref={bodyRef} className="scroll-fade flex-1">
+      <WizardHeader title="Checking setup" onBack={onBack} onClose={onClose} />
+      <div ref={bodyRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
         <div className="px-4 py-4 space-y-4">
 
-        {/* Checklist */}
-        {backendType === 'drive' && (
-          <div className="space-y-3">
-            <PrereqRow label="Cloud sync tool" status={checking ? 'checking' : prereqs?.rcloneInstalled ? 'ready' : 'missing'} />
-            <PrereqRow label="Google account connected" status={checking ? 'checking' : prereqs?.gdriveConfigured ? 'ready' : 'missing'} />
-          </div>
-        )}
-        {backendType === 'github' && (
-          <div className="space-y-3">
-            <PrereqRow label="GitHub tools" status={checking ? 'checking' : prereqs?.ghInstalled ? 'ready' : 'missing'} />
-            <PrereqRow label="Signed in to GitHub" status={checking ? 'checking' : prereqs?.ghAuthenticated ? 'ready' : 'missing'} />
-          </div>
-        )}
+        {/* WHY one labelled card of rows (small-fixes-3): each requirement was a card of its own
+            with a coloured ✓ / ✗ glyph and lowercase words, and the install sat bare under them.
+            The guide: a list of short names is plain rows inside ONE box (decisions "device list",
+            L-3); a state is a status pill in its colour, normal words (the Local engine's
+            Running / Stopped); a lone button is full width; text about the card lives inside it. */}
+        <div>
+        <SectionLabel className="mb-2">What this needs</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+        {backendType === 'drive' && (<>
+          <PrereqRow label="Cloud sync tool" status={checking ? 'checking' : prereqs?.rcloneInstalled ? 'ready' : 'missing'} />
+          <PrereqRow label="Google account connected" status={checking ? 'checking' : prereqs?.gdriveConfigured ? 'ready' : 'missing'} />
+        </>)}
+        {backendType === 'github' && (<>
+          <PrereqRow label="GitHub tools" status={checking ? 'checking' : prereqs?.ghInstalled ? 'ready' : 'missing'} />
+          <PrereqRow label="Signed in to GitHub" status={checking ? 'checking' : prereqs?.ghAuthenticated ? 'ready' : 'missing'} />
+        </>)}
         {backendType === 'icloud' && (
-          <div className="space-y-3">
-            <PrereqRow label="iCloud Drive found" status={checking ? 'checking' : prereqs?.icloudPath ? 'ready' : 'missing'} />
-          </div>
+          <PrereqRow label="iCloud Drive found" status={checking ? 'checking' : prereqs?.icloudPath ? 'ready' : 'missing'} />
         )}
 
         {/* Action: install rclone */}
         {needsRclone && !checking && (
-          <div className="pt-2 space-y-2">
-            <div className="text-2xs text-fg-dim">
-              YouCoded needs a small helper tool to connect to Google Drive.
-            </div>
-            {/* Another hardcoded blue survivor (spec change 55) — now the theme accent.
-                The faded busy FILL collapses to plain `disabled` (spec decision 72),
-                but the spinner stays: this install advertises "about a minute" right
-                below it, and a minute of a motionless disabled button reads as hung.
-                currentColor so it tracks the label on every theme. */}
-            <Button size="lg" onClick={handleInstall} disabled={installing}>
-              {installing && (
-                <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
-              )}
-              {installing ? 'Installing...' : 'Install Now'}
-            </Button>
-            <div className="text-3xs text-fg-muted">This usually takes about a minute.</div>
+          <div className="pt-1 space-y-2">
+            <p className="text-2xs text-fg-muted">
+              YouCoded needs a small helper tool to connect to Google Drive. Installing it usually takes about a minute.
+            </p>
+            {/* Hidden once the install failed: its notice below carries Try again (small-fixes-1).
+                The spinner stays: a minute of a motionless disabled button reads as hung. */}
+            {!installError && (
+              <Button size="lg" className="w-full" onClick={handleInstall} disabled={installing}>
+                {installing && (
+                  <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                )}
+                {installing ? 'Installing…' : 'Install now'}
+              </Button>
+            )}
           </div>
         )}
 
@@ -775,21 +728,16 @@ function PrereqCheckStep({
           <IcloudMissingHelp onRecheck={runCheck} />
         )}
 
-        {/* Install error */}
+        {/* Install error. WHY ErrorState (small-fixes-1): the box offered only an underlined
+            "Install manually" link — no way to try the install again, and underlined text is not
+            a button (guide "Buttons"). Now the shared error box: Install manually (outlined) and
+            Try again (filled) inside it, in place of the Install now button. */}
         {installError && (
-          // The "Install manually" link stays INSIDE the callout, which does not
-          // make this a K5 status strip: K5 is for a laid-out action that
-          // resolves the state, and this is an inline link inside the sentence
-          // that explains it. A dot-message-button row would read worse here.
-          <Callout tone="danger">
-            {installError}
-            <div className="mt-1">
-              <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://rclone.org/install/')}>
-                Install manually
-              </button>
-            </div>
-          </Callout>
+          <ErrorState mode="recoverable" message={installError} onRetry={() => void handleInstall()}
+            moreActions={[{ label: 'Install manually', onClick: () => claude.openExternal('https://rclone.org/install/') }]} />
         )}
+        </div>
+        </div>
         </div>
       </div>
     </div>
@@ -826,7 +774,7 @@ function IcloudMissingHelp({ onRecheck }: { onRecheck: () => void }) {
               apple.com/icloud
             </button>
           </div>
-          <div>After installing, sign in with your Apple ID and enable iCloud Drive. Then come back and tap "Check Again".</div>
+          <div>After installing, sign in with your Apple ID and enable iCloud Drive. Then come back and tap "Check again".</div>
         </div>
       )}
       {os === 'linux' && (
@@ -842,8 +790,8 @@ function IcloudMissingHelp({ onRecheck }: { onRecheck: () => void }) {
       )}
       {os !== 'linux' && (
         /* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */
-        <Button variant="secondary" onClick={onRecheck}>
-          Check Again
+        <Button variant="secondary" className="w-full" onClick={onRecheck}>
+          Check again
         </Button>
       )}
     </div>
@@ -876,7 +824,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         // is the deterministic fix (same contract as installClaude).
         setInstallError(
           result.error ||
-            "GitHub CLI was installed, but this app can't see it yet. Quit and reopen YouCoded, then tap Check Again.",
+            "GitHub CLI was installed, but this app can't see it yet. Quit and reopen YouCoded, then tap Check again.",
         );
       } else {
         setInstallError(result.error || 'Installation failed');
@@ -901,11 +849,11 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         <div className="space-y-2">
           {/* Spinner matches the rclone install button: this advertises "about a
               minute" right below it, and a motionless disabled button reads as hung. */}
-          <Button size="lg" onClick={handleInstallGh} disabled={installing}>
+          <Button size="lg" className="w-full" onClick={handleInstallGh} disabled={installing}>
             {installing && (
               <span className="w-3 h-3 border-2 border-current/30 border-t-current rounded-full animate-spin" />
             )}
-            {installing ? 'Installing...' : 'Install Now'}
+            {installing ? 'Installing...' : 'Install now'}
           </Button>
           <div className="text-3xs text-fg-muted">This usually takes about a minute.</div>
         </div>
@@ -922,7 +870,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
       {(installError || !canAutoInstall) && os === 'mac' && (
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On macOS, the easiest way is Homebrew. In Terminal, run:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">brew install gh</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>brew install gh</div>
           <div>No Homebrew? Download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
         </div>
       )}
@@ -930,28 +878,29 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On Windows, download the installer from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>.</div>
           <div>Or, if you use winget, open PowerShell and run:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">winget install GitHub.cli</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>winget install GitHub.cli</div>
         </div>
       )}
       {(installError || !canAutoInstall) && os === 'linux' && (
         <div className="text-3xs text-fg-muted space-y-1">
           <div>On Linux, install with your package manager:</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo apt install gh  # Debian/Ubuntu</div>
-          <div className="font-mono text-fg-dim bg-inset/50 px-2 py-1 rounded">sudo dnf install gh  # Fedora</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>sudo apt install gh  # Debian/Ubuntu</div>
+          <div className={`font-mono text-fg-dim ${CARD_LEVEL_2} px-2 py-1`}>sudo dnf install gh  # Fedora</div>
           <div>Full instructions: <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://github.com/cli/cli/blob/trunk/docs/install_linux.md')}>install guide</button>.</div>
         </div>
       )}
       {(installError || !canAutoInstall) && os === 'other' && (
         <div className="text-3xs text-fg-muted">
-          Install from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check Again".
+          Install from <button className="text-accent underline link-control" onClick={() => claude.openExternal('https://cli.github.com')}>cli.github.com</button>, then come back and tap "Check again".
         </div>
       )}
       {(installError || !canAutoInstall) && (
-        <div className="text-3xs text-fg-muted">After installing, come back and tap "Check Again".</div>
+        <div className="text-3xs text-fg-muted">After installing, come back and tap "Check again".</div>
       )}
       {/* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */}
-      <Button variant="secondary" onClick={onRecheck}>
-        Check Again
+      {/* Full width: a follow-up action under a group (guide "Buttons"). */}
+      <Button variant="secondary" className="w-full" onClick={onRecheck}>
+        Check again
       </Button>
     </div>
   );
@@ -961,17 +910,20 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
 
 function PrereqRow({ label, status }: { label: string; status: 'checking' | 'ready' | 'missing' }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/30">
-      <StatusIcon status={status} />
-      <span className="text-xs text-fg">{label}</span>
-      <span className="text-3xs text-fg-muted ml-auto">
-        {status === 'checking' ? 'checking...' : status === 'ready' ? 'ready' : 'needed'}
-      </span>
-    </div>
+    <SettingRow
+      variant="item"
+      title={label}
+      control={status === 'checking' ? <Pill>Checking…</Pill>
+        : status === 'ready' ? <Pill tone="ok">Ready</Pill>
+        : <Pill tone="warning">Needed</Pill>}
+    />
   );
 }
 
 // --- Auth Step ---
+
+// Said only when the sign-in gave no reason of its own: nothing about why (never a guess).
+const SIGN_IN_NO_REASON = "The sign-in didn't finish.";
 
 function AuthStep({
   backendType,
@@ -1006,18 +958,18 @@ function AuthStep({
         if (result.success) {
           onSuccess({ remoteName: result.remoteName });
         } else {
-          setError(result.error || 'Sign-in failed');
+          setError(result.error || SIGN_IN_NO_REASON);
         }
       } else if (backendType === 'github') {
         const result = await claude.sync.setup.authGithub();
         if (result.success) {
           onSuccess({ username: result.username });
         } else {
-          setError(result.error || 'Sign-in failed');
+          setError(result.error || SIGN_IN_NO_REASON);
         }
       }
     } catch (e: any) {
-      setError(e.message || 'Something went wrong');
+      setError(plainMessage(e, SIGN_IN_NO_REASON));
     }
     setWaiting(false);
   };
@@ -1034,57 +986,43 @@ function AuthStep({
   return (
     <div className="flex flex-col h-full">
       <WizardHeader title={title} onBack={onBack} onClose={onClose} />
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 text-center">
-        {/* Icon */}
-        <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl mb-4 ${BACKEND_STYLE[backendType].tint}`}>
-          {BACKEND_STYLE[backendType].icon}
-        </div>
-
-        {!waiting ? (
-          <>
-            <div className="text-fg-dim text-2xs mb-6 max-w-xs space-y-2">
-              <div>A browser window will open for you to sign in. After you sign in, come back here — it'll update automatically.</div>
-              {isReconnect && backendType === 'drive' && (
-                <div className="text-amber-700 text-3xs pt-1">
-                  Important: sign in with the <strong>same Google account</strong> you originally connected. Picking a different account would start a new backup instead of restoring the existing one.
-                </div>
-              )}
-              {isAdditionalDrive && (
-                <div className="text-amber-700 text-3xs pt-1">
-                  Tip: make sure you pick the <strong>other</strong> Google account (e.g., work vs. personal vs. school) in the browser — not the same one you already connected. You may need to sign out of Google in your browser first, or use an incognito window.
-                </div>
-              )}
-            </div>
-            {/* Last of the hardcoded bg-blue-600 buttons (spec change 55) — the sign-in
-                CTA now uses the theme accent like every other primary action. */}
-            <Button size="lg" onClick={handleAuth}>
-              {buttonLabel}
-            </Button>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 text-blue-400 text-2xs mb-4">
-              <span className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
-              Waiting for sign-in...
-            </div>
-            <div className="text-fg-muted text-3xs max-w-xs">
-              Complete the sign-in in your browser, then come back here. This page will update automatically.
-            </div>
-          </>
-        )}
-
-        {/* Error + retry */}
-        {error && (
-          <div className="mt-4 space-y-2 text-center">
-            <div className="text-2xs text-fg-dim">
-              Looks like the sign-in didn't complete. No worries — try again when you're ready.
-            </div>
-            {/* Filled-grey (bg-inset) becomes the outline `secondary` — spec decision 60. */}
-            <Button variant="secondary" onClick={handleAuth}>
-              Try Again
-            </Button>
+      {/* WHY rebuilt (small-fixes-3, Destin: "this page sucks. weird spacing at the top, spacing
+          between cards is weird, i dont like the icon"): it centred a coloured emoji disc and
+          loose lines in the middle of the popup, the tip box at its own spacing. Now it is
+          Settings → Account's sign-in card (decisions "Games: signed-out card"): a small label,
+          one card, a left-aligned line, any tip as a notice inside the card, and one full-width
+          filled button — top-aligned, the guide's 16px between groups. Waiting replaces the
+          button with the shared loading line; a failure replaces it with the error box. */}
+      <div className="flex-1 px-4 py-4 space-y-4">
+        <div>
+          <SectionLabel className="mb-2">{backendType === 'drive' ? 'Google account' : 'GitHub account'}</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+            <p className="text-xs text-fg-2">
+              A browser window opens for you to sign in. Come back here afterwards — this page updates by itself.
+            </p>
+            {isReconnect && backendType === 'drive' && (
+              <Callout tone="warning">
+                Sign in with the <strong>same Google account</strong> you connected before. A different account would start a new backup instead of continuing this one.
+              </Callout>
+            )}
+            {isAdditionalDrive && (
+              <Callout tone="warning">
+                Pick the <strong>other</strong> Google account (work, personal or school) in the browser — not the one you already connected. You may need to sign out of Google in your browser first, or use a private window.
+              </Callout>
+            )}
+            {waiting ? (
+              <LoadingState variant="inline" verb="Waiting for" what="you to finish signing in, in your browser" />
+            ) : error ? (
+              /* The sign-in's own reason, or only what is certain (small-fixes-2#SF2-8), with
+                 Try again, in the button's place. */
+              <ErrorState mode="recoverable" variant="inline" message={error} onRetry={() => void handleAuth()} />
+            ) : (
+              <Button size="lg" className="w-full" onClick={handleAuth}>
+                {buttonLabel}
+              </Button>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -86,7 +86,8 @@ describe('SecretsStore', () => {
     const file = path.join(dir, 'native-secrets.json');
     const before = fs.readFileSync(file, 'utf8');
     const available = vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(false);
-    await expect(store.get(ref)).rejects.toThrow(/Unlock your system keychain.*retry/);
+    // "try again", not "retry": the message follows the app-wide wording (error-notices-1#EN-Q1, 38efb4786).
+    await expect(store.get(ref)).rejects.toThrow(/Unlock your system keychain.*try again/);
     expect(await store.get('missing')).toBeNull();
     expect(fs.readFileSync(file, 'utf8')).toBe(before);
     available.mockReturnValue(true);

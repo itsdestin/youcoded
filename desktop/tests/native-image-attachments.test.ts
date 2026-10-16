@@ -33,6 +33,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveProfile, CLOUD_DEFAULT, type CapabilityProfile } from '../src/main/harness/capability-profile';
 import { ReadTool } from '../src/main/harness/tools/read';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 import type { ToolServices } from '../src/main/harness/tools/types';
 import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
 import { imageNote } from '../src/main/harness/image-support';
@@ -179,10 +185,10 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const model = new MockLanguageModelV4({
       doStream: async (o: any) => {
         seen = o.prompt;
-        return { stream: simulateReadableStream({ chunks: [
+        return { stream: simulateReadableStream({ chunks: asParts([
           { type: 'stream-start', warnings: [] },
           { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-        ] }) };
+        ]) }) };
       },
     });
     const session = new HarnessSession({
@@ -206,11 +212,11 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const prompts: any[] = [];
     const model = new MockLanguageModelV4({ doStream: async (req: any) => {
       prompts.push(req.prompt);
-      return { stream: simulateReadableStream({ chunks: [
+      return { stream: simulateReadableStream({ chunks: asParts([
         { type: 'stream-start', warnings: [] },
         { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
         { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-      ] }) };
+      ]) }) };
     } });
     const events: any[] = [];
     let queued = true;
@@ -245,11 +251,11 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const prompts: any[] = [];
     const model = new MockLanguageModelV4({ doStream: async (req: any) => {
       prompts.push(req.prompt);
-      return { stream: simulateReadableStream({ chunks: [
+      return { stream: simulateReadableStream({ chunks: asParts([
         { type: 'stream-start', warnings: [] },
         { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
         { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-      ] }) };
+      ]) }) };
     } });
     const events: any[] = [];
     let queued = true;
@@ -339,10 +345,10 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const notes = path.join(dir, 'b.txt'); fs.writeFileSync(notes, 'hello');
     const profile = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null });
     let seen: any;
-    const model = new MockLanguageModelV4({ doStream: async (o: any) => { seen = o.prompt; return { stream: simulateReadableStream({ chunks: [
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { seen = o.prompt; return { stream: simulateReadableStream({ chunks: asParts([
       { type: 'stream-start', warnings: [] },
       { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-    ] }) }; } });
+    ]) }) }; } });
     const events: any[] = [];
     const session = new HarnessSession({ sessionId: 's-down', cwd: dir, harness: ASSISTANT_PRESET, binding: { providerId: 'chatgpt', modelId: 'gpt-x' },
       skillCatalog: EMPTY_SKILL_CATALOG, profile } as any, async () => model as any);

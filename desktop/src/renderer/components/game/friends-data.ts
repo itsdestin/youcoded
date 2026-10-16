@@ -62,3 +62,39 @@ export function statusLabel(row: FriendRowData, nowMs: number): string {
   if (days < 7) return `Last seen ${days}d ago`;
   return `Last seen ${new Date(row.lastSeenAt * 1000).toLocaleDateString()}`;
 }
+
+/**
+ * Which of the panel's connection states is showing (games-social round 2, GS-12:
+ * "a clear difference between the incognito state, pc internet off state, and game
+ * server broken/unreachable state"). One answer, read by the friends card AND the game
+ * tiles, so the two can never disagree.
+ *
+ *  - `offline`    the computer reports no network connection (useNetworkOnline). Wins
+ *                 over everything: going online or retrying cannot help until it returns.
+ *  - `incognito`  your own choice — hidden from friends. Since round 5 this device still
+ *                 RECEIVES friends' presence over a hidden connection (presence-socket.ts).
+ *  - `server`     the presence connection reported an error while the computer is online.
+ *                 Said as "Can't reach the game server" — WHERE it failed, not why.
+ *  - `connecting` the second before the socket opens.
+ *  - `online`     connected.
+ */
+export type SocialState = 'offline' | 'incognito' | 'server' | 'connecting' | 'online';
+
+export function socialState(s: { networkOnline: boolean; incognito?: boolean; connected: boolean; partyError: string | null }): SocialState {
+  if (!s.networkOnline) return 'offline';
+  // A server failure outranks incognito now that incognito keeps a (hidden) connection open
+  // (round 5): if that connection fails, the problem is what to show.
+  if (s.partyError) return 'server';
+  if (s.incognito) return 'incognito';
+  return s.connected ? 'online' : 'connecting';
+}
+
+/** What each state puts on the Connect 4 / Chess tiles, and whether it greys them. The
+ *  friends card says the rest itself (round 3: an error card for offline / server down, the
+ *  status pill for incognito). */
+export const SOCIAL_STATE_COPY: Record<Exclude<SocialState, 'online'>, { tile: string; greysVersus: boolean }> = {
+  offline: { tile: 'No internet connection', greysVersus: true },
+  incognito: { tile: "You're incognito", greysVersus: false },
+  server: { tile: "Can't reach the game server", greysVersus: true },
+  connecting: { tile: 'Connecting…', greysVersus: false },
+};

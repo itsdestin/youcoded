@@ -102,7 +102,9 @@ html[data-mode="buddy-chat"] .buddy-chat-panel {
     ) !important;
   backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
   -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
-  border-radius: 18px;
+  /* WHY the theme's popup corner, not a fixed 18px (guide principle 2: corners come from the
+     theme's shape setting): the same var(--radius-xl) .layer-surface gives every popup. */
+  border-radius: var(--radius-xl);
   border: 1px solid color-mix(in srgb, var(--edge) 60%, transparent);
   box-shadow:
     /* Top-edge light catch — 1px inset white simulates light on glass curve */
@@ -246,8 +248,11 @@ body[data-mode="buddy-chat"] .input-bar-container > div:last-child {
    the pill's corners match the bubble's curvature — at 12px inside an
    18px bubble, the pill reads as visibly squarer than its container,
    which is the "sharp/rectangular corners" the user observed. */
+/* WHY var(--radius-xl), not 18px (guide principle 2): the panel above now takes the theme's
+   popup corner, so the pill follows the same token and keeps matching its curvature. It is also
+   the main message box's own corner (InputBar's rounded-xl). */
 body[data-mode="buddy-chat"] .input-bar-container form {
-  border-radius: 18px !important;
+  border-radius: var(--radius-xl) !important;
   box-shadow:
     0 2px 8px rgba(0, 0, 0, 0.18),
     0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent);

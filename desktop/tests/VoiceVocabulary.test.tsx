@@ -26,7 +26,7 @@ function mount(phase: 'idle' | 'listening' = 'idle') {
 async function open() {
   mount();
   fireEvent.contextMenu(screen.getByRole('button', { name: 'Speak your message' }));
-  return screen.findByRole('textbox', { name: 'Add word or phrase' });
+  return screen.findByRole('textbox', { name: 'Add a word' });
 }
 beforeEach(() => {
   install();
@@ -67,79 +67,77 @@ describe('Voice vocabulary preview', () => {
     expect((field as HTMLInputElement).value).toBe('');
     expect(screen.getByRole('button', { name: 'Remove YouCoded' })).toBeTruthy();
     expect(screen.getByText(/hints for Parakeet, not text replacements/)).toBeTruthy();
-    expect(screen.getByText(/stays on this computer/)).toBeTruthy();
+    expect(screen.getByText(/stay on this computer/)).toBeTruthy();
     expect(screen.getByText(/next recording/)).toBeTruthy();
     // WHY: fidelity notes belong in the review deck, never painted into the app UI.
     expect(screen.queryByText(/UI preview only|Speech recognition is not connected/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+    // vocab-chips-2#D-1/#D-2: saves as you go and adds on Enter — no Save, no Add button.
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+    expect((field as HTMLInputElement).placeholder).toContain('press Enter');
   });
 
-  it('trims hints, prevents case-insensitive duplicates and saves whole Unicode phrases', async () => {
+  it('trims hints, prevents case-insensitive duplicates and saves each change at once', async () => {
     const bridge = install().voiceVocabulary;
     const save = vi.spyOn(bridge, 'save');
     const field = await open();
     fireEvent.click(screen.getByRole('button', { name: 'Remove YouCoded' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(['Zoë', 'Côte d’Ivoire']));
     add(field, '  zoë  ');
     add(field, '\n\n');
     add(field, ' WeCoded themes \n');
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(['Zoë', 'Côte d’Ivoire', 'WeCoded themes']));
     expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(3);
-    expect(screen.getByRole('status').textContent).toContain('3 phrases · Unsaved changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(save).toHaveBeenCalledWith(['Zoë', 'Côte d’Ivoire', 'WeCoded themes']));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved'));
     expect(await bridge.get()).toEqual(['Zoë', 'Côte d’Ivoire', 'WeCoded themes']);
   });
 
   it('starts empty and lets a saved vocabulary be cleared by removing its chips', async () => {
-    install('/?scenario=empty', 'empty');
+    const bridge = install('/?scenario=empty', 'empty').voiceVocabulary;
     const field = await open();
-    expect((field as HTMLInputElement).value).toBe('');
-    expect(screen.getByRole('status').textContent).toContain('0 phrases');
+    expect(screen.getByText('No words yet.')).toBeTruthy();
     add(field, 'Parakeet');
-    expect(screen.getByRole('status').textContent).toContain('1 phrase · Unsaved changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove Parakeet' })).toHaveProperty('disabled', false));
     fireEvent.click(screen.getByRole('button', { name: 'Remove Parakeet' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('0 phrases · Saved'));
+    await waitFor(async () => expect(await bridge.get()).toEqual([]));
+    expect(screen.getByText('No words yet.')).toBeTruthy();
   });
 
-  it('renders at most 50 chips initially from 1,200 hints and keeps Add and Save outside the bounded scroller', async () => {
+  it('renders at most 50 chips initially from 1,200 hints and keeps the field outside the bounded scroller', async () => {
     install('/?scenario=stress', 'stress');
-    await open();
+    const field = await open();
     expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(50);
     const list = screen.getByRole('region', { name: 'Vocabulary phrases' });
     expect(list.className).toContain('max-h-48');
     expect(list.className).toContain('overflow-y-auto');
-    expect(list.contains(screen.getByRole('button', { name: 'Add' }))).toBe(false);
-    expect(list.contains(screen.getByRole('button', { name: 'Save' }))).toBe(false);
-    expect(screen.getByRole('status').textContent).toContain('1200 phrases');
+    expect(list.contains(field)).toBe(false);
   });
 
-  it('adds with the button, explains duplicates, and closes without saving pending edits', async () => {
+  it('explains duplicates, refuses them, and a word added before closing is already saved', async () => {
     const bridge = install().voiceVocabulary;
     const field = await open();
     fireEvent.change(field, { target: { value: 'Youcoded' } });
-    expect(screen.getByRole('button', { name: 'Add' })).toHaveProperty('disabled', true);
     expect(screen.getByText('Already in your vocabulary.')).toBeTruthy();
-    fireEvent.change(field, { target: { value: 'New phrase' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.getByRole('button', { name: 'Remove New phrase' })).toBeTruthy();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(3);
+    add(field, 'New phrase');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove New phrase' })).toHaveProperty('disabled', false));
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Voice vocabulary' })).toBeNull());
-    expect(await bridge.get()).toEqual(['YouCoded', 'Zoë', 'Côte d’Ivoire']);
+    expect(await bridge.get()).toEqual(['YouCoded', 'Zoë', 'Côte d’Ivoire', 'New phrase']);
   });
 
-  it('does not report a failed save as saved and offers retry', async () => {
+  it('does not report a failed save as saved and Try again saves it', async () => {
     const bridge = install().voiceVocabulary;
-    vi.spyOn(bridge, 'save').mockRejectedValueOnce(new Error('Preview save failed'));
+    const save = vi.spyOn(bridge, 'save').mockRejectedValueOnce(new Error('Preview save failed'));
     const field = await open();
     add(field, 'Updated name');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await screen.findByRole('button', { name: 'Retry' });
-    expect(screen.getByRole('status').textContent).toContain('Unsaved changes');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved'));
+    await screen.findByRole('button', { name: 'Try again' });
+    // The word stays on screen so nothing typed is lost.
+    expect(screen.getByRole('button', { name: 'Remove Updated name' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull());
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(await bridge.get()).toContain('Updated name');
   });
 
   it('shows loading, then a failed read with retry instead of an editable false empty state', async () => {
@@ -147,28 +145,41 @@ describe('Voice vocabulary preview', () => {
     vi.spyOn(bridge, 'get').mockRejectedValueOnce(new Error('Preview read failed'));
     mount();
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Speak your message' }));
-      expect(screen.getByText('Loading vocabulary…')).toBeTruthy();
-    await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByText('Loading vocabulary…')).toBeTruthy();
+    await screen.findByRole('button', { name: 'Try again' });
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByRole('textbox', { name: 'Add word or phrase' });
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await screen.findByRole('textbox', { name: 'Add a word' });
   });
 
-  it('disables editing and duplicate saves until the preview acknowledges the write', async () => {
+  it('disables editing while a save is in flight, so changes never race', async () => {
     const bridge = install().voiceVocabulary;
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     const save = vi.spyOn(bridge, 'save').mockReturnValueOnce(pending);
     const field = await open();
     add(field, 'New phrase');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(field).toHaveProperty('disabled', true);
-    expect(screen.getByRole('button', { name: 'Saving…' })).toHaveProperty('disabled', true);
-    expect(screen.getByRole('status').textContent).toContain('Saving…');
+    expect(screen.getByRole('button', { name: 'Remove YouCoded' })).toHaveProperty('disabled', true);
     expect(save).toHaveBeenCalledTimes(1);
     finish();
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Saved'));
+    await waitFor(() => expect(field).toHaveProperty('disabled', false));
+  });
+
+  // WHY (final review, guide "Status and notices"): the bridge's raw words are for a bug report,
+  // so the notice says one fixed sentence and the raw text waits under a Details fold.
+  it('a failed save says a plain sentence with Try again and keeps the raw words under Details', async () => {
+    const bridge = install().voiceVocabulary;
+    vi.spyOn(bridge, 'save').mockRejectedValueOnce(new Error('EACCES: permission denied, open vocab.json'));
+    const field = await open();
+    add(field, 'New phrase');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Your changes couldn’t be saved.');
+    expect(alert.textContent).not.toContain('EACCES');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByText(/EACCES/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText(/EACCES/)).toBeTruthy();
   });
 
   it.each([ANDROID_LOCAL_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES])('hides the vocabulary menu without local desktop capabilities', (capabilities) => {

@@ -1,0 +1,245 @@
+// The one shell every Marketplace detail page is built from — plugins, skills,
+// connections, themes and integrations alike (redesign 2026-10-04, backlog row 9:
+// "these pages feel dated… not synced with our modern settings menus / session
+// switcher / resume browser… rethink how we show these pages").
+//
+// WHY one shell: the old pages were a near-full-screen panel with their own header
+// ("Details" and the words Esc and Close), a bare column of text and controls sitting straight on
+// the panel, and a second hand-copied version for integrations that had drifted
+// (its own header size, a full-width line, hand-typed buttons). Every piece here is
+// one the design guide names, so the page reads like Session details, Account and
+// Backup & sync:
+//   - the shared popup (`Dialog`): one-line title, the ✕, the tapered line, Esc
+//     (guide "Popups and side panels"; decisions B-1, H-2);
+//   - a top card about the thing itself — name with its status pill on the top line,
+//     one row of chips under it, the description (guide "Cards" → text order;
+//     decisions U-1, G-9), its quick actions at the top right (guide "Cards");
+//   - every other group is a small label and then a card (guide "Spacing" →
+//     "Nothing sits bare", "A label comes first"; decisions NB-1…3).
+// How the groups are ARRANGED was the one thing the guide left open; Destin picked two
+// columns (marketplace-detail-1#MD-1): the reading on the left, the short facts on the
+// right, one column at phone width. The one-column and folded drafts were removed.
+import React from 'react';
+import { Button, Callout, CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
+import { ChipRow } from './FactChips';
+
+export type DetailSection = {
+  id: string;
+  /** The small label above the section's card (sentence case, never repeats the title).
+   *  Empty = no label: only for a card that is a PICTURE of the item (a theme's preview) —
+   *  Destin dropped "Preview" there (marketplace-detail-2#M2-3: "dont need the text
+   *  'preview'"), the same exception as the top card. */
+  label: string;
+  node: React.ReactNode;
+  /** Short facts rather than reading: sits in the right-hand column. */
+  side?: boolean;
+};
+
+/** True inside the narrow right-hand column: buttons there stack full width, as in any
+ *  narrow space (guide "Buttons": stacked when narrow; decisions BP-1) — the column is
+ *  about 250px, narrower than the guide's 420px "narrow popup". */
+const NarrowColumn = React.createContext(false);
+
+/** True when the top card puts its buttons on its text's line (`iconLayout="row"`): they
+ *  then hug the right like any text-and-buttons line (guide "Buttons" → text and buttons
+ *  in one box, on one line when they fit; decisions NB-2), never full width. */
+const InlineActions = React.createContext(false);
+
+/** A labelled group: the small label, then one first-level card holding it. */
+function LabelledCard({ section }: { section: DetailSection }) {
+  return (
+    <section data-detail-section={section.id}>
+      {section.label && <SectionLabel className="mb-2">{section.label}</SectionLabel>}
+      <div className={`${CARD_LEVEL_1} p-3`}>{section.node}</div>
+    </section>
+  );
+}
+
+export function DetailPage({
+  title, screen, onClose, identity, sections, hero, identitySide = false,
+}: {
+  /** The popup's own title, e.g. "Plugin details". */
+  title: string;
+  /** Photo-only build: the shoot screen this popup marks itself as. */
+  screen?: string;
+  onClose(): void;
+  /** The top card about the item (see DetailIdentity). */
+  identity: React.ReactNode;
+  sections: DetailSection[];
+  /** Something shown first, full width, above everything (a theme's preview picture). */
+  hero?: React.ReactNode;
+  /** Put the top card at the head of the right-hand column instead of across the top. */
+  identitySide?: boolean;
+}) {
+  const narrow = useNarrowViewport();
+  const main = sections.filter((s) => !s.side);
+  const side = sections.filter((s) => s.side);
+  const sideItems = [
+    ...(identitySide ? [<NarrowColumn.Provider key="identity" value>{identity}</NarrowColumn.Provider>] : []),
+    ...side.map((s) => <LabelledCard key={s.id} section={s} />),
+  ];
+  const mainItems = main.map((s) => <LabelledCard key={s.id} section={s} />);
+
+  let body: React.ReactNode;
+  if (narrow) {
+    // Phone width: one column, the top card first, then the reading, then the facts.
+    body = <>{identitySide && identity}{mainItems}{side.map((s) => <LabelledCard key={s.id} section={s} />)}</>;
+  } else if (sideItems.length === 0 || mainItems.length === 0) {
+    // Nothing to put beside it (a theme with only its preview): one column, full width.
+    body = <>{identitySide && identity}{mainItems}{side.map((s) => <LabelledCard key={s.id} section={s} />)}</>;
+  } else {
+    body = (
+      // WHY a 2:1 grid and not a fixed side width: the guide keeps exact sizes in the
+      // shared pieces, and a ratio reflows with the window instead of needing a number.
+      <div className="grid grid-cols-3 gap-4 items-start">
+        <div className="col-span-2 space-y-4 min-w-0">{mainItems}</div>
+        <div className="col-span-1 space-y-4 min-w-0">{sideItems}</div>
+      </div>
+    );
+  }
+
+  return (
+    // WHY `wide`: the two-pane popup size (Dialog.tsx) — the only shared width with room
+    // for a facts column beside the reading.
+    <Dialog open onClose={onClose} title={title} size="wide" screen={screen}>
+      {hero}
+      {!identitySide && identity}
+      {body}
+    </Dialog>
+  );
+}
+
+/**
+ * The top card: the item itself. Name and status pill on the top line, quick actions
+ * (favourite, share, like) at its top right, one row of chips, the description, then
+ * anything about this one item (a notice, "Part of …") and its buttons — all INSIDE the
+ * card (guide "Card levels": text that describes a card lives inside it; "Status and
+ * notices": a notice about one thing sits inside that thing).
+ *
+ * WHY no label above it: it is the page's subject, like Session details' name card —
+ * the one approved popup that opens on the thing it is about. A label here could only
+ * repeat the title. (Recorded as a conflict with "A label comes first" in the friction log.)
+ */
+export function DetailIdentity({
+  icon, name, status, quickActions, chips, description, children, actions,
+  iconLayout = 'top', quickActionsOnTitle = false,
+}: {
+  icon?: React.ReactNode;
+  name: React.ReactNode;
+  status?: React.ReactNode;
+  quickActions?: React.ReactNode;
+  chips?: React.ReactNode;
+  description?: React.ReactNode;
+  /** Notices and rows about this item, between the description and the buttons. */
+  children?: React.ReactNode;
+  /** <DetailActions> — the item's buttons. */
+  actions?: React.ReactNode;
+  /** How an icon tile lines up with the words. `row` (Destin picked it, marketplace-detail-4
+   *  #M4-1): one row, tile | name + description | buttons on one centre line — the Account
+   *  profile card and the shared setting row (guide "Settings": control at the right,
+   *  vertically centred). `top`: no icon, or the icon beside the name only. */
+  iconLayout?: 'top' | 'row';
+  /** Keep the quick actions on the name's line even in the narrow column; the name then
+   *  wraps between words, never inside one. */
+  quickActionsOnTitle?: boolean;
+}) {
+  const phone = useNarrowViewport();
+  const inColumn = React.useContext(NarrowColumn);
+  // WHY (round 3): in the narrow right-hand column the quick actions moved down beside
+  // the chips, because beside the name "Meadow Mist" broke mid-word. A draft can now put
+  // them back on the name's line (`quickActionsOnTitle`) with word-only wrapping instead.
+  const actionsBelow = inColumn && !quickActionsOnTitle;
+  const row = iconLayout === 'row' && !phone;
+  const nameLine = (
+    // data-centres-agree: shoot checks the name and its status pill share one centre line.
+    <div className="flex items-center gap-2 min-w-0 flex-wrap" data-centres-agree="name and status">
+      {/* Session details' name size (text-lg semibold) — the subject of the popup.
+          `break-normal` where the name shares its line: wrap between words only. */}
+      <div className={`text-lg font-semibold text-fg leading-tight min-w-0 ${quickActionsOnTitle ? 'break-normal' : 'break-words'}`}>{name}</div>
+      {status}
+    </div>
+  );
+  const chipRow = (chips || (actionsBelow && quickActions)) && (
+    <div className="-mt-1 flex items-center gap-2 min-w-0">
+      <ChipRow>{chips}</ChipRow>
+      {actionsBelow && quickActions && <div className="shrink-0 flex items-center gap-1 -mr-1">{quickActions}</div>}
+    </div>
+  );
+  const quick = !actionsBelow && quickActions && <div className="shrink-0 flex items-center gap-1 -mt-1 -mr-1">{quickActions}</div>;
+  const desc = description && <p className="text-sm text-fg-2">{description}</p>;
+
+  if (row) {
+    return (
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`} data-detail-identity>
+        <div className="flex items-center gap-3">
+          {icon}
+          <div className="min-w-0 flex-1 space-y-0.5">{nameLine}{desc}</div>
+          <InlineActions.Provider value>{actions}</InlineActions.Provider>
+          {quick}
+        </div>
+        {chipRow}
+        {children}
+      </div>
+    );
+  }
+  return (
+    <div className={`${CARD_LEVEL_1} p-4 space-y-3`} data-detail-identity>
+      <div className="flex gap-3 items-start">
+        {icon}
+        <div className="min-w-0 flex-1 space-y-1">{nameLine}</div>
+        {quick}
+      </div>
+      {chipRow}
+      {desc}
+      {children}
+      {actions}
+    </div>
+  );
+}
+
+/**
+ * The item's buttons, placed by the guide's width rule (guide "Buttons"; decisions
+ * BP-1, BP-3, BW-1/2): one button is full width; two sit side by side hugging the right
+ * edge, the filled one on the right — or, at phone width, stack full width with the
+ * filled one on top. Pass children in reading order: less important first, the one
+ * filled (main) action LAST.
+ */
+export function DetailActions({ children }: { children: React.ReactNode }) {
+  // Both hooks always run (never short-circuit a hook call).
+  const phone = useNarrowViewport();
+  const inColumn = React.useContext(NarrowColumn);
+  const inline = React.useContext(InlineActions);
+  const narrow = phone || inColumn;
+  const items = React.Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
+  const stacked = !inline && (narrow || items.length === 1);
+  return (
+    <div data-detail-actions className={stacked ? 'flex flex-col-reverse gap-2' : `flex items-center justify-end gap-2${inline ? ' shrink-0' : ''}`}>
+      {stacked
+        ? items.map((child, i) => <div key={i} className="flex flex-col">{child}</div>)
+        : items}
+    </div>
+  );
+}
+
+/** A failed install, said inside the item's card with its own Try again (guide "Status and
+ *  notices": a notice about one thing sits inside it, its buttons inside the notice at the right).
+ *  Shared by the plugin, theme and integration detail pages, so all three read the same.
+ *
+ *  WHY one plain sentence and the reason folded under Details (Destin, small-fixes-1#SF-1:
+ *  "just "try again". as we just did everywhere else … this error text is also worse and more
+ *  convoluted"): the box read "Couldn't install: Plugin not found in marketplace: …" beside a
+ *  "Try installing again" button. Now it is the approved Contribute failure's shape
+ *  (submit-ticket-5#ST5-9): a short sentence naming what failed, "Try again", and the
+ *  operation's own words one click away under Details — never dropped, never guessed. */
+export function InstallFailed({ name, message, onRetry }: { name: string; message: string; onRetry(): void }) {
+  return (
+    <div className="space-y-2">
+      {/* popup-cards-8#Q-1: Details sits inside the error box, everywhere */}
+      <Callout tone="danger" details={message} actions={<Button size="sm" onClick={onRetry}>Try again</Button>}>
+        {name} couldn&rsquo;t be installed.
+      </Callout>
+    </div>
+  );
+}

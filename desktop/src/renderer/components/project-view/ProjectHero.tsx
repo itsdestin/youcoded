@@ -3,7 +3,7 @@
 //
 // Layout (matches docs/superpowers/prototypes/2026-06-14-project-view-redesign.html):
 //   PROJECT eyebrow
-//   <project name button ▾>                        [New Conversation]
+//   <project name button ▾>                        [New conversation]
 //   [folder] path · [octocat] owner/name  (both inline click targets)
 //   N files · N conversations · N context files · active <when>
 // (2026-07-23: the separate "N artifacts" stat was dropped when the Artifacts
@@ -11,7 +11,7 @@
 //
 // The project name is a clickable switcher trigger (opens <ProjectSwitcher>,
 // Task 2.3) and MUST NOT truncate — it wraps. The ONE accent use in this card is
-// the New Conversation primary button.
+// the New conversation primary button.
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { getCapabilities } from '../../platform';
@@ -73,7 +73,7 @@ interface ProjectHeroProps {
   onTurnOnSync: () => void;
   onSyncNow: (spaceId: string) => void;
   onRenamed: () => void;             // parent refreshes the list after a rename / stop
-  canRemove: boolean;                // false for synced projects (move-out is deferred)
+  canRemove: boolean;                // true for every project since backlog row 10: a synced one is removed from THIS computer's list only (folders-service `hidden`)
   onRemove: () => void;
 }
 
@@ -89,7 +89,7 @@ function ChevronDown({ size = 18 }: { size?: number }) {
 
 import { createPortal } from 'react-dom';
 import { FolderIcon, GitHubIcon, CogIcon } from './icons';
-import { Button, TextInput, Textarea } from '../ui';
+import { Button, SectionLabel, TextInput, Textarea } from '../ui';
 import { useAnchoredMenu } from '../../hooks/useAnchoredMenu';
 import { OverlayPanel } from '../overlays/Overlay';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
@@ -257,13 +257,14 @@ export function ProjectHero({
     : sync.dot.color === 'green'
       ? {
           short: sync.lastSynced ? `Synced ${sync.lastSynced}` : 'Synced',
-          tone: 'text-[#44A05C]',
+          // The dot beside the words carries green/red; the words are the text colour (small-fixes-3#SF3-10).
+          tone: 'text-fg-2',
           detail: 'Syncs across your devices.',
           action: sync.spaceId ? { label: 'Sync now', onClick: () => onSyncNow(sync.spaceId!) } : null,
         }
     : sync.dot.color === 'red'
       ? {
-          short: 'Sync problem', tone: 'text-[#DD4444]',
+          short: 'Sync problem', tone: 'text-fg-2',
           // The REAL error, never a guess — surfaced verbatim when the engine
           // gave one (error-message-standards.md).
           detail: sync.errorMessage
@@ -284,7 +285,10 @@ export function ProjectHero({
           action: null, // The switch is global; it lives in Settings, not here.
         }
       : {
-          short: 'Only on this computer', tone: 'text-fg-2',
+          // WHY "Not synced" (project-switcher-2#P2Q-1, "match"): the project switcher's pill
+          // says it for the same state; one project, one wording. The full sentence below
+          // still says it stays on this computer.
+          short: 'Not synced', tone: 'text-fg-2',
           detail: 'This project stays on this computer until you turn on sync for it.',
           // The action that had NO desktop home in the refresh-icon shape.
           action: { label: 'Turn on sync for this project', onClick: onTurnOnSync },
@@ -298,7 +302,7 @@ export function ProjectHero({
     // once a project exists (a fresh install rings "Add a project" instead).
     <div className="layer-surface p-3 sm:p-5 flex flex-col gap-3 sm:gap-4" data-guide-anchor="project-hero">
       {/* Top row: the content column, plus the narrow-only cog pinned right.
-          WHY the card is a COLUMN now (2026-08-06): New Conversation moved to
+          WHY the card is a COLUMN now (2026-08-06): New conversation moved to
           the bottom-right, so the old left/right split stopped describing the
           layout — the cog is the only thing still anchored top-right. */}
       <div className="flex items-start justify-between gap-3">
@@ -310,9 +314,11 @@ export function ProjectHero({
             and the editor re-wrapped 2 lines into 3. `flex-1` makes the width
             the row's, so read and edit modes occupy the same box. */}
         <div className="flex-1 min-w-0">
-        <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1.5">
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel className="mb-1.5">
           Project
-        </div>
+        </SectionLabel>
 
         {/* Name as the switcher trigger. WHY: must NOT truncate — the user
             explicitly called this out. whitespace-normal + break-words let long
@@ -398,14 +404,19 @@ export function ProjectHero({
           // mount and on every keystroke. Enter still COMMITS (matching rename)
           // — the wrap is for layout parity, not for multi-line values.
           <Textarea
-            size="sm"
             ref={autoGrowDesc}
             value={descDraft}
             rows={1}
             autoFocus
             aria-label="Project description"
             placeholder="What is this project?"
-            className="mt-1.5 -ml-2.5 w-full max-w-[46rem] text-sm italic overflow-hidden"
+            // WHY no hang and upright (close-session-friction proposal 13; Destin on Session
+            // details' identical box, close-session-1#CS-3: "a bit odd"): the -ml-2.5 pulled the
+            // box into the card's left margin, so its right edge stopped short, and the italics
+            // made the field read as the saved quote rather than a box you type in. Now the
+            // app's plain text box, inside the card's own margins. The saved description below
+            // keeps its quotes and italics.
+            className="mt-1.5 w-full max-w-[46rem] overflow-hidden"
             // Cap at the keystroke, not just on commit — PROJECT_DESCRIPTION_MAX
             // is the shared source of truth (shared/artifacts/types.ts), not a
             // re-typed 200 that could drift from the main-process limit.
@@ -423,10 +434,10 @@ export function ProjectHero({
           <button
             type="button"
             onClick={() => setEditingDesc(true)}
-            // Geometry MUST match the Textarea below exactly -- same padding,
-            // radius, negative margin, and a transparent 1px border standing in
-            // for the field's real one. Otherwise clicking to edit shifts the
-            // text and resizes the box under the cursor.
+            // The saved description hangs into the card's margin so its WORDS line up with the
+            // name above (the read state, kept as approved). The box you type in no longer
+            // copies that (above), so a click now moves the words in by the box's padding —
+            // the same as Session details' note since close-session-2.
             className="mt-1.5 block text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors max-w-[46rem]"
             title="Edit description"
           >
@@ -436,13 +447,12 @@ export function ProjectHero({
           // Dashed-outline add affordance, matching QuickChips' "+ Add Chip" and
           // ModelPicker's freeform row. Bare hover-only text read as a label,
           // not a control -- there was nothing to see until the cursor was
-          // already on it. `-ml-2 px-2` keeps the LABEL aligned with the name
-          // and path above, so the box hangs into the card's gutter instead of
-          // indenting the text.
+          // already on it. WHY no -ml-2 hang any more (close-session-friction proposal 13): a
+          // control keeps the card's margins; the label now starts at the card's edge.
           <button
             type="button"
             onClick={() => setEditingDesc(true)}
-            className="mt-1.5 -ml-2 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors"
+            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors"
           >
             <span aria-hidden="true" className="text-sm leading-none">+</span>
             Add a description
@@ -477,7 +487,7 @@ export function ProjectHero({
         </div>
 
         {/* Narrow-only cog, now top-right of the card (it used to sit beside
-            New Conversation, which moved to the bottom). */}
+            New conversation, which moved to the bottom). */}
         {narrow && (
           <button
             ref={menu.anchorRef}
@@ -497,8 +507,8 @@ export function ProjectHero({
       </div>
 
       {/* Bottom row: management actions left, the primary action right
-          (2026-08-06 — New Conversation moved down here from the top-right).
-          It renders unconditionally because New Conversation always exists,
+          (2026-08-06 — New conversation moved down here from the top-right).
+          It renders unconditionally because New conversation always exists,
           even when the actions cluster inside it does not. */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         {/* Management actions (spec §4). The cluster renders at every width
@@ -592,7 +602,7 @@ export function ProjectHero({
           className="w-full sm:w-auto sm:shrink-0 sm:ml-auto"
           onClick={() => onNewConversation(project.path)}
         >
-          New Conversation
+          New conversation
         </Button>
       </div>
 

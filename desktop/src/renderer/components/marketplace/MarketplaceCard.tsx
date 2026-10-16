@@ -1,15 +1,16 @@
 // Unified card for skill + theme + plugin discovery. Corner affordance
 // cycles through three states (install / installing / favorited) via
 // InstallFavoriteCorner; integrations render through the same component via
-// optional iconUrl + accentColor props (no separate IntegrationCard).
+// an optional iconUrl prop (no separate IntegrationCard). WHY no accentColor any more
+// (final-review#MK-1, Destin: "i don't think i like the colored outlines on integration
+// cards"): every card wears the shared card outline (guide "Card levels" → the outline is
+// what separates layers); the hero dropped its accent border the same way (P-21 #1).
 
 import { memo, useId, useState } from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
-// P-21 #3: "1 installs" / "1 likes" — counts go through the shared pluraliser.
-import { plural } from "../../../shared/plural";
 import InstallFavoriteCorner from "./InstallFavoriteCorner";
 // Task 1: the "Update" corner is a real button now — see UpdateButton.tsx for
 // why it had to become a shared component.
@@ -18,7 +19,9 @@ import UpdateButton from "./UpdateButton";
 // glyphs and the thumbs summary replace the star rating on every card.
 import { ScanBadge, AuthorBadge } from "./TrustBadges";
 import { capabilityLine } from "./CapabilityList";
-import { ThumbsSummary } from "./FeedbackSection";
+import { ChipRow, CountChip, ThumbsChip } from "./FactChips";
+import { Chip } from "../ui";
+import { THEME_PREVIEW_FRAME } from "../appearance/ThemeCard";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 
 export type MarketplaceCardEntry =
@@ -38,8 +41,6 @@ interface Props {
   updateAvailable?: boolean;
   /** Optional custom icon (integrations). Renders top-left inside the tile. */
   iconUrl?: string;
-  /** Optional accent border color (integrations). */
-  accentColor?: string;
   /** Integrations handle install/connect through their own flow (handleIntegration
    *  routed via onOpen) — hide the corner download/favorite affordance in that case. */
   suppressCorner?: boolean;
@@ -69,9 +70,11 @@ interface Props {
 // consolidation. Status colors are intentionally hardcoded (not theme tokens)
 // since green/amber/red carry semantic meaning independent of the active theme.
 export const STATUS_TONE_CLASS: Record<'ok' | 'warn' | 'err' | 'neutral' | 'locked', string> = {
-  ok: 'bg-green-500/15 text-green-400 border border-green-500/30',
-  warn: 'bg-amber-500/15 text-amber-400 border border-amber-500/30',
-  err: 'bg-red-500/15 text-red-400 border border-red-500/30',
+  // Tint and outline carry the state, the words stay the text colour (small-fixes-3#SF3-10; the
+  // shared Pill's rule).
+  ok: 'bg-green-500/15 text-fg-2 border border-green-500/30',
+  warn: 'bg-amber-500/15 text-fg-2 border border-amber-500/30',
+  err: 'bg-red-500/15 text-fg-2 border border-red-500/30',
   neutral: 'bg-inset text-fg-2 border border-edge',
   // Platform-blocked — reads as "not for this platform" without the alarm of
   // err/warn. Change 24: was `bg-slate-500/10 border-slate-500/30`, a stock
@@ -92,7 +95,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
+function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -150,19 +153,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
   // A non-bundle kind gets its name in the byline ("Skill · Anthropic") so a
   // split view says what each card IS; bundles stay unlabeled like today.
   const typeLabel = catalog && catalog.itemType !== "plugin" ? CATALOG_TYPE_LABEL[catalog.itemType].one : null;
-  const thumbs = pluginStats ? <ThumbsSummary up={pluginStats.thumbs_up} down={pluginStats.thumbs_down} /> : null;
-  // Round 2: safety first, then who made it; the risky abilities as words.
-  const trust = catalog ? (
-    <div className="flex items-center gap-1 flex-nowrap min-w-0" data-trust>
-      <ScanBadge scan={catalog.scan} responsiveLabel />
-      {/* 2026-08-31: the source chip moved to the detail page. On a card it was a
-          third chip competing with the two that answer what you actually ask while
-          scanning a grid — is this safe, and who made it. Where it was mirrored from
-          matters when you are deciding to install, which is the detail page. */}
-      {/* Round 3: the author is a chip here, not a grey line under the title. */}
-      {author && <AuthorBadge author={author} />}
-    </div>
-  ) : null;
   // Task 21: a row the installer cannot take gets no Install affordance at all —
   // the detail overlay offers "Open source" instead. Themes are always
   // installable, so this only gates the skill side.
@@ -175,27 +165,45 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
   ) : isInstalled ? (
     <InstallFavoriteCorner inline installed installing={isInstalling} favorited={isFavorited} onInstall={install} onToggleFavorite={toggleFavorite} />
   ) : null;
-  // Round 3: "412 installs" → a download arrow and the number; the words are
-  // on hover.
-  const installCount = installs > 0 ? (
-    <span className="inline-flex items-center gap-1 shrink-0" title={plural(installs, "install")}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="7 10 12 15 17 10" />
-        <line x1="12" y1="15" x2="12" y2="3" />
-      </svg>
-      {installs.toLocaleString()}
-    </span>
-  ) : null;
   const capLine = catalog ? capabilityLine(catalog.capabilities) : null;
+  // WHY one chip row right under the name (decisions "Item card chips", U-1: "all the chips
+  // should be in the same row right below the name"; "Item card text order", CA-1: the footer
+  // details become chips too; "Card chip row", G-9 refined by M2-1: one line that scrolls
+  // sideways with the edge fade, never wrapping or clipping): trust, author, kind, contents and
+  // the numbers, in the detail page's own row (FactChips) — they were a byline, a trust row and
+  // a footer of plain grey words.
+  const peekChip = item.kind === "skill" ? componentSummary(item.entry.components) : null;
+  const factChips = (
+    <>
+      {catalog && <ScanBadge scan={catalog.scan} responsiveLabel />}
+      {author && <AuthorBadge author={author} />}
+      {typeLabel && <Chip>{typeLabel}</Chip>}
+      {peekChip && <Chip>{peekChip}</Chip>}
+      {pluginStats && <ThumbsChip up={pluginStats.thumbs_up} down={pluginStats.thumbs_down} />}
+      {installs > 0 && <CountChip n={installs} word="install" />}
+      {likes > 0 && <CountChip n={likes} word="like" />}
+    </>
+  );
+  const hasFactChips = !!(catalog || author || typeLabel || peekChip || pluginStats || installs > 0 || likes > 0);
 
   const title = item.kind === "skill" ? item.entry.displayName : item.entry.name;
   const themePreviewUrl = item.kind === "theme" && !themePreviewFailed ? item.entry.preview : undefined;
   // Fallback for a preview that would not load: the theme's own colours. Not a
   // screenshot, but it identifies the theme and the card stops looking broken.
   const themeTokens = item.kind === "theme" ? item.entry.previewTokens : undefined;
+  // WHY corners that follow the card's (final-fixes#MK-2 follow-up, Destin: "the previews should
+  // be better fitted to the card. this looks janky"): the picture sat 4px inside a card whose
+  // corners are the theme's large radius (--radius-xl) while its own were the small rounded-md, so
+  // the rim between them was thin at the sides and thick at the corners. Its top corners are now
+  // the card's radius less the 4px gap — one even rim all round — and its bottom corners stay
+  // small where the picture meets the words. A theme that enlarges its radii scales both together.
+  // WHY the picture's own 16:10 shape (popup-cards-8#M-1, Destin: "still cant see the bottom of the
+  // preview. i should be able to see the full window"): theme previews are 800x500 window
+  // pictures, and a fixed 144px-tall strip cut off their bottom third. The frame now has the
+  // picture's shape, so the whole window shows; the card is taller by that much.
+  const previewFrame = { aspectRatio: '16 / 10', borderRadius: 'calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) var(--radius-sm) var(--radius-sm)' };
   const themeSwatches = item.kind === "theme" && themePreviewFailed && themeTokens && Object.keys(themeTokens).length > 0 ? (
-    <div data-theme-swatches className="w-full h-36 flex border-b border-edge-dim" title={`${item.entry.name} colours — preview image unavailable`}>
+    <div data-theme-swatches style={previewFrame} className={`m-1 mb-0 flex ${THEME_PREVIEW_FRAME}`} title={`${item.entry.name} colours — preview image unavailable`}>
       {Object.entries(themeTokens).map(([name, color]) => (
         <span key={name} className="flex-1" style={{ background: color as string }} />
       ))}
@@ -204,7 +212,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
   const blurb = item.kind === "skill"
     ? (item.entry.tagline || item.entry.description || "")
     : (item.entry.description || "");
-  const peek = item.kind === "skill" ? componentSummary(item.entry.components) : null;
 
   const showIcon = !!iconUrl && !iconFailed;
 
@@ -245,10 +252,9 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
             onOpen(id);
           }
         }}
-        className="layer-surface flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="layer-surface card-raised flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         data-marketplace-card={id}
         data-marketplace-card-compact="true"
-        style={accentColor ? { borderColor: accentColor } : undefined}
       >
         {/* 52x52 thumbnail rendered only when we have a real image source
             (integration iconUrl or theme preview). Skill plugins without an
@@ -265,20 +271,20 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
 
         {/* Center column. min-w-0 is load-bearing — without it the truncate
             below stops working because the flex item can grow past parent. */}
-        <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-fg truncate">{title}</h3>
-          {(typeLabel || (!catalog && author)) && (
-            <p className="text-xs text-fg-dim truncate">{[typeLabel, catalog ? null : author].filter(Boolean).join(" · ")}</p>
-          )}
+        {/* WHY this order (decisions "Item card chips", U-1): name and its tinted status pill
+            on the top line, the one chip row under it, then the description. The pill sat in
+            the right-hand column. */}
+        <div className="flex-1 min-w-0 flex flex-col gap-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className="font-medium text-fg truncate">{title}</h3>
+            {!showUpdateAction && compactStatus && (
+              <span className={`shrink-0 text-3xs px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}>
+                {compactStatus.text}
+              </span>
+            )}
+          </div>
+          {hasFactChips && <ChipRow>{factChips}</ChipRow>}
           {blurb && <p className="text-xs text-fg-2 line-clamp-2">{blurb}</p>}
-          {trust && <div className="mt-1">{trust}</div>}
-          {thumbs || installs > 0 || likes > 0 ? (
-            <div className="mt-1 flex items-center gap-3 text-xs text-fg-dim">
-              {thumbs}
-              {installCount}
-              {likes > 0 && <span>{plural(likes, "like")}</span>}
-            </div>
-          ) : null}
         </div>
 
         {/* Right column: status pill + inline install button. The install
@@ -291,15 +297,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
             via p-3 — well above WCAG 2.2's 24px minimum and close to iOS
             HIG's 44pt recommendation. */}
         <div className="shrink-0 flex flex-col items-end gap-1.5">
-          {showUpdateAction ? (
-            <UpdateButton id={updateId} kind={kind} />
-          ) : compactStatus ? (
-            <span
-              className={`text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}
-            >
-              {compactStatus.text}
-            </span>
-          ) : null}
+          {showUpdateAction && <UpdateButton id={updateId} kind={kind} />}
           {!suppressCorner && !notInstallable && kind === 'skill' && !isInstalled && !isInstalling && (
             <button
               type="button"
@@ -334,22 +332,29 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
       // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
       // same lift on desktop, but guarded by @media (hover: hover) so a tap on
       // Android doesn't leave the card stuck at 1.02 (spec §9.E).
-      className="relative layer-surface text-left flex flex-col overflow-hidden hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="relative layer-surface card-raised text-left flex flex-col overflow-hidden hover-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
-      style={accentColor ? { borderColor: accentColor } : undefined}
     >
       {/* Corner affordance — install → spinner → favorite star, all at the
           same absolute coordinates. Themes skip the install affordance so the
           corner is only wired for skills. Integrations opt out entirely via
           suppressCorner since their install/connect flow goes through onOpen. */}
+      {/* WHY a framed picture (final-review#MK-2, Destin: "improve these marketplace theme
+          cards a bit to slightly better match the cards used in the appearance panel"):
+          Appearance's theme cards set the preview INSIDE the card, 4px in, with its own
+          rounded corner and outline, showing the window's top (object-top). The picture
+          used to run edge to edge with a line under it. Same frame (THEME_PREVIEW_FRAME),
+          same height as before so the grids and rails keep their size. */}
       {themePreviewUrl && (
-        <img
-          src={themePreviewUrl}
-          alt=""
-          loading="lazy"
-          className="w-full h-36 object-cover border-b border-edge-dim"
-          onError={() => setThemePreviewFailed(true)}
-        />
+        <div style={previewFrame} className={`m-1 mb-0 shrink-0 ${THEME_PREVIEW_FRAME}`}>
+          <img
+            src={themePreviewUrl}
+            alt=""
+            loading="lazy"
+            className="w-full h-full object-cover"
+            onError={() => setThemePreviewFailed(true)}
+          />
+        </div>
       )}
       {themeSwatches}
       {/* p-3/gap-1.5 at narrow shrinks the rail tile so 2-3 fit on a phone screen
@@ -371,18 +376,9 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           )}
           <div className="min-w-0">
             <h3 className="font-medium text-fg truncate text-sm sm:text-base">{title}</h3>
-            {/* Author on its own line at sm+; at narrow we hide it here and
-                render it inline with the bottom stats row to save vertical
-                space — see the bottom row below. */}
-            {(typeLabel || (!catalog && author)) && (
-              <p className="hidden sm:block text-xs text-fg-dim truncate">{[typeLabel, catalog ? null : author].filter(Boolean).join(" · ")}</p>
-            )}
-            {/* Overhaul: who made it + was it checked, right under the byline
-                so the two trust signals are read before the blurb. */}
-            {trust && <div className="mt-1">{trust}</div>}
             {isLocalTheme && (
               <div className="mt-1 inline-flex items-center gap-1 group relative">
-                <span className="text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
+                <span className="text-3xs px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
                   Local
                 </span>
                 <button
@@ -420,7 +416,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
         <div className="flex items-center gap-1 shrink-0">
         {statusBadge ? (
           <span
-            className={`relative z-10 text-3xs uppercase tracking-wide shrink-0 px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[statusBadge.tone]}`}
+            className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[statusBadge.tone]}`}
           >
             {statusBadge.text}
           </span>
@@ -430,11 +426,14 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           // alike. It is the real action now.
           <UpdateButton id={updateId} kind={kind} />
         ) : (isInstalling || isInstalled) && (
+          // WHY the "Installed" state also carries a tint (guide: a status
+          // label is a small tinted pill, not plain text) — it used to be a
+          // bare grey word next to its own tinted "Installing…" sibling.
           <span
-            className={`relative z-10 text-3xs uppercase tracking-wide shrink-0 px-2 py-0.5 rounded-full ${
+            className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${
               isInstalling
                 ? 'text-accent border border-accent/50 bg-accent/10 animate-pulse'
-                : 'text-fg-dim'
+                : STATUS_TONE_CLASS.neutral
             }`}
           >
             {isInstalling ? 'Installing…' : 'Installed'}
@@ -446,6 +445,8 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
         {corner}
         </div>
       </div>
+      {/* The one chip row right under the name line (U-1, see factChips above). */}
+      {hasFactChips && <div className="flex min-w-0"><ChipRow>{factChips}</ChipRow></div>}
       {/* Round 2: the blurb reserves two lines even when it is one, so every
           card in a row keeps the same shape (Destin: "not symmetrical"). */}
       <p className="text-xs text-fg-2 line-clamp-2 min-h-[2rem]">{blurb}</p>
@@ -462,24 +463,11 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           {pluginBadge.name}
         </button>
       )}
-      <div className="mt-auto flex flex-col gap-1 pt-1 min-w-0">
-        {/* Round 2: what it can do, as WORDS on their own line — "Runs
-            commands · Uses the internet · Needs a key". Only the risky kinds,
-            only when there are any; the sentences are on the detail page. */}
-        {capLine && <p className="hidden sm:block text-2xs text-fg-dim truncate" title={capLine}>{capLine}</p>}
-        <div className="flex items-center gap-2 sm:gap-3 text-xs text-fg-dim min-w-0">
-          {/* Author appears here at narrow only — keeps the byline visible without
-              spending a whole row on it. Hidden at sm+ since it has its own line
-              under the title up top. */}
-          {!catalog && author && <span className="sm:hidden text-fg-dim truncate">{author}</span>}
-          {thumbs}
-          {installCount}
-          {likes > 0 && <span className="shrink-0">{plural(likes, "like")}</span>}
-          {/* Component peek (e.g. "2 skills · 3 commands") is wide-only and
-              right-aligned so the row reads: feedback left, contents right. */}
-          {peek && <span className="hidden sm:inline text-fg-muted truncate ml-auto text-right">{peek}</span>}
-        </div>
-      </div>
+      {/* Round 2: what it can do, as WORDS on their own line — "Runs
+          commands · Uses the internet · Needs a key". Only the risky kinds,
+          only when there are any; the sentences are on the detail page. The
+          numbers and contents that shared this foot are chips now (U-1). */}
+      {capLine && <p className="mt-auto hidden sm:block text-2xs text-fg-dim truncate" title={capLine}>{capLine}</p>}
       </div>
     </div>
   );
@@ -496,6 +484,6 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
 // click, not the thousands of elements the window removed; closing it needs a
 // selector-scoped marketplace store, the same shape as splitting
 // ArtifactContext (plan: "Deliberately out of scope").
-// Your Library's cards gain nothing from this memo (their `item` objects are
+// Your library's cards gain nothing from this memo (their `item` objects are
 // per render) — deliberately, see LibraryScreen's openLibraryEntry comment.
 export default memo(MarketplaceCard);

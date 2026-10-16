@@ -1,24 +1,32 @@
-import { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { memoWhileClosed } from '../memo-while-closed';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
-import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState, Pill, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput, Toggle } from '../ui';
+import type { PillTone } from '../ui/Pill';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
+import { networkOnlineNow } from '../../hooks/useNetworkOnline';
+import { ContributionDesign } from './ContributionDesign';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
 // sending, sent and opened-in-GitHub had no surface at all. A failure is NOT a
 // phase — it renders on the review step with the draft intact, which is what
 // "your details stay in the draft and you can retry" actually requires.
-type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened' | 'handing-over' | 'handed-over';
+type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened' | 'handed-over';
 
 // Carried over from the screen this replaces. The old flow's second action was
 // "Let Claude Try to Fix It": set the workspace up, open a session, hand it the
 // description. The approved design has no such action, so removing it would have
 // deleted a working feature no deck asked to remove — it is kept, in the app's own
 // words, and goes to Destin on the acceptance deck to keep, cut or redesign.
-const HANDOVER_PROMPT = (kind: string, description: string) =>
+const HANDOVER_PROMPT = (kind: string, description: string, errorDetails: string) =>
   kind === 'bug'
     ? `I just filed (or am about to file) a bug against YouCoded. Here's what I described: «${description}». `
+      // WHY (submit-ticket-2): the error used to reach the assistant only through the
+      // description, pre-filled with "This happened in …". That pre-fill is gone (ST-13),
+      // so the error details travel here instead, when the user left them ticked.
+      + (errorDetails ? `The error details: «${errorDetails}». ` : '')
       + `Investigate the codebase in this workspace and propose a fix. Read \`docs/PITFALLS.md\` first, `
       + `and check both desktop and Android touchpoints if the bug could affect either.`
     : `I want to add a new feature to YouCoded. Here's what I'm asking for: «${description}». `
@@ -39,19 +47,21 @@ const HANDOVER_PROMPT = (kind: string, description: string) =>
 export type ReportContext = { error?: string; surface?: string; diagnose?: boolean };
 
 function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
-  useEscClose(open, onClose);
+  // WHY a flag for the Contribute screen (submit-ticket-3#ST3-Q1 "contribute"): the ticket
+  // hands "Let your assistant try to fix it" to Contribute, which explains and runs the
+  // download. It opens on top of this popup, and Escape belongs to it while it shows.
+  const [contributing, setContributing] = useState(false);
+  useEscClose(open && !contributing, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
   // WHY typed (2026-09-30 one-core R3-2): the dev:* request types now say the kind is bug or feature.
   const [kind, setKind] = useState<'bug' | 'feature'>('bug');
   const [phase, setPhase] = useState<Phase>(context?.diagnose ? 'review' : 'draft');
   const [title, setTitle] = useState('');
-  const [description, setDescription] = useState(
-    // Seeded, not locked: it is the user's ticket, so the surface is a starting
-    // point they can rewrite. The error itself is shown separately, under Error
-    // details, where they can review it before it is sent (R11).
-    context?.surface ? `This happened in ${context.surface}.\n\n` : '',
-  );
+  // WHY never pre-filled (Destin, submit-ticket-1#ST-13: "it shouldn't fill text in the
+  // description, but the error details checkbox should explain itself when it applies"):
+  // where it happened and the error travel as the "The error you saw" choice instead.
+  const [description, setDescription] = useState('');
   const [includeContext, setIncludeContext] = useState(true);
   const [logs, setLogs] = useState(false);
   const [logsBusy, setLogsBusy] = useState(false);
@@ -59,11 +69,32 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
   const [attachments, setAttachments] = useState(false);
   const [aiInfo, setAiInfo] = useState(!!context?.diagnose);
   const [error, setError] = useState('');
+
   const [url, setUrl] = useState('');
   const [truncated, setTruncated] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState('');
   const review = phase === 'review';
+  const narrow = useNarrowViewport();
+  // Read only to word a failed send: "no network" is said only when the computer itself
+  // reports none (useNetworkOnline's rule) — never guessed from the error text.
+  const online = networkOnlineNow();
+
+  // WHY an effect and not only useState's first value (found shooting the practice states,
+  // 2026-10-06): every caller keeps this popup MOUNTED and opens it by handing it a context,
+  // so the initial values above ran at mount — before any error existed, and Diagnose
+  // opened a blank draft instead of the review step it promises.
+  useEffect(() => {
+    if (context?.diagnose) { setPhase('review'); setAiInfo(true); }
+  }, [context]);
+
+  // The error details: only when this ticket was opened from an error (submit-ticket-1#ST-13 —
+  // opened from Settings there is no error, so there is nothing to offer). Bug tickets only,
+  // as before.
+  const isBug = kind === 'bug';
+  const errorDetails = [context?.surface && `This happened in ${context.surface}.`, context?.error].filter(Boolean).join('\n');
+  const hasErrorDetails = isBug && !!errorDetails;
+  const errorOn = hasErrorDetails && includeContext;
 
   // Reading them is what ticking the box means. It happens when they tick it, so the
   // text is on screen for review before the review step — never collected silently.
@@ -105,25 +136,11 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
     }
   };
 
-  const handOver = async () => {
-    setError('');
-    setPhase('handing-over');
-    try {
-      // The MANAGED setup, not the legacy fixed-folder installer the old screen
-      // used: that one pulled into ~/youcoded-dev if it recognised it, which R9
-      // forbids. Already set up? Reuse it rather than cloning a second copy.
-      const status = await window.claude.dev.setupStatus();
-      const ready = status.state === 'ready' && status.path
-        ? { ok: true as const, path: status.path }
-        : await window.claude.dev.setupWorkspace();
-      if (!ready.ok) { setError(ready.error); setPhase('review'); return; }
-      await window.claude.dev.openSessionIn({ cwd: ready.path, initialInput: HANDOVER_PROMPT(kind, description) });
-      setPhase('handed-over');
-    } catch (e: unknown) {
-      setError(plainMessage(e, 'A working copy could not be opened, so nothing was started.'));
-      setPhase('review');
-    }
-  };
+  // WHY no download here any more (submit-ticket-3#ST3-Q1 "contribute"; Destin on the
+  // waiting screen: "when would a user encounter this screen?"): the ticket popup used to run
+  // the ~1 GB download itself, with its own waiting and failed screens. Contribute is the one
+  // place that explains it and reuses the copy already made; the ticket's words go with it.
+  const handOver = () => { setError(''); setContributing(true); };
 
   const send = async () => {
     setError('');
@@ -133,9 +150,11 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
       // WHY assembled here rather than typed into the box: the user's draft stays
       // their words, and what is attached is exactly what they reviewed under Error
       // details — nothing more, and nothing if they unticked it (R11).
-      const evidence = kind === 'bug' && includeContext
-        ? `${description}\n\n---\n${versionLine()}${context?.error ? `\n${context.error}` : ''}`
-        : description;
+      // WHY no version here any more (submit-ticket-1#ST-Q1, Destin: "we should always send
+      // version. the box should just be for error details"): the main process stamps every
+      // ticket with its Environment line (version and system) whatever is ticked, and the
+      // review step now lists that line. Repeating it here only duplicated it.
+      const evidence = errorOn ? `${description}\n\n---\n**Error details:**\n${errorDetails}` : description;
       const r = await window.claude.dev.submitIssue({
         kind, title, description: evidence,
         log: kind === 'bug' && logs ? logText : undefined,
@@ -175,154 +194,219 @@ function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: 
     }
   };
 
-  return <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
-    <div className="p-4 space-y-4">
 
-      {phase === 'sending' && <LoadingState verb="Sending" what="your ticket" />}
+  const missing = !title.trim() || !description.trim();
+  const sendLabel = attachments ? 'Continue in GitHub' : 'Submit public ticket';
+  const backToDraft = () => { setError(''); setPhase('draft'); };
+  const [openPiece, setOpenPiece] = useState<string | null>(null);
+  const toggle = (id: string) => (on: boolean) => setOpenPiece(on ? id : null);
 
-      {phase === 'handing-over' && <>
-        <LoadingState verb="Setting up" what="a working copy to try this in" />
-        <p className="text-xs text-fg-2 text-center">This can take a few minutes the first time. Your ticket is not sent — this is a separate attempt to fix it.</p>
+  // Two actions in a WIDE popup sit side by side, filled on the right; at phone width they
+  // stack, filled on top (guide "Buttons"; approved here as submit-ticket-1#ST-4).
+  const pair = (secondary: React.ReactNode, primary: React.ReactNode) => narrow
+    ? <div className="flex flex-col gap-2">{primary}{secondary}</div>
+    : <div data-parts-agree="ticket buttons" className="flex items-center justify-end gap-2">{secondary}{primary}</div>;
+  const wide = narrow ? 'w-full py-2.5' : '';
+
+  // ── One "include" choice ───────────────────────────────────────────────────
+  // WHY a plain hint under every title, and no (i) (Destin, submit-ticket-1#ST-1 "the checkbox
+  // ux is still odd", #ST-13 "should explain itself"; replaces signed R18). WHY a switch
+  // (submit-ticket-2#ST2-C1 "switches"): the guide's setting row — title and hint left, the
+  // app's switch at the right, vertically centred.
+  const tick = (o: { title: string; hint: string; label: string; checked: boolean; onChange: (v: boolean) => void }) =>
+    <SettingRow key={o.label} variant="item" title={o.title} description={o.hint}
+      control={<Toggle aria-label={o.label} checked={o.checked} onChange={o.onChange} />} />;
+
+  // WHY the files notice stays (R14): GitHub uploads a file the moment it is attached.
+  const filesNotice = <Callout>GitHub uploads a file as soon as you attach it — before you submit the issue — so check and crop it first. You attach files yourself in your browser; nothing is uploaded from here.</Callout>;
+
+  // ── Draft ────────────────────────────────────────────────────────────────
+  const ticketCard = <section>
+    <SectionLabel className="mb-2">Your ticket</SectionLabel>
+    <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+      <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={(id) => setKind(id === 'feature' ? 'feature' : 'bug')} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />
+      <div className="space-y-2">
+        <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
+        <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
+        <label htmlFor="report-description" className="block text-xs text-fg-2">Description</label>
+        <Textarea id="report-description" className="w-full h-28" value={description} onChange={e => setDescription(e.target.value)} placeholder={isBug ? 'What happened? What did you expect? What steps caused it?' : 'What would you like to do, and how would it help?'} />
+      </div>
+      {/* The public line and the reason the button is grey, at the card's foot (ST-1 round 1). */}
+      <p className="text-2xs text-fg-2">Tickets are public on GitHub, where anyone can read them.{missing && ' Add a title and a description to carry on.'}</p>
+    </div>
+  </section>;
+
+  const includeCard = <section>
+    <SectionLabel className="mb-2">Include with ticket</SectionLabel>
+    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+      {hasErrorDetails && tick({
+        title: 'The error you saw', label: 'Include error details', checked: includeContext, onChange: setIncludeContext,
+        hint: context?.error ? `Adds where it happened (${context.surface ?? 'this screen'}) and the error message.` : `Adds where it happened (${context?.surface}).`,
+      })}
+      {isBug && tick({
+        title: 'Recent logs', label: 'Include recent logs', checked: logs, onChange: chooseLogs,
+        hint: 'The app’s last 200 lines of activity. You can read them, and remove anything private, before sending.',
+      })}
+      {tick({
+        title: 'Screenshots or files', label: 'Finish with attachments in GitHub', checked: attachments, onChange: setAttachments,
+        hint: 'You finish the ticket in your browser and attach them there.',
+      })}
+      {attachments && filesNotice}
+    </div>
+  </section>;
+
+  // ── Review ───────────────────────────────────────────────────────────────
+  // The ticket as it will read (approved, submit-ticket-1#ST-2). The same card carries the
+  // outcome afterwards: a status pill beside the kind and one line at its foot (ST2-3) —
+  // the "middle" between round 1's bare text and round 1's separate result card.
+  const summaryCard = (status?: { tone: PillTone; text: string }, foot?: React.ReactNode) => <section>
+    <SectionLabel className="mb-2">Your ticket</SectionLabel>
+    <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+      <div data-centres-agree="ticket title" className="flex items-center gap-2 min-w-0 flex-wrap">
+        <span className="text-sm font-medium text-fg min-w-0 break-words">{title.trim() || 'No title yet'}</span>
+        <Pill tone="info">{isBug ? 'Bug' : 'Feature'}</Pill>
+        {status && <Pill tone={status.tone}>{status.text}</Pill>}
+      </div>
+      <p className="text-xs text-fg-2 whitespace-pre-wrap break-words">{description.trim() || 'No description yet.'}</p>
+      <div className="text-2xs text-fg-muted pt-1 space-y-1">{foot ?? <p>This ticket will be public on GitHub.</p>}</div>
+    </div>
+  </section>;
+
+  const logLines = logText ? logText.split('\n').filter(Boolean).length : 0;
+  // Folded rows, picked on submit-ticket-1#ST-C1 ("folded"). Each opens INSIDE its own box
+  // (the shared FoldRow, which opens inside its box since Destin's ST-3).
+  const sentWithIt = <section>
+    <SectionLabel className="mb-2">Sent with it</SectionLabel>
+    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+      {/* WHY always listed (submit-ticket-1#ST-Q1, "show"): every ticket carries the app
+          version and system, whatever is ticked, so the review says so. The main process
+          writes that line with the system's release number too (dev-tools.ts). */}
+      <SettingRow variant="item" title="App version and system" description={`${versionLine()} — always sent, so maintainers know what you’re running`} />
+      {errorOn && <FoldRow title="The error you saw" description={context?.surface ? `From ${context.surface}` : 'The error message'} open={openPiece === 'error'} onToggle={toggle('error')}>
+        <p className="text-xs text-fg-2 font-mono whitespace-pre-wrap break-all">{errorDetails}</p>
+      </FoldRow>}
+      {isBug && logs && <FoldRow title="Recent logs" description={logsBusy ? 'Reading recent logs…' : logLines ? `${logLines} lines — open to read or remove anything private` : 'No recent log lines were found.'} open={openPiece === 'logs'} onToggle={toggle('logs')}>
+        {/* WHY filled by logTail (code review C5): the box once collected nothing at all. */}
+        <Textarea id="report-logs" aria-label="Logs to review" className="w-full h-24" value={logText} onChange={e => setLogText(e.target.value)} placeholder={logsBusy ? 'Reading recent logs…' : 'No recent log lines were found.'} />
+      </FoldRow>}
+      {attachments && filesNotice}
+    </div>
+  </section>;
+
+  // AI help: still only on the review step, folded (R17). WHY its rows sit INSIDE the folded
+  // card (Destin, submit-ticket-1#ST-3: "an expandable card should always contain expanded
+  // content within itself, not open a new separate card below").
+  // WHY the plain words for the hand-over (ST-7, ST-11: "what does that even mean", "unclear"):
+  // "a working copy" meant nothing to him; it is YouCoded's code, downloaded to this computer.
+  const aiHelp = <FoldRow title="Optional AI help" open={aiInfo} onToggle={setAiInfo}>
+    <div className="space-y-2">
+      <p className="text-xs text-fg-2">Only this ticket and what you chose to include go to your assistant. Nothing is sent automatically; it uses your plan.</p>
+      {/* WHY a note when nothing rewrote it (design review F17): never a silent no-op. */}
+      {aiNote && <p className="text-xs text-fg-2">{aiNote}</p>}
+      <SettingRow variant="item" title="Improve the wording" description="Rewrites your title and description. You read it before sending."
+        control={<Button size="sm" variant="secondary" aria-label="Improve wording with the assistant" disabled={aiBusy} onClick={improve}>{aiBusy ? 'Rewriting…' : 'Rewrite'}</Button>} />
+      <SettingRow variant="item" title={isBug ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
+        description="Opens a new conversation that works on it, in your assistant’s own copy of YouCoded’s code. Uses a lot of your plan."
+        control={<Button size="sm" variant="secondary" aria-label={isBug ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'} disabled={!description.trim()} onClick={handOver}>Start</Button>} />
+    </div>
+  </FoldRow>;
+
+  // A failed action REPLACES the buttons it came from (approved, submit-ticket-1#ST-5/ST-6).
+  const failure = error && <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below"
+    actions={<>
+      <Button size="sm" variant="secondary" onClick={backToDraft}>Back to draft</Button>
+      <Button size="sm" onClick={send}>Try again</Button>
+    </>}>
+    {online
+      ? <>Your ticket wasn’t sent. {error} Your draft is still here.</>
+      : <>This computer isn’t connected to a network, so your ticket wasn’t sent. Your draft is still here.</>}
+  </Callout>;
+
+  const sendButtons = failure || pair(
+    <Button variant="secondary" className={wide} onClick={backToDraft}>Back to draft</Button>,
+    <Button className={wide} disabled={missing} onClick={send}>{sendLabel}</Button>,
+  );
+
+  // A wait sits where the buttons were, in the approved card (submit-ticket-1#ST-10).
+  const waiting = (what: React.ReactNode, hint?: string) => <div className={`${CARD_LEVEL_1} p-3 space-y-1`}>
+    {what}
+    {hint && <p className="text-xs text-fg-2">{hint}</p>}
+  </div>;
+  const openTicket = () => void window.claude.shell.openExternal(url);
+
+  // WHY the buttons on the popup's pinned bottom line (popup-cards-3#Q-1, Destin: "if the buttons
+  // at the bottom apply to an entire popup with multiple sections, they should remain at the
+  // bottom"): this popup has several labelled cards and its buttons act on the whole ticket, so they
+  // sit in the shared footer — always in view while the cards scroll — as Close session's and
+  // Update's do. They used to come after the last card and scroll away with it.
+  const footer = phase === 'draft'
+    // A lone main action is full width (R20; guide "One button").
+    ? <Button className="w-full py-2.5" disabled={missing} onClick={() => setPhase('review')}>Review ticket</Button>
+    : review ? sendButtons
+    // WHY a button and not the raw address (UX review U16).
+    : phase === 'sent' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} onClick={openTicket}>Open my ticket</Button>)
+    // WHY the way back in (UX review U1). "Open in browser": Destin's words (submit-ticket-2#ST2-6
+    // "Open in Browser"), in the app's sentence case (decisions "Sentence case everywhere").
+    : phase === 'opened' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} onClick={openTicket}>Open in browser</Button>)
+    // WHY a pair, with Submit (submit-ticket-2): every other outcome ends in the same two buttons
+    // at the right; and the ticket is still unsent here, so sending it is the obvious next step.
+    : phase === 'handed-over' ? pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
+      <Button className={wide} disabled={missing} onClick={send}>{sendLabel}</Button>)
+    : undefined;
+
+  return <>
+  <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket" footer={footer}>
+    <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
+
+      {phase === 'draft' && <>
+        {ticketCard}
+        {includeCard}
       </>}
 
-      {phase === 'handed-over' && <>
-        <p className="text-sm text-fg">Your assistant is on it, in a new session.</p>
-        <p className="text-xs text-fg-2">Nothing was sent to GitHub. If the fix works, you can propose it from that session; if it doesn’t, come back and submit the ticket instead.</p>
-        <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
+      {review && <>
+        {summaryCard()}
+        {sentWithIt}
+        {aiHelp}
       </>}
+
+      {/* WHY only a box under the label (Destin, submit-ticket-2#ST2-10: "bare sending your
+          ticket box under your ticket header, gets replaced with the submission summary when
+          done"): the ticket card and a second sending card read as two things at once. */}
+      {phase === 'sending' && <section>
+        <SectionLabel className="mb-2">Your ticket</SectionLabel>
+        {waiting(<LoadingState verb="Sending" what="your ticket" variant="inline" />)}
+      </section>}
 
       {phase === 'sent' && <>
-        <p className="text-sm text-fg">Your ticket is submitted.</p>
-        <p className="text-xs text-fg-2">Anyone can read it, and maintainers decide what happens next.</p>
-        {/* WHY a button and not the raw address (UX review U16): a bare
-            https://github.com/… line is something to squint at, not something to
-            press, and on Android a plain <a target=_blank> does nothing at all. */}
-        <Button className="w-full py-2.5" onClick={() => void window.claude.shell.openExternal(url)}>Open my ticket</Button>
-        <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Done</Button>
+        {summaryCard({ tone: 'ok', text: 'Submitted' },
+          <p>Submitted to GitHub, where anyone can read it. Maintainers decide what happens next.</p>)}
       </>}
 
       {phase === 'opened' && <>
-        <p className="text-sm text-fg">Finish your ticket in GitHub.</p>
-        {/* WHY: this is the approved attachment route — the ticket is not submitted
-            here, because GitHub uploads a file the moment it is attached. Saying so
-            is the difference between a hand-off and a silent failure. */}
-        <p className="text-xs text-fg-2">Your ticket is open in your browser with everything you wrote. Attach your screenshots or files there, then submit it.</p>
-        {/* WHY this line exists (audit E-07): the prefilled link has a length limit, and
-            the old code shortened the body to fit without telling anyone — evidence went
-            missing between here and GitHub with nothing said. */}
-        {truncated && <p className="text-xs text-fg-2">It was too long for a browser link, so part of the details was left out. Paste anything missing from your draft before you submit.</p>}
-        {/* WHY the link is here (UX review U1): the screen described something
-            happening somewhere the user cannot see, with nothing to press if it did
-            not. This is the way back in. */}
-        <Button variant="secondary" className="w-full py-2.5" onClick={() => void window.claude.shell.openExternal(url)}>Open it again</Button>
-        <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
+        {summaryCard({ tone: 'info', text: 'Finish in GitHub' }, <>
+          {/* WHY: the approved attachment route — nothing is submitted here (R13). */}
+          <p>It’s open in your browser with everything you wrote. Attach your screenshots or files there, then submit it.</p>
+          {/* WHY (audit E-07): the prefilled link has a length limit; say when it cut. */}
+          {truncated && <p>It was too long for a browser link, so part of the details was left out. Paste anything missing before you submit.</p>}
+        </>)}
       </>}
 
-      {(phase === 'draft' || phase === 'review') && <>
-        {/* WHY: the failure sits above the draft it belongs to, and the draft is
-            still here — R23. A separate failure screen would have to either carry
-            the draft or throw it away. */}
-        {error && <ErrorState
-          title="Your ticket wasn’t sent"
-          explainer={error}
-          onRetry={send}
-        />}
-        <p className="text-sm text-fg-2">Tickets are public on GitHub. Review details before sharing.</p>
-        {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={(id) => setKind(id === 'feature' ? 'feature' : 'bug')} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
-        {/* WHY: one noun for one object. The flow previously said ticket, report, bug report and
-            issue for the same thing across four controls, which reads as four different actions. */}
-        {review && <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Review your ticket</h3>}
-        <div className="space-y-2">
-          <label htmlFor="report-title" className="block text-xs text-fg-2">Title</label>
-          <TextInput id="report-title" className="w-full" value={title} onChange={e => setTitle(e.target.value)} placeholder="A short summary" />
-          <label htmlFor="report-description" className="block text-xs text-fg-2">Description</label>
-          <Textarea id="report-description" className="w-full h-28" value={description} onChange={e => setDescription(e.target.value)} placeholder={kind === 'bug' ? 'What happened? What did you expect? What steps caused it?' : 'What would you like to do, and how would it help?'} />
-        </div>
-        {/* WHY: separate choosing evidence from reviewing its content; don't stack a full
-            editor and explanatory paragraphs between every compact selection row. */}
-        {!review ? <section className="space-y-2">
-          <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Include with ticket</h3>
-          {kind === 'bug' && <>
-            <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
-            <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
-          </>}
-          {/* WHY the row says where it ends up (UX review U4): ticking it opened no
-              file picker, and quietly changed the send button from "Submit public
-              ticket" to "Continue in GitHub" — a tester could not tell what had
-              happened or why. Files cannot be attached here at all: GitHub uploads a
-              file the moment it is attached, so that step is theirs. */}
-          <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Ticking this finishes your ticket in your browser, where you attach the files yourself. They cannot be attached here: GitHub uploads a file the moment it is attached, so it has to happen where you can see it.</AnchorTip>} />
-        </section> : <section className="space-y-3">
-          {kind === 'bug' && includeContext && <div className="space-y-1">
-            <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Error details and version</h3>
-            {/* WHY the real version (R22): this was a hardcoded string, so the one
-                thing the ticket promised to carry accurately was made up. */}
-            <p className="text-xs text-fg-2 font-mono">{versionLine()}</p>
-            {/* The originating error, shown before anything is sent — never attached
-                to a ticket the user has not seen (R11). */}
-            {context?.error && <p className="text-xs text-fg-2 font-mono break-all">{context.error}</p>}
-          </div>}
-          {/* WHY: both evidence blocks read as one pattern — section label, one line of
-              explanation, then the content. A bare inline label made them look unrelated. */}
-          {kind === 'bug' && logs && <div className="space-y-1">
-            <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Recent logs</h3>
-            <p className="text-xs text-fg-2">Remove private details before sharing.</p>
-            {/* WHY this is filled by logTail (code review C5): ticking "Recent logs"
-                used to collect nothing at all, and the empty box explained itself with
-                "Sample text only — no logs collected" — a mockup caption on a shipped
-                screen, which R21 forbids, telling the user their choice had no effect. */}
-            <Textarea id="report-logs" aria-label="Logs to review" className="w-full h-24 mt-2" value={logText} onChange={e => setLogText(e.target.value)} placeholder={logsBusy ? 'Reading recent logs…' : 'No recent log lines were found.'} />
-          </div>}
-        </section>}
-        {attachments && <Callout>Review and crop files before attaching them. GitHub uploads a file as soon as you attach it — before you submit the issue. You’ll attach approved files yourself in the browser; nothing is uploaded here.</Callout>}
-        {review ? <>
-          <SettingRow title="Optional AI help" expanded={aiInfo} onClick={() => setAiInfo(!aiInfo)} />
-          {aiInfo && <div className="px-3 space-y-2">
-            <p className="text-sm text-fg-2">Only this draft and selected details go to your chosen assistant. Review them first. Nothing is sent automatically; provider usage may apply.</p>
-            {/* WHY this reports doing nothing: the assistant call falls back to the
-                user's OWN words when nothing is available to ask, which on a native
-                session is the normal case. Presenting that as a result would be a
-                button that silently does nothing (design review F17). */}
-            {aiNote && <p className="text-xs text-fg-2">{aiNote}</p>}
-            <Button variant="secondary" className="w-full py-2.5" disabled={aiBusy} onClick={improve}>
-              {aiBusy ? 'Rewriting…' : 'Improve wording with the assistant'}
-            </Button>
-            {/* WHY this lives INSIDE the disclosure (grader, 2026-09-10): carried over
-                from the screen this replaces, it was first put in the footer — and that
-                broke two signed rows on their own words. R2-12 is "keep AI help behind a
-                review-stage disclosure" and this is AI help; R4-23 is headlined "No
-                captions anywhere, and two stacked buttons" and it made four. Behind the
-                disclosure it is the same feature, contradicting neither. */}
-            <Button variant="secondary" className="w-full py-2.5" disabled={!description.trim()} onClick={handOver}>
-              {kind === 'bug' ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
-            </Button>
-            <p className="text-3xs text-fg-muted text-center">Uses a lot of your model allowance — not recommended on smaller plans.</p>
-          </div>}
-          {/* WHY: the app's dialogs stack full-width actions (see the legacy ContributePopup and
-              BugReportPopup) — primary on top, secondary under it. Chip-sized right-aligned
-              buttons were this mockup's own invention and read as a different app. */}
-          {/* WHY the submit button goes away while an error is showing: Retry inside
-              the error and "Submit public ticket" below it are the same action written
-              twice, which reads as two different things to try. The error owns the
-              retry; the footer keeps only the way back to editing. */}
-          <div className="flex flex-col gap-2">
-            {!error && <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>}
-            <Button variant="secondary" className="w-full py-2.5" onClick={() => { setError(''); setPhase('draft'); }}>Back to draft</Button>
-          </div>
-        </> : <>
-          {/* WHY the reason is on screen (UX review U13): the button was simply
-              inactive, the grey-on-grey cue was easy to miss, and no field was marked
-              as needed — so pressing it appeared to do nothing at all. A control the
-              user cannot use has to say what would make it usable. */}
-          {(!title.trim() || !description.trim()) && (
-            <p className="text-xs text-fg-2">Add a title and a description to carry on.</p>
-          )}
-          <Button className="w-full py-2.5" disabled={!title.trim() || !description.trim()} onClick={() => setPhase('review')}>Review ticket</Button>
-        </>}
+      {phase === 'handed-over' && <>
+        {summaryCard({ tone: 'neutral', text: 'Not sent' },
+          <p>Your assistant is working on a fix in a new conversation. Nothing was sent to GitHub — you can still send this ticket.</p>)}
       </>}
 
     </div>
-  </Dialog>;
+  </Dialog>
+  {/* WHY on top of the ticket, not in its place (shoot --check: Escape must close only the
+      top layer): Contribute opens over the ticket, so Escape, the ✕ or Back to ticket all
+      land back on the ticket, untouched. */}
+  <ContributionDesign open={open && contributing} onClose={() => setContributing(false)} screen="settings/development/bug-report"
+    handover={{ title: title.trim(), kind: isBug ? 'bug' : 'feature', initialInput: HANDOVER_PROMPT(kind, description, errorOn ? errorDetails : ''),
+      onStarted: () => { setContributing(false); setPhase('handed-over'); } }} />
+  </>;
 }
 
 // Same reason as SettingsPanel: a closed report form is never rebuilt by a parent re-render.

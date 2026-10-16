@@ -60,13 +60,21 @@ export default function GamePanel({ connection, chessConnection, incognito, onTo
     // Fills the framed-shell's drawer-pane slot (see ChatView). The pane's own
     // chrome — width, rounded corners, top/bottom chrome-height margins, and the
     // chrome-glass frame around it — comes from .drawer-pane in globals.css, so
-    // this root only sets the interior surface (bg-inset, matching the artifact
-    // drawer's aside) and fills its container. It no longer carries the old
+    // this root only sets the interior surface (bg-panel, the popups' surface — see
+    // below) and fills its container. It no longer carries the old
     // w-80 / border-l / bg-panel slide-out styling.
     // relative: positioning context for the resize handle below.
-    // game-panel: class hook only, for the 'float' chrome style's see-through
-    // pane (float-chrome.css); no other style reads it.
-    <div className="game-panel relative h-full flex flex-col overflow-hidden bg-inset">
+    // game-panel: class hook for the 'float' chrome style's see-through pane
+    // (float-chrome.css) and the wallpaper glass rule in globals.css.
+    //
+    // WHY bg-panel, not bg-inset (final-review#GM-1, Destin: "the cards no longer
+    // separate from the main background surface. in every other menu (settings, etc)
+    // we explicitly made it so card separate from the background"): the cards in here
+    // are the first-level card (`bg-inset/50`), which only reads as a lighter step on
+    // the popups' `panel` surface. On an `inset` pane it was the pane's own colour, so
+    // the friends card and the game tiles were bare outlines. The pane now wears the
+    // same surface as Settings.
+    <div className="game-panel relative h-full flex flex-col overflow-hidden bg-panel">
       <ScreenMark name="chat/games" />
       {/* w-1.5 is a 6px hit area hugging the pane's left edge; the visible
           affordance is the hover/drag accent tint. Theme tokens only — no new

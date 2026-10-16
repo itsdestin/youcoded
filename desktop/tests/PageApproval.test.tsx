@@ -9,6 +9,7 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { PageApproval } from '../src/renderer/components/pages/page-connections';
+import { FieldError } from '../src/renderer/components/ui';
 import type { PageApproveResult, PageSummary } from '../src/shared/pages-types';
 
 afterEach(() => { cleanup(); delete (window as { claude?: unknown }).claude; });
@@ -50,6 +51,20 @@ describe('the approval screen', () => {
     expect(document.querySelector('[data-device-extra]')).toBeNull();
   });
 
+  // WHY (final review; guide "Status and notices"): a short error under a field is the shared
+  // FieldError — grey words in the small red-tinted box — never a plain grey line of its own.
+  it('shows a bad device address as the shared field error under the address box', () => {
+    const { container } = render(<FieldError as="div" size="2xs">x</FieldError>);
+    const shared = (container.firstChild as HTMLElement).className;
+    cleanup();
+    render(<PageApproval page={page([{ id: 'ha', kind: 'device', service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full', needsKey: false, approved: false }])} onNotNow={() => {}} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.change(document.querySelector('[data-device-address-field] input') as HTMLInputElement, { target: { value: 'localhost:8123' } });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('That address is this computer, not a device in your home.');
+    expect(alert.className).toBe(shared);
+  });
+
   it('says so when allowing failed, and does not pretend the page opened', async () => {
     const approve = vi.fn(async () => ({ ok: false, message: 'This computer has no keychain, so the key could not be stored.' }) as PageApproveResult);
     withBridge(approve);
@@ -60,7 +75,7 @@ describe('the approval screen', () => {
     expect(screen.getByRole('button', { name: 'Allow and open' })).toBeEnabled();
 
     // Retry is a real second attempt, not a dismissal.
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(2));
   });
 
@@ -71,7 +86,7 @@ describe('the approval screen', () => {
     // The host swaps this screen for the page; until it does, the button must
     // not invite a second press.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Allowing…' })).toBeDisabled());
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

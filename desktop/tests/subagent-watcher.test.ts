@@ -479,6 +479,7 @@ describe('SubagentWatcher timer lifecycle', () => {
     await vi.waitFor(() => expect(emitted.length).toBe(1), { timeout: SETTLE_MS });
     await watcher.settleByParent('toolu_parent_once');
     watcher.kickScan(); // re-scans the directory
+    // settle (negative assertion): the settled agent must not be emitted again.
     await wait(100);
     expect(emitted.length).toBe(1);
     expect(watcher.hasActiveWatch('once')).toBe(false);

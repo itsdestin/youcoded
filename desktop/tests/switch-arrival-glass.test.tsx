@@ -41,7 +41,7 @@ describe('data-bubble-glass is stamped exactly when bubbles get a backdrop-filte
     expect(document.getElementById('theme-glass')?.textContent).toContain('.in-view .bg-inset');
   });
 
-  it('off with no bubble blur, with Reduce Visual Effects, and on a solid theme', () => {
+  it('off with no bubble blur, with Reduce visual effects, and on a solid theme', () => {
     applyThemeToDom({ ...minimalTheme, background: { ...glass, 'bubble-blur': 0 } } as any, false);
     expect(stamped()).toBe(false);
     applyThemeToDom({ ...minimalTheme, background: glass } as any, true);

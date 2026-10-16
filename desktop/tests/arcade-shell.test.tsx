@@ -14,7 +14,7 @@ const CHESS = gameById('chess')!;
 
 function picker(statuses: Record<string, any>, signedIn = true) {
   return render(
-    <ArcadePicker statuses={statuses} onPick={vi.fn()} signedIn={signedIn} onSignIn={vi.fn()} />,
+    <ArcadePicker statuses={statuses} onPick={vi.fn()} signedIn={signedIn} />,
   );
 }
 
@@ -57,20 +57,22 @@ describe('the picker states the deciding fact', () => {
 });
 
 describe('signed out, solo still plays', () => {
-  it('leaves solo tiles enabled and only gates the versus ones', () => {
+  it('leaves solo tiles enabled and greys the versus ones', () => {
     picker({ flappy: { bestScore: '31 pipes' }, chess: { friendsOnline: ['Jake'] } }, false);
     const flappy = screen.getByText('Flappy').closest('button')!;
     const chess = screen.getByText('Chess').closest('button')!;
     expect(flappy).not.toBeDisabled();
-    // Signed out is NOT disabled — the tile explains the gate when clicked.
-    // A dead tile teaches nothing (design guide §4.7).
-    expect(chess).not.toBeDisabled();
+    // Redesign backlog row 11 (Destin: "grey/disable unplayable games"): a
+    // versus game signed out is disabled — and still says why in words.
+    expect(chess).toBeDisabled();
     expect(screen.getAllByText('Sign in to play').length).toBeGreaterThan(0);
   });
 
-  it('says what an account actually buys, and does not gate the panel', () => {
+  it('does not gate the panel, and the old banner copy is gone', () => {
     picker({}, false);
-    expect(screen.getByText(/play without an account/i)).toBeInTheDocument();
+    // Row 11: "remove 'flappy and 2048 play without an account'" — the sign-in
+    // card is the friends panel above the grid now (FriendsPanel.tsx).
+    expect(screen.queryByText(/play without an account/i)).toBeNull();
     // The four tiles are still on screen — the old panel replaced everything
     // with a sign-in wall, which is the friction §4.2 exists to remove.
     expect(screen.getByText('Flappy')).toBeInTheDocument();
@@ -134,19 +136,40 @@ describe('the leaderboard', () => {
 
   it('labels the column with the game\'s own scoring word', () => {
     // "Score" is wrong for Flappy and right for 2048 — the registry decides.
-    // The eyebrow uppercases in CSS (G-7), so the DOM text is the real label.
+    // WHY no more `.toContain('uppercase')` (labels batch, guide: no spaced
+    // capitals — decisions H-3/L-1…L-4): G-7's eyebrow is now the shared
+    // SectionLabel primitive, normal case, no letter-spacing. The arcade
+    // lobby/leaderboard menus are NOT exempt from the guide (only game
+    // boards are), so this label moved like every other real site.
     render(<Leaderboard game={FLAPPY} rows={rows} />);
     const eyebrow = screen.getByText(FLAPPY.scoring!.label);
     expect(eyebrow).toBeInTheDocument();
-    expect(eyebrow.className).toContain('uppercase');
+    expect(eyebrow.className).not.toContain('uppercase');
   });
 });
 
 describe('picking a game', () => {
   it('hands back the definition, not a string', () => {
     const onPick = vi.fn();
-    render(<ArcadePicker statuses={{}} onPick={onPick} signedIn onSignIn={vi.fn()} />);
+    render(<ArcadePicker statuses={{}} onPick={onPick} signedIn />);
     fireEvent.click(screen.getByText('Chess').closest('button')!);
     expect(onPick).toHaveBeenCalledWith(CHESS);
+  });
+});
+
+describe('offline, incognito and an unreachable server are three different states', () => {
+  it('ranks them: no network first, then your own choice, then a server failure', async () => {
+    const { socialState } = await import('../src/renderer/components/game/friends-data');
+    expect(socialState({ networkOnline: false, incognito: true, connected: false, partyError: 'x' })).toBe('offline');
+    expect(socialState({ networkOnline: true, incognito: true, connected: false, partyError: null })).toBe('incognito');
+    expect(socialState({ networkOnline: true, incognito: false, connected: false, partyError: 'lost' })).toBe('server');
+    expect(socialState({ networkOnline: true, incognito: false, connected: false, partyError: null })).toBe('connecting');
+    expect(socialState({ networkOnline: true, incognito: false, connected: true, partyError: null })).toBe('online');
+  });
+
+  it('an incognito note leaves the versus tile playable; a failure greys it', () => {
+    picker({ chess: { note: "You're incognito", friendsOnline: [] }, 'connect-four': { unavailable: 'No internet connection' } });
+    expect(screen.getByText("You're incognito").closest('button')!).not.toBeDisabled();
+    expect(screen.getByText('No internet connection').closest('button')!).toBeDisabled();
   });
 });

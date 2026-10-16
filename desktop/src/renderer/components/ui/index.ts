@@ -16,6 +16,9 @@ export type { ButtonProps, ButtonVariant, ButtonSize } from './Button';
 export { Badge } from './Badge';
 export type { BadgeProps } from './Badge';
 
+// The fact chip (2026-10-05): one recipe for every chip in a row of facts — Chip.tsx says why.
+export { Chip, CHIP } from './Chip';
+
 export { CloseButton } from './CloseButton';
 export type { CloseButtonProps } from './CloseButton';
 
@@ -24,6 +27,9 @@ export type { ToggleProps, ToggleTone } from './Toggle';
 
 export { FIELD, FIELD_SURFACE, FIELD_TEXT, FIELD_SIZE, fieldClasses } from './field';
 export type { FieldSize } from './field';
+
+// Card-levels trial (2026-09-27) — see cardLevels.ts for the WHY.
+export { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
 
 export { InputGroup } from './InputGroup';
 export type { InputGroupProps, InputGroupFieldProps } from './InputGroup';
@@ -45,7 +51,7 @@ export type { CheckboxProps } from './Checkbox';
 export { Radio, RadioGroup } from './Radio';
 export type { RadioProps, RadioGroupProps } from './Radio';
 
-export { LoadingState, EmptyState, ErrorState, FieldError } from './states';
+export { LoadingState, EmptyState, ErrorState, ScreenError, FieldError } from './states';
 export type { LoadingStateProps, EmptyStateProps, ErrorStateProps, FieldErrorProps, StateVariant } from './states';
 
 export { AnchorTip } from './AnchorTip';
@@ -74,11 +80,28 @@ export type { FilterMenuChipProps } from './FilterMenuChip';
 export { Dialog, DIALOG_WIDTHS } from './Dialog';
 export type { DialogProps, DialogSize } from './Dialog';
 
-export { SettingRow, SETTING_ROW_BASE, RowStatus } from './SettingRow';
+export { SettingRow, RowStatus } from './SettingRow';
 export type { SettingRowProps, SettingRowVariant } from './SettingRow';
+
+export { SectionLabel } from './SectionLabel';
+
+export { FieldRow } from './FieldRow';
 
 export { Callout } from './Callout';
 export type { CalloutProps, CalloutTone } from './Callout';
+
+// Fix batch 2 (2026-09-26): the three Settings pieces Destin ruled on the
+// settings-pieces deck (fold-out P-1, consent P-6) and the guide's tinted pill.
+export { FoldRow } from './FoldRow';
+export { ConsentRow } from './ConsentRow';
+export { OneJobCard, OneJobText, OneJobLabel, OneJobHint } from './OneJobCard';
+export { Pill, PillButton } from './Pill';
+
+// The small anchored menu (games-social friction, proposal 8) — Menu.tsx says why.
+export { Menu, MenuItem, MenuRadioItem, MenuNote } from './Menu';
+
+// The one slider (submit-ticket-5#ST5-5) — Slider.tsx says why.
+export { Slider } from './Slider';
 
 export { ZoomPill } from './ZoomPill';
 export type { ZoomPillProps } from './ZoomPill';

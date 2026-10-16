@@ -178,7 +178,7 @@ describe('EditorFrame hosting the editor', () => {
     expect(r.getByText(/Opening/)).toBeTruthy();
     r.fromEditor({ type: 'yc:office-failed' });
     expect(r.getByText("Office couldn't open this file.")).toBeTruthy();
-    expect(r.getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(r.getByRole('button', { name: /try again/i })).toBeTruthy();
     expect(r.queryByText(/Opening/)).toBeNull();
   });
 

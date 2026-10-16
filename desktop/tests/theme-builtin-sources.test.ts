@@ -49,8 +49,8 @@ function loadBuiltins() {
 describe('built-in theme sources agree', () => {
   const builtins = loadBuiltins();
 
-  it('finds the four built-in themes', () => {
-    expect(builtins.map((t) => t.slug).sort()).toEqual(['creme', 'dark', 'light', 'midnight']);
+  it('finds the six built-in themes', () => {
+    expect(builtins.map((t) => t.slug).sort()).toEqual(['creme', 'dark', 'light', 'midnight', 'youcoded', 'youcoded-night']);
   });
 
   for (const theme of loadBuiltins()) {

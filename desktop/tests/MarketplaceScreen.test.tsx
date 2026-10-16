@@ -43,6 +43,10 @@ import { installFiringIntersectionObserver } from './helpers/firing-intersection
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 import type { SkillEntry } from '../src/shared/types';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 
 // WHY: MarketplaceScreen branches its grid layout via MarketplaceGrid's
 // useNarrowViewport() call, and jsdom has no matchMedia — .claude/rules/
@@ -128,7 +132,7 @@ function Tree() {
       <SkillProvider>
         <MarketplaceProvider>
           <MarketplaceStatsProvider>
-            <MarketplaceScreen onExit={() => {}} />
+            <ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><MarketplaceScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} /></ArtifactProvider>
           </MarketplaceStatsProvider>
         </MarketplaceProvider>
       </SkillProvider>

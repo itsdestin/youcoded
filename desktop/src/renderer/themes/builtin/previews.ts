@@ -1,4 +1,4 @@
-// Preview images for the four built-in themes — the SAME kind of picture the Marketplace
+// Preview images for the built-in themes — the SAME kind of picture the Marketplace
 // and Library cards show for community themes: since 2026-09-24 a screenshot of the real
 // app in that theme (youcoded-dev scripts/ui-review/theme-previews.py, 800×500; before
 // that, a mock page from wecoded-themes/scripts/generate-previews.js).
@@ -10,9 +10,11 @@ import midnight from './previews/midnight.png';
 import dark from './previews/dark.png';
 import light from './previews/light.png';
 import creme from './previews/creme.png';
+import youcoded from './previews/youcoded.png';
+import youcodedNight from './previews/youcoded-night.png';
 import type { LoadedTheme } from '../theme-types';
 
-const BUILTIN_PREVIEWS: Record<string, string> = { midnight, dark, light, creme };
+const BUILTIN_PREVIEWS: Record<string, string> = { midnight, dark, light, creme, youcoded, 'youcoded-night': youcodedNight };
 
 /** URL of a theme's preview picture, or null when the theme cannot have one. */
 export function themePreviewSrc(theme: Pick<LoadedTheme, 'slug' | 'source'>): string | null {

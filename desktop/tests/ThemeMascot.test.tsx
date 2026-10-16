@@ -35,7 +35,7 @@ describe('default mascot rim by size', () => {
 
 // A theme's mascot picture is a file on the computer, addressed as theme-asset://,
 // which a browser connected over remote access cannot load (it showed a broken-image
-// box on "No Active Session"). It happened only "sometimes" because the built-in
+// box on "No active session"). It happened only "sometimes" because the built-in
 // themes draw their own mascot and need no file.
 describe('a theme mascot picture that cannot be reached', () => {
   beforeEach(() => {

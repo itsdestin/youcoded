@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useLayoutEffect, useState } from 'react';
 
 // Phase 3 overlay primitives. Wrap .layer-scrim and .layer-surface from
 // globals.css so components get consistent scrim color, blur, rounding,
@@ -39,20 +39,57 @@ export const POPOVER_Z = 9001;
 // very top because hover hints are pointer-events-none and close on leave.
 export const TOOLTIP_Z = 10000;
 
+// ── Stacking: a popup opened over another popup ──────────────────────────────
+// WHY (final-review#CT-8, Destin: "these popups are stacking with no blur, which looks a bit
+// cluttered. all other popups blur what's behind them"): two popups on the SAME layer used the
+// same two numbers, so the first popup's panel (CONTENT_Z, 61) sat ABOVE the second popup's scrim
+// (SCRIM_Z, 60) — the second popup's blur and dim covered the app but not the popup it came from.
+// Every scrim now takes a depth: 0 for the first one open, then one more for each scrim opened
+// while others are up, and lifts its scrim (and the Dialog its panel) 2 per depth. Capped at 4
+// so a depth never reaches the next layer's numbers (L2's 61 + 8 = 69 < L3's scrim at 70).
+const MAX_STACK_DEPTH = 4;
+const openDepths = new Set<number>();
+
+/** This overlay's depth among the scrims open now (0 = nothing under it). */
+export function useOverlayDepth(active: boolean): number {
+  const [depth, setDepth] = useState(0);
+  // Layout effect, so the lifted numbers land before the first paint (no flash under the
+  // popup beneath). Takes the first depth above every one in use; gives it back on close.
+  useLayoutEffect(() => {
+    if (!active) return;
+    let d = 0;
+    for (const used of openDepths) d = Math.max(d, used + 1);
+    d = Math.min(d, MAX_STACK_DEPTH);
+    openDepths.add(d);
+    setDepth(d);
+    return () => { openDepths.delete(d); };
+  }, [active]);
+  return depth;
+}
+
+/** The z-index lift for an overlay `depth` popups deep. */
+export const stackLift = (depth: number) => depth * 2;
+
 type ScrimProps = {
   layer: OverlayLayer;
+  /** The depth a caller already took with useOverlayDepth (Dialog does, to lift its panel by
+   *  the same amount). Without it the scrim takes its own. */
+  depth?: number;
   onClick?: (e: React.MouseEvent) => void;
   className?: string;
   style?: React.CSSProperties;
   children?: React.ReactNode;
 };
 
-export function Scrim({ layer, onClick, className = '', style, children }: ScrimProps) {
+export function Scrim({ layer, depth, onClick, className = '', style, children }: ScrimProps) {
+  // A scrim with no depth from its caller registers its own, so a Dialog opened over it counts it.
+  const own = useOverlayDepth(depth === undefined);
+  const d = depth ?? own;
   return (
     <div
       className={`layer-scrim ${className}`.trim()}
       data-layer={layer}
-      style={{ zIndex: SCRIM_Z[layer], ...style }}
+      style={{ zIndex: SCRIM_Z[layer] + stackLift(d), ...style }}
       onClick={onClick}
     >
       {children}
@@ -74,6 +111,9 @@ type OverlayPanelProps = {
   'aria-modal'?: boolean;
   'aria-labelledby'?: string;
   'aria-label'?: string;
+  /** The Toast's live region ("polite"). Declared so the type says what reaches the div —
+   *  tests/aria-props.test.ts flags an undeclared aria-* prop on a component. */
+  'aria-live'?: 'off' | 'polite' | 'assertive';
 };
 
 // Single-element .layer-surface. An earlier split added an inner

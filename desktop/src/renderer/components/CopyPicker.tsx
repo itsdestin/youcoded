@@ -18,7 +18,9 @@ export default function CopyPicker({ options, onCopy, onDismiss }: Props) {
     <div className="flex justify-start px-4 py-1">
       <div className="max-w-[85%] w-full bg-inset border border-edge-dim rounded-2xl rounded-bl-sm px-4 py-3">
         <div className="flex items-center justify-between mb-2">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+          {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no
+              spaced capitals). */}
+          <div className="text-xs font-medium text-fg-muted">
             Copy to clipboard
           </div>
           {/* Was a hand-rolled glyph: it had an aria-label but no focus ring

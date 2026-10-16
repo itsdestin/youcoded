@@ -52,9 +52,14 @@ describe('LocalModelRow', () => {
   beforeEach(() => { setupModelsMock(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('an unfinished row wears the interrupted banner, shows real progress, and resumes by model id', async () => {
+  it('an unfinished row shows an interrupted notice with Resume and Delete inside it, real progress, and resumes by model id', async () => {
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
-    expect(screen.getByText('Download interrupted')).toBeTruthy();
+    // The shared notice box, not a coloured strip: its options sit INSIDE it
+    // (decisions.md "Problem on a list item").
+    const notice = screen.getByText('Download interrupted').closest('.rounded-lg.border') as HTMLElement;
+    expect(notice.className).toContain('bg-amber-500/10');
+    expect(notice.contains(screen.getByText('Resume'))).toBe(true);
+    expect(notice.contains(screen.getByText('Delete'))).toBe(true);
     expect(screen.getByText('66% — 74.2 of 113.0 GB')).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByText('Resume')); });
     expect(window.claude.models.resume).toHaveBeenCalledWith('Half-UD-Q4_K_XL-00001-of-00004');
@@ -144,8 +149,8 @@ describe('LocalModelRow', () => {
 
   it('a live download shows a progress bar and Pause in place of Resume and Delete', () => {
     render(<LocalModelRow model={unfinished} progress={liveOf('downloading')} onRefresh={async () => {}} />);
-    expect(screen.getByText('Downloading')).toBeTruthy();          // the band carries the state word
-    expect(screen.getByText('70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
+    // The progress line carries the state word (the coloured band is gone).
+    expect(screen.getByText('Downloading · 70% — 79.2 of 113.0 GB · part 3 of 4')).toBeTruthy();
     expect(screen.getByLabelText('Download progress')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
     // WHY Delete is absent while bytes move: two stop-shaped buttons differing
@@ -157,14 +162,15 @@ describe('LocalModelRow', () => {
 
   it('an untraceable row offers no Resume, shows no percentage, and says what to do', () => {
     render(<LocalModelRow model={untraceable} onRefresh={async () => {}} />);
-    expect(screen.getByText('Damaged')).toBeTruthy();
     expect(screen.queryByText('Resume')).toBeNull();
     expect(screen.queryByText(/%/)).toBeNull();      // no total on disk = no honest percentage
     expect(screen.getByText('74.2 GB downloaded')).toBeTruthy();
-    // The way out lives behind the (i) rather than as a permanent paragraph
-    // under the least useful row — the trigger must still be reachable.
-    expect(screen.getByLabelText('Why this download is damaged')).toBeTruthy();
-    expect(screen.getByText('Delete')).toBeTruthy();
+    // A danger notice inside the card says what to do, in plain grey text, with
+    // Delete inside it — no red strip, no explanation hidden behind an (i).
+    const notice = screen.getByText('Damaged download').closest('.rounded-lg.border') as HTMLElement;
+    expect(notice.className).toContain('bg-destructive/10');
+    expect(notice.textContent).toMatch(/Find the model in search and download\s+it again/);
+    expect(notice.contains(screen.getByText('Delete'))).toBe(true);
   });
 
   it('the delete confirmation names the real number of bytes at stake', async () => {
@@ -324,7 +330,9 @@ async function openSettings(settings: StoredModelSettings, later?: StoredModelSe
   return () => { landed = true; };
 }
 
-const LOAD_ERROR_TITLE = 'This model failed to load last time';
+// The opening words of the load-error sentence (no longer a separate red title — 2026-10-05,
+// plain error boxes app-wide); the engine's own words follow in their own span.
+const LOAD_ERROR_TITLE = /This model failed to load last time/;
 
 describe('fields main computes', () => {
   beforeAll(() => { shippedPollMs = setModelSettingsPollMs(50); });
@@ -404,7 +412,7 @@ describe('fields main computes', () => {
       await openSettings({ ...SETTINGS, lastLoadError: 'error: invalid argument: --tempp' });
       const body = screen.getByTestId('model-settings');
       const first = body.firstElementChild as HTMLElement;
-      expect(first.textContent).toContain(LOAD_ERROR_TITLE);
+      expect(first.textContent).toMatch(LOAD_ERROR_TITLE);
     });
 
     it('R26: opens Advanced when the model failed to load, and leaves it shut otherwise', async () => {
@@ -457,6 +465,7 @@ describe('fields main computes', () => {
       await openSettings({ ...SETTINGS, contextLength: 8192, pendingApply: true });
       const box = screen.getByLabelText('Context length for this model') as HTMLInputElement;
       fireEvent.change(box, { target: { value: '4096' } });
+      // settle (negative assertion): a poll tick passes and must not overwrite the draft.
       await new Promise((r) => setTimeout(r, APOLL));
       expect((screen.getByLabelText('Context length for this model') as HTMLInputElement).value).toBe('4096');
     });
@@ -499,13 +508,20 @@ describe('fields main computes', () => {
       // stayed on the failure. Now the next read succeeds two seconds later and
       // draws the whole working dialog — with a stale "could not read" line under
       // it for as long as it is open.
+      // WHY the gate: the poll runs every 50 ms here, so on a busy machine the
+      // second (working) read could land and wipe the line before waitFor's
+      // first look — the test then failed on a dialog that behaved correctly.
+      // Later reads wait until the test has SEEN the failure.
       let calls = 0;
+      let seen!: () => void;
+      const sawFailure = new Promise<void>((r) => { seen = r; });
       (globalThis as any).window = (globalThis as any).window ?? {};
       (globalThis as any).window.claude = {
         models: {
           settings: vi.fn(async () => {
             calls += 1;
             if (calls === 1) throw new Error('Could not read this model’s settings.');
+            await sawFailure;
             return SETTINGS;
           }),
           setSettings: vi.fn().mockResolvedValue(SETTINGS),
@@ -517,6 +533,7 @@ describe('fields main computes', () => {
       render(<LocalModelRow model={COMPLETE} onRefresh={async () => {}} />);
       await act(async () => { fireEvent.click(screen.getByLabelText(/^Settings for /)); });
       await waitFor(() => expect(screen.getByText('Could not read this model’s settings.')).toBeTruthy());
+      seen();
       await waitFor(
         () => expect(screen.queryByText('Could not read this model’s settings.')).toBeNull(),
         POLLED,
@@ -556,7 +573,8 @@ describe('fields main computes', () => {
       await openDialog();
       const before = models.settings.mock.calls.length;
       await act(async () => { fireEvent.click(screen.getByLabelText('Keep loaded')); });
-      await new Promise((r) => setTimeout(r, APOLL));     // a poll tick passes
+      // settle (negative assertion): a poll tick passes with no re-read while the save is in the air.
+      await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(before);
       // …and once the save lands, polling resumes.
       await act(async () => { saves[0].resolve({ ...SETTINGS, keepLoaded: true }); await Promise.resolve(); });
@@ -644,6 +662,7 @@ describe('fields main computes', () => {
       await act(async () => { fireEvent.change(box, { target: { value: '8192' } }); fireEvent.blur(box); });
       expect(saves).toHaveLength(2);
       await act(async () => { saves[0].resolve({ ...SETTINGS, keepLoaded: true }); await Promise.resolve(); });
+      // settle (negative assertion): the second save is still in the air, so no poll may run.
       await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(before);
     });
@@ -656,6 +675,7 @@ describe('fields main computes', () => {
       const after = models.settings.mock.calls.length;
       // A late answer to a closed dialog must not try to draw into it.
       await act(async () => { reads[0].resolve({ ...SETTINGS, lastLoadError: 'too late' }); await Promise.resolve(); });
+      // settle (negative assertion): a closed dialog polls no more.
       await new Promise((r) => setTimeout(r, APOLL));
       expect(models.settings.mock.calls.length).toBe(after);
       expect(screen.queryByText('too late')).toBeNull();

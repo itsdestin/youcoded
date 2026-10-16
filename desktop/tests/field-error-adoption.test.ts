@@ -17,8 +17,13 @@ import { RENDERER, readSource } from './helpers/guard-scope';
 // file rather than shared, since the ast-grep rule is now the primary guard
 // and this is a narrow bookkeeping check on exactly two named files.
 const EXEMPT: Record<string, { count: number; why: string }> = {
-  'GitReviewView.tsx': { count: 1, why: 'destructive text button' },
-  'UpdateButton.tsx': { count: 1, why: 'role="status" by design' },
+  // Both dropped to 0 (guide batch, 2026-09-29): GitReviewView.tsx's "Revert
+  // changes…" moved to <Button variant="danger-outline">, and UpdateButton.tsx's
+  // update-check error moved to <FieldError>. Kept at 0 rather than removed so
+  // a future hand-rolled line in either file is still caught by this check —
+  // see the file-level comment on the ast-grep rule's wholesale ignores:.
+  'GitReviewView.tsx': { count: 0, why: 'destructive text button — moved to Button variant="danger-outline" 2026-09-29' },
+  'UpdateButton.tsx': { count: 0, why: 'role="status" by design — moved to FieldError 2026-09-29' },
 };
 
 function handRolledCount(src: string): number {

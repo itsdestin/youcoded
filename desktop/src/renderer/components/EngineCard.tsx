@@ -16,7 +16,7 @@
 // the two speed switches, the context length, the optional engine builds and
 // the folder.
 import { useEffect, useState } from 'react';
-import { AnchorTip, Button, Callout, ErrorState, FieldError, SettingRow, TextInput, Toggle } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, FoldRow, Pill, SettingRow, TextInput, Toggle } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../shared/engine-types';
@@ -93,7 +93,11 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   const [status, setStatus] = useState<EngineStatusView | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The failure AND how to try that same thing again. WHY (small-fixes-1): the message used to be
+  // a red box with nothing to press — the comment beside it said the button above was the retry,
+  // but the guide's rule is that a failed action's notice carries its own Try again
+  // (error-message-standards "Every error state offers an action").
+  const [error, setError] = useState<{ message: string; retry: () => void } | null>(null);
 
   useEffect(() => {
     // Fetch once, then keep live via the two push subscriptions. `alive` guards
@@ -136,7 +140,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   const run = async (fn: () => Promise<any>) => {
     setBusy(true); setError(null);
     try { setStatus(await fn()); }
-    catch (e: any) { setError(plainMessage(e)); }
+    catch (e: any) { setError({ message: plainMessage(e), retry: () => void run(fn) }); }
     finally { setBusy(false); setProgress(null); }
   };
 
@@ -188,7 +192,15 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       if (next) {
         setPrereqs(null);
         try { setPrereqs(await window.claude.engine.prereqs(opt.backend)); }
-        catch (e: any) { setError(plainMessage(e)); }
+        catch (e: any) {
+          // Try again re-reads what is missing; the set-up box is already open.
+          const retry = async () => {
+            setError(null);
+            try { setPrereqs(await window.claude.engine.prereqs(opt.backend)); }
+            catch (e2: any) { setError({ message: plainMessage(e2), retry: () => void retry() }); }
+          };
+          setError({ message: plainMessage(e), retry: () => void retry() });
+        }
       }
       return;
     }
@@ -202,7 +214,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       const p = await window.claude.engine.prereqs(backend);
       setPrereqs(p);
       if (p.satisfied) { setSetupOpen(false); await run(() => window.claude.models.setBackend(backend)); }
-    } catch (e: any) { setError(plainMessage(e)); }
+    } catch (e: any) { setError({ message: plainMessage(e), retry: () => void recheck(backend) }); }
   };
 
   const copyCommand = async (cmd: string) => {
@@ -256,9 +268,14 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
     facts.push(`Engine ${status.installedVersion}`, BACKEND_WORDS[status.backend ?? ''] ?? status.backend ?? '');
     if (status.state === 'stopped') facts.push('starts on first message');
   }
-  const factLine = status.state === 'error'
+  // WHY the error is no longer the fact line (fix batch 2, 2026-09-26 —
+  // decisions.md "Errors and warnings in a setting", settings-pieces#P-2): a
+  // crashed engine is a problem ON this card, so it is the shared danger box
+  // inside the card (below) with its fix — Restart engine — inside that box.
+  const engineProblem = status.state === 'error'
     ? (status.errorMessage ?? 'Stopped after repeated crashes')
-    : facts.filter(Boolean).join(' · ');
+    : null;
+  const factLine = engineProblem ? '' : facts.filter(Boolean).join(' · ');
 
   const options = (status.backendOptions ?? []).filter((o) => o.backend !== status.backend);
   // Two shelves, not one list. A recommended build (CUDA) keeps its place in the
@@ -348,7 +365,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                 <p className="text-fg-muted">
                   Run this in a terminal{prereqs.distro ? ` (${prereqs.distro})` : ''}. It will ask for your password.
                 </p>
-                <div className="flex items-start gap-1.5 rounded-md bg-well px-2.5 py-2">
+                <div className={`${CARD_LEVEL_2} flex items-start gap-1.5 px-2.5 py-2`}>
                   <pre className="flex-1 min-w-0 text-3xs font-mono whitespace-pre-wrap break-words select-all">{prereqs.command}</pre>
                   <Button size="sm" variant="ghost" onClick={() => void copyCommand(prereqs.command!)} className="shrink-0 -my-1">
                     {copied ? 'Copied' : 'Copy'}
@@ -400,16 +417,21 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   };
 
   return (
-    // Change 25: the in-panel row surface — bg-inset/50, borderless. Was
-    // `border border-edge-dim bg-well`. Same idiom as ProvidersSection's rows
-    // and SettingsRow, which is what the header comment above always intended.
-    <div className="mt-2 rounded-lg bg-inset/50 px-3 py-2.5">
+    // Card-levels sweep (2026-09-27): LEVEL-1, same as "Models"/"Other local apps".
+    <div className={`${CARD_LEVEL_1} mt-2 px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs text-fg font-medium">
-            Local engine
-            <span className="ml-2 text-3xs font-normal text-fg-muted">{stateWord}</span>
-          </p>
+          {/* WHY a flex row (small-fixes-1): the pill sat INSIDE the title's line of text, so it
+              rode the words' baseline and came out 1.4px low at 1.5x (shoot's "centres agree",
+              2026-10-05). The cause was the inline placement, not the shared pill: the detail
+              pages' name + status row (DetailPage.tsx) centres the two as flex items, and this
+              copies it — and is now checked by the same mark. */}
+          <div className="flex items-center gap-2" data-centres-agree="engine name and status">
+            <span className="text-xs text-fg font-medium">Local engine</span>
+            {/* WHY a pill (status pills trial, 2026-09-29): a live state — the
+                word stays, green tint while it runs, grey otherwise. */}
+            <Pill tone={status.state === 'running' ? 'ok' : 'neutral'}>{stateWord}</Pill>
+          </div>
           {factLine && <p className="text-3xs text-fg-muted" data-testid="engine-fact-line">{factLine}</p>}
         </div>
         {/* Primary row action via the shared primitive — drops the hand-rolled
@@ -422,16 +444,6 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
             onClick={() => run(() => window.claude.engine.install())}
           >
             {busy ? 'Installing…' : 'Install'}
-          </Button>
-        )}
-        {status.state === 'error' && (
-          <Button
-            size="sm"
-            className="shrink-0"
-            disabled={busy}
-            onClick={() => run(() => window.claude.engine.restart())}
-          >
-            Restart engine
           </Button>
         )}
         {/* engine.install() always fetches the PINNED build and verify-boots it
@@ -448,6 +460,19 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
           </Button>
         )}
       </div>
+      {engineProblem && (
+        <Callout
+          tone="danger"
+          className="mt-2"
+          actions={(
+            <Button size="sm" disabled={busy} onClick={() => run(() => window.claude.engine.restart())}>
+              Restart engine
+            </Button>
+          )}
+        >
+          {engineProblem}
+        </Callout>
+      )}
       {busy && progress?.kind === 'download' && (
         <p className="mt-2 text-3xs text-fg-dim">
           Downloading… {mb(progress.receivedBytes)}{progress.totalBytes ? ` of ${mb(progress.totalBytes)}` : ''}
@@ -456,7 +481,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
       {busy && (progress?.kind === 'verify' || progress?.kind === 'unpack') && (
         <p className="mt-2 text-3xs text-fg-dim">{progress.kind === 'verify' ? 'Verifying download…' : 'Unpacking…'}</p>
       )}
-      {error && <FieldError as="p" className="mt-2">{error}</FieldError>}
+      {/* The shared error box with Try again for the action that failed (small-fixes-1).
+          `inline`: a notice about this card, inside it (guide "Status and notices"). */}
+      {error && <ErrorState mode="recoverable" variant="inline" className="mt-2" message={error.message} onRetry={error.retry} />}
       {/* Say WHY the button is there. "A newer engine is available" alone tells a
           non-developer nothing about whether they need it. */}
       {updateAvailable && !busy && (
@@ -523,16 +550,14 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
 
           {/* Advanced (Q-4 pick a): the one expandable-row shape — SettingRow with
               its chevron turned down while open. */}
-          <SettingRow
-            variant="item"
+          {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+          <FoldRow
             title="Advanced"
             description={advancedOpen ? undefined : 'Speed settings, context length, where models are stored'}
-            onClick={() => setAdvancedOpen((o) => !o)}
-            expanded={advancedOpen}
-          />
-
-          {advancedOpen && (
-            <div className="space-y-1.5 pl-3" data-testid="engine-advanced">
+            open={advancedOpen}
+            onToggle={setAdvancedOpen}
+          >
+            <div className="space-y-1.5" data-testid="engine-advanced">
               <ScreenMark name="settings/assistant/local/engine-advanced" />
               {/* Both default ON — the best defaults ship; the switch is for ruling a
                   feature out when a model misbehaves (Destin, Q-4 note). Short hints;
@@ -638,7 +663,16 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                   go: the setting was saved and the call already answered "yes"
                   long before applying it went wrong, so without this line the
                   change silently never lands. */}
-              {status.configApplyError && <FieldError as="p">{status.configApplyError}</FieldError>}
+              {/* WHY Callout (fix batch 1 addendum, 2026-09-24): same reasoning
+                  as the card-level error above. */}
+              {/* WHY Report bug (small-fixes-1): this box had nothing to press. The engine's own
+                  words say what failed, but nothing here can re-apply a saved setting (the next
+                  engine start reads it), so the honest action is reporting it — never a guessed
+                  fix (error-message-standards). */}
+              {status.configApplyError && (
+                <ErrorState mode="recoverable" variant="inline" message={status.configApplyError}
+                  onReportBug={() => setReportContext({ surface: 'Local engine settings' })} />
+              )}
 
               {/* The optional engine builds (ROCm). Deliberately down HERE, inside
                   a section that is shut by default, rather than in the card body
@@ -653,7 +687,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                 value={`${status.installedVersion ?? '—'} · ${BACKEND_WORDS[status.backend ?? ''] ?? status.backend ?? ''}`}
               />
             </div>
-          )}
+          </FoldRow>
         </div>
       )}
     </div>

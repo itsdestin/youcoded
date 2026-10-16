@@ -82,19 +82,18 @@ describe('“Warn me about this model”', () => {
   });
 });
 
-describe('the warning is drawn in the theme-derived amber (contract R30)', () => {
-  it('the closed warning line asks the theme for its amber instead of hard-coding one', async () => {
-    // WHY a class assertion and not a colour: jsdom has no theme engine, so the
-    // pixel cannot be measured here. What CAN be pinned is that this line reads
-    // its colour from `--warning-fg`, which theme-engine.ts derives per theme —
-    // the readability itself is pinned in warning-color-readable.test.ts. The
-    // pair is the guard; either half alone passes with the bug in place.
+// small-fixes-2#SF2-10 (Destin picked "fix next round", 2026-10-13) replaces contract R30's
+// amber TEXT: the guide keeps status colour out of words, so the warning is a status pill — the
+// words in the normal text colour, the amber in the pill's tint — like Local models' fit pills.
+describe('the warning is a status pill, not coloured words (SF2-10)', () => {
+  it('the closed warning line keeps its words in the text colour and its amber in the tint', async () => {
     const setSettings = vi.fn().mockResolvedValue({});
     bridge(setSettings);
     render(<Host />);
     await waitFor(() => expect(screen.getByText('This model may not fit in available memory')).toBeTruthy());
     const line = screen.getByText('This model may not fit in available memory');
-    expect(line.className, 'uses the derived warning colour').toContain('text-warning-fg');
-    expect(line.className, 'no fixed amber left in it').not.toMatch(/amber/);
+    expect(line.className, 'words in the normal text colour').toContain('text-fg-2');
+    expect(line.className, 'no status colour on the words').not.toMatch(/text-(warning|destructive|amber)/);
+    expect(line.className, 'the amber is the tint').toMatch(/bg-amber-500\/15/);
   });
 });

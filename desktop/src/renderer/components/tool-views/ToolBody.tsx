@@ -79,10 +79,15 @@ function CollapsibleBlock({ children, maxLines = 20, className = '' }: { childre
   const cap = open && overflow ? 'scroll-box-cap' : '';
   return (
     <div className="relative">
-      <pre className={`text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
-        {shown}
-        {overflow && !open && <span className="text-fg-muted">{'\n'}…</span>}
-      </pre>
+      {/* WHY a frame around the scroller (2026-10-15, the one scroll fade): the fade is a mask, so
+          on the box itself it would fade its fill and border too. The frame keeps them whole; only
+          the text fades, at an edge with more. CSS-only, so no listener per tool card. */}
+      <div className="bg-panel rounded-sm overflow-hidden">
+        <pre className={`scroll-mask-y text-xs text-fg-dim p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
+          {shown}
+          {overflow && !open && <span className="text-fg-muted">{'\n'}…</span>}
+        </pre>
+      </div>
       {overflow && (
         <button
           onClick={() => setOpen(o => !o)}
@@ -211,9 +216,10 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 // there's no hardcoded blue token — translucent blue on pink goes muddy.
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'add' | 'remove' | 'warn' | 'info' }) {
   const toneClass =
-    tone === 'add' ? 'bg-green-400/15 text-green-400 border-green-400/40'
-    : tone === 'remove' ? 'bg-red-400/15 text-red-400 border-red-400/40'
-    : tone === 'warn' ? 'bg-amber-700/15 text-amber-700 border-amber-700/40'
+    // Tint and outline carry the tone; the words are the text colour (small-fixes-3#SF3-10).
+    tone === 'add' ? 'bg-green-400/15 text-fg-2 border-green-400/40'
+    : tone === 'remove' ? 'bg-red-400/15 text-fg-2 border-red-400/40'
+    : tone === 'warn' ? 'bg-amber-500/15 text-fg-2 border-amber-500/40'
     : tone === 'info' ? 'bg-inset text-fg-2 border-edge'
     : 'bg-inset text-fg-muted border-edge';
   return (
@@ -247,10 +253,16 @@ function CopyButton({ text }: { text: string }) {
 function ErrorBlock({ error }: { error: string }) {
   return (
     <div>
-      <div className="text-3xs uppercase tracking-wider text-red-500 mb-1">Error</div>
-      <pre className="text-xs text-red-400 bg-panel rounded-sm p-2 overflow-auto max-h-48 whitespace-pre-wrap">
-        {error}
-      </pre>
+      {/* Words in the text colour; the red is the box's tint and outline (small-fixes-3#SF3-10). */}
+      <div className="text-3xs uppercase tracking-wider text-fg-2 mb-1">Error</div>
+      {/* WHY a frame around the scroller (2026-10-15, the one scroll fade): the fade is a mask, so
+          on the box itself it would fade its fill and border too. The frame keeps them whole; only
+          the text fades, at an edge with more. CSS-only, so no listener per tool card. */}
+      <div className="bg-destructive/10 border border-destructive/30 rounded-sm overflow-hidden">
+        <pre className="scroll-mask-y text-xs text-fg-2 p-2 overflow-auto max-h-48 whitespace-pre-wrap">
+          {error}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -286,11 +298,27 @@ function EditView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
   );
 }
 
+/** Whether a finished Write made a new file or replaced one, read from the tool's own result
+ *  — or null when the result does not say (still running, failed, or wording we don't know).
+ *
+ *  WHY (small-fixes-1): the card said "New file" on EVERY Write, including one that replaced an
+ *  existing file. The tool's input never says which; only its result does. Claude Code answers
+ *  "File created successfully at: …" or "The file … has been updated successfully."; the
+ *  native Write tool (harness/tools/write.ts) answers "Created …" or "Overwrote …". Unknown is
+ *  shown as no chip, never guessed as new (error-message-standards: unknown is not "none"). */
+export function writeOutcome(response: string | undefined): 'created' | 'replaced' | null {
+  const r = (response ?? '').trimStart();
+  if (/^File created successfully\b/.test(r) || /^Created\s/.test(r)) return 'created';
+  if (/^The file .* has been (?:updated|overwritten)\b/s.test(r) || /^Overwrote\s/.test(r)) return 'replaced';
+  return null;
+}
+
 function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
   // Fix: an object file_path crashed basename(); an object content crashed .split().
   const fp = asString(tool.input.file_path);
   const content = asString(tool.input.content);
   const lineCount = content ? content.split('\n').length : 0;
+  const outcome = tool.status === 'complete' && !tool.error ? writeOutcome(tool.response) : null;
 
   return (
     <div className="space-y-2">
@@ -299,7 +327,8 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
         sessionId={sessionId}
         chips={
           <>
-            <Chip tone="add">New file</Chip>
+            {outcome === 'created' && <Chip tone="add">New file</Chip>}
+            {outcome === 'replaced' && <Chip tone="warn">Replaced file</Chip>}
             {lineCount > 0 && <span className="text-3xs text-fg-muted">{lineCount} lines</span>}
           </>
         }
@@ -395,7 +424,10 @@ function ShellView({ tool, commandField, sessionId }: {
       {/* Inside the details like any failed command's output — not pinned (Destin, review 5). */}
       <AdminRefusedNote tool={tool} />
       <div className="relative group">
-        <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
+        {/* WHY no overflow-auto (2026-10-15, the one scroll fade): break-all + pre-wrap wrap every
+            line and the box has no height cap, so it can never scroll — the class only made it
+            look like a scroll area to the fade guard. */}
+        <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
         </pre>
         {cmd && (
@@ -660,6 +692,10 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
       />
       {rows.length > 0 ? (
         <>
+          {/* WHY the frame is its own box (2026-10-15, the one scroll fade): the expanded box
+              fades its rows at a scrolled edge, and the fade is a mask — on the framed box it
+              would fade the border and fill too. */}
+          <div className={`${READ_BOX_BASE} overflow-hidden`}>
           <div
             ref={boxRef}
             data-testid="read-box"
@@ -667,7 +703,7 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
             // there is nothing to scroll inside THIS box until expanded —
             // only the expanded scroller needs overflow-auto + the cap
             // (review round 1, 2026-09-18).
-            className={expanded ? `${READ_BOX_BASE} overflow-auto scroll-box-cap` : READ_BOX_BASE}
+            className={expanded ? 'scroll-mask-y overflow-auto scroll-box-cap' : undefined}
           >
             {drawn.map(r => (
               <div key={r.lineNo} className="flex items-start">
@@ -676,6 +712,7 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
               </div>
             ))}
             {expanded && reveal.hasMore && <div ref={reveal.sentinelRef} data-reveal-sentinel className="h-px" aria-hidden />}
+          </div>
           </div>
           {overflow && (
             <button

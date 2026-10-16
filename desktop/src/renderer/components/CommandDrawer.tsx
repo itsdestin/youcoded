@@ -5,9 +5,10 @@ import SkillCard from './SkillCard';
 import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useDrawerResize } from '../hooks/useDrawerResize';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
-import { EmptyState, ErrorState, FilterChip } from './ui';
+import { CARD_LEVEL_1, EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
 
@@ -69,6 +70,8 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   const effectiveQuery = searchMode ? (externalFilter ?? '') : search;
   const isSearching = effectiveQuery.trim().length > 0;
 
+  const resize = useDrawerResize(open, onClose);
+
   // Focus internal search on open — only in browse mode (compass button).
   // In search mode the InputBar keeps focus so the user sees the "/" prefix.
   // On Android (and remote-browser touch devices), focusing the search input
@@ -129,7 +132,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   );
 
   // P-9 #3 (2026-08-27): which browse-mode section is the LAST one on screen.
-  // "Add Skills" is rendered as the final card of THAT section's grid so it
+  // "Add skills" is rendered as the final card of THAT section's grid so it
   // fills the empty slot at the end of the row instead of always starting a
   // new row of its own. When neither section shows, the drawer body needs an
   // empty state — see the browse-mode JSX for the three cases.
@@ -151,9 +154,9 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         title={!clickable ? entry.disabledReason : undefined}
         // Change 22: command cards share the drawer grid with SkillCard, so they
         // move to the same surface — migrating one and not the other splits the
-        // grid into two card species. Same !rounded-lg + flat-shadow overrides.
-        style={{ boxShadow: 'none' }}
-        className={`layer-surface !rounded-lg p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        // grid into two card species. WHY CARD_LEVEL_1 (final-review#GM-1): the same
+        // first-level card as SkillCard and Settings, so it separates from the panel drawer.
+        className={`${CARD_LEVEL_1} p-3 text-left flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           clickable
             ? 'card-interactive cursor-pointer'
             : 'opacity-50 cursor-not-allowed'
@@ -220,8 +223,8 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         onClick={onClose}
       />
 
-      {/* Drawer — overflow-hidden clips the scroll-fade pseudos to the rounded-t-xl
-          corners so fades don't paint into the square corners above.
+      {/* Drawer — overflow-hidden clips the scrolling list to the rounded-t-xl
+          corners.
 
           `command-drawer` is a STYLING HOOK, not decoration: globals.css uses it
           to cancel the backdrop-filter that theme-engine puts on every
@@ -232,16 +235,28 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
           Removing this class silently reopens that bug; guarded by
           tests/drawer-card-glass.test.ts. */}
       <div
-        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
+        ref={resize.drawerRef}
+        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
           open ? 'translate-y-0' : 'translate-y-full'
         }`}
-        style={{ maxHeight: '45vh' }}
+        // WHY a set height, not a 45vh cap (LB-3, 2026-10-01): it opens at 70% and the
+        // handle moves it, so the box keeps its height even when few skills are listed.
+        // The height eases only on a click-to-full; while dragging it follows the pointer.
+        style={{ height: resize.height, transitionProperty: resize.dragging ? 'transform' : 'transform, height' }}
       >
         {open && !searchMode && <ScreenMark name="chat/skills" />}
         {open && searchMode && <ScreenMark name="chat/commands" />}
-        {/* Grab handle */}
-        <div className="flex justify-center py-2">
-          <div className="w-8 h-1 rounded-full bg-fg-faint" />
+        {/* Grab handle — drag to resize, click (or Enter) for full height and back,
+            drag far down to close. touch-none so a finger drag isn't read as a scroll. */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={resize.isMax ? 'Resize drawer — press Enter for the default height' : 'Resize drawer — press Enter for full height'}
+          tabIndex={0}
+          className="shrink-0 flex justify-center py-2 cursor-ns-resize touch-none select-none group focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-t-xl"
+          {...resize.handleProps}
+        >
+          <div className="w-8 h-1 rounded-full bg-fg-faint group-hover:bg-fg-muted transition-colors" />
         </div>
 
         {/* Search bar — read-only mirror in search mode (InputBar drives the
@@ -253,7 +268,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
              trailing icon buttons are navigation (Library, Marketplace), not
              field actions. Left hand-rolled on purpose — revisit only with a
              deliberate design decision, not as a sweep. */}
-        <div className="px-4 pb-3">
+        <div className="shrink-0 px-4 pb-3">
           <div
             className="flex items-center gap-2 bg-well rounded-lg px-3 py-2 border border-edge-dim"
             {...(searchMode ? { onClick: () => {/* no-op: keep focus in InputBar */} } : {})}
@@ -277,13 +292,13 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
                 className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
               />
             )}
-            {/* Pencil — opens Your Library (favorites/installed management).
+            {/* Pencil — opens Your library (favorites/installed management).
                 Falls back to the legacy Skill Manager when the redesign flag
                 is off; onOpenLibrary is only supplied in that mode. */}
             <button
               onClick={() => { onClose(); (onOpenLibrary ?? onOpenManager)(); }}
               className="shrink-0 p-1 rounded-sm hover:bg-inset text-fg-muted hover:text-fg transition-colors"
-              title={onOpenLibrary ? "Your Library — favorites & installed" : "Manage skills"}
+              title={onOpenLibrary ? "Your library — favorites & installed" : "Manage skills"}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" strokeLinecap="round" strokeLinejoin="round" />
@@ -304,14 +319,14 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
         </div>
 
         {/* Scrollable content.
-             "Add Skills +" is the last box of whatever list is showing, so the
+             "Add skills +" is the last box of whatever list is showing, so the
              marketplace is always one click away. When a search has zero matches
              it stands alone; when NOTHING is listed in browse mode an <EmptyState>
              with a "Browse the Marketplace" button takes its place (P-9 #3). */}
-        {/* Padding lives on an inner wrapper so the scroll-fade element itself has
-            no padding — sticky fade pseudos sit flush with the drawer's outer edges.
+        {/* Padding lives on an inner wrapper so the scrolling element itself has
+            no padding — the fade then meets the drawer's outer edges.
             The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
-        <div ref={scrollRef} className="scroll-fade" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+        <div ref={scrollRef} className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1">
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row
@@ -350,11 +365,15 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
                 </FilterChip>
               </div>
 
-              {/* Favorites section. Hosts "Add Skills" only when it is the last
+              {/* Favorites section. Hosts "Add skills" only when it is the last
                   section on screen (favorites-only on, or nothing else installed). */}
               {showFavs && (
                 <section className="px-2 pt-2">
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">Favorites</h3>
+                  {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                      batch, guide: no spaced capitals — decisions H-3/L-1…L-4).
+                      No px-1 — SectionLabel owns its spacing (design lint
+                      no-restyle) and the parent <section> already has px-2. */}
+                  <SectionLabel className="mb-1">Favorites</SectionLabel>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {favsSorted.map(renderSkillCard)}
                     {addSkillsIn === 'favorites' && <AddSkillsCard onClick={openMarketplace} />}
@@ -363,11 +382,11 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
               )}
 
               {/* All installed (non-favorites) — hidden when favoritesOnly toggle is on.
-                  P-9 #3: "Add Skills" is the last card IN this grid, so it takes the
+                  P-9 #3: "Add skills" is the last card IN this grid, so it takes the
                   spare slot at the end of the row rather than a row of its own. */}
               {showOthers && (
                 <section className="px-2 pt-3">
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">All installed</h3>
+                  <SectionLabel className="mb-1">All installed</SectionLabel>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {othersSorted.map(renderSkillCard)}
                     <AddSkillsCard onClick={openMarketplace} />
@@ -376,7 +395,7 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
               )}
 
               {/* Nothing to list. Three reasons, told apart in plain words —
-                  before P-9 #3 all three showed one dashed "Add Skills" card
+                  before P-9 #3 all three showed one dashed "Add skills" card
                   hugging the left edge, which read as a broken grid. */}
               {addSkillsIn === null && (
                 drawerSkills.length === 0 && loadError ? (
@@ -384,10 +403,14 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
                   // drawerSkills is [] both when nothing is installed and when loading the
                   // skills failed. A failed load is its own answer, with Retry — never
                   // "No skills installed yet." and a trip to the Marketplace.
-                  <ErrorState className="mx-4" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
+                  // WHY mx-2 mt-3 (error-notices-1#EN-1, 2026-10-12: "the spacing is very odd"):
+                  // the box sat flush against the line under the filter chips and inset
+                  // further than the list. It now takes the skill sections' own px-2 pt-3,
+                  // so it starts where the cards would and leaves the same gap under the chips.
+                  <ErrorState className="mx-2 mt-3" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
                 ) : drawerSkills.length === 0 ? (
                   // Truly nothing installed: the standard empty state with the
-                  // marketplace as the way out (same action Add Skills has).
+                  // marketplace as the way out (same action Add skills has).
                   <EmptyState
                     className="px-4"
                     message="No skills installed yet."
@@ -419,22 +442,21 @@ function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, f
   );
 }
 
-// Persistent "Add Skills +" tile — matches SkillCard's drawer dimensions so it
+// Persistent "Add skills +" tile — matches SkillCard's drawer dimensions so it
 // sits naturally at the end of the grid. Uses dashed border + accent color to
 // read as an action, not a skill.
 function AddSkillsCard({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      // Change 22: same surface as the skill/command cards it sits beside, but
-      // it KEEPS the dashed border — that's the action affordance ("add
-      // something here"), not card chrome. .layer-surface's solid border is
-      // overridden rather than inherited for exactly that reason.
-      style={{ boxShadow: 'none' }}
-      className="layer-surface !rounded-lg !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      // Same surface as the skill/command cards it sits beside (CARD_LEVEL_1 since
+      // final-review#GM-1), but it KEEPS the dashed border — that's the action
+      // affordance ("add something here"), not card chrome, so the first-level
+      // card's solid outline is overridden rather than inherited.
+      className={`${CARD_LEVEL_1} !border-dashed !border-edge card-interactive p-3 text-left hover:!border-accent transition-colors flex flex-col items-center justify-center text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
     >
       <span className="text-lg font-medium leading-none">+</span>
-      <span className="text-sm font-medium mt-1">Add Skills</span>
+      <span className="text-sm font-medium mt-1">Add skills</span>
       <span className="text-2xs text-fg-muted mt-1">Browse marketplace</span>
     </button>
   );

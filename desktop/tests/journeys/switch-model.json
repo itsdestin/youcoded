@@ -13,7 +13,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Sonnet | Auto Effort",
+        "label": "Sonnet | Auto effort",
         "nth": 1
       }
     },
@@ -29,14 +29,14 @@
       "do": "expect",
       "control": {
         "role": "button",
-        "label": "Haiku | Auto Effort"
+        "label": "Haiku | Auto effort"
       }
     },
     {
       "do": "click",
       "target": {
         "role": "button",
-        "label": "All Sessions",
+        "label": "All sessions",
         "nth": 1
       }
     },

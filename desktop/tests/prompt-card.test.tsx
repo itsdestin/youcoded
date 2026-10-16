@@ -22,6 +22,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import React from 'react';
 import PromptCard from '../src/renderer/components/PromptCard';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
+import { Dialog } from '../src/renderer/components/ui/Dialog';
 import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 import type { InteractivePrompt } from '../src/renderer/state/chat-types';
 
@@ -59,10 +61,10 @@ function resumePrompt(): InteractivePrompt {
 afterEach(cleanup);
 
 describe('PromptCard — Resume Session', () => {
-  let onSelect: ReturnType<typeof vi.fn>;
+  let onSelect: ReturnType<typeof vi.fn<(button: InteractivePrompt['buttons'][number], label: string) => void>>;
 
   beforeEach(() => {
-    onSelect = vi.fn();
+    onSelect = vi.fn<(button: InteractivePrompt['buttons'][number], label: string) => void>();
   });
 
   it('sends each option its own keystroke', () => {
@@ -199,6 +201,22 @@ describe('PromptCard — a dialog answered by verified navigation', () => {
     settle({ ok: false, reason: 'menu-changed', typed: false });
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringMatching(/options changed/));
     for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('PromptCard — a popup open over the chat', () => {
+  it('ignores Enter and the number keys: they belong to the popup', () => {
+    // Destin, approved in chat 2026-10-12: Enter in a popup answered the card behind it.
+    const onSelect = vi.fn();
+    render(
+      <EscCloseProvider>
+        <PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />
+        <Dialog open onClose={() => {}} title="Session details" noScreen="test"><p>a popup</p></Dialog>
+      </EscCloseProvider>,
+    );
+    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: '1' });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });
 

@@ -13,7 +13,7 @@
 // reopen: [...] — built for exactly this) for the empty-strip cases, and
 // overrides the store's `sessions` directly for the non-empty case.
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { beforeAll, describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
@@ -140,17 +140,22 @@ afterEach(() => {
   expect(crashes).toEqual([]);
 });
 
+// The app's one-time cost — importing the whole App — is warmed before the tests under its
+// own budget (test-suite-hygiene: "warmed in beforeAll ... never inside the first test"):
+// ≈10 s alone on 2026-10-04, and a full run on a busy machine timed the first test out.
+const APP_IMPORT_MS = 60_000;
+beforeAll(async () => { await import('../src/renderer/App'); }, APP_IMPORT_MS);
+// WHY 20 s (2026-10-09): a full run at load average ~38, just after a restart, needed more
+// than 4 s for the mounted App to show the screen; the three positive waits failed while the
+// file passed alone. A found screen returns at once, so only a broken one pays the wait (under
+// the 30 s test timeout); the negative checks do not use this number.
+const APPEAR_MS = 20_000;
+
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {
     await mountApp();
-    // WHY wait for boot separately (2026-10-03): this is the file's first test,
-    // so it pays the cold mount of the whole App (~5.5s alone, ~15s under the
-    // full suite's parallel load). The 4s budget below used to cover boot AND the
-    // screen, and timed out under load. Boot gets its own generous wait; the 4s
-    // stays for what this test is about — the screen appearing once booted.
-    await screen.findByLabelText('Settings', {}, { timeout: 25000 });
-    expect(await screen.findByText('Welcome back', {}, { timeout: 4000 })).toBeInTheDocument();
-  }, 40000);
+    expect(await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS })).toBeInTheDocument();
+  });
 
   it('skips when this window is not the directory leader', async () => {
     // Workbench default: getDirectory() answers leaderWindowId 1. Naming a
@@ -196,7 +201,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it('onDone (Start fresh) forgets exactly the ids the screen showed', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: 4000 });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
     const store = (window as any).__workbenchStore;
     // The fixture's full offer, per scenarios.ts's 'welcome-back' case.
     expect(store.getState().reopen).toEqual(['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4']);
@@ -209,12 +214,12 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     await waitFor(() => expect(store.getState().reopen).toEqual([]));
   });
 
-  // The screen shows no Skip Permissions switch, so Resume all must never
+  // The screen shows no Skip permissions switch, so Resume all must never
   // carry a "skip" default into every reopened session unseen.
   it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
     await mountApp({ overrideDefaults: { skipPermissions: true } });
     const store = (window as any).__workbenchStore;
-    await screen.findByText('Welcome back', {}, { timeout: 4000 });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
     const before = store.getState().sessions.length;
 
     fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));

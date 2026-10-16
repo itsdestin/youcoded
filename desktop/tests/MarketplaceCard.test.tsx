@@ -19,6 +19,16 @@ import {
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import { AccountProvider } from '../src/renderer/state/account-context';
 import type { SkillEntry } from '../src/shared/types';
+// WHY ArtifactProvider: the screen's band (ScreenBand, decisions "Full-screen titles") holds the
+// header's Pages / Projects buttons, which read the artifact store.
+import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
+
+/** Each fact chip's words, with the number and word spaced as they read. */
+function chipTexts(root: HTMLElement): string[] {
+  return Array.from(root.querySelectorAll('[data-chip]')).map((el) =>
+    Array.from(el.childNodes).map((n) => n.textContent ?? '').filter(Boolean).join(' ').replace(/\s+/g, ' ').trim());
+}
 
 // WHY: each section below was its own file, so each started with an empty
 // /stats cache and the environment's own fetch. One section replaces
@@ -280,10 +290,10 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3, installs: 412 } },
     });
-    const { getByTitle, getByText } = await renderCard();
-    // The count renders as a download arrow whose title is the pluralised words.
-    expect(getByTitle('412 installs')).toBeTruthy();
-    expect(getByText('412')).toBeTruthy();
+    const { container } = await renderCard();
+    // The count is a fact chip in the card's one chip row (decisions "Item card chips"):
+    // a bold number, then the word.
+    expect(chipTexts(container)).toContain('412 installs');
   });
 
   it('shows nothing when the theme has no installs yet', async () => {
@@ -292,8 +302,8 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3, installs: 0 } },
     });
-    const { queryByTitle } = await renderCard();
-    expect(queryByTitle('0 installs')).toBeNull();
+    const { container } = await renderCard();
+    expect(chipTexts(container).some((t) => t.includes('install'))).toBe(false);
   });
 
   it('survives an older Worker that reports no installs field at all', async () => {
@@ -302,10 +312,10 @@ describe('MarketplaceCard theme download count', () => {
       plugins: {},
       themes: { 'ocean-depths': { likes: 3 } },
     });
-    const { queryByTitle, getByText } = await renderCard();
-    expect(queryByTitle('0 installs')).toBeNull();
+    const { container } = await renderCard();
+    expect(chipTexts(container).some((t) => t.includes('install'))).toBe(false);
     // The likes half still renders, so the card is not blank.
-    expect(getByText('3 likes')).toBeTruthy();
+    expect(chipTexts(container)).toContain('3 likes');
   });
 });
 
@@ -573,36 +583,27 @@ describe('marketplace small fixes', () => {
 
   // 2 — rails clip with no affordance at phone width (P-17 / audit #26).
   it('the rail says there is more to scroll in each direction', async () => {
+    // The rail takes the app's one fade (.scroll-mask): the browser fades whichever end has
+    // more, from the rail's own scroll position — no script, no per-rail resize listener.
+    // jsdom has no layout or scroll timelines; the fade itself is checked in the screenshots.
     render(<MarketplaceRail title="Featured"><div>a</div><div>b</div></MarketplaceRail>);
     const list = screen.getByRole('list');
-    // jsdom has no layout, so nothing overflows on mount → no fade.
-    expect(list.getAttribute('data-fade')).toBe('none');
-
-    // Fake the metrics of a rail whose content is wider than its box.
-    Object.defineProperty(list, 'scrollWidth', { value: 1000, configurable: true });
-    Object.defineProperty(list, 'clientWidth', { value: 300, configurable: true });
-    list.scrollLeft = 0;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('right');
-
-    list.scrollLeft = 350;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('both');
-
-    list.scrollLeft = 700;
-    act(() => { fireEvent.scroll(list); });
-    expect(list.getAttribute('data-fade')).toBe('left');
+    expect(list.className).toContain('scroll-mask');
+    expect(list.getAttribute('style') ?? '').not.toContain('mask');
   });
 
   // 3 — longDescription printed its markdown source instead of rendering it.
   it('the detail overlay renders the long description as markdown', async () => {
-    const { container } = await renderWithProviders(
+    await renderWithProviders(
       <MarketplaceDetailOverlay target={{ kind: 'skill', id: 'x' }} onClose={() => {}} />,
     );
-    expect(container.querySelector('strong')?.textContent).toBe('bold');
-    expect(container.querySelectorAll('li').length).toBe(2);
+    // The page is the shared popup (Dialog), which renders into document.body rather
+    // than inside the test's container (detail redesign, 2026-10-04).
+    const page = document.body;
+    expect(page.querySelector('strong')?.textContent).toBe('bold');
+    expect(page.querySelectorAll('li').length).toBe(2);
     // The literal source must not be on screen anywhere.
-    expect(container.textContent).not.toContain('**bold**');
+    expect(page.textContent).not.toContain('**bold**');
   });
 });
 
@@ -803,7 +804,7 @@ describe('the Update action is wired to mp.update()', () => {
   });
 
   it('the Library Updates tab can actually update', async () => {
-    await renderWithProviders(<LibraryScreen onExit={() => {}} initialTab="updates" />);
+    await renderWithProviders(<ArtifactProvider value={{ state: initialArtifactState, dispatch: () => {} }}><LibraryScreen onExit={() => {}} settingsOpen={false} onToggleSettings={() => {}} initialTab="updates" /></ArtifactProvider>);
     const buttons = screen.getAllByRole('button', { name: 'Update' });
     expect(buttons.length).toBeGreaterThan(0);
     await act(async () => { fireEvent.click(buttons[0]); });

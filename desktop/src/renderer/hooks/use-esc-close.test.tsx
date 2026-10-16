@@ -261,3 +261,27 @@ describe('useEscClose', () => {
     expect(() => act(() => { dismiss(); })).not.toThrow();
   });
 });
+
+// Final review F40: the guided tour's bubble takes Escape but is not a popup — Enter in the
+// message box must keep working under it.
+describe('an Escape-taking overlay that is not a popup', () => {
+  it('closes on Escape but does not count as an open popup', async () => {
+    const { usePopupOpen } = await import('./use-esc-close');
+    const onClose = vi.fn();
+    let popupOpen: () => boolean = () => true;
+    function Tour() { useEscClose(true, onClose, { notPopup: true }); return null; }
+    function Probe() { popupOpen = usePopupOpen(); return null; }
+    render(<EscCloseProvider><Probe /><Tour /></EscCloseProvider>);
+    expect(popupOpen()).toBe(false);
+    pressEsc();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a real popup still counts', async () => {
+    const { usePopupOpen } = await import('./use-esc-close');
+    let popupOpen: () => boolean = () => false;
+    function Probe() { popupOpen = usePopupOpen(); return null; }
+    render(<EscCloseProvider><Probe /><Overlay onClose={() => {}} /></EscCloseProvider>);
+    expect(popupOpen()).toBe(true);
+  });
+});

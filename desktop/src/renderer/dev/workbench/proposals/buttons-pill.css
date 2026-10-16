@@ -1,0 +1,30 @@
+/* Design-guide review proposal B (2026-09-24): PILLS EVERYWHERE.
+   Every button, every "pick one" control and every search box is fully
+   rounded at every size — the shape the small buttons, tabs and filter chips
+   already have, carried to the large and full-width ones. Secondary actions
+   are outlined, never bare text. Workbench-only: ?proposal=buttons-pill.
+
+   Wrapped in @layer proposal and PREPENDED to <head> by index.tsx: the app's
+   own `!rounded-full` utilities are important declarations inside Tailwind's
+   layers, and a layered !important beats any unlayered one — only an earlier
+   layer's !important outranks it. */
+@layer proposal {
+
+button:is(.rounded-lg, .rounded-full, .rounded-xl, .rounded-md, .rounded, .\!rounded-full):not([role=switch], [role=radio], [role=checkbox]):not(.session-strip, .session-strip *):not([aria-label="Send message"], [aria-label="Voice"], [aria-label*="Stop" i]) {
+  border-radius: 9999px !important;
+}
+
+[role=tablist],
+.layer-surface.\!rounded-full {
+  border-radius: 9999px !important;
+}
+
+.rounded-full:has(> input), .rounded-full:has(> div > input) {
+  border-radius: 9999px !important;
+}
+
+[role=dialog] button.text-fg-dim.text-sm:not([class*="border"]) {
+  border: 1px solid var(--edge-dim) !important;
+  color: var(--fg-2) !important;
+}
+}

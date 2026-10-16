@@ -4,12 +4,14 @@ import { act, cleanup, fireEvent, render, screen, renderHook } from '@testing-li
 import { afterEach, expect, it, vi } from 'vitest';
 import SessionRenameDialog from '../src/renderer/components/SessionRenameDialog';
 import { useRenamedSessions } from '../src/renderer/components/assistant-settings/use-renamed-sessions';
-vi.mock('../src/renderer/components/ui', () => ({
+vi.mock('../src/renderer/components/ui', async () => ({
+  // The one-job layout pieces are plain markup with no behaviour, so the real ones are used.
+  ...(await vi.importActual<typeof import('../src/renderer/components/ui/OneJobCard')>('../src/renderer/components/ui/OneJobCard')),
   Dialog: ({ children }: any) => <div>{children}</div>,
   Button: (props: any) => <button {...props} />,
   TextInput: (props: any) => <input {...props} />,
   LoadingState: () => <span>Loading</span>,
-  ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Retry</button></div>,
+  ErrorState: ({ message, onRetry }: any) => <div>{message}<button onClick={onRetry}>Try again</button></div>,
 }));
 afterEach(cleanup);
 it('keeps a manual name protected with no automatic-name reset action', async () => {
@@ -18,7 +20,7 @@ it('keeps a manual name protected with no automatic-name reset action', async ()
   await screen.findByDisplayValue('My name');
   expect(screen.queryByRole('button', { name: 'Use automatic name' })).toBeNull();
   expect(screen.getByText('You named this session. Automatic naming won’t replace it.')).toBeTruthy();
-  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Cancel', 'Save name']);
+  expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Save', 'Cancel']); // stacked, main one on top (popup-cards-2#A-1)
 });
 it('a saved rename tells the already-fetched lists, or the row keeps the old name', async () => {
   // Renaming a SAVED conversation touches no live session, so there is no
@@ -35,7 +37,7 @@ it('a saved rename tells the already-fetched lists, or the row keeps the old nam
     render(<SessionRenameDialog id="saved-1" name="Old name" onClose={() => {}} />);
     const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '  Biology revision  ' } });
-    await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
     expect(rename).toHaveBeenCalledWith('saved-1', 'Biology revision');
     expect(seen).toEqual([{ id: 'saved-1', title: 'Biology revision' }]);
   } finally {
@@ -54,7 +56,7 @@ it('says nothing to the lists when the save was refused', async () => {
   try {
     render(<SessionRenameDialog id="saved-2" name="Old name" onClose={() => {}} />);
     await screen.findByDisplayValue('Old name');
-    await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
     expect(seen).toEqual([]);
     expect(screen.getByText('Storage is not available.')).toBeTruthy();
   } finally {
@@ -78,7 +80,7 @@ it('does not expose an old failed load retry on the next identity', async () => 
   const view = render(<SessionRenameDialog id="a" name="A" onClose={() => {}} />);
   view.rerender(<SessionRenameDialog id="b" name="B" onClose={() => {}} />);
   await act(async () => { rejectOld(new Error('old failure')); });
-  expect(screen.queryByText('Retry')).toBeNull();
+  expect(screen.queryByText('Try again')).toBeNull();
   expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('B');
   expect(title.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
 });
@@ -120,7 +122,7 @@ it('closes on save even though the rename changes the name the parent passes bac
   render(<Parent />);
   const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
   fireEvent.change(input, { target: { value: 'Biology revision' } });
-  await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+  await act(async () => { screen.getByRole('button', { name: 'Save' }).click(); });
   expect(rename).toHaveBeenCalledWith('s1', 'Biology revision');
   expect(onClose).toHaveBeenCalledTimes(1);
 });

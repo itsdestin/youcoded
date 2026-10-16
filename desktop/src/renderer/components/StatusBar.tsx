@@ -17,7 +17,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { Dialog, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -84,7 +84,9 @@ const MODEL_DISPLAY: Record<ModelAlias | 'unknown', { label: string; color: stri
   fable:       { label: CLAUDE_ALIAS_LABELS.fable,      color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
   // Error state, not a real model — red like the high-danger usage threshold
   // (utilizationColor/contextColor) so it reads as "wrong", never as a normal pill.
-  unknown:     { label: 'Model Unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
+  // WHY the words in the text colour (small-fixes-3#SF3-10 sweep): the guide keeps status colour out
+  // of words; the red stays in the chip's outline.
+  unknown:     { label: 'Model unknown', color: 'var(--fg-2)', border: 'rgba(221,68,68,0.5)' },
 };
 
 /**
@@ -160,7 +162,8 @@ export const PERMISSION_DISPLAY: Record<PermissionMode | NativePermissionMode | 
   // Error state — App.tsx passes this when the real mode can't be confirmed
   // (unrecognized value, missing data on resume/reconnect) rather than guessing
   // 'normal'/'ask', which would misrepresent what's actually enforced.
-  unknown:       { label: 'PERMISSION UNKNOWN',  shortLabel: 'UNKNOWN', color: '#DD4444', bg: 'var(--panel)', border: 'rgba(221,68,68,0.3)' },
+  // Words in the text colour, red only in the outline (small-fixes-3#SF3-10 sweep).
+  unknown:       { label: 'PERMISSION UNKNOWN',  shortLabel: 'UNKNOWN', color: 'var(--fg-2)', bg: 'var(--panel)', border: 'rgba(221,68,68,0.5)' },
 };
 
 // --- Native (local-model) StatusBar chips (Task 12) ---
@@ -256,16 +259,20 @@ export function selectNativeStatusChips(
   };
 }
 
-function utilizationColor(pct: number): string {
-  if (pct >= 80) return 'text-[#DD4444]';
-  if (pct >= 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
+// WHY dots, not coloured numbers (small-fixes-3#SF3-10, Destin picked "sweep them next"): the guide
+// keeps the status hues out of words — "+12", "34%" were green/amber/red text. The number is now the
+// normal text colour and the state is the small coloured dot before it, the setting row's own status
+// dot (RowStatus, "● Last synced just now"). Same thresholds as before.
+function utilizationDot(pct: number): string {
+  if (pct >= 80) return 'bg-[#DD4444]';
+  if (pct >= 50) return 'bg-[#FF9800]';
+  return 'bg-[#4CAF50]';
 }
 
-function contextColor(pct: number): string {
-  if (pct < 20) return 'text-[#DD4444]';
-  if (pct < 50) return 'text-[#FF9800]';
-  return 'text-[#4CAF50]';
+function contextDot(pct: number): string {
+  if (pct < 20) return 'bg-[#DD4444]';
+  if (pct < 50) return 'bg-[#FF9800]';
+  return 'bg-[#4CAF50]';
 }
 
 // formatTime12 / formatDayLong moved to shared/time-format.ts (2026-09-05) so
@@ -320,9 +327,7 @@ function UsageChip({ label, utilization, reset, onClick, title }: {
       className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
     >
       <span>{label}:</span>
-      <span className={utilizationColor(utilization)}>
-        {utilization}%
-      </span>
+      <span><RowStatus dotClassName={utilizationDot(utilization)}>{utilization}%</RowStatus></span>
       <span className="text-fg-muted hidden sm:inline">{reset}</span>
     </button>
     </Tooltip>
@@ -437,11 +442,13 @@ interface Props {
   onOpenModelPicker?: () => void;
   // Context popup: session and a dispatcher wrapper threaded from App.tsx.
   sessionId?: string | null;
+  /** The session's name, for the Session details popup's title card. */
+  sessionName?: string;
   onDispatch?: (input: string) => void;
   /** Open-tasks counts for the chip — derived at App root from a single
    *  useSessionTasks instance so the chip and popup share inactiveMap state. */
   openTasksCounts?: { running: number; pending: number };
-  /** Fired when the user clicks the Open Tasks chip. */
+  /** Fired when the user clicks the Open tasks chip. */
   onOpenOpenTasks?: () => void;
   /** Native-runtime sessions only (Task 12): the active session's most-recent
    *  turn-complete usage. null/absent for CC + idle sessions (chips stay hidden). */
@@ -465,10 +472,10 @@ interface Props {
   nativeTotals?: SessionTotals | null;
 }
 
-
+// Tint and outline carry the state; the words are the text colour (small-fixes-3#SF3-10).
 const warnStyles = {
-  danger: 'bg-red-400/15 text-red-400 border-red-400/25',
-  warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
+  danger: 'bg-red-400/15 text-fg-2 border-red-400/40',
+  warn: 'bg-amber-500/15 text-fg-2 border-amber-500/40',
 };
 
 // --- Widget visibility system ---
@@ -480,8 +487,10 @@ interface WidgetDef {
   label: string;
   defaultVisible: boolean;
   locked?: boolean;     // core control — always on, non-toggleable in the config menu
-  description: string;  // Shown in (i) tooltip in config popup
-  bestFor: string;      // Who benefits most from this widget
+  description: string;  // Its first sentence is the row's hint in the config popup
+  /** A hint written for the row when the first sentence would drop a caveat the user needs
+   *  (final review F45: "informational only on Pro/Max", "resets on a rolling window"). */
+  hint?: string;
 }
 
 interface WidgetCategory {
@@ -491,10 +500,10 @@ interface WidgetCategory {
 
 const WIDGET_CATEGORIES: WidgetCategory[] = [
   // WHY first and locked: these are the controls the bar always draws. Listing
-  // them here (instead of a lone "always on" tag beside Tags & Note) tells the
+  // them here (instead of a lone "always on" tag beside Tags & note) tells the
   // user up front what cannot be switched off, so the rows below are all choices.
   {
-    name: 'Always On',
+    name: 'Always on', // WHY sentence case (labels batch): feeds the section heading below verbatim.
     widgets: [
       {
         id: 'model',
@@ -502,7 +511,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Which model this session is using. Click it to switch models.',
-        bestFor: 'Everyone. Always know which model is answering.',
       },
       {
         id: 'permission-mode',
@@ -510,15 +518,13 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'How much Claude may do without asking first. Click it to change the mode.',
-        bestFor: 'Everyone. Always see whether Claude will ask before acting.',
       },
       {
         id: 'session-tags',
-        label: 'Tags & Note',
+        label: 'Tags & note',
         defaultVisible: true,
         locked: true,
         description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
-        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
       },
       {
         id: 'announcement',
@@ -526,26 +532,34 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
-        bestFor: 'Everyone. Only appears when there is something to say.',
+      },
+      {
+        // WHY always on (popup-cards-8#W-1, Destin: "we should also make the version chip
+        // always-on"): it is where an available update shows, so it must not be switched off.
+        id: 'version',
+        label: 'Version',
+        defaultVisible: true,
+        locked: true,
+        description: 'Current YouCoded version. Glows when an update is available.',
       },
     ],
   },
   {
-    name: 'Rate Limits',
+    name: 'Rate limits',
     widgets: [
       {
         id: 'usage-5h',
-        label: '5h Usage',
+        label: '5h usage',
         defaultVisible: true,
         description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Helps you pace usage and avoid hitting rate limits during heavy sessions.',
+        hint: 'How much of your 5-hour limit you\'ve used; it resets on a rolling window.',
       },
       {
         id: 'usage-7d',
-        label: '7d Usage',
+        label: '7d usage',
         defaultVisible: true,
         description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Track your weekly usage pattern so you don\'t run out mid-week.',
+        hint: 'How much of your 7-day limit you\'ve used; it resets on a rolling window.',
       },
     ],
   },
@@ -557,28 +571,25 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Context %',
         defaultVisible: true,
         description: 'How much of your assistant\'s conversation memory remains. Lower means it may forget earlier context.',
-        bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
       },
       {
         id: 'session-cost',
-        label: 'Session Cost',
+        label: 'Session cost',
         defaultVisible: false,
         description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
-        bestFor: 'API users tracking spend. Also useful for Pro/Max users curious about what their session would cost on the API.',
+        hint: 'Estimated cost in US dollars — only an estimate on Pro and Max plans, which aren\'t billed per token.',
       },
       {
         id: 'session-time',
-        label: 'Session Duration',
+        label: 'Session duration',
         defaultVisible: false,
         description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
-        bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
-        label: 'Active Ratio',
+        label: 'Active ratio',
         defaultVisible: false,
         description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
-        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
       },
     ],
   },
@@ -587,41 +598,36 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'tokens-in',
-        label: 'Input Tokens',
+        label: 'Input tokens',
         defaultVisible: false,
         description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
-        bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
-        label: 'Output Tokens',
+        label: 'Output tokens',
         defaultVisible: false,
         description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
-        bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
-        label: 'Cache Efficiency',
+        label: 'Cache efficiency',
         defaultVisible: false,
         description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
-        bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
       },
       {
         // The id stays 'cache-hit-rate' on purpose — it is the persisted key for
         // everyone who already turned this chip on. Only what it MEASURES and
         // what it is CALLED changed; renaming the id would silently reset them.
         id: 'cache-hit-rate',
-        label: 'Context Reuse',
+        label: 'Context reuse',
         defaultVisible: false,
         description: 'How much of each prompt was reused from cache instead of re-read. Reused context is cheaper and much faster.',
-        bestFor: 'Long conversations. A sudden drop means the cache stopped working — usually an idle gap, or a change of model.',
       },
       {
         id: 'output-speed',
-        label: 'Output Speed',
+        label: 'Output speed',
         defaultVisible: false,
         description: 'Average output tokens per second across the session. Varies by model — Haiku is fastest, Opus is slowest.',
-        bestFor: 'Comparing model performance. Useful when deciding whether to switch models for faster iteration.',
       },
     ],
   },
@@ -630,17 +636,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'code-changes',
-        label: 'Code Changes',
+        label: 'Code changes',
         defaultVisible: false,
         description: 'Lines of code added and removed this session. A quick productivity snapshot.',
-        bestFor: 'Developers using Claude for coding tasks. See at a glance how much code Claude has written.',
       },
       {
         id: 'git-branch',
-        label: 'Git Branch',
+        label: 'Git branch',
         defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
-        bestFor: 'Developers working across multiple branches or repos.',
       },
     ],
   },
@@ -649,10 +653,9 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'open-tasks',
-        label: 'Open Tasks',
+        label: 'Open tasks',
         defaultVisible: true,
         description: 'Chip showing tasks Claude is tracking in the current session (running + pending counts). Hides when there are no open tasks. Click to see the full list.',
-        bestFor: 'Everyone who uses sessions where Claude juggles multiple tasks. Lets you see what\'s in flight without scrolling the chat.',
       },
     ],
   },
@@ -661,24 +664,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     widgets: [
       {
         id: 'sync-warnings',
-        label: 'Sync Warnings',
+        label: 'Sync warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
-        bestFor: 'Anyone who backs up or syncs with YouCoded. Keeps you aware of sync issues that could cause data loss.',
       },
       {
         id: 'theme',
         label: 'Theme',
         defaultVisible: true,
         description: 'Shows the active theme. Click to cycle through your configured themes.',
-        bestFor: 'Anyone who uses multiple themes or wants quick access to theme switching.',
-      },
-      {
-        id: 'version',
-        label: 'Version',
-        defaultVisible: true,
-        description: 'Current YouCoded version. Glows when an update is available.',
-        bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
       },
     ],
   },
@@ -738,16 +732,8 @@ function PencilIcon() {
   );
 }
 
-// Info (i) icon for widget descriptions
-function InfoIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-      <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-    </svg>
-  );
-}
-
+/** A widget's hint: the first sentence of its description. */
+const firstSentence = (text: string) => { const m = text.match(/^.*?[.!?](\s|$)/); return (m ? m[0] : text).trim(); };
 
 // --- Config Popup ---
 // Centered modal (matches SettingsPanel popup style) for customizing status bar widgets
@@ -762,8 +748,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
   relevance: RelevanceContext;
 }) {
   useEscClose(open, onClose);
-  // Track which widget's (i) tooltip is expanded
-  const [expandedInfo, setExpandedInfo] = useState<WidgetId | null>(null);
   // Track whether the Theme widget's cycle editor is expanded. Separate from
   // expandedInfo because the cycle editor is Theme-specific and collapses the
   // info panel when opened (and vice-versa) — they're mutually exclusive rows.
@@ -792,179 +776,77 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           now owns -- it was one of the two places that had independently
           discovered transform centering breaks a bounded scroll region. Its
           "No flex-1" workaround is gone too: that was needed because its body
-          was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
+          was a bare scrolling div with no min-height:0, which Dialog's body
           supplies. */}
-      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status Bar Widgets" size="panel">
-            {WIDGET_CATEGORIES.map((cat) => (
-              <section key={cat.name}>
-                <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                  {cat.name}
-                </h3>
-                <div className="space-y-0.5">
-                  {cat.widgets.map((w) => {
-                    const isExpanded = expandedInfo === w.id;
-                    const isThemeRow = w.id === 'theme';
-                    const showCycleEditor = isThemeRow && cycleEditorOpen;
-                    const reason = widgetUnavailableReason(w.id, relevance);
-                    return (
-                      <div key={w.id}>
-                        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-inset transition-colors">
-                          {/* Toggle checkbox — locked widgets (fixed controls)
-                              render always-checked and non-interactive. When the
-                              widget doesn't apply to this session's runtime,
-                              swap the button for a plain, non-focusable row: it
-                              is not a control here, so it must not look or
-                              behave like one. The saved on/off choice is
-                              untouched and returns when the user switches to a
-                              session where the widget applies. */}
-                          {reason ? (
-                            /* Label on its own line, reason on the line beneath
-                               it. WHY not side by side (how this used to read):
-                               a long reason squeezed the label and wrapped
-                               "Session Duration" onto two lines, so that one row
-                               stood taller than every other row in the menu.
-                               Stacked, each part gets a full line and every
-                               dimmed row is the same height. The empty spacer
-                               keeps the label's left edge on the same x as the
-                               enabled rows, whose labels sit after a checkbox. */
-                            <div className="flex items-start gap-2 flex-1 text-left opacity-50">
-                              <span className="w-3.5 h-3.5 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-2xs text-fg">{w.label}</div>
-                                <div className="text-3xs text-fg-muted italic">{reason}</div>
-                              </div>
-                            </div>
-                          ) : (
-                          <button
-                            onClick={() => { if (!w.locked) toggle(w.id); }}
-                            disabled={w.locked}
-                            className={`flex items-center gap-2 flex-1 text-left rounded-md px-1 -mx-1 ${w.locked ? 'cursor-default' : 'state-layer stepped-hover'}`}
-                          >
-                            <span
-                              className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                (w.locked || visible.has(w.id))
-                                  ? 'bg-accent border-accent text-on-accent'
-                                  : 'border-edge-dim'
-                              }`}
-                            >
-                              {(w.locked || visible.has(w.id)) && (
-                                <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
-                                  <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                </svg>
-                              )}
-                            </span>
-                            <span className="text-2xs text-fg">{w.label}</span>
-                          </button>
-                          )}
-
-                          {/* Pencil — Theme widget only. Opens the cycle editor
-                              (which themes the pill rotates through). Moved here
-                              from per-card checkmarks in the Appearance popup.
-                              Gated on !reason too (belt-and-braces: 'theme' never
-                              gets a reason today, but a dimmed row must never
-                              carry a focusable element, full stop). */}
-                          {isThemeRow && !reason && (
-                            <Tooltip text="Edit theme cycle">
-                            <button
-                              onClick={() => {
-                                setCycleEditorOpen(v => !v);
-                                setExpandedInfo(null);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                showCycleEditor ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                              aria-label="Edit theme cycle"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                              </svg>
-                            </button>
-                            </Tooltip>
-                          )}
-
-                          {/* (i) info toggle — hidden for a dimmed row. The row
-                              already isn't a control (it's just explained why),
-                              and the reason line itself is the info; a second
-                              focusable element here would be the same defect as
-                              leaving the checkbox tabbable. */}
-                          {!reason && (
-                            <Tooltip text="More info">
-                            <button
-                              onClick={() => {
-                                setExpandedInfo(isExpanded ? null : w.id);
-                                if (isThemeRow) setCycleEditorOpen(false);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                isExpanded ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                            >
-                              <InfoIcon />
-                            </button>
-                            </Tooltip>
-                          )}
+      {/* WHY no line under the title, and an "Always on" section instead (final-fixes#PR-7d,
+          Destin: "remove subheader under status bar widgets, add a new "always on" section with
+          model, permission, tag/not, etc lines with on but greyed toggles that can't be
+          disabled"; popup-cards-1#PC-2 kept other popups' lines but not this one). */}
+      <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
+        {/* WHY labelled cards with a hint under every name (pick-menus, 2026-10-01; Destin,
+            LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
+            right"): the rows sat bare on the popup (guide: a label first, nothing bare)
+            and every explanation hid behind its own (i). The hint is the description's
+            first sentence; the "Best for" advice behind the (i) is dropped. Switches on
+            the right, like Settings (pick-menus#PM-1). */}
+        {WIDGET_CATEGORIES.map((cat) => (
+          <section key={cat.name}>
+            <SectionLabel className="mb-2">{cat.name}</SectionLabel>
+            {/* WHY spaced rows, no divide-y (final review F17; decisions "Card levels": never a
+                full-width line inside a card) — 8px between rows (decisions "Popup spacing"). */}
+            <div className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
+              {cat.widgets.map((w) => {
+                const reason = widgetUnavailableReason(w.id, relevance);
+                const on = !!w.locked || visible.has(w.id);
+                const hint = reason ?? w.hint ?? firstSentence(w.description);
+                const canToggle = !w.locked && !reason;
+                // An always-on row shows its switch on and greyed, never a control (PR-7d).
+                return (
+                  <div key={w.id} data-widget-row={w.id}>
+                    {/* The shared settings row (switch vertically centred beside title and
+                        hint). A row that doesn't apply here is dimmed with its reason as the
+                        hint and NO switch — not a control in this session; its saved choice
+                        returns in a session where it applies. */}
+                    <SettingRow
+                      header
+                      variant="item"
+                      title={w.label}
+                      description={hint}
+                      className={reason ? 'opacity-50' : ''}
+                      control={w.locked || canToggle ? <Toggle checked={on} disabled={!!w.locked} onChange={() => { if (!w.locked) toggle(w.id); }}
+                        aria-label={w.locked ? `${w.label} (always on)` : w.label} /> : undefined}
+                    />
+                    {/* The Theme pill's cycle: which themes a tap rotates through. A fold
+                        under its own row instead of a pencil beside it. */}
+                    {w.id === 'theme' && !reason && (
+                      <FoldRow className="mt-2" title="Theme cycle" description={`${cycleList.length} theme${cycleList.length === 1 ? '' : 's'} — tap the pill to rotate`}
+                        open={cycleEditorOpen} onToggle={setCycleEditorOpen}>
+                        <ScreenMark name="chat/status-bar/themes" />
+                        <div className={`${CARD_LEVEL_2} p-1`}>
+                          {allThemes.map(t => {
+                            const inCycle = cycleList.includes(t.slug);
+                            const isOnly = inCycle && cycleList.length === 1;
+                            return (
+                              <button key={t.slug} type="button" onClick={() => toggleCycle(t.slug)} disabled={isOnly}
+                                title={isOnly ? 'At least one theme must stay in the cycle' : undefined}
+                                className={`flex items-center gap-2 w-full px-2 py-1 rounded-sm text-left text-2xs transition-colors ${isOnly ? 'cursor-not-allowed' : 'hover:bg-inset'}`}>
+                                {/* WHY no colour dot before the name (final-review#CH-17, Destin:
+                                    "remove the weird color dots next to the themes"): the tick and
+                                    the theme's name are the whole row. */}
+                                <CheckboxMark checked={inCycle} />
+                                <span className="text-fg truncate">{t.name}</span>
+                              </button>
+                            );
+                          })}
                         </div>
-
-                        {/* Expanded info panel */}
-                        {isExpanded && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <p className="text-fg-dim leading-relaxed">{w.description}</p>
-                            <p className="text-fg-muted leading-relaxed">
-                              <span className="font-medium text-fg-muted">Best for:</span> {w.bestFor}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Theme cycle editor — inline, mirrors the info-panel layout.
-                            Tapping the theme pill in the status bar rotates through
-                            every theme checked here. Must keep ≥1 in the cycle. */}
-                        {showCycleEditor && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <ScreenMark name="chat/status-bar/themes" />
-                            <p className="text-fg-dim leading-relaxed">
-                              Pick which themes the pill rotates through when you tap it.
-                            </p>
-                            <div className="space-y-0.5 pt-1">
-                              {allThemes.map(t => {
-                                const inCycle = cycleList.includes(t.slug);
-                                const isOnly = inCycle && cycleList.length === 1;
-                                return (
-                                  <Tooltip key={t.slug} text={isOnly ? 'At least one theme must stay in the cycle' : ''}>
-                                  <button
-                                    onClick={() => toggleCycle(t.slug)}
-                                    disabled={isOnly}
-                                    className={`flex items-center gap-2 w-full px-1.5 py-1 rounded-sm text-left transition-colors ${
-                                      isOnly ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
-                                    }`}
-                                  >
-                                    <span
-                                      className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                        inCycle ? 'bg-accent border-accent text-on-accent' : 'border-edge-dim'
-                                      }`}
-                                    >
-                                      {inCycle && (
-                                        <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
-                                          <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                        </svg>
-                                      )}
-                                    </span>
-                                    <span
-                                      className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-edge-dim"
-                                      style={{ background: `linear-gradient(135deg, ${t.tokens.canvas}, ${t.tokens.accent})` }}
-                                    />
-                                    <span className="text-fg truncate">{t.name}</span>
-                                  </button>
-                                  </Tooltip>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+                      </FoldRow>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </Dialog>
     </>,
     document.body
@@ -990,7 +872,7 @@ const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its hi
 export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App hands this bar a memoised projection + stable handlers (hooks/useStatusBarProps.ts), so unrelated shell state no longer re-renders it
   statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
   permissionMode, onCyclePermission, permissionPending, fast, effort, onOpenModelPicker,
-  sessionId, onDispatch,
+  sessionId, sessionName, onDispatch,
   openTasksCounts, onOpenOpenTasks,
   nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
 }: Props) {
@@ -1128,7 +1010,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           return (
             <Tooltip text={`${model.modelId} — click to change model`}>
             <button
-              onClick={onOpenModelPicker}
+              onClick={onOpenModelPicker} data-model-chip=""
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors max-w-[14rem] truncate"
               style={{ color: nStyle.color, borderColor: nStyle.borderColor }}
             >
@@ -1151,7 +1033,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
               ? "YouCoded couldn't confirm which model this session is using — click to set one explicitly"
               : 'Click to change model and effort (Shift+Space cycles model)'}>
             <button
-              onClick={onOpenModelPicker}
+              onClick={onOpenModelPicker} data-model-chip=""
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
               style={{ color: display.color, borderColor: display.border }}
             >
@@ -1160,7 +1042,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
               {model.kind !== 'unknown' && (
                 <>
                   <span className="opacity-40">|</span>
-                  <span className="capitalize">{effort || 'auto'} Effort</span>
+                  {/* No CSS `capitalize` (2026-09-29): it title-cases every word; capitalize only the first letter in JS. */}<span>{(effort || 'auto').replace(/^./, (c) => c.toUpperCase())} effort</span>
                 </>
               )}
             </button>
@@ -1176,7 +1058,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {fast && runtime === 'claude' && (
         <Tooltip text="Fast mode on — click to configure">
         <button
-          onClick={onOpenModelPicker}
+          onClick={onOpenModelPicker} data-model-chip=""
           className="flex items-center px-1.5 py-0.5 rounded-sm border border-amber-700/40 bg-amber-700/15 text-amber-700 cursor-pointer hover:brightness-125 transition-colors"
           aria-label="Fast mode on"
         >
@@ -1212,11 +1094,11 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           it is the everyday way to tag a session or leave it a note. */}
       {!isAndroid() && (
         <span data-guide-anchor="tags-notes" className="inline-flex">
-          <SessionTagsChip sessionId={sessionId ?? null} />
+          <SessionTagsChip sessionId={sessionId ?? null} sessionName={sessionName} />
         </span>
       )}
 
-      {/* Open Tasks chip — hidden when 0 open OR when widget is toggled off.
+      {/* Open tasks chip — hidden when 0 open OR when widget is toggled off.
           Counts are derived at App root to share one useSessionTasks instance
           with the popup; two instances would have separate inactiveMap state
           that don't sync within the same page. */}
@@ -1245,8 +1127,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           reset={format7dReset(usage.seven_day.resets_at)} onClick={openUsage} title={usageTitle} />
       )}
       {/* Odd-length windows ride on the Customize toggle of the approved chip
-          they most resemble: a multi-day window follows "7d Usage", a
-          sub-day one follows "5h Usage" — there is no per-length toggle. */}
+          they most resemble: a multi-day window follows "7d usage", a
+          sub-day one follows "5h usage" — there is no per-length toggle. */}
       {usableOtherWindows(usage?.other).map((w, i) => (
         show(w.minutes >= 1440 ? 'usage-7d' : 'usage-5h') ? (
           <UsageChip key={`${w.minutes}-${i}`} label={windowLengthLabel(w.minutes)} utilization={w.utilization}
@@ -1273,7 +1155,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
           >
             <span>Context:</span>
-            <span className={contextColor(contextPercent)}>{pill.value}</span>
+            <span><RowStatus dotClassName={contextDot(contextPercent)}>{pill.value}</RowStatus></span>
             {pill.suffix && <span>{pill.suffix}</span>}
           </button>
         );
@@ -1319,7 +1201,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
               >
                 <span>Context:</span>
-                <span className={contextColor(nativeChips.contextPct)}>{pill.value}</span>
+                <span><RowStatus dotClassName={contextDot(nativeChips.contextPct)}>{pill.value}</RowStatus></span>
                 {pill.suffix && <span>{pill.suffix}</span>}
               </button>
               </Tooltip>
@@ -1514,7 +1396,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-fg-muted">Cached:</span>
-            <span className="text-green-400">{formatTokens(cr)}</span>
+            {/* Normal words (small-fixes-3#SF3-10): green told nothing a number doesn't. */}
+            <span>{formatTokens(cr)}</span>
           </span>
           </Tooltip>
         );
@@ -1562,9 +1445,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             <span className="text-fg-muted">Reuse:</span>
             {display.kind === 'first-turn' && <span className="text-fg-muted">New</span>}
             {display.kind === 'percent' && (
-              <span className={display.pct >= 80 ? 'text-green-400' : display.pct >= 50 ? 'text-amber-700' : 'text-red-400'}>
-                {display.pct}%
-              </span>
+              <span><RowStatus dotClassName={display.pct >= 80 ? 'bg-green-400' : display.pct >= 50 ? 'bg-amber-500' : 'bg-red-400'}>{display.pct}%</RowStatus></span>
             )}
           </span>
           </Tooltip>
@@ -1626,8 +1507,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
-            <span className="text-green-400">+{added ?? 0}</span>
-            <span className="text-red-400">-{removed ?? 0}</span>
+            {/* Normal words (small-fixes-3#SF3-10): the + and − already say added and removed. */}
+            <span>+{added ?? 0}</span>
+            <span>-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
           </span>
           </Tooltip>
@@ -1639,10 +1521,12 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         <Tooltip text={`Git: ${gitBranch}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border"
-          style={{ color: '#0D9488', borderColor: 'rgba(13,148,136,0.35)' }}
+          // The teal stays in the outline and the branch mark; the name is the text colour
+          // (small-fixes-3#SF3-10: no fixed hue on words).
+          style={{ borderColor: 'rgba(13,148,136,0.35)' }}
         >
           {/* Branch icon (octicon git-branch) */}
-          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" style={{ color: '#0D9488' }}>
             <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>
           </svg>
           <span>{gitChipLabel(gitBranch)}</span>
@@ -1654,15 +1538,15 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           there is no pull/restore path feeding it anymore. */}
 
       {/* Sync status pill — at most one badge total.
-          Red "Sync Failing" for any danger-level warning,
-          orange "Sync Warning" for warn-only,
+          Red "Sync failing" for any danger-level warning,
+          orange "Sync warning" for warn-only,
           nothing when synced. Click opens the panel where the descriptive copy lives. */}
       {show('sync-warnings') && (() => {
         const handler = onOpenSync || onRunSync;
         const severity = deriveWarningSeverity(syncWarnings ?? []);
         if (severity === null) return null;
         const isFailing = severity === 'failing';
-        const label = isFailing ? 'Sync Failing' : 'Sync Warning';
+        const label = isFailing ? 'Sync failing' : 'Sync warning';
         const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
         return (
           <Tooltip text={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
@@ -1700,19 +1584,19 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         <button
           onClick={() => setAnnouncementOpen(true)}
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px] cursor-pointer hover:bg-inset transition-colors"
+          // Orange outline (and ★) mark it; the words are the text colour (small-fixes-3#SF3-10).
           style={{
-            color: '#EA580C',
-            borderColor: 'rgba(234,88,12,0.35)',
+            borderColor: 'rgba(234,88,12,0.45)',
           }}
         >
-          <span aria-hidden>★</span>
+          <span aria-hidden style={{ color: '#EA580C' }}>★</span>
           <span className="truncate">{statusData.announcement.message}</span>
         </button>
         </Tooltip>
       )}
 
       {/* Version pill — shows YouCoded app version, glows yellow when update available.
-         Click opens the in-app UpdatePanel (changelog + Update Now) — no more raw URL jumps. */}
+         Click opens the in-app UpdatePanel (changelog + Update now) — no more raw URL jumps. */}
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
@@ -1736,8 +1620,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           }`}
         >
           {updateStatus.update_available ? (
-            <span className="text-amber-700 font-medium">
-              v{updateStatus.latest} — Update Available
+            // Normal words on the amber tint (small-fixes-3#SF3-10); sentence case (decisions "Sentence case").
+            <span className="text-fg font-medium">
+              v{updateStatus.latest} — Update available
             </span>
           ) : (
             <span>v{updateStatus.current}</span>
@@ -1753,7 +1638,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       )}
 
       {/* Customize widget — pencil icon opens config popup, always last */}
-      <Tooltip text="Customize Status Bar">
+      <Tooltip text="Customize status bar">
       <button
         onClick={() => setPopupOpen(true)}
         className="ml-auto flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"

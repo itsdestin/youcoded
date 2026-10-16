@@ -10,6 +10,8 @@
 // conversation is what the person sees next.
 import React, { useCallback, useRef, useState } from 'react';
 import { Dialog } from '../ui/Dialog';
+import { CARD_LEVEL_1 } from '../ui/cardLevels';
+import { SectionLabel } from '../ui/SectionLabel';
 import { BuddyNewSessionForm } from '../buddy/BuddyNewSessionForm';
 import { markCaretAtStart } from './page-prompt-caret';
 
@@ -78,7 +80,12 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
     // page lives there too — and a dialog must sit above what opened it.
     // `screen`: the photo-only name — the title is the one thing that tells Create from Edit.
     <Dialog screen={request.title.startsWith('Edit ') ? 'pages/library/edit' : 'pages/create'} open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle={request.subtitle ?? 'Pick where the conversation starts and which model builds it.'}>
-      {request.fromPage !== undefined && <PageMessagePreview text={request.initialInput} pageName={request.fromPage} />}
+      {/* WHY a card round the form (final-review#ST-21/#PR-7, the one popup rule): its fields
+          and switch sat bare on the popup. One card holding a whole form with its buttons, as the
+          quick-chip editor's card does. */}
+      <div className={`${CARD_LEVEL_1} p-3`}>
+        {/* The page's message stays inside the one card, above the choices it leads into. */}
+        {request.fromPage !== undefined && <PageMessagePreview text={request.initialInput} pageName={request.fromPage} />}
       <BuddyNewSessionForm
         key={request.initialInput + (request.cwd ?? '')}
         initialInput={request.initialInput}
@@ -88,6 +95,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
         onCreated={(_id, info) => onCreated(info)}
         onCancel={onCancel}
       />
+      </div>
     </Dialog>
   );
 }
@@ -103,13 +111,19 @@ function PageMessagePreview({ text, pageName }: { text: string; pageName: string
   const label = `Message from ${pageName}`;
   return (
     <div className="mb-3">
-      <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">{label}</div>
-      <div
-        role="region"
-        aria-label={label}
-        tabIndex={0}
-        className="max-h-40 overflow-y-auto bg-well border border-edge-dim rounded-lg px-3 py-2 text-xs text-fg-2 whitespace-pre-wrap break-words select-text focus:outline-none focus:border-accent"
-      >{text}</div>
+      {/* WHY SectionLabel (guide "Headings": small labels are sentence case, never spaced capitals). */}
+      <SectionLabel className="mb-1">{label}</SectionLabel>
+      {/* WHY a frame and a scroller (guide: every scroll area fades with the one fade): the mask
+          fades whatever it is on, so the well's fill and border sit on the outer box and only the
+          text inside scrolls under the fade. */}
+      <div className="bg-well border border-edge-dim rounded-lg focus-within:border-accent">
+        <div
+          role="region"
+          aria-label={label}
+          tabIndex={0}
+          className="scroll-mask max-h-40 overflow-y-auto px-3 py-2 text-xs text-fg-2 whitespace-pre-wrap break-words select-text focus:outline-none"
+        >{text}</div>
+      </div>
       <p className="text-2xs text-fg-muted mt-1 mb-0">It waits in the message box until you press Enter.</p>
     </div>
   );

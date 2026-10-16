@@ -17,6 +17,7 @@ import { BrowserWindow } from 'electron';
 import { IPC } from '../../shared/backend-contract';
 import { listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from '../theme-watcher';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { THEME_DEFAULT_FIELD, decideThemeDefault, parseThemeDefault } from '../../shared/theme-default';
 
 // Security: strict slug format to prevent path traversal before path.resolve. A leading underscore is allowed for
 // reserved internal slugs (e.g. _preview, used by the theme builder).
@@ -29,6 +30,26 @@ const appearancePrefPath = () => path.join(os.homedir(), '.claude', 'youcoded-ap
 interface ThemeFavorites { getThemeFavorites(): string[]; setThemeFavorite(slug: string, favorited: boolean): void }
 let favorites: ThemeFavorites | null = null;
 export function bindAppearance(store: ThemeFavorites): void { favorites = store; }
+
+// WHY (final review F1): the YouCoded default theme is for NEW installs only. Which kind this install is
+// must be decided from what existed BEFORE this run — main.ts calls this right after its first-run check
+// and before the first window exists — and written once into the appearance file, so a later launch (when
+// the wizard has finished and the install looks "existing") cannot change the answer. appearance:get and
+// appearance:set wait for it, so no screen reads the file before the answer is in it and no write races it.
+let themeDefaultSettled: Promise<void> = Promise.resolve();
+export function settleThemeDefault(isNewInstall: boolean, file = appearancePrefPath()): Promise<void> {
+  themeDefaultSettled = (async () => {
+    let existing: Record<string, unknown> = {};
+    try { existing = JSON.parse(await fs.promises.readFile(file, 'utf8')); } catch { /* no file yet */ }
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {};
+    if (parseThemeDefault(existing[THEME_DEFAULT_FIELD])) return; // already decided on an earlier launch
+    try {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file, JSON.stringify({ ...existing, [THEME_DEFAULT_FIELD]: decideThemeDefault(isNewInstall) }));
+    } catch { /* a failed write is decided again next launch; the renderer keeps its own guess meanwhile */ }
+  })();
+  return themeDefaultSettled;
+}
 
 export const appearanceChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.THEME_LIST, kind: 'handle', handler: () => listUserThemes() }),
@@ -64,12 +85,14 @@ export const appearanceChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.APPEARANCE_GET, kind: 'handle',
     handler: async () => {
+      await themeDefaultSettled;
       try { return JSON.parse(await fs.promises.readFile(appearancePrefPath(), 'utf8')); } catch { return null; }
     },
   }),
   defineChannel({
     name: IPC.APPEARANCE_SET, kind: 'handle',
     handler: async (prefs) => {
+      await themeDefaultSettled;
       try {
         let existing: Record<string, unknown> = {};
         try { existing = JSON.parse(await fs.promises.readFile(appearancePrefPath(), 'utf8')); } catch { /* first write */ }

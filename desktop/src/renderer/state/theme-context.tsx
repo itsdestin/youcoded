@@ -5,6 +5,7 @@ import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyl
 import { getCapabilities } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
+import { defaultCycleFor, defaultThemeFor, guessThemeDefault, parseThemeDefault, THEME_DEFAULT_MIRROR_KEY, type ThemeDefaultKind } from '../../shared/theme-default';
 import { applyLookOverrides, parseLookOverrides, PAGES_SOLID_ATTR, type LookOverrides } from '../themes/look-overrides';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
@@ -14,6 +15,59 @@ import lightJson from '../themes/builtin/light.json';
 import darkJson from '../themes/builtin/dark.json';
 import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
+import youcodedJson from '../themes/builtin/youcoded.json';
+import youcodedNightJson from '../themes/builtin/youcoded-night.json';
+import youcodedWall from '../themes/builtin/assets/youcoded-wallpaper.jpg';
+import youcodedWallTerminal from '../themes/builtin/assets/youcoded-wallpaper-terminal.webp';
+import youcodedNightWall from '../themes/builtin/assets/youcoded-night-wallpaper.jpg';
+import youcodedNightWallTerminal from '../themes/builtin/assets/youcoded-night-wallpaper-terminal.webp';
+
+import ycRig from '../themes/builtin/assets/youcoded-mascot-rig.svg?raw';
+import ycIdle from '../themes/builtin/assets/youcoded-mascot-idle.svg?raw';
+import ycWelcome from '../themes/builtin/assets/youcoded-mascot-welcome.svg?raw';
+import ycCurious from '../themes/builtin/assets/youcoded-mascot-inquisitive.svg?raw';
+import ycShocked from '../themes/builtin/assets/youcoded-mascot-shocked.svg?raw';
+import ycnRig from '../themes/builtin/assets/youcoded-night-mascot-rig.svg?raw';
+import ycnIdle from '../themes/builtin/assets/youcoded-night-mascot-idle.svg?raw';
+import ycnWelcome from '../themes/builtin/assets/youcoded-night-mascot-welcome.svg?raw';
+import ycnCurious from '../themes/builtin/assets/youcoded-night-mascot-inquisitive.svg?raw';
+import ycnShocked from '../themes/builtin/assets/youcoded-night-mascot-shocked.svg?raw';
+
+// WHY data: URLs for the buddy, not file URLs: MascotRig fetch()es the rig, and a bundled
+// file:// URL is not fetchable in every build (the packaged app, Android); a data: URL is,
+// everywhere. Each drawing is ~20-27KB (its blurred glass is an embedded PNG).
+const svgData = (raw: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(raw)}`;
+
+/** A built-in theme with a picture and the glass buddy: the asset resolver leaves
+ *  built-ins alone (it only rewrites community `assets/...` paths), so the bundled files'
+ *  URLs go in here. */
+function withWallpaper(json: unknown, value: string, terminal: string, buddy: [string, string, string, string, string]): LoadedTheme {
+  const t = json as ThemeDefinition;
+  return {
+    ...t,
+    background: { ...t.background!, value, 'terminal-value': terminal },
+    // The glass buddy (theme questions deck T-4): drawn by scripts/brand/glass-buddy.py in
+    // the workspace from the default rig's skeleton, so every pose still works.
+    mascot: lazyMascot(buddy),
+    source: 'youcoded-core',
+  };
+}
+
+/** The five poses as data: URLs, each built the first time something reads it.
+ *  WHY lazy (final review F47, Destin picked it on final-review#Q-6): encoding all ten
+ *  drawings (~250KB) ran at import in every window — the buddy window too — whether or not
+ *  a YouCoded theme was ever shown. A getter encodes a pose only when the active theme (or a
+ *  preview of it) reads it, then keeps the result, so each read after that is the same
+ *  string (no re-render churn) and every reader (`theme.mascot.rig`, a spread, JSON) still
+ *  sees a plain string property. */
+function lazyMascot(buddy: [string, string, string, string, string]): NonNullable<LoadedTheme['mascot']> {
+  const out = {} as Record<string, string>;
+  (['rig', 'idle', 'welcome', 'inquisitive', 'shocked'] as const).forEach((pose, i) => {
+    let url: string | undefined;
+    Object.defineProperty(out, pose, { enumerable: true, configurable: true, get: () => (url ??= svgData(buddy[i])) });
+  });
+  return out as NonNullable<LoadedTheme['mascot']>;
+}
 import { themeIconSet, type ThemeIconSet } from '../../shared/theme-icons';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -22,6 +76,11 @@ const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(darkJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   { ...(midnightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   { ...(cremeJson as unknown as ThemeDefinition), source: 'youcoded-core' },
+  // The YouCoded pair (theme questions deck, Destin 2026-10-04): brand purple, the
+  // glow-and-silk picture (deck yc-walls-2, "Richer"), Outfit for text. Drawn by
+  // the workspace's scripts/brand/theme-walls.html (?w=gs2), so the app owns them.
+  withWallpaper(youcodedJson, youcodedWall, youcodedWallTerminal, [ycRig, ycIdle, ycWelcome, ycCurious, ycShocked]),
+  withWallpaper(youcodedNightJson, youcodedNightWall, youcodedNightWallTerminal, [ycnRig, ycnIdle, ycnWelcome, ycnCurious, ycnShocked]),
 ];
 
 const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace";
@@ -49,8 +108,20 @@ const CONTEXT_DISPLAY_KEY = 'youcoded-context-display';
 // migrated. The old key and the old `glassOverrides` field in youcoded-appearance.json are
 // simply never read again.
 const LOOK_OVERRIDES_KEY = 'youcoded-look-overrides';
-const DEFAULT_THEME = 'midnight';
-const DEFAULT_CYCLE = ['midnight', 'dark'];
+// WHY the YouCoded pair, chosen by the computer's own light/dark setting (theme questions
+// deck T-1/T-5, Destin 2026-10-04): setup is brand lavender, and opening a new install in
+// near-black Midnight was the sharpest jump of the first run. NEW installs only (final review
+// F1): an install already in use before this release stays on Midnight and the old cycle —
+// see shared/theme-default.ts for how the host tells the two apart.
+function prefersDark(): boolean {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+}
+function safeStorage(): Storage | null {
+  try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+}
+/** Only the no-provider context default; the provider works out the install's own default. */
+const DEFAULT_THEME = defaultThemeFor('youcoded', prefersDark());
+const DEFAULT_CYCLE = defaultCycleFor('youcoded');
 
 /** How the StatusBar context pill renders the window: '45% Remaining' vs
  *  '35.2k / 64k'. Both are colored by the same percentage. */
@@ -223,8 +294,14 @@ function applyHighlightTheme(dark: boolean) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [activeSlug, setActiveSlug] = useState(() => getStored(STORAGE_KEY, DEFAULT_THEME));
-  const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
+  // Which default this install is on (new install → YouCoded pair, existing → Midnight). Starts as the
+  // renderer's guess and is replaced by the host's recorded answer in loadAppearance below.
+  const [defaultKind, setDefaultKind] = useState<ThemeDefaultKind>(() => guessThemeDefault(safeStorage()));
+  const installDefault = defaultThemeFor(defaultKind, prefersDark());
+  const installDefaultRef = useRef(installDefault);
+  installDefaultRef.current = installDefault;
+  const [activeSlug, setActiveSlug] = useState(() => getStored(STORAGE_KEY, installDefault));
+  const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, defaultCycleFor(defaultKind)));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
   const [pagesSeeThrough, setPagesSeeThroughState] = useState(() => getStored(PAGES_SEE_THROUGH_KEY, '1') !== '0');
@@ -236,7 +313,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // treatment of StatusBar's derived-metric widgets (commit da18ee7).
   const [showTurnMetadata, setShowTurnMetadataState] = useState(() => getStored(SHOW_TURN_METADATA_KEY, '') === '1');
   // Artifact viewer "Hide code & configs" toggle. Default ON for non-technical
-  // users — they only see Documents & Mockups in the drawer / Project View.
+  // users — they only see Documents & mockups in the drawer / Project View.
   // Artifact viewer "Show deleted" toggle. Default OFF — hide both explicit
   // delete versions AND artifacts whose underlying file has gone missing.
   const [showDeletedArtifacts, setShowDeletedArtifactsState] = useState(() => getStored(SHOW_DELETED_ARTIFACTS_KEY, '') === '1');
@@ -369,9 +446,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // The theme as the user sees it: its own choices, with any global override on top.
   // WHY every source (user themes too): the override is the user's, not the theme's —
-  // a theme they built still follows it. The user-theme EDITOR must therefore read the
-  // raw theme from allThemes, never this, or saving a tweak would bake the override
-  // into their theme file (ThemeScreen's editingTheme).
+  // a theme they built still follows it. Anything that WRITES a theme file must read the
+  // raw theme from allThemes, never this, or it would bake the override into the file.
   const activeTheme = useMemo(
     () => applyLookOverrides(activeThemeRaw, lookOverrides),
     [activeThemeRaw, lookOverrides],
@@ -386,12 +462,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // otherwise the fallback would treat _preview as "uninstalled" and reset to
     // DEFAULT, silently undoing every theme-builder preview activation.
     if (!allThemesInternal.find(t => t.slug === activeSlug)) {
-      setActiveSlug(DEFAULT_THEME);
-      try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
+      // The install's own default (final review F1): an existing install falls back to Midnight, as it always did.
+      setActiveSlug(installDefault);
+      try { localStorage.setItem(STORAGE_KEY, installDefault); } catch {}
       // A refresh after a reconnect is never a choice: it must not overwrite the saved theme for every screen (sync-fix3 review).
-      if (!reconnectRefreshing.current) persistAppearance({ theme: DEFAULT_THEME });
+      if (!reconnectRefreshing.current) persistAppearance({ theme: installDefault });
     }
-  }, [allThemesInternal, activeSlug, userThemesLoaded]);
+  }, [allThemesInternal, activeSlug, userThemesLoaded, installDefault]);
 
   // Re-read all user themes from disk. Exposed so install/uninstall flows
   // can refresh the list; the active-theme fallback effect (above) uses the
@@ -447,6 +524,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         const prefs = await claude.appearance.get();
         if (!prefs) return; // First launch — no file yet, keep localStorage/defaults
 
+        // WHY (final review F1): the host's record of which default this install is on. With no theme
+        // ever chosen (none in the file, none in this screen's storage), the install's default is shown —
+        // without saving it as a choice, so a later default change could still reach a new install.
+        const kind = parseThemeDefault(prefs.defaultTheme);
+        if (kind) {
+          setDefaultKind(kind);
+          try { localStorage.setItem(THEME_DEFAULT_MIRROR_KEY, kind); } catch {}
+          const chosenHere = (() => { try { return !!localStorage.getItem(STORAGE_KEY); } catch { return false; } })();
+          if (!(prefs.theme && typeof prefs.theme === 'string') && !chosenHere && generation === selectionGeneration.current) {
+            setActiveSlug(defaultThemeFor(kind, prefersDark()));
+          }
+          const cycleHere = (() => { try { return !!localStorage.getItem(CYCLE_KEY); } catch { return false; } })();
+          if (!(Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) && !cycleHere) {
+            setCycleListState(defaultCycleFor(kind));
+          }
+        }
         if (prefs.theme && typeof prefs.theme === 'string' && generation === selectionGeneration.current) {
           void applyIncomingTheme(prefs.theme);
         }
@@ -623,7 +716,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           setUserThemes(prev => prev.filter(t => t.slug !== PREVIEW_SLUG));
           setActiveSlug(prev => {
             if (prev !== PREVIEW_SLUG) return prev;
-            const revert = prePreviewSlug ?? DEFAULT_THEME;
+            const revert = prePreviewSlug ?? installDefaultRef.current;
             setPrePreviewSlug(null);
             try { localStorage.setItem(STORAGE_KEY, revert); } catch {}
             persistAppearance({ theme: revert });
@@ -696,11 +789,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setCycleList = useCallback((list: string[]) => {
-    const safe = list.length > 0 ? list : DEFAULT_CYCLE;
+    // An emptied list falls back to this install's own default cycle (final review F1).
+    const safe = list.length > 0 ? list : defaultCycleFor(defaultKind);
     setCycleListState(safe);
     try { localStorage.setItem(CYCLE_KEY, JSON.stringify(safe)); } catch {}
     persistAppearance({ themeCycle: safe });
-  }, []);
+  }, [defaultKind]);
 
   const setReducedEffects = useCallback((v: boolean) => {
     setReducedEffectsState(v);

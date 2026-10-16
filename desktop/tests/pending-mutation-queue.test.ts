@@ -536,9 +536,10 @@ describe('a file already sitting in the project before the watcher started never
 
     // No result should ever appear — give it a real but bounded wait, then
     // confirm both the request (untouched) and no result exist.
+    // settle (negative assertion): the request must never be picked up.
     await new Promise((r) => setTimeout(r, 1500));
-    expect(fs.existsSync(target)).toBe(true); // never even picked up
     expect(fs.existsSync(path.join(dir, `${id}.result.json`))).toBe(false);
+    expect(fs.existsSync(target)).toBe(true); // never even picked up
   });
 
   it('a request written just as the watcher starts (a genuine cold-start race) IS still processed', async () => {

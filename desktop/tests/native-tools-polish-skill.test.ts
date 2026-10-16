@@ -15,7 +15,7 @@ function catalogOf(body: string, description = 'Write a journal entry'): SkillCa
   return {
     list: () => [{ id: 'p:journal', description }],
     // Resolves the bare name too, like the real catalog does.
-    load: (id: string) => ({ id: 'p:journal', displayName: 'Journal', description, body }),
+    load: (id: string) => ({ id: 'p:journal', displayName: 'Journal', description, body, file: '/tmp/skills/journal/SKILL.md' }),
   };
 }
 

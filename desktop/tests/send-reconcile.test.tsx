@@ -146,6 +146,7 @@ describe('after the connection drops (a Claude Code session: the message is writ
     wire.restore();
     reconnect();
     await waitFor(() => expect(m.bubbles()[0].sendNote).toBe('not-sent'));
+    // settle: a NEGATIVE check — an automatic resend would happen within this window, and none should.
     await new Promise((r) => setTimeout(r, 20));                    // give an automatic resend every chance to happen
     expect(wire.session.sendInput).toHaveBeenCalledTimes(1);        // the one original write, and no second
     expect(host.sendInput).not.toHaveBeenCalled();
@@ -237,6 +238,7 @@ describe('a message sent as a request (a native session) whose answer never came
     await nativeSend(m);
     wire.restore();
     act(() => { window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, { detail: { id: 'dev:1:9', type: 'permission:respond', outcome: 'unknown' } })); });
+    // settle: a NEGATIVE check — a second outcome request would be sent within this window, and none should.
     await new Promise((r) => setTimeout(r, 10));
     expect(wire.session.sendOutcomes).toHaveBeenCalledTimes(1);     // only the one the send itself asked for
   });

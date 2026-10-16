@@ -21,6 +21,9 @@ import { ContextIntroBanner } from '../ContextIntroBanner';
 // Plain-text load-timing label — shared with ContextEditorOverlay
 // (context-labels.ts); spelled out in words, never a glyph.
 import { timingLabel } from '../context-labels';
+import { CARD_LEVEL_1 } from '../../ui';
+import { TabHeading } from '../TabHeading';
+import { useScrollFade } from '../../../hooks/useScrollFade';
 
 interface ContextTabProps {
   // Lifted, cached groups from ProjectView. null = still loading for this project.
@@ -31,7 +34,7 @@ interface ContextTabProps {
 
 // Per-scope teaching copy. Descriptions are EXACT and intentionally have NO
 // trailing periods (the wording was specified verbatim by the user).
-// WHY the labels: the tab is now "Instructions & Memories", so the scopes read
+// WHY the labels: the tab is now "Instructions & memories", so the scopes read
 // "Global instructions" and "Project instructions" — "Global"/"This project"
 // alone no longer said what the group contained.
 const GROUP_META: Record<ContextScope, { label: string; desc: string }> = {
@@ -80,9 +83,13 @@ import { useScreenOpen } from '../../../shoot-mode';
 // the panel edge — a third distinct scrollbar position across three tabs. One
 // shell for all three branches so they can't drift apart again.
 function ContextTabShell({ children }: { children: React.ReactNode }) {
+  // WHY (2026-09-29, "fix scroll fade effects"): drives the see-through edge
+  // fade (.scroll-mask) — cards fade under the tab row and the window's edge
+  // instead of being cut off.
+  const scrollRef = useScrollFade<HTMLDivElement>();
   return (
-    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-1 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
-      <div className="flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
+    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
+      <div ref={scrollRef} className="scroll-mask scroll-mask--wide flex-1 overflow-auto scrollbar-none max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
         {children}
       </div>
     </div>
@@ -123,20 +130,26 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                 (i) button on one non-wrapping row compressed the description
                 into overlapping text at ~326px. ml-auto on the button still
                 right-aligns it on the first line. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1">
-              <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                {meta.label}
-              </span>
-              <span className="text-xs text-fg-muted min-w-0">{meta.desc}</span>
-              <button
-                type="button"
-                className="ml-auto shrink-0 w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
-                title="Learn how these work"
-                aria-label={`How ${meta.label} context works`}
-                onClick={() => onOpenInfo(group.scope)}
-              >
-                <InfoIcon />
-              </button>
+            {/* WHY TabHeading (header/section consistency): the same heading row
+                as Files and Conversations, the description UNDER the heading
+                instead of squeezed beside it, the (i) as its tool. */}
+            <div className="mb-2">
+            <TabHeading
+              description={meta.desc}
+              action={(
+                <button
+                  type="button"
+                  className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
+                  title="Learn how these work"
+                  aria-label={`How ${meta.label} context works`}
+                  onClick={() => onOpenInfo(group.scope)}
+                >
+                  <InfoIcon />
+                </button>
+              )}
+            >
+              {meta.label}
+            </TabHeading>
             </div>
 
             {group.files.length === 0 ? (
@@ -147,7 +160,10 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                   <button
                     key={f.id}
                     type="button"
-                    className="w-full text-left flex items-center gap-3 bg-panel border border-edge-dim rounded-lg p-3 shrink-0 hover:bg-inset hover:border-edge transition-colors"
+                    // WHY CARD_LEVEL_1: the app's one first-level card, matching the
+                    // conversation cards on the tab beside it (was bg-panel + a
+                    // dimmer edge, a look no other list uses).
+                    className={`w-full text-left flex items-center gap-3 ${CARD_LEVEL_1} p-3 shrink-0 hover:bg-inset transition-colors`}
                     onClick={() => onEditFile(f)}
                     title={f.absolutePath}
                   >

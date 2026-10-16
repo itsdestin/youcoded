@@ -140,7 +140,7 @@ describe('when an Office save fails', () => {
 
   it('offers Retry, Save a copy… and Close without saving', async () => {
     await failedTab();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Save a copy…' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close without saving' })).toBeInTheDocument();
   });
@@ -150,7 +150,7 @@ describe('when an Office save fails', () => {
     await failedTab({ saveCopy });
     await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'check'));
     expect(screen.queryByRole('button', { name: 'Save a copy…' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
 
   it('changes nothing when the copy dialog is cancelled', async () => {
@@ -287,7 +287,7 @@ describe('quitting, closing or reloading with an Office document not saved yet',
   it("main's refused quit lists it — even with the Office page closed — and asks it to save at once", async () => {
     const { prompt, win } = await changed();
     act(() => prompt()({ mode: 'quit', afterTeardown: false, restartDropped: false }));
-    expect(await screen.findByText('A file has unsaved changes.')).toBeInTheDocument();
+    expect(await screen.findByText(/^A file has unsaved changes\./)).toBeInTheDocument();
     expect(screen.getByText('plan.docx')).toBeInTheDocument();
     expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
@@ -567,7 +567,7 @@ describe('Save a copy while the editor could still change', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
     await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'save'));
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Close without saving' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Versions' })).toBeDisabled();
     expect(frameOf(container)!.hasAttribute('inert')).toBe(true);
@@ -709,7 +709,7 @@ describe('restoring a kept version of an open document', () => {
     }).then((r) => { fromFrame = r.from; return r; });
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.');
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Close without saving' })).toBeInTheDocument();
     const invoke = vi.mocked(office.invoke);
     const savesBefore = invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin').length;

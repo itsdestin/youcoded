@@ -1,4 +1,5 @@
 import React from 'react';
+import { Callout, CALLOUT_DANGER_SURFACE } from './Callout';
 import BrailleSpinner from '../BrailleSpinner';
 import { Button } from './Button';
 import { triggerTip } from '../guide/tips';
@@ -7,8 +8,8 @@ import { triggerTip } from '../guide/tips';
  * The loading / empty / error family (changes 31-34, §1.6).
  *
  * Shared anatomy: [mark] message [action].
- * Marks carry meaning — braille spinner = working, nothing = empty,
- * destructive dot = failed.
+ * Marks carry meaning — braille spinner = working, nothing = empty. A failure
+ * is the red-tinted notice box itself (ErrorState, below; no separate mark).
  *
  * Two variants everywhere:
  *   block  — list surfaces, text-sm, vertical breathing room
@@ -83,11 +84,6 @@ export function EmptyState({ message, action, variant = 'block', className = '' 
   );
 }
 
-/** The failure mark. Shared with Toast's error tone. */
-function ErrorDot() {
-  return <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" aria-hidden="true" />;
-}
-
 type ErrorStateCommon = {
   /**
    * Layout only, no longer a discriminant: 'general' stacks, 'recoverable' is a row.
@@ -104,6 +100,9 @@ type ErrorStateCommon = {
    *  at the right-hand end. They do not count toward "at least one action": the type still
    *  demands one of the three. */
   moreActions?: ReadonlyArray<{ label: string; onClick: () => void }>;
+  /** The failure's own words, folded under "Details" inside the box (Callout `details`;
+   *  popup-cards-8#Q-1, Destin: Details goes inside the error box, everywhere). */
+  details?: string;
   /** Every action is disabled while a choice already made is running (Office's "Save a copy…",
    *  fix round 5: pressing Retry or Close without saving mid-copy would race it). */
   busy?: boolean;
@@ -140,16 +139,23 @@ type ErrorStateAction =
 export type ErrorStateProps = ErrorStateCommon & ErrorStateText & ErrorStateAction;
 
 /**
- * Option C, chosen explicitly over A ("quiet inline") and B ("destructive-tinted
- * callout"): the container is NEUTRAL, and the destructive dot alone carries the
- * failure. Errors are not red boxes (design rule 6).
+ * The error is THE notice box — the shared Callout, danger tone (red tint + red
+ * border, normal-colour words) — with its buttons inside it at the right.
+ *
+ * WHY (error-notices-1, 2026-10-12): this used to be "Option C" (2026-07-16 spec
+ * §1.6): a NEUTRAL grey inset box whose small red dot alone carried the failure,
+ * chosen over a "destructive-tinted callout". The design guide Destin has since
+ * approved reverses that: "every warning, error or info notice is the one tinted box
+ * with a matching border … only the box carries the colour" (guide-draft "Status and
+ * notices"; decisions "Error notices: no red titles, app-wide"). So the grey box and
+ * the dot are gone and every caller gets the guide's box without changing a line.
+ * The dot went too because the guide allows colour in the box only.
  *
  * The `general` mode IS the two-action fallback component that
  * docs/error-message-standards.md schedules for v1.3.1 — every user-facing error
  * is either specific+Retry or general+two-actions.
  */
 export function ErrorState(props: ErrorStateProps) {
-  const container = `bg-inset/50 rounded-lg p-3 ${props.className ?? ''}`.trim();
   // `mode` no longer narrows the type, so the layout is chosen from the text shape
   // unless a caller overrides it. Title+explainer stacks; a bare message is a row.
   const general = (props.mode ?? ('title' in props ? 'general' : 'recoverable')) === 'general';
@@ -165,6 +171,9 @@ export function ErrorState(props: ErrorStateProps) {
   // Retry → Diagnose → Report bug that was actually supplied.
   // Fixed, not per-caller: three-button errors that each ordered themselves would
   // look like three different apps.
+  // WHY "Try again", not "Retry" (Destin, error-notices-1#EN-Q1, 2026-10-12): the guide and
+  // every screen redesigned since (Games offline, a failed ticket, Contribute) say "Try
+  // again"; two words for one button read as two different apps. The prop stays `onRetry`.
   const primary = props.onRetry ? 'retry' : props.onDiagnose ? 'diagnose' : 'report';
   const actions = (
     <>
@@ -183,45 +192,84 @@ export function ErrorState(props: ErrorStateProps) {
       )}
       {props.onRetry && (
         <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry} disabled={props.busy}>
-          Retry
+          Try again
         </Button>
       )}
     </>
   );
 
+  // Whatever text shape the caller gave, the box shows it: a title (general errors)
+  // is the notice's lead line in the normal text colour, the explainer or message its body.
+  const body = props.explainer ?? props.message;
   if (general) {
+    // WHY 'below' (G-28, Destin 2026-09-10: "buttons should either be full modal width
+    // or on the righthand side"): a general error is a title and a sentence or two, so
+    // its buttons get their own line at the bottom RIGHT — the same placement the old
+    // stacked layout had, and the one the notice box uses for a long notice
+    // (provider-notices#PN-1). Never bottom left, where a filled button reads as stray.
     return (
-      <div className={container} role="alert">
-        <div className="flex items-start gap-2">
-          <span className="mt-1.5">
-            <ErrorDot />
-          </span>
-          <div className="flex flex-col gap-2 min-w-0">
-            <span className="text-sm font-medium text-fg">{props.title}</span>
-            <span className="text-2xs text-fg-dim leading-relaxed">{props.explainer}</span>
-            {/* WHY justify-end (G-28, Destin 2026-09-10): "buttons should either be full
-                modal width or on the righthand side" — a filled button at the bottom LEFT
-                reads as stray rather than as the thing to press. The row layout below is
-                the other permitted case: its action is inline with the text, on the right. */}
-            <div className="flex items-center justify-end gap-2">{actions}</div>
-          </div>
-        </div>
-      </div>
+      <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} actionsPlacement="below" details={props.details}>
+        {body}
+      </Callout>
     );
   }
 
+  // A one-line error keeps its buttons on the same line, at the right (they wrap below,
+  // still right-aligned, when there is no room). `inline` — inside a section, a menu or
+  // a card — is the notice box's slim one-line form (provider-notices-2: "why is this red
+  // box so tall"); `block` — a whole list or pane that failed — is the full box.
+  // Retry stays the FILLED button (review correction: an outline reads as dim on dark themes).
   const block = (props.variant ?? 'block') === 'block';
   return (
-    <div className={container} role="alert">
-      <div className="flex items-center gap-2">
-        <ErrorDot />
-        <span className={`flex-1 min-w-0 text-fg-2 ${block ? 'text-sm' : 'text-2xs'}`}>
-          {props.message}
-        </span>
-        {/* Retry is FILLED primary — an explicit review correction from secondary,
-            because secondary reads as a dim outline on dark themes. */}
-        {actions}
-      </div>
+    <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} compact={!block} details={props.details}>
+      {body}
+    </Callout>
+  );
+}
+
+type ScreenErrorProps = {
+  /** What couldn't load, as the box's lead line: "The marketplace couldn't load". */
+  title: string;
+  /** One plain sentence — what still holds, or what to try. No machine words. */
+  message?: React.ReactNode;
+  /** The raw failure, folded under Details above the buttons. */
+  details?: string;
+  onRetry: () => void;
+  onReportBug?: () => void;
+  busy?: boolean;
+};
+
+/**
+ * The full-screen error: a whole screen (Marketplace, Library, Pages) that has nothing to
+ * show because its one load failed.
+ *
+ * WHY its own shape (Destin, guide test gt-r1#B-3: "we need better full-screen error states
+ * for when nothing on the page loads at all"): the ordinary notice box at the top of an
+ * otherwise empty full screen read as a stray strip, not as "this screen didn't load". Here it
+ * sits in the middle of the screen at a readable width, with the guide's notice order —
+ * what failed, one sentence, Details, then a full-width filled Try again (Report bug
+ * outlined under it). Same tinted box as every notice, so it is still the one error look.
+ */
+export function ScreenError({ title, message, details, onRetry, onReportBug, busy }: ScreenErrorProps) {
+  return (
+    // WHY a fixed top gap, not vertical centring: the screens it sits in (Marketplace's body,
+    // Library's tab, Pages' list) aren't all full-height boxes, so "centred" landed at the top on
+    // two of three. A set distance from the top puts it in the same spot on every screen.
+    <div className="w-full flex justify-center px-4 pt-24 pb-12">
+      <Callout
+        tone="danger"
+        role="alert"
+        className="w-full max-w-sm"
+        title={title}
+        details={details}
+        actionsPlacement="below"
+        actions={<>
+          <Button variant="primary" className="w-full" onClick={onRetry} disabled={busy}>Try again</Button>
+          {onReportBug && <Button variant="secondary" className="w-full" onClick={onReportBug} disabled={busy}>Report bug</Button>}
+        </>}
+      >
+        {message}
+      </Callout>
     </div>
   );
 }
@@ -245,13 +293,17 @@ export type FieldErrorProps = {
   as?: 'span' | 'p' | 'div';
 };
 
-/** Field-level errors stay short lines under the input — not cards. */
+/** Field-level errors: one short line under the input, in a small tinted box.
+ *  WHY the box (fix-batch3#FB-1, 2026-09-29; Destin picked it over red text and
+ *  over grey text with a red icon): the guide says "never red or coloured body
+ *  text" — the colour lives in the box, the words stay the normal grey. It is
+ *  the notice box (Callout, danger tone) in miniature: same tint and border. */
 export function FieldError({ children, className = '', size = '3xs', as: Tag = 'span' }: FieldErrorProps) {
   // Literal class strings, not `text-${size}` — Tailwind scans source text for
   // whole class names and never sees an interpolated one.
   const sizeClass = size === '2xs' ? 'text-2xs' : 'text-3xs';
   return (
-    <Tag className={`${sizeClass} text-destructive-fg ${className}`.trim()} role="alert">
+    <Tag className={`block ${sizeClass} text-fg-2 border ${CALLOUT_DANGER_SURFACE} rounded-md px-2 py-1 ${className}`.trim()} role="alert">
       {children}
     </Tag>
   );

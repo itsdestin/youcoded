@@ -53,7 +53,7 @@ describe('saved context settings', () => {
     render(<SavedContextSettings />); await ready(); click('ChatGPT');
     await screen.findByText(/disk failed/);
     expect(tab('ChatGPT', '1M').getAttribute('aria-selected')).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(saved.chatgpt).toBe('long'));
     expect(set).toHaveBeenLastCalledWith({ chatgpt: 'long' });
   });
@@ -64,7 +64,7 @@ describe('saved context settings', () => {
     await waitFor(() => expect(saved.chatgpt).toBe('long'));
     expect(tab('OpenRouter', '1M').getAttribute('aria-selected')).toBe('true');
     await screen.findByText(/disk failed/);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(saved.openrouter).toBe('long'));
   });
   it('shows loading and retries a failed load without fake defaults', async () => {
@@ -74,7 +74,7 @@ describe('saved context settings', () => {
     expect(screen.getByText(/Loading context/)).toBeTruthy();
     await act(async () => load.reject(new Error('read failed')));
     expect(screen.queryByRole('tablist')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' })); await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' })); await ready();
     expect(get).toHaveBeenCalledTimes(2); expect(set).not.toHaveBeenCalled();
   });
   it('waits for a previous mount\'s delayed saves before reopening, then allows choosing the lower mode', async () => {

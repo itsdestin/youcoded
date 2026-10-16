@@ -13,15 +13,18 @@ import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { CROSS_PROJECT_SLUG } from '../src/shared/permission-types';
 import type { PermissionRule } from '../src/shared/permission-types';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { scriptedModel, stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
 import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
+import type { DelegationRecord } from '../src/main/harness/specialists/delegation-ledger';
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
 import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
+import { looseData } from '../src/shared/transcript-event-types';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
  *  10ms interval each loop already uses (1,500 x 10ms = 15s, matching the
@@ -109,13 +112,15 @@ function waitForEvent(h: NativeSessionHost, match: (e: any) => boolean): Promise
 }
 
 // RAW V4 stream-part shapes (see harness-session.test.ts): deltas carry `delta`, usage is nested.
-const CHUNKS = [
+// WHY the cast: the finish part is deliberately minimal (no `raw` finish reason, no cache/text token
+// split) — the host must cope with exactly this sparse shape, so the fixture is not padded to the full type.
+const CHUNKS = ([
   { type: 'stream-start', warnings: [] },
   { type: 'text-start', id: 'p1' },
   { type: 'text-delta', id: 'p1', delta: 'Hi there' },
   { type: 'text-end', id: 'p1' },
   { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 3 }, outputTokens: { total: 2 } } },
-];
+] as unknown) as LanguageModelV4StreamPart[];
 const factory = async () => new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: CHUNKS }) }) }) as any;
 
 // Fix pass 2 (Task 13): the constructor's 3rd param collapsed from a bare
@@ -321,7 +326,8 @@ describe('NativeSessionHost', () => {
     const cascadeEntered = new Promise<void>((resolve) => { enteredCascade = resolve; });
     const cascadeGate = new Promise<void>((resolve) => { releaseCascade = resolve; });
     const cascade = (host as any).destroyChildrenOf.bind(host);
-    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (id: string) => {
+    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (...args: unknown[]) => {
+      const id = args[0] as string; // WHY: spyOn on an `any` host types the stub's args as unknown[]
       await cascade(id);
       if (id === 'root-1') { enteredCascade(); await cascadeGate; }
     });
@@ -419,7 +425,7 @@ describe('NativeSessionHost', () => {
     const history = host.getHistory('s-1');
     expect(history).not.toBeNull();
     expect(history!.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
-    expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
+    expect(looseData(history![1]).text).toBe('Hi there');   // coalesced on disk
     // 2026-09-16 C2: the IPC handlers read through the async twins, which must
     // answer exactly what the sync forms do; isLive answers the tear-off's
     // boolean without reading anything.
@@ -461,7 +467,7 @@ describe('NativeSessionHost', () => {
     expect((guarded as any).live.get('stored').session.opts.harness.limits.maxSteps).toBe(14);
     await guarded.destroyAll();
 
-    const headerBase = { v: 1, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
+    const headerBase = { v: 1 as const, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
     await store.create({ ...headerBase, sessionId: 'old' });
     await new NativeHome(root).appendSessionLine(nativeStoreSlug(root), 'bad', { ...headerBase, sessionId: 'bad', stepGuard: 'oops' });
     for (const id of ['old', 'bad']) {
@@ -752,6 +758,7 @@ describe('NativeSessionHost', () => {
     // and flushes the open part. Give the old stream's remaining chunk delays
     // (15ms each) generous room to fire if the abort did NOT take.
     const afterResume = appends.length;
+    // settle (negative assertion): the aborted stream must write nothing more.
     await new Promise((r) => setTimeout(r, 120));
     expect(appends.length).toBe(afterResume); // the orphan wrote nothing more
 
@@ -829,7 +836,7 @@ describe('NativeSessionHost', () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
         undefined, undefined, undefined, undefined,
-        { destroyAll: mcpDestroyAll },
+        { destroyAll: mcpDestroyAll, acquire: vi.fn() }, // WHY acquire: required by the manager type; this test never opens a session
       );
       await h.destroyAll();
       expect(mcpDestroyAll).toHaveBeenCalledTimes(1);
@@ -1792,9 +1799,7 @@ describe('NativeSessionHost', () => {
         (p as any).rememberRule('a', cwdA, userRule);
         // The persist is fire-and-forget, so wait for it to land before reading
         // from a session that has no in-memory copy of its own.
-        for (let i = 0; i < 100 && (await store.rulesFor(cwdB)).length === 0; i++) {
-          await new Promise((r) => setTimeout(r, 10));
-        }
+        await vi.waitFor(async () => expect((await store.rulesFor(cwdB)).length).toBeGreaterThan(0));
 
         const decideB = (p as any).buildDecide('b', cwdB, []);
         expect((await decideB('Task', SUBJECT)).action).toBe('allow');
@@ -2155,8 +2160,9 @@ describe('NativeSessionHost', () => {
     it('consumes ready input at a second empty response without host-draining another turn', async () => {
       let requests = 0;
       const prompts: any[] = [];
-      const empty = [{ type: 'stream-start', warnings: [] },
-        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } }];
+      // WHY cast: same deliberately sparse finish part as CHUNKS.
+      const empty = ([{ type: 'stream-start', warnings: [] },
+        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } }] as unknown) as LanguageModelV4StreamPart[];
       const modelFactory = async () => new MockLanguageModelV4({ doStream: async (req: any) => {
         const index = requests++;
         prompts.push(req.prompt);
@@ -2503,6 +2509,7 @@ describe('NativeSessionHost', () => {
       // Give the deferred runTurns (setImmediate) + the now-zombie turn's
       // delayed stream room to play out in the background — it must stay
       // silent (destroy() already tore down the session's listeners).
+      // settle (negative assertion): no user message may surface.
       await new Promise((r) => setTimeout(r, 150));
       expect(events.some((e) => e.type === 'user-message' && e.data.text === 'same-tick')).toBe(false);
     });
@@ -2527,6 +2534,7 @@ describe('NativeSessionHost', () => {
 
       await qHost.quiesce('qz');
       const appendsAtQuiesce = appendSpy.mock.calls.length;
+      // settle (negative assertion): the queued survivor must never run.
       await new Promise((r) => setTimeout(r, 80)); // the queue would have drained by now
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce); // queued-survivor never ran
 
@@ -2551,6 +2559,7 @@ describe('NativeSessionHost', () => {
       await qHost.quiesce('qz2');
 
       const appendsAtQuiesce = appendSpy.mock.calls.length;
+      // settle (negative assertion): no appends after quiesce.
       await new Promise((r) => setTimeout(r, 80));
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce); // no post-quiesce appends
       // Aborted mid-stream: the turn must NOT have reached turn-complete.
@@ -2569,6 +2578,7 @@ describe('NativeSessionHost', () => {
       const quiesced = qHost.quiesce('qz3');
       expect(qHost.send('qz3', 'mid-quiesce')).toEqual({ status: 'failed', reason: 'not-live' });
       await quiesced;
+      // settle (negative assertion): the refused send must never be written.
       await new Promise((r) => setTimeout(r, 80));
       expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
       // Still refused after quiesce returns: the takeover's flush and lease
@@ -2597,6 +2607,7 @@ describe('NativeSessionHost', () => {
       (qHost as any).kickIdleDeliveryPass('qz4');
       expect((qHost as any).live.get('qz4').inFlight).toBeFalsy();
 
+      // settle (negative assertion): no appends after quiesce.
       await new Promise((r) => setTimeout(r, 80));
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce);
       await qHost.destroyAll();
@@ -3024,7 +3035,7 @@ describe('NativeSessionHost', () => {
         // second, differently-typed specialist attempting Bash isn't possible;
         // this is the mechanism the end-to-end tests above rely on, isolated.
         const store = {
-          rulesFor: async () => [{ tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker' }],
+          rulesFor: async () => [{ tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow' as const, specialist: 'worker' }],
           remember: async () => { /* no-op */ }, remove: async () => false, removeProject: async () => false,
         };
         const h = new NativeSessionHost(
@@ -3090,10 +3101,7 @@ describe('NativeSessionHost', () => {
 
         // Disk path (next run): wait for the fire-and-forget persist, then read
         // it back through a host that holds NOTHING in memory for this session.
-        for (let i = 0; i < 100 && !(await store.rulesFor(F)).some((r) => r.specialist === 'worker'); i++) {
-          await new Promise((r) => setTimeout(r, 10));
-        }
-        expect((await store.rulesFor(F)).some((r) => r.specialist === 'worker')).toBe(true);
+        await vi.waitFor(async () => expect((await store.rulesFor(F)).some((r) => r.specialist === 'worker')).toBe(true));
         const restarted = new NativeSessionHost(
           new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined, store,
         );
@@ -3205,14 +3213,14 @@ describe('NativeSessionHost', () => {
       // narrowed to a subdirectory must still read the rules the user granted
       // for the PROJECT — grants follow the project, not the subtree — so the
       // lookup has to use the parent's cwd even though the child runs in `sub`.
-      const rulesFor = vi.fn(async () => []);
+      const rulesFor = vi.fn<(cwd: string) => Promise<PermissionRule[]>>(async () => []);
       const store = new SessionStore(new NativeHome(root));
       const globOnce = async () => scriptedModel([
         stream(toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
       ]) as any;
       const h = new NativeSessionHost(store, globOnce, NO_CONTEXT, async () => null, async () => null, undefined,
-        { rulesFor, remember: async () => { /* no-op */ } });
+        { rulesFor, remember: async () => { /* no-op */ }, remove: async () => false, removeProject: async () => false });
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
       const sub = path.join(root, 'sub-perms');
       fs.mkdirSync(sub, { recursive: true });
@@ -3259,7 +3267,7 @@ describe('NativeSessionHost', () => {
       // which IS this child's report — a one-shot specialist that says its
       // piece and is torn down.
       const { childId, report } = await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         // Task 1 (plan 1b): spawnSpecialist now binds a caller-supplied
         // reservation rather than reserving one itself — this test drives the
         // run loop directly (below tools/task.ts), so it hands a plain reader
@@ -5347,14 +5355,14 @@ describe('NativeSessionHost', () => {
       });
 
       const { childId, report } = await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         token: { parentId: 'root-1', writer: false },
       });
       expect(report).toContain('Hi there'); // the suite's default `factory`'s one text step
 
       await store.append(root, {
         type: 'tool-result', sessionId: 'root-1', uuid: 'u-tool-result', timestamp: Date.now(),
-        data: { toolUseId: 'tc-1', toolResult: report },
+        data: { toolUseId: 'tc-1', toolResult: report, isError: false },
       });
 
       await h.destroy('root-1');
@@ -5367,8 +5375,8 @@ describe('NativeSessionHost', () => {
       const taskIdx = events.findIndex((e) => e.type === 'tool-use' && e.data.toolName === 'Task');
       expect(taskIdx).toBeGreaterThanOrEqual(0);
       // Immediately after — not just "somewhere after".
-      expect(events[taskIdx + 1].data.agentId).toBe(childId);
-      expect(events[taskIdx + 1].data.parentAgentToolUseId).toBe(events[taskIdx].data.toolUseId);
+      expect(looseData(events[taskIdx + 1]).agentId).toBe(childId);
+      expect(looseData(events[taskIdx + 1]).parentAgentToolUseId).toBe(looseData(events[taskIdx]).toolUseId);
       // Every stamped (agentId-bearing) event is display-safe — nothing else
       // rode along under the parent's id.
       //
@@ -5378,7 +5386,7 @@ describe('NativeSessionHost', () => {
       // to the parent's own file. It carries agentId only to name which child
       // the money belongs to. Its own coverage is in
       // tests/subagent-usage-event.test.ts.
-      const stamped = events.filter((e) => e.data.agentId && e.type !== 'subagent-usage');
+      const stamped = events.filter((e) => looseData(e).agentId && e.type !== 'subagent-usage');
       expect(stamped.length).toBeGreaterThan(0);
       expect(stamped.every((e) => SUBAGENT_DISPLAY_TYPES.has(e.type))).toBe(true);
       // …and that bookkeeping event really is on the parent's record exactly once.
@@ -5399,7 +5407,7 @@ describe('NativeSessionHost', () => {
       });
 
       await h.spawnSpecialist('root-1', {
-        specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+        specialist: EXPLORER, prompt: 'find the config loader', description: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
         token: { parentId: 'root-1', writer: false },
       });
 
@@ -5417,7 +5425,7 @@ describe('NativeSessionHost', () => {
 
       const events = h2.getHistory('root-1')!;
       const replayedText = events.find((e) => e.type === 'assistant-text' && e.data.agentId === childHeader.sessionId)!;
-      expect(replayedText.data.partId).toBe(originalText.data.partId);
+      expect(looseData(replayedText).partId).toBe(looseData(originalText).partId);
 
       await h2.destroyAll();
     });
@@ -5426,7 +5434,7 @@ describe('NativeSessionHost', () => {
   // mergeChildEvents (Task 9, plan 1b) — the pure splice function, tested
   // directly per the brief rather than only through getHistory() above.
   describe('mergeChildEvents (pure function)', () => {
-    const rec = (over: Partial<any> = {}) => ({
+    const rec = (over: Partial<DelegationRecord> = {}): DelegationRecord => ({
       childId: 'child-1', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
       workDir: '/x', description: 'd', background: false, status: 'completed',
       startedAt: 0, delivered: true, owner: OWNER, missedSteers: [], ...over,
@@ -5447,8 +5455,8 @@ describe('NativeSessionHost', () => {
       expect(merged[1].type).toBe('tool-use');
       expect(merged[2].type).toBe('assistant-text');
       expect(merged[2].sessionId).toBe('root-1');
-      expect(merged[2].data.agentId).toBe('child-1');
-      expect(merged[2].data.parentAgentToolUseId).toBe('tc-1');
+      expect(looseData(merged[2]).agentId).toBe('child-1');
+      expect(looseData(merged[2]).parentAgentToolUseId).toBe('tc-1');
       expect(merged[3].type).toBe('turn-complete');
     });
 
@@ -5483,7 +5491,7 @@ describe('NativeSessionHost', () => {
         { record: rec({ childId: 'child-2', parentToolCallId: 'tc-2' }), events: [ev('assistant-text', { data: { text: 'from child 2' } })] },
       ];
       const merged = mergeChildEvents('root-1', parentEvents, children);
-      expect(merged.map((e) => `${e.type}:${e.data.agentId ?? e.data.toolUseId}`)).toEqual([
+      expect(merged.map((e) => `${e.type}:${looseData(e).agentId ?? looseData(e).toolUseId}`)).toEqual([
         'tool-use:tc-1', 'assistant-text:child-1', 'tool-use:tc-2', 'assistant-text:child-2',
       ]);
     });
@@ -5509,10 +5517,10 @@ describe('NativeSessionHost', () => {
       ];
       const merged = mergeChildEvents('root-1', parentEvents, [{ record: rec(), events: childEvents }]);
       expect(merged.map((e) => e.type)).toEqual(['tool-use', 'assistant-thinking', 'assistant-text']);
-      expect(merged[1].data.text).toBe('thinking it through');
+      expect(looseData(merged[1]).text).toBe('thinking it through');
       expect(merged[1].sessionId).toBe('root-1');
-      expect(merged[1].data.agentId).toBe('child-1');
-      expect(merged[1].data.parentAgentToolUseId).toBe('tc-1');
+      expect(looseData(merged[1]).agentId).toBe('child-1');
+      expect(looseData(merged[1]).parentAgentToolUseId).toBe('tc-1');
     });
   });
 
@@ -5926,8 +5934,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     const run = startIn('p3', 'echo a', 'ta');
     reg('p3').emit('long-running', run, 5 * 60_000);          // mark queued behind the busy turn
     await run.exited;                                         // ...then the run finishes (completion queued after it)
-    await new Promise((r) => setTimeout(r, 50));
-    expect(((host as any).pendingHostNotices.get('p3') ?? []).map((n: any) => n.meta?.kind)).toEqual(['shell-running', 'shell']);
+    await vi.waitFor(() => expect(((host as any).pendingHostNotices.get('p3') ?? []).map((n: any) => n.meta?.kind)).toEqual(['shell-running', 'shell']));
     release();
     await waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-complete');
     await host.drain('p3');
@@ -6056,6 +6063,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
   it.skipIf(!posix)('interrupt() leaves background runs alone', async () => {
     const a = startIn('p1', 'sleep 5', 'ta');
     host.interrupt('p1');
+    // settle (negative assertion): interrupt must not stop the background run.
     await new Promise((r) => setTimeout(r, 100));
     expect(a.status).toBe('running');
   });
@@ -6067,10 +6075,11 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     const a = startIn('p1', 'sleep 0.3', 'ta');
     await host.destroy('p1', { keepShells: true });
     await a.exited;
-    await new Promise((r) => setTimeout(r, 50));
-    const written = spy.mock.calls.map((c) => String(c[1]));
-    expect(written.some((l) => l.includes('a background command finished after its conversation was closed'))).toBe(true);
-    expect(written.some((l) => l.includes('late permission answer'))).toBe(false);
+    // WHY a signal, not a 50 ms sleep (final review F55): the note is written after the exit is
+    // handled, a moment that stretches on a busy machine; wait for the line itself.
+    const written = () => spy.mock.calls.map((c) => String(c[1]));
+    await vi.waitFor(() => expect(written().some((l) => l.includes('a background command finished after its conversation was closed'))).toBe(true));
+    expect(written().some((l) => l.includes('late permission answer'))).toBe(false);
     spy.mockRestore();
   });
 
@@ -6079,8 +6088,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     host.on('shell-event', (e: any) => views.push(e));
     const a = startIn('p1', 'echo hi', 'ta');
     await a.exited;
-    await new Promise((r) => setTimeout(r, 300));
-    expect(views[views.length - 1]).toEqual({ sessionId: 'p1', run: expect.objectContaining({ shellId: a.shellId, status: 'exited', exitCode: 0, tail: 'hi' }) });
+    await vi.waitFor(() => expect(views[views.length - 1]).toEqual({ sessionId: 'p1', run: expect.objectContaining({ shellId: a.shellId, status: 'exited', exitCode: 0, tail: 'hi' }) }));
     expect(host.shellRunsFor('p1').map((v: any) => v.shellId)).toEqual([a.shellId]);
     expect(host.shellRunsFor('nope')).toEqual([]);
   });

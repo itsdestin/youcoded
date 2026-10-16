@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SpecialistDefinitionView, DelegatedModelsView, SpecialistsListResult } from '../../shared/types';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
-import { Button, EmptyState, ErrorState, FieldError, LoadingState } from './ui';
+import { Button, Callout, CARD_LEVEL_1, EmptyState, ErrorState, FieldError, LoadingState, Pill, SectionLabel } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
@@ -15,7 +15,9 @@ import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } fr
 // VISIBLE warning, never a silent edit). No editor: that is later marketplace
 // work; the folder is opened for you instead.
 
-const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+// WHY: the local SECTION_LABEL class string is retired here in favour of the
+// shared `<SectionLabel>` primitive (fix batch 1, 2026-09-24 — design guide
+// small label: normal case, no letter-spacing).
 
 // Task 10: group labels per the approved design. A project's OWN
 // .claude/agents/ file gets the same 'claude-code' source as the user-level
@@ -164,8 +166,9 @@ export default function SpecialistsSection({ cwd }: {
   // downstream has to guess which half of the screen is broken.
   if (roster.status === 'unavailable' || tiersUnavailable) {
     return (
-      <section className="space-y-5">
-        <EmptyState message="Specialists run on the desktop app. Open Settings there to add or edit them." />
+      // WHY space-y-4: 16px between groups (decisions "Popup spacing", SP-4; guide "Spacing") — was 20px.
+      <section className="space-y-4">
+        <EmptyState message="Specialists run on the desktop app. Open settings there to add or edit them." />
       </section>
     );
   }
@@ -190,32 +193,40 @@ export default function SpecialistsSection({ cwd }: {
   const warningCount = definitions.reduce((n, d) => n + d.warnings.length, 0);
 
   return (
-    <section className="space-y-5">
+    // space-y-4: the guide's 16px between groups (fix batch 2; was 20px, off
+    // the 4·8·12·16·24 scale).
+    <section className="space-y-4">
       {/* ── 1. Models for specialists ─────────────────────────────────────── */}
       {/* Destin's copy (workbench pass): the panel opens by saying what this
           screen is for and pointing at the ⓘ for the long version, so neither
-          block below has to carry an explainer of its own. */}
-      <p className="text-2xs text-fg-dim leading-relaxed">
+          block below has to carry an explainer of its own.
+          WHY -mt-2 (fix batch 2, 2026-09-26): this is the "Specialists"
+          heading's own intro, so it sits 8px under it (the scale's step for
+          things that belong together), not 16px. The page shell spaces every
+          block 16px apart, which is right between groups but read as a big gap
+          between a heading and its first line — Destin, B1-4: "the large gap
+          after the specialists header before the copy". */}
+      <p className="-mt-2 text-2xs text-fg-dim leading-relaxed">
         Your assistant may utilize “specialists” to help it accomplish some tasks. This menu allows you to configure which specialists your assistant has access to. Click the (i) above for additional information.
       </p>
 
       <div>
-        <h3 className={SECTION_LABEL}>Specialist intelligence tiers</h3>
+        <SectionLabel className="mb-2">Specialist intelligence tiers</SectionLabel>
         {/* Destin (workbench pass): the intro paragraph is GONE, wrapper and
             all — not just emptied, or the box would keep its padding and read
             as a blank gap. The heading plus each row's own hint carry it; the
             (i) explainer holds the longer version for anyone who wants it. */}
-        <div className="rounded-lg bg-inset/50">
+        <div className={CARD_LEVEL_1}>
           {tierLoadError ? (
             <div className="p-2.5">
               <ErrorState mode="recoverable" message={tierLoadError} onRetry={() => void loadTiers()} variant="inline" />
             </div>
           ) : (
             <>
-              {/* No `border-t` any more — the paragraph that used to sit above
-                  it is gone, so it would have drawn a stray rule across the top
-                  of the box. */}
-              <div className="divide-y divide-edge-dim">
+              {/* Card-levels sweep (2026-09-27): `divide-y`/`border-t` are gone —
+                  no full-width line inside a card. `space-y-2` on the row stack
+                  separates Budget from Frontier instead. */}
+              <div className="p-3 space-y-3">
                 <TierRow
                   tier="budget"
                   title="Budget"
@@ -244,7 +255,7 @@ export default function SpecialistsSection({ cwd }: {
                   full ErrorState below is deliberately heavier because it
                   replaces a whole missing list, not one field. */}
               {tierWriteError && (
-                <div className="border-t border-edge-dim px-3 py-2">
+                <div className="px-3 py-2">
                   <FieldError>{tierWriteError}</FieldError>
                 </div>
               )}
@@ -255,44 +266,55 @@ export default function SpecialistsSection({ cwd }: {
 
       {/* ── 2. The roster ─────────────────────────────────────────────────── */}
       <div>
-        <h3 className={SECTION_LABEL}>
-          Available specialists{roster.status === 'ready' ? ` · ${definitions.length}` : ''}
-          {warningCount ? ` · ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}
-        </h3>
-        {/* Fix (UX review 1, U27): an empty padded div sat here above the first
-            group and read as a missing row; the first group's top border now
-            starts the card. */}
-        <div className="rounded-lg bg-inset/50">
+        {/* WHY this shape (fix batch 2 — design guide "Text and numbers"): a
+            count beside a label is the word then a smaller, fainter number
+            ("Available specialists 7"), never "· 7 ·". The warnings are a
+            status, so they are the tinted pill ("1 warning"), not more text. */}
+        <div className="mb-2 flex items-center gap-2" data-centres-agree="label and warnings">
+          <SectionLabel>
+            Available specialists
+            {roster.status === 'ready' && <span className="ml-1.5 text-3xs font-normal text-fg-dim">{definitions.length}</span>}
+          </SectionLabel>
+          {warningCount > 0 && <Pill tone="warning">{warningCount} warning{warningCount === 1 ? '' : 's'}</Pill>}
+        </div>
+        {/* Card-levels sweep (2026-09-27): every `border-t` band split below is
+            gone — no full-width line inside a card. `space-y-2 py-1` (plus each
+            branch's own padding) separates the roster body, the footer and any
+            folder error instead. */}
+        <div className={`${CARD_LEVEL_1} space-y-2 py-1`}>
           {roster.status === 'loading' ? (
-            <div className="border-t border-edge-dim px-3 py-3">
+            <div className="px-3 py-3">
               <LoadingState what="specialists" variant="inline" />
             </div>
           ) : roster.status === 'failed' ? (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <ErrorState mode="recoverable" message={roster.error} onRetry={() => void refreshSpecialistRoster(cwd)} variant="inline" />
             </div>
           ) : definitions.length === 0 && skipped.length === 0 ? (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <EmptyState message="No specialists found — even the built-ins are missing, which is a bug worth reporting." variant="inline" />
             </div>
           ) : (
-            SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
-              <div key={src} className="border-t border-edge-dim">
-                {/* Fix: was "uppercase tracking-wider" — the same four classes
-                    in a non-canonical order (ast-grep rule
-                    section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/;
-                    K1 tranche 1). Pre-existing on this branch; fixed while
-                    Task 10 already had this file open for the group-label
-                    rewrite. */}
-                <div className="px-3 pt-2 pb-1 text-3xs font-medium text-fg-muted tracking-wider uppercase">{SOURCE_LABEL[src]}</div>
-                <ul className="pb-1">
-                  {(bySource.get(src) ?? []).map(d => <RosterRow key={`${d.source}-${d.id}`} d={d} folders={folders} />)}
-                  {skippedFor(src).map(s => <SkippedRow key={s.path} s={s} />)}
-                </ul>
-              </div>
-            ))
+            <div className="space-y-2">
+              {SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
+                <div key={src}>
+                  {/* WHY SectionLabel, not the old eyebrow class (fix batch 1,
+                      2026-09-24): design guide small label — normal case, no
+                      letter-spacing. Was `text-3xs ... tracking-wider uppercase`.
+                      Padding on the wrapper: SectionLabel owns only margin
+                      (design-lint no-restyle). */}
+                  <div className="px-3 pt-2 pb-1">
+                    <SectionLabel>{SOURCE_LABEL[src]}</SectionLabel>
+                  </div>
+                  <ul className="pb-1">
+                    {(bySource.get(src) ?? []).map(d => <RosterRow key={`${d.source}-${d.id}`} d={d} folders={folders} />)}
+                    {skippedFor(src).map(s => <SkippedRow key={s.path} s={s} />)}
+                  </ul>
+                </div>
+              ))}
+            </div>
           )}
-          <div className="border-t border-edge-dim px-2 py-1.5 flex items-center justify-between gap-2">
+          <div className="px-2 py-1.5 flex items-center justify-between gap-2">
             {/* Footer copy per Task 13 brief, verbatim. */}
             <span className="text-3xs text-fg-muted px-1">Files are re-read each time you send a message; Refresh to re-read now.</span>
             <div className="flex items-center gap-1 shrink-0">
@@ -309,7 +331,7 @@ export default function SpecialistsSection({ cwd }: {
             </div>
           </div>
           {folderError && (
-            <div className="border-t border-edge-dim p-2.5">
+            <div className="p-2.5">
               <ErrorState mode="recoverable" message={folderError} onRetry={openFolder} variant="inline" />
             </div>
           )}
@@ -332,15 +354,16 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
   // Stacked, not side-by-side: the panel dialog is ~420px wide and the picker
   // trigger is wide, so a row layout squeezed the hint into a one-word column.
   return (
-    <div className="px-3 py-2.5 space-y-1.5" data-testid={`tier-row-${tier}`}>
+    // WHY no padding of its own (Destin, fixes review F-4, 2026-09-28: "still a big
+    // gap after the budget selector"): each row carried px-3 py-2.5 on top of the
+    // stack's gap, so ~40px sat between Budget's picker and Frontier's title versus
+    // 6px between a title and its picker. The card now pads once (p-3) and spaces
+    // rows 12px apart — the guide's in-card rhythm.
+    <div className="space-y-1.5" data-testid={`tier-row-${tier}`}>
       <div className="flex items-baseline gap-2 flex-wrap">
         <span className="text-xs font-medium text-fg-2">{title}</span>
         <span className="text-2xs text-fg-muted">{hint}</span>
       </div>
-      {/* Destin (workbench pass): Clear sits BENEATH the picker at the same
-          width, not beside it. Side-by-side made two competing controls on one
-          line and shrank the picker — the destructive one should read as
-          secondary to the thing it undoes, not as its equal. */}
       <div className="space-y-1.5">
         <ModelPicker
           value={choice}
@@ -348,22 +371,20 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           includeClaude={false}
           runsOn="host" // the tier model is run by the computer
           emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
+          // Card-levels sweep: nested inside this section's level-1 card, so
+          // the trigger matches every other nested control (level-2 default).
+          triggerClassName=""
+          // WHY onClear here, not a separate "Set to …" line + Clear button
+          // (round 4 — Destin: the lines repeated the picker's own value, the
+          // button was odd, and each tier should clear on its own): "No
+          // selection" is now the picker's own first row; choosing it clears
+          // this tier exactly as the old Clear button did.
+          onClear={onClear}
         />
-        {value && (
-          <Button size="sm" variant="ghost" className="w-full" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
+        {!loaded && (
+          <div className="text-2xs"><LoadingState what={`the ${tier} model`} variant="inline" /></div>
         )}
       </div>
-      {/* Destin (2026-09-15 review): the unset explanation belongs INSIDE the
-          selector as its current value, not on a separate line beneath it.
-          The status line below therefore exists only while loading or when a
-          concrete override is selected. */}
-      {(!loaded || value) && (
-        <div className="text-2xs">
-          {!loaded
-            ? <LoadingState what={`the ${tier} model`} variant="inline" />
-            : <span className="text-fg-dim">Set to <span className="text-fg-2">{value!.label}</span></span>}
-        </div>
-      )}
     </div>
   );
 }
@@ -383,14 +404,19 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
               same neutral styling as read-only — the words already say what the
               helper can do, and colouring one capability as a hazard made the
               list read as a warning rather than a roster. */}
-          <span className="text-4xs uppercase tracking-wide px-1 rounded border border-edge text-fg-muted">
-            {d.charter === 'read-write' ? (canShell ? 'can edit & run commands' : 'can edit files') : 'read-only'}
-          </span>
+          {/* WHY Pill (fix batch 2, 2026-09-26): the guide's tinted pill in
+              normal case ("Read-only", "Can edit & run commands") — these were
+              9px spaced-out capitals in a hairline box. Both capabilities keep
+              ONE tint (Destin's earlier call: colouring read-write as a hazard
+              made the roster read as a warning); only a real warning is amber. */}
+          <Pill tone="info">
+            {d.charter === 'read-write' ? (canShell ? 'Can edit & run commands' : 'Can edit files') : 'Read-only'}
+          </Pill>
           {d.modelPreference && d.modelPreference !== 'parent' && (
-            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-edge text-fg-muted">prefers {d.modelPreference}</span>
+            <Pill tone="info">Prefers {d.modelPreference}</Pill>
           )}
           {d.warnings.length > 0 && (
-            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-amber-700/40 text-amber-700">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</span>
+            <Pill tone="warning">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</Pill>
           )}
         </div>
         {/* Task 10: provenance — where this row's definition actually came
@@ -413,11 +439,18 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
         <div className="mt-1 pl-2 border-l-2 border-edge-dim space-y-1 text-2xs">
           <div className="text-fg-muted">Tools: <span className="text-fg-dim">{d.allowedTools.join(', ')}</span></div>
           {d.path && <div className="text-fg-muted">File: <span className="font-mono text-fg-dim break-all">{d.path}</span></div>}
-          {d.warnings.map((w, i) => <div key={i} className="text-amber-700">⚠ {w}</div>)}
         </div>
       )}
-      {!open && d.warnings.length > 0 && (
-        <div className="text-2xs text-amber-700 mt-0.5">⚠ {d.warnings[0]}</div>
+      {/* WHY a warning Callout inside the row (fix batch 2 — decisions.md
+          "Problem on a list item"): a warning about this specialist is the
+          shared tinted box inside its own row, text grey — it was amber text
+          with a ⚠. Closed: the first warning; open: all of them. */}
+      {d.warnings.length > 0 && (
+        <Callout tone="warning" className="mt-1.5">
+          {open
+            ? <ul className="space-y-0.5">{d.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+            : d.warnings[0]}
+        </Callout>
       )}
     </li>
   );
@@ -431,7 +464,10 @@ function SkippedRow({ s }: { s: { path: string; source: 'personal' | 'claude-cod
   return (
     <li className="px-3 py-1.5 opacity-50" data-testid={`specialist-skipped-${basename(s.path)}`}>
       <div className="text-xs font-medium text-fg-2 font-mono truncate">{basename(s.path)}</div>
-      <div className="text-2xs text-amber-700">⚠ {s.error} — not offered to the assistant.</div>
+      {/* WHY Callout, not amber text with a ⚠ (guide: every warning is the one
+          tinted box; matches the warnings Callout above in this same file,
+          which this row had been missed by). */}
+      <Callout tone="warning" className="mt-1">{s.error} — not offered to the assistant.</Callout>
     </li>
   );
 }

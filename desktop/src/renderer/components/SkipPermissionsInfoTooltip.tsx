@@ -1,6 +1,6 @@
 import { AnchorTip } from './ui';
 
-// Info tooltip for the "Skip Permissions" toggle: a plain-language explanation of
+// Info tooltip for the "Skip permissions" toggle: a plain-language explanation of
 // Claude Code's native permission system and the tradeoffs of turning prompts off
 // for a whole session.
 //
@@ -58,7 +58,8 @@ export function SkipPermissionsInfoTooltip() {
           skip-permissions warnings elsewhere: this heading is danger
           messaging, so it rides the theme's destructive token rather than
           a fixed red a community pack can't touch. */}
-      <p className="text-xs font-semibold text-destructive-fg mt-2.5 mb-1.5">What could go wrong</p>
+      {/* A heading in the text colour (small-fixes-3#SF3-10: no red titles — decisions "Error notices: no red titles"). */}
+      <p className="text-xs font-semibold text-fg mt-2.5 mb-1.5">What could go wrong</p>
       <div className="space-y-1">
         <div className="flex items-start gap-1.5">
           <span className="shrink-0 mt-px">·</span>

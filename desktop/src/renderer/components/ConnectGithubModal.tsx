@@ -11,7 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { getCapabilities } from '../platform';
-import { Button, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, ErrorState, FieldError } from './ui';
 
 type Stage = 'checking' | 'gh-missing' | 'code' | 'done' | 'error';
 
@@ -227,7 +227,7 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
             </p>
 
             {installNote?.kind === 'restart' && (
-              <div className="rounded-md border border-edge bg-inset px-3 py-2 text-xs text-fg-dim">
+              <div className={`${CARD_LEVEL_1} px-3 py-2 text-xs text-fg-dim`}>
                 {installNote.text}
               </div>
             )}
@@ -254,8 +254,10 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
                 </div>
               </div>
             )}
+            {/* WHY FieldError (guide: no red/coloured body text for messages);
+                it already carries role="alert" itself. */}
             {installNote?.kind === 'error' && (
-              <div role="alert" className="text-xs text-destructive-fg">{installNote.text}</div>
+              <FieldError as="div">{installNote.text}</FieldError>
             )}
 
             {/* "Never mind" removed: it called the same handleClose as the ✕ in
@@ -362,20 +364,16 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
 
         {/* ---- error ---- */}
         {stage === 'error' && (
-          <div className="mt-4 space-y-3">
-            <p role="alert" className="text-sm text-fg-2">
-              {errorReason ? ERROR_COPY[errorReason] : ERROR_COPY.network}
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={handleClose}>
-                Never mind
-              </Button>
-              {/* Had no hover state at all before. */}
-              <Button onClick={() => void startCode()}>
-                Try again
-              </Button>
-            </div>
-          </div>
+          // WHY ErrorState (error-notices-1, 2026-10-12): a failed action is the notice
+          // box in the buttons' place, its own buttons inside it — the way back outlined,
+          // the retry filled at the right (guide "Status and notices"). This was a bare
+          // line over a loose button pair. The words are unchanged.
+          <ErrorState
+            className="mt-4"
+            message={errorReason ? ERROR_COPY[errorReason] : ERROR_COPY.network}
+            moreActions={[{ label: 'Never mind', onClick: handleClose }]}
+            onRetry={() => void startCode()}
+          />
         )}
       </Dialog>
     </>

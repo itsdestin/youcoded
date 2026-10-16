@@ -45,7 +45,11 @@ export type ProviderIconKey =
   | 'meta'
   | 'mistral'
   | 'cohere'
-  | 'perplexity';
+  | 'perplexity'
+  // The two sign-in marks setup needed (first-run deck R-3, 2026-10-04): Claude's own
+  // spark (not Anthropic's "A") and OpenRouter's, for their "Log in with" buttons.
+  | 'claude'
+  | 'openrouter';
 
 // --- Brand palettes --------------------------------------------------------
 //

@@ -14,7 +14,7 @@
 import { IPC } from '../../shared/backend-contract';
 import {
   syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
-  syncSpacesRenameProject, syncSpacesStopProject, syncSpacesSetProjectDescription, getManagedRoots,
+  syncSpacesRenameProject, syncSpacesStopProject, syncSpacesRemoveProject, syncSpacesSetProjectDescription, getManagedRoots,
 } from '../sync-spaces/service';
 import { readDevices, renameDevice, removeDevice } from '../sync-spaces/device-registry';
 import type { SessionManager } from '../session-manager';
@@ -56,6 +56,8 @@ export const syncSpacesChannels: MainChannelDef[] = [
   // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
   defineChannel({ name: IPC.SYNC_SPACES_RENAME_PROJECT, kind: 'handle', handler: (p) => syncSpacesRenameProject(String(p?.name ?? ''), String(p?.displayName ?? '')) }),
   defineChannel({ name: IPC.SYNC_SPACES_STOP_PROJECT, kind: 'handle', handler: (p) => syncSpacesStopProject(String(p?.name ?? '')) }),
+  // Remove a synced project everywhere (backlog row 10) — same payload shape as stop.
+  defineChannel({ name: IPC.SYNC_SPACES_REMOVE_PROJECT, kind: 'handle', handler: (p) => syncSpacesRemoveProject(String(p?.name ?? '')) }),
   defineChannel({ name: IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION, kind: 'handle', handler: (p) => syncSpacesSetProjectDescription(String(p?.name ?? ''), String(p?.description ?? '')) }),
 
   // Conversation-lease takeover (Plan 2b Task 9): thin passthroughs to the lease client (query) and

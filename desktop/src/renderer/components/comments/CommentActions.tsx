@@ -240,7 +240,9 @@ export function InlineEditField({ text, onSave, onCancel, onRequestDelete, class
         // Bare, like InputGroup.Field — FIELD_SURFACE's border/background
         // live on the wrapper div above; the Textarea primitive would put a
         // second border on this element instead.
-        className={`w-full resize-none bg-transparent border-0 outline-none leading-snug ${FIELD_TEXT} ${FIELD_SIZE.sm}`}
+        // scroll-mask: past the 14em cap the out-of-view lines fade like every other scroll area;
+        // its scroll padding keeps the caret's line clear of the fade (2026-10-15).
+        className={`scroll-mask w-full resize-none bg-transparent border-0 outline-none leading-snug ${FIELD_TEXT} ${FIELD_SIZE.sm}`}
         data-edit-menu
       />
       <div className="flex items-center justify-end gap-1.5 px-1.5 pb-1.5 pt-1">

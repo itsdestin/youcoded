@@ -19,7 +19,7 @@
 
 import React, { useState } from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, SearchFilterPill, SegmentedTabs, SegmentedTabLabel, PaletteIcon, Select } from "../ui";
+import { Button, SearchFilterPill, SectionLabel, SegmentedTabs, SegmentedTabLabel, PaletteIcon, Select } from "../ui";
 import { CATALOG_ITEM_TYPES, CATALOG_TYPE_LABEL, catalogType, type CatalogItemType } from "../../../shared/catalog-types";
 import { typeIcon } from "./type-icons";
 import { useMarketplace } from "../../state/marketplace-context";
@@ -219,7 +219,11 @@ function FilterSheet({
         role="dialog"
         aria-modal
         aria-labelledby="marketplace-filter-sheet-title"
-        className="fixed inset-x-2 max-h-[80vh] overflow-y-auto rounded-2xl flex flex-col"
+        // WHY no overflow here (2026-10-15, the one scroll fade): the panel is .layer-surface,
+        // whose unlayered `overflow: hidden` beat this Tailwind overflow-y-auto, so a tall
+        // sheet clipped instead of scrolling. The groups between the header and Apply now
+        // scroll (and fade) on their own; the header and Apply stay in view.
+        className="fixed inset-x-2 max-h-[80vh] rounded-2xl flex flex-col"
         style={{ bottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-edge-dim bg-panel">
@@ -232,12 +236,12 @@ function FilterSheet({
             Clear all
           </button>
         </header>
-        <div className="flex-1 flex flex-col gap-4 p-4">
+        <div className="scroll-mask flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 p-4">
           <SheetGroup label="Type">
             {/* P-1 #1: same pick-one switch as the wide bar. Seven segments do
                 not fit a phone — the row scrolls sideways INSIDE the sheet's
                 padding (round 1 bled past the edge, which read as a bug). */}
-            <div className="w-full overflow-x-auto">
+            <div className="scroll-mask scroll-mask--chips w-full overflow-x-auto">
               <SegmentedTabs
                 variant="pill"
                 tabs={typeTabs}
@@ -269,10 +273,12 @@ function FilterSheet({
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function SheetGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="text-xs uppercase tracking-wide text-fg-dim">{label}</h3>
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-2 [&>*]:w-full [&>*]:min-w-0">{children}</div>
     </div>
   );

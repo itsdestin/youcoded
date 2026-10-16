@@ -25,6 +25,12 @@ import { streamText, tool, zodSchema } from 'ai';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { z } from 'zod';
 import { makeSession, scriptModel, fakeTool } from './helpers/harness-fakes';
+import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
+// WHY: these tests feed the mock model RAW provider stream parts on purpose, with
+// deliberately minimal shapes (usage carries only `total`, finishReason may be
+// partial). The strict LanguageModelV4StreamPart type demands every usage field,
+// so the literal is cast once here rather than padding every fixture.
+const asParts = (chunks: unknown[]): LanguageModelV4StreamPart[] => chunks as unknown as LanguageModelV4StreamPart[];
 
 // RAW LanguageModelV4ToolCall chunk: `input` is a stringified JSON string.
 const toolCallChunk = {
@@ -40,7 +46,7 @@ describe('ai@7 tool-call stream contract (provider-dependencies row)', () => {
       model: new MockLanguageModelV4({
         doStream: async () => ({
           stream: simulateReadableStream({
-            chunks: [
+            chunks: asParts([
               { type: 'stream-start', warnings: [] },
               { type: 'text-start', id: 't1' },
               { type: 'text-delta', id: 't1', delta: 'Let me read that.' },
@@ -48,7 +54,7 @@ describe('ai@7 tool-call stream contract (provider-dependencies row)', () => {
               toolCallChunk,
               // V4 finish reason is the { unified, raw } object; usage is nested.
               { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: { inputTokens: { total: 10 }, outputTokens: { total: 5 } } },
-            ],
+            ]),
           }),
         }),
       }),
@@ -88,13 +94,13 @@ describe('ai@7 tool-call stream contract (provider-dependencies row)', () => {
     const result = streamText({
       model: new MockLanguageModelV4({
         doStream: async () => ({
-          stream: simulateReadableStream({ chunks: [
+          stream: simulateReadableStream({ chunks: asParts([
             { type: 'stream-start', warnings: [] },
             { type: 'text-start', id: 't1' },
             { type: 'text-delta', id: 't1', delta: 'done' },
             { type: 'text-end', id: 't1' },
             { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
-          ] }),
+          ]) }),
         }),
       }),
       tools: { Read: tool({ description: 'read', inputSchema: zodSchema(z.object({ file_path: z.string() })) }) },

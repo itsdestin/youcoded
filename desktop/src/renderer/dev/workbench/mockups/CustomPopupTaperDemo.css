@@ -1,0 +1,36 @@
+/* WHY: approved styles now live in the real custom popups. These dev-only
+   rules restore the honest Before panes and keep the unchosen alternatives
+   viewable in answered decks; no other OverlayPanel is affected. */
+.inline-block.bg-canvas:has(.file-taper-demo),
+.inline-block.bg-canvas:has(.tag-taper-demo) { background-color: transparent; }
+.file-taper-demo #theme-bg, .file-taper-demo #theme-pattern,
+.tag-taper-demo #theme-bg, .tag-taper-demo #theme-pattern { z-index: 0; }
+
+/* The original plugin/type line no longer exists in production. Recreate its
+   original appearance only as a dev-only pseudo-element in the Today pane;
+   do not move the React-owned title node or change FileViewerOverlay's API. */
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-header],
+body:has(.file-taper-demo[data-variant='two-lines']) [data-file-viewer-header] { padding-top: 32px; }
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-header]::before,
+body:has(.file-taper-demo[data-variant='two-lines']) [data-file-viewer-header]::before {
+  content: 'Sample Plugin · Skill';
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  font-size: 12px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: .025em;
+  color: var(--fg-dim);
+}
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-header] { border-bottom: 1px solid var(--edge-dim); }
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-header]::after { display: none; }
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-header] h2 { font-size: 18px; font-weight: 600; }
+body:has(.file-taper-demo[data-variant='today']) [data-file-viewer-scroll] { mask-image: none; }
+body:has(.file-taper-demo[data-variant='two-lines']) [data-file-viewer-header] h2 { font-size: 18px; }
+
+body:has(.tag-taper-demo[data-variant='today']) [data-tag-note-header] { border-bottom: 1px solid var(--edge); }
+body:has(.tag-taper-demo[data-variant='today']) [data-tag-note-header]::after { display: none; }
+body:has(.tag-taper-demo[data-variant='today']) [data-tag-note-header] h2 { font-size: 14px; font-weight: 700; }
+body:has(.tag-taper-demo[data-variant='today']) [data-tag-note-scroll] { mask-image: none; }
+body:has(.tag-taper-demo[data-variant='divider']) [data-tag-note-scroll] { mask-image: none; }

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
-import { Button, Toggle, Tooltip } from './ui';
+import { Button, SectionLabel, Toggle, Tooltip } from './ui';
 import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -24,9 +24,9 @@ import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
-import { PRIORITY_TAG } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
-import { TagChip } from './tags/TagChip';
+import { TagChip, TagStack } from './tags/TagChip';
 import type { TagRecord } from '../../shared/tags';
 import {
   chooseTearOffModel, dragCarriesSession, readSessionDrag, writeSessionDrag,
@@ -265,9 +265,16 @@ function FolderMark({ className = '' }: { className?: string }) {
 // The tags a session carries, as the same named chips the tag picker and the
 // Resume Browser card use — spelled out, not colour-coded dots (Destin, P-8
 // review 2, 2026-08-28: "tags should not be dots, but full chips with spelled
-// names"). Priority is a reserved flag rather than a tag and leads the row, the
-// way it leads the status-bar chip.
-const MAX_CHIPS = 3;
+// names"). Pinned (the Priority flag) is not a tag: it shows as PinMark by the
+// status pill.
+
+/** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
+ *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
+function PinMark({ sessionId }: { sessionId: string }) {
+  const meta = useSessionMeta(sessionId);
+  if (!meta.flags.priority) return null;
+  return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span></Tooltip>;
+}
 
 function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<string, TagRecord> }) {
   // One getMeta per open row. The menu holds the live sessions of ONE window,
@@ -275,27 +282,15 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
   // when it is shut. A bulk read would need a new channel on all five surfaces.
   const meta = useSessionMeta(sessionId);
   const applied = [...meta.tags].map((id) => byId.get(id)).filter((t): t is TagRecord => !!t);
-  const marks: { label: string; color: string }[] = [
-    ...(meta.flags.priority ? [{ label: PRIORITY_TAG.label, color: PRIORITY_TAG.color as string }] : []),
-    ...applied.map((t) => ({ label: t.label, color: t.color as string })),
-  ];
-  if (marks.length === 0 && !meta.note) return null;
-  // Names cost width, so past three the rest collapse into a count that names
-  // them on hover — a row must never push the status pill off its own line.
-  const shown = marks.slice(0, MAX_CHIPS);
-  const rest = marks.slice(MAX_CHIPS);
+  // Pinned is not a tag any more (pick-menus-2#PM2-3): PinMark shows it by the status.
+  if (applied.length === 0 && !meta.note) return null;
   return (
     <span className="shrink-0 flex items-center gap-1">
-      {shown.map((m, i) => (
-        <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
-      ))}
-      {rest.length > 0 && (
-        <Tooltip text={rest.map((m) => m.label).join(', ')}>
-        <span className="text-3xs text-fg-muted">
-          +{rest.length}
-        </span>
-        </Tooltip>
-      )}
+      {/* Three or more tags fold into one stacked-icons button that rolls out on hover
+          (pick-menus-6#PM6-1), so a row never pushes the status pill off its line. */}
+      {applied.length >= 3
+        ? <TagStack tags={applied} />
+        : applied.map((t) => <TagChip key={t.id} tag={t} />)}
       {meta.note && (
         <Tooltip text="This session has a note">
         <span className="flex items-center">
@@ -432,7 +427,7 @@ export default function SessionStrip({
   const [binding, setBinding] = useState<Binding | null>(() => loadLastBinding());
   const nb = useNativeBinding({ active: showNewForm, runtime, binding, setBinding });
 
-  // First-time warnings (spec §5): Skip Permissions on its toggle, small model
+  // First-time warnings (spec §5): Skip permissions on its toggle, small model
   // on Create. The popover at z-9000 would sit ABOVE the warning and its
   // outside-click closer would read a click in the dialog as "outside", so the
   // popover hides while the warning is up and returns after. Only `menuOpen`
@@ -2255,7 +2250,7 @@ export default function SessionStrip({
 
         {/* ── Dropdown trigger ───────────────────────────── */}
         <div ref={menuRef}>
-          <Tooltip text="All Sessions">
+          <Tooltip text="All sessions">
           <button
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
@@ -2286,7 +2281,7 @@ export default function SessionStrip({
             // Half the rendered width, which is min(384px, 88vw) — the clamp below
             // keeps the menu on screen, so it has to track the real width.
             const halfDropdown = Math.min(384, window.innerWidth * 0.88) / 2;
-            // WHY: a fixed 432px session list let its rows plus the New Session
+            // WHY: a fixed 432px session list let its rows plus the New session
             // form run below short windows. Cap the complete menu at the space
             // below its trigger; the list is the flexing, scrollable portion.
             const belowTrigger = triggerRect
@@ -2314,19 +2309,23 @@ export default function SessionStrip({
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
           {sessions.length > 0 && !isAndroid() && (
             <>
-              <div className="px-3 pt-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                Sessions in this window
-              </div>
+              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4).
+                  Margin, not padding (px-3 pt-1.5) — SectionLabel owns only
+                  margin/layout (design lint no-restyle), and margin keeps
+                  this a flat sibling of the list below (SessionStrip.test.tsx
+                  finds it via `heading.nextElementSibling`). */}
+              <SectionLabel className="mx-3 mt-1.5">Sessions in this window</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
               the available screen height above, it shrinks first (roughly five
-              rows on short windows) and scrolls before its New Session controls
+              rows on short windows) and scrolls before its New session controls
               can be pushed past the bottom edge. */}
           {sessions.length > 0 && (
             <div
               ref={sessionListRef}
-              className="scroll-fade flex-1"
+              className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1"
               // WHY (2026-09-07, Destin): lets a "sessions in other windows" row be
               // dragged straight back into this window's list — reuses the same
               // dragAdopt() main already uses for the header pill bar's cross-window
@@ -2339,7 +2338,11 @@ export default function SessionStrip({
               // scripts/ast-grep/rules/shortcuts-dialog-keeps-scroll-body-session-menu-height.yml
               // pins (retired tests/menu-row-reachability.test.ts, Plan B 2026-09-16).
               style={{
-                maxHeight: 'min(432px, 55vh)',
+                // WHY 316px (quick-fix batch, 2026-09-29; ui-quick-fixes#QF-1: "reduce
+                // the number of sessions shown by default to like 6.5"): six rows of
+                // ~48px plus half of a seventh, so the cut-off row says "scroll for
+                // more". 55vh still wins on short windows.
+                maxHeight: 'min(316px, 55vh)',
                 background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
               }}
               onDragOver={(e) => {
@@ -2412,13 +2415,20 @@ export default function SessionStrip({
                       const r = e.currentTarget.getBoundingClientRect();
                       setMenuDropIndex(e.clientY < r.top + r.height / 2 ? idx : idx + 1);
                     }}
+                    // WHY bg-accent/10 for the active session, not bg-inset
+                    // (fix batch 1, 2026-09-24): the active row and the
+                    // default hover both used the SAME token, so a hovered
+                    // row could look identical to the actually-active one
+                    // (job D's hover/selected collision). Only the colour
+                    // token changes here — every drag/motion class above and
+                    // below this line is untouched.
                     className={`relative flex items-center pr-1 group/row select-none touch-none ${
                       menuDragId === s.id ? 'opacity-40 ' : ''
                     }${
                       shiftNavIdx === idx
                         ? 'bg-accent/20 text-fg'
                         : s.id === activeSessionId
-                          ? 'bg-inset text-fg'
+                          ? 'bg-accent/10 text-fg'
                           : 'text-fg-dim hover:bg-inset hover:text-fg'
                     } ${isBeingDragged ? 'opacity-30' : ''}`}
                     style={{
@@ -2520,11 +2530,12 @@ export default function SessionStrip({
                               </button>
                             )}
                           </span>
-                          {s.permissionMode === 'bypass' && (
-                            <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
-                              DANGER
+                          {s.permissionMode === 'bypass' && ( // WHY a normal-case pill, not ALL-CAPS text: guide, status labels are pills.
+                            <span className="shrink-0 inline-flex items-center px-1.5 py-px rounded-full border text-4xs leading-none font-medium text-fg-2 bg-red-400/15 border-red-400/30">
+                              Danger
                             </span>
                           )}
+                          <PinMark sessionId={s.id} />
                           <StatusPill color={color} isActive={s.id === activeSessionId} />
                         </span>
                         <span className="flex items-center gap-2 min-w-0">
@@ -2564,7 +2575,7 @@ export default function SessionStrip({
                         </span>
                       </span>
                     </div>
-                    <Tooltip text="Close Session">
+                    <Tooltip text="Close session">
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
@@ -2615,13 +2626,12 @@ export default function SessionStrip({
             return (
               <>
                 <div className="border-t border-edge" />
-                <div className="px-3 pt-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                  Sessions in other windows
-                </div>
+                {/* Margin, not padding — see the sibling label above for why. */}
+                <SectionLabel className="mx-3 mt-1.5">Sessions in other windows</SectionLabel>
                 {/* WHY: Peer windows can hold an unbounded number of sessions.
                     Keep this group inside the same scrolling middle as local
-                    sessions, so it cannot hide the New Session actions below. */}
-                <div className="scroll-fade flex-1 py-1">
+                    sessions, so it cannot hide the New session actions below. */}
+                <div className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none flex-1 py-1">
                   {remoteGroups.flatMap((g) =>
                     g.sessions.map((s) => {
                       const color = sessionStatuses?.get(s.id) || 'gray';
@@ -2659,11 +2669,12 @@ export default function SessionStrip({
                             <span className="flex-1 min-w-0 flex flex-col gap-0.5">
                               <span className="flex items-center gap-2 min-w-0">
                                 <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
-                                {s.permissionMode === 'bypass' && (
-                                  <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
-                                    DANGER
+                                {s.permissionMode === 'bypass' && ( // WHY a normal-case pill, not ALL-CAPS text: guide, status labels are pills.
+                                  <span className="shrink-0 inline-flex items-center px-1.5 py-px rounded-full border text-4xs leading-none font-medium text-fg-2 bg-red-400/15 border-red-400/30">
+                                    Danger
                                   </span>
                                 )}
+                                <PinMark sessionId={s.id} />
                                 <StatusPill color={color} isActive={false} />
                               </span>
                               <span className="flex items-center gap-2 min-w-0">
@@ -2696,7 +2707,7 @@ export default function SessionStrip({
                               </span>
                             </span>
                           </button>
-                          <Tooltip text="Close Session">
+                          <Tooltip text="Close session">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2723,14 +2734,16 @@ export default function SessionStrip({
 
           {showNewForm ? (
             <div
-              className="p-3 flex-1 min-h-0 flex flex-col gap-2 rounded-b-lg overflow-y-auto scroll-fade"
+              className="scroll-mask relative overflow-y-auto overflow-x-hidden min-h-0 scrollbar-none p-3 flex-1 flex flex-col gap-2 rounded-b-lg"
               style={{ maxHeight: 'var(--session-menu-available-height)' }}
             >
               {/* WHY: The creation form is another long list inside the capped
                   dropdown, so this container must shrink and scroll before its
                   Model, permissions, and Create controls reach the bottom edge. */}
               <div>
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
+                {/* WHY: field captions drop the spaced-caps eyebrow + sentence
+                    case (labels batch, guide: no spaced capitals). */}
+                <label className="text-xs font-medium text-fg-muted mb-1 block">Project folder</label>
                 <FolderSwitcher
                   value={newCwd}
                   onChange={setNewCwd}
@@ -2744,7 +2757,7 @@ export default function SessionStrip({
                   is DERIVED from the pick (see applyModelChoice), so the user
                   answers "which model?" instead of decoding "Runtime" first. */}
               <div>
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+                <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
                 <ModelPicker
                   value={modelChoice}
                   onSelect={applyModelChoice}
@@ -2760,7 +2773,7 @@ export default function SessionStrip({
               {runtime === 'native' && nb.nativeSupported && (
                 <NativeExtras nb={nb} preset={preset} onPreset={setPreset} />
               )}
-              {/* Skip Permissions is CLAUDE-CODE ONLY. It works by starting the
+              {/* Skip permissions is CLAUDE-CODE ONLY. It works by starting the
                   CLI with permissions bypassed, and a native session has no PTY
                   and no CC permission flow for it to affect — so on a native
                   model the control did nothing at all. The Resume Browser
@@ -2770,8 +2783,9 @@ export default function SessionStrip({
               {runtime !== 'native' && (
                 <>
                   <div className="flex items-center justify-between">
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
-                      Skip Permissions
+                    {/* WHY "Skip permissions": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                    <label className="text-xs font-medium text-fg-muted inline-flex items-center">
+                      Skip permissions
                       <SkipPermissionsInfoTooltip />
                     </label>
                     {/* Shared Toggle (change 15). The "danger" tone replaces the raw
@@ -2784,7 +2798,7 @@ export default function SessionStrip({
                       // there leaves it off. Turning off never asks.
                       onChange={(next) => (next ? gateSkipPermissions(() => setDangerous(true)) : setDangerous(false))}
                       tone="danger"
-                      aria-label="Skip Permissions"
+                      aria-label="Skip permissions"
                     />
                   </div>
                   {/* Warning text was a raw text-[#DD4444] hex. Change 17 moves it onto
@@ -2798,12 +2812,13 @@ export default function SessionStrip({
               {/* Launch in new window — hidden on platforms without multi-window support */}
               {detachAvailable && (
                 <div className="flex items-center justify-between">
-                  <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Launch in New Window</label>
+                  {/* WHY "Launch in new window": sentence case like every other label (Destin, 2026-09-29), and the same words in its aria-label, titles and hints. */}
+                  <label className="text-xs font-medium text-fg-muted">Launch in new window</label>
                   {/* Shared Toggle (change 15) — same accent on-state as before. */}
                   <Toggle
                     checked={launchInNewWindow}
                     onChange={setLaunchInNewWindow}
-                    aria-label="Launch in New Window"
+                    aria-label="Launch in new window"
                   />
                 </div>
               )}
@@ -2824,7 +2839,7 @@ export default function SessionStrip({
                 disabled={nb.nativeCreateBlocked}
                 className="w-full py-1.5"
               >
-                {dangerous && runtime !== 'native' ? 'Create (Dangerous)' : 'Create Session'}
+                {dangerous && runtime !== 'native' ? 'Create (dangerous)' : 'Create session'}
               </Button>
             </div>
           ) : (
@@ -2855,7 +2870,7 @@ export default function SessionStrip({
                 className="flex-1 px-3 py-2 text-sm text-fg-dim hover:bg-inset hover:text-fg transition-colors flex items-center justify-center gap-1.5"
               >
                 <span className="text-base leading-none">+</span>
-                <span>New Session</span>
+                <span>New session</span>
               </button>
             </div>
           )}

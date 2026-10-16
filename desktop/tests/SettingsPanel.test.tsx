@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// SettingsPanel — the Remote Access section: the mock panel's controls, the setup banner and
+// SettingsPanel — the Remote access section: the mock panel's controls, the setup banner and
 // the end-of-setup check.
 import { afterEach, expect, it, vi, describe } from 'vitest';
 import React from 'react';
@@ -14,6 +14,42 @@ import {
   type TailscaleInfo,
 } from '../src/renderer/components/SettingsPanel';
 
+describe('SettingsPanel — drawer edges', () => {
+  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const panel = read('../src/renderer/components/SettingsPanel.tsx');
+  const css = read('../src/renderer/components/SettingsDrawer.css');
+  // WHY: the scoped stylesheet must ship with the drawer, not just exist on disk.
+  expect(panel).toMatch(/import '\.\/SettingsDrawer\.css';/);
+
+  it('uses the selected title and a tapered divider without a full-width border', () => {
+    // WHY: the component class and CSS pseudo-element must agree; a CSS-only guard
+    // would pass even if the title kept its old font and border classes.
+    expect(panel).toMatch(/settings-drawer-header[^"\n]*\bpx-4\b[^"\n]*\bpy-3\b"/);
+    expect(panel).not.toMatch(/settings-drawer-header[^"\n]*\bborder-b\b/);
+    expect(panel).toMatch(/<h2 className="text-base font-medium text-fg">Settings<\/h2>/);
+    expect(css).toMatch(/\.settings-drawer-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*linear-gradient\(to right, transparent, var\(--edge-card\) 8%, var\(--edge-card\) 92%, transparent\)/);
+  });
+
+  it('preserves the unchanged Today pane of the visual comparison', () => {
+    // WHY: production now carries the selected style; without a scoped reset
+    // the earlier Today/Selected deck would silently compare two Selected panes.
+    const demo = read('../src/renderer/dev/workbench/mockups/SettingsTaperDemo.css');
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header\s*\{[^}]*border-bottom:\s*1px solid var\(--edge\)/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header::after\s*\{[^}]*display:\s*none/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header h2\s*\{[^}]*font-size:\s*0\.875rem;[^}]*font-weight:\s*700/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-scroll\s*\{[^}]*mask-image:\s*none/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-scroll::before,[\s\S]*?\.settings-drawer-scroll::after\s*\{[^}]*display:\s*block/);
+  });
+
+  it('fades scroll content with the app\'s one fade, evenly across the width', () => {
+    // WHY: the drawer's body is a .scroll-mask like every other scroll area — the content
+    // itself fades, so the real drawer background shows through; no private copy, and no
+    // unfaded strip at the sides (Destin removed that from dialogs: "looks really strange").
+    expect(panel).toMatch(/ref=\{outerScrollRef\} className="scroll-mask [^"]*settings-drawer-scroll/);
+    expect(css).not.toMatch(/mask-image/);
+  });
+});
+
 describe('SettingsPanel — remote access panel', () => {
   afterEach(cleanup);
   const address = 'https://home-laptop.example-tailnet.ts.net';
@@ -27,19 +63,18 @@ describe('SettingsPanel — remote access panel', () => {
     return onAction;
   }
 
-  it('password field offers Generate, the length hint and the disconnect warning', () => {
+  it('password field states the length hint and the disconnect warning, with no Generate button', () => {
     mount('ready');
-    const password = screen.getByLabelText('Remote access password') as HTMLInputElement;
-    // Generate fills a memorable passphrase over the minimum length.
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
-    expect(password.value).toMatch(/^[a-z]{4}-[a-z]{4}-[a-z]{4}$/);
-    expect(password.value.replace(/-/g, '').length).toBeGreaterThanOrEqual(8);
+    // Destin removed Generate (fix batch 1, B1-5: "the generate button should just be removed").
+    expect(screen.queryByRole('button', { name: 'Generate' })).toBeNull();
+    // Set is the small FILLED button inside the field (decisions.md P-5), not outlined.
+    expect(screen.getByRole('button', { name: 'Set' }).className).toContain('bg-accent');
     // The guidance and the consequence are both stated.
     expect(screen.getByText('At least 8 characters.')).toBeTruthy();
     expect(screen.getByText(/disconnects every device/)).toBeTruthy();
   });
 
-  it('preserves the panel: enabled, password, keep awake, full-width Add Device and Info', () => {
+  it('preserves the panel: enabled, password, keep awake, full-width Add device and Info', () => {
     mount('ready');
     expect(screen.getByRole('switch', { name: 'Remote access server enabled' })).toBeTruthy();
     const password = screen.getByLabelText('Remote access password');
@@ -49,10 +84,10 @@ describe('SettingsPanel — remote access panel', () => {
     for (const name of ['Off', '1h', '4h', '8h', '24h']) expect(screen.getByRole('tab', { name })).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: '8h' }));
     expect(screen.getByRole('tab', { name: '8h' }).getAttribute('aria-selected')).toBe('true');
-    const add = screen.getByRole('button', { name: 'Add Device' });
+    const add = screen.getByRole('button', { name: 'Add device' });
     expect(add.className).toContain('w-full');
     fireEvent.click(add);
-    // The address appears in the Tailscale section AND in the Add Device panel, and the two
+    // The address appears in the Tailscale section AND in the Add device panel, and the two
     // must be the same string. A tester was shown a bare IP in one place and a tailnet
     // hostname in the other, with nothing saying they were the same machine.
     const shown = screen.getAllByText(address);
@@ -109,7 +144,11 @@ describe('SettingsPanel — remote access panel', () => {
     expect(screen.getByText('Offline')).toBeTruthy();
     // WHY: the shipped row hardcodes a green dot for every connected client. Only the online
     // device and the panel's own ready dot may be green — never the remembered offline device.
-    expect(document.querySelectorAll('.bg-green-400').length).toBe(2);
+    // 3, not 2, since 2026-09-29: the Tailscale "Status" row's "Connected · home-laptop" used
+    // to be a hand-rolled `text-green-400` line (guide: status colour lives in the dot, never
+    // the word) — it moved to the shared RowStatus dot, which is a genuine new .bg-green-400
+    // match this selector counts, not a regression.
+    expect(document.querySelectorAll('.bg-green-400').length).toBe(3);
     fireEvent.click(screen.getByRole('button', { name: 'Unpair My tablet' }));
     expect(action).not.toHaveBeenCalled();
     expect(screen.getByText(/pair again/)).toBeTruthy();
@@ -121,7 +160,7 @@ describe('SettingsPanel — remote access panel', () => {
   it('reports a failed check without inventing a cause', () => {
     const action = mount('conflict');
     expect(screen.getByText(/another service/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(action).toHaveBeenCalledWith({ type: 'check' });
     cleanup();
     mount('error');
@@ -289,7 +328,7 @@ describe('SettingsPanel — the Android app\'s saved computers', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
     expect(await screen.findByText("Couldn't remove Desk: The phone did not answer.")).toBeTruthy();
     expect(screen.getByText('Desk')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await vi.waitFor(() => expect(screen.queryByText('Desk')).toBeNull());
     expect(removePairedDevice).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/Couldn't remove/)).toBeNull();

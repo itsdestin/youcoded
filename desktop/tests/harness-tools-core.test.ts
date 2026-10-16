@@ -32,6 +32,14 @@ import type { ToolContext } from '../src/main/harness/tools/types';
 import { pngHeader } from './helpers/image-fixtures';
 import { IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 import { defineTool, SEARCH_TIMEOUT_MS } from '../src/main/harness/tools/registry';
+import type { ToolResultPayload } from '../src/main/harness/tools/types';
+
+// WHY: defineTool types `inputSchema` as the generic ZodType, but every tool here
+// is built from z.object(...), and these tests read its per-field `.shape`.
+const shapeOf = (schema: unknown) => (schema as { shape: Record<string, { description?: string }> }).shape;
+// WHY: Bash's execute() also returns `truncated` (see bash.ts's payload type), but
+// the registry types every tool's return as the narrower ToolResultPayload.
+type BashResult = ToolResultPayload & { truncated: boolean };
 
 // Each test gets a fresh tmp sandbox + fresh ToolContext (readRegistry/todos maps),
 // so read-before-edit state never leaks between cases.
@@ -1170,10 +1178,10 @@ describe('Bash', () => {
     it('a line-capped result reports the line dimension, not just chars', async () => {
       // 120 short lines: ~700 chars total, nowhere near the 4,000-char cap, so
       // LINES are the only reason this is truncated.
-      const r = await BashTool.execute(
+      const r = (await BashTool.execute(
         { command: `node -e "for(let i=1;i<=120;i++)console.log('L'+i)"` },
         ctx,
-      );
+      )) as BashResult;
       expect(r.truncated).toBe(true);
       // Exactly 120 — not 121 (trailing-newline overcount) and not 123 (probe sentinel).
       // The LINE count is pinned exactly (that is the fix); the char count is
@@ -1188,10 +1196,10 @@ describe('Bash', () => {
       // One 60,000-char line trips only the char cap; head/tail each take a
       // partial line, so a line count here would read as "showing 0 lines"
       // beside 4,000 visible chars.
-      const r = await BashTool.execute(
+      const r = (await BashTool.execute(
         { command: `node -e "process.stdout.write('x'.repeat(60000))"` },
         ctx,
-      );
+      )) as BashResult;
       expect(r.truncated).toBe(true);
       expect(r.text).toContain('chars output, showing');
       expect(r.text).not.toMatch(/showing \d+ chars \/ 0 lines/);
@@ -1485,7 +1493,7 @@ describe('Glob', () => {
     it('the tool and the pattern parameter both say so', () => {
       // The no-slash rule is the surprising one — it belongs on the parameter
       // the model fills in, not only in the tool blurb.
-      expect(GlobTool.inputSchema.shape.pattern.description).toMatch(/no "\/"/);
+      expect(shapeOf(GlobTool.inputSchema).pattern.description).toMatch(/no "\/"/);
       expect(GlobTool.description).toMatch(/no "\/"/);
       expect(GlobTool.description).toMatch(/hidden files and folders are skipped unless the pattern names them/i);
     });
@@ -1876,22 +1884,22 @@ describe('Grep flags (G-7): ignore_case, literal, type, multiline', () => {
 
 describe('Grep/Glob schema descriptions', () => {
   it('path means the same thing on both tools and both schemas say so, in the same words', () => {
-    const grepPath = GrepTool.inputSchema.shape.path;
-    const globPath = GlobTool.inputSchema.shape.path;
+    const grepPath = shapeOf(GrepTool.inputSchema).path;
+    const globPath = shapeOf(GlobTool.inputSchema).path;
     expect(grepPath.description).toBeTruthy();
     expect(globPath.description).toBeTruthy();
     expect(grepPath.description).toBe(globPath.description);
   });
 
   it('every Grep parameter has a description', () => {
-    const shape = GrepTool.inputSchema.shape;
+    const shape = shapeOf(GrepTool.inputSchema);
     for (const key of Object.keys(shape)) {
       expect((shape as any)[key].description, key).toBeTruthy();
     }
   });
 
   it('every Glob parameter has a description', () => {
-    const shape = GlobTool.inputSchema.shape;
+    const shape = shapeOf(GlobTool.inputSchema);
     for (const key of Object.keys(shape)) {
       expect((shape as any)[key].description, key).toBeTruthy();
     }

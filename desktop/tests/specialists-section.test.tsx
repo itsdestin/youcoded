@@ -52,6 +52,7 @@ describe('SpecialistsSection mount', () => {
 
     await waitFor(() => expect(list).toHaveBeenCalled());
     // Give a second, racing call a chance to land before asserting the count.
+    // settle (negative assertion): a racing second call must not land.
     await new Promise((r) => setTimeout(r, 30));
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith({ cwd: 'cwd-settings-mount-once', ensurePersonalFolder: true });
@@ -146,7 +147,7 @@ describe('roster status: loading / failed / unavailable', () => {
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('ENOENT: could not read the specialists folder')).toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 
@@ -156,11 +157,11 @@ describe('roster status: loading / failed / unavailable', () => {
 
     render(<SpecialistsSection cwd="cwd-unavailable" />);
 
-    expect(await screen.findByText('Specialists run on the desktop app. Open Settings there to add or edit them.')).toBeInTheDocument();
+    expect(await screen.findByText('Specialists run on the desktop app. Open settings there to add or edit them.')).toBeInTheDocument();
     // Whole-section takeover, not a per-widget fallback: the tier pickers
     // above the roster must not render alongside this message either.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.queryByLabelText('Model')).toBeNull();
   });
 });
@@ -188,11 +189,19 @@ describe('model tiers: load and write failures are shown, never swallowed into "
 
     render(<SpecialistsSection cwd="cwd-tier-write-failed" />);
 
-    await screen.findByText('My Budget Model');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    // WHY assert on the picker's own trigger text, not a separate "Set to …"
+    // line (round 4 — that line is gone, it only repeated this value): the
+    // test's provider/catalog mocks are empty, so the trigger falls back to
+    // the raw modelId ("x/y") rather than the label — see ModelPicker's
+    // `currentLabel`. Open-then-click "No selection" replaces the removed
+    // Clear button, matching how a real pick is made.
+    const budgetRow = await screen.findByTestId('tier-row-budget');
+    await within(budgetRow).findByText('x/y');
+    fireEvent.click(within(budgetRow).getByRole('button', { name: 'Model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'No selection' }));
 
     // Reverts: the previous value is still shown, not cleared.
-    await waitFor(() => expect(screen.getByText('My Budget Model')).toBeInTheDocument());
+    await waitFor(() => expect(within(budgetRow).getByText('x/y')).toBeInTheDocument());
     // The real refusal text is shown verbatim, not swallowed.
     expect(screen.getByText(/Model no longer available\./)).toBeInTheDocument();
   });
@@ -215,8 +224,10 @@ describe('model tiers: load and write failures are shown, never swallowed into "
 
     render(<SpecialistsSection cwd="cwd-tier-write-alert" />);
 
-    await screen.findByText('My Budget Model');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    const budgetRow = await screen.findByTestId('tier-row-budget');
+    await within(budgetRow).findByText('x/y');
+    fireEvent.click(within(budgetRow).getByRole('button', { name: 'Model' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'No selection' }));
 
     // role="alert" does not compute its accessible NAME from content (ARIA:
     // "alert" is name-from-author, not name-from-content) — find the alert,
@@ -259,7 +270,7 @@ describe('model tiers: load and write failures are shown, never swallowed into "
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('Could not reach the harness.')).toBeInTheDocument();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(getDelegatedModels).toHaveBeenCalledTimes(2));
   });
 });
@@ -283,11 +294,11 @@ describe('desktop-only takeover: the tier-call signal, independent of the roster
 
     render(<SpecialistsSection cwd="cwd-tiers-unavailable" />);
 
-    expect(await screen.findByText('Specialists run on the desktop app. Open Settings there to add or edit them.')).toBeInTheDocument();
+    expect(await screen.findByText('Specialists run on the desktop app. Open settings there to add or edit them.')).toBeInTheDocument();
     // Whole-section takeover — the roster that DID load must not show through.
     expect(screen.queryByText('Models specialists run on')).toBeNull();
     expect(screen.queryByText('Explorer')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

@@ -32,7 +32,7 @@ const PROCESSING_STALE_MS = 10 * 60_000;
 const FOREIGN_STORE_TTL_DAYS = 3;
 const FOREIGN_STORE_TTL_MS = FOREIGN_STORE_TTL_DAYS * 24 * 3600_000;
 type Store = NonNullable<ReturnType<typeof getConversationStore>>;
-const STORE_DOWN = 'conversation storage is not available right now — retry with YouCoded open';
+const STORE_DOWN = 'conversation storage is not available right now — try again with YouCoded open';
 
 export function outboxDir(homeRoot: string): string { return path.join(chatsearchDir(homeRoot), 'outbox'); }
 

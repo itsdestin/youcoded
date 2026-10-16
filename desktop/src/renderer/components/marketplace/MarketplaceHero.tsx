@@ -64,7 +64,7 @@ export default function MarketplaceHero({ slots, lookup, onOpen }: Props) {
 
   // P-21 #1: the hero used to paint its border in the slot's accentColor — a
   // hardcoded gold (or blue/green) in every theme. It now keeps the theme's own
-  // card edge from layer-surface. MarketplaceCard still honours accentColor.
+  // card edge from layer-surface. MarketplaceCard dropped it too (final-review#MK-1).
   return (
     <section
       role="region"
@@ -74,7 +74,10 @@ export default function MarketplaceHero({ slots, lookup, onOpen }: Props) {
       onTouchEnd={handleTouchEnd}
     >
       <div className="relative z-10">
-        <p className="text-xs uppercase tracking-wide text-fg-dim">Featured</p>
+        {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no spaced
+            capitals). Kept a plain <p>, not SectionLabel — this annotates the
+            hero card itself, not a group inside a screen/popup/list. */}
+        <p className="text-xs text-fg-dim">Featured</p>
         <h2 className="text-base sm:text-2xl font-semibold text-fg">
           {entry?.displayName || slot.id}
         </h2>

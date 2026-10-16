@@ -299,6 +299,8 @@ export const IPC = {
   // ipc-handlers.ts resolves IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION against.
   SYNC_SPACES_SET_PROJECT_DESCRIPTION: 'syncspaces:set-project-description',
   SYNC_SPACES_STOP_PROJECT: 'syncspaces:stop-project',
+  // Remove a synced project everywhere: stop + off every device's lists (backlog row 10).
+  SYNC_SPACES_REMOVE_PROJECT: 'syncspaces:remove-project',
   // Conversation-lease takeover (Plan 2b Task 9). query = who holds this session;
   // takeover = ask-hand-off-then-poll-and-acquire; force = overwrite a stale lease.
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
@@ -1254,7 +1256,7 @@ interface ClaudeApi {
     // relayed server frame (presence/user-joined/challenge/…) or a synthetic
     // connection-state event ({type:'connected'|'disconnected'|'error'}) — all
     // carry a `type` discriminator; the renderer (Task 7) narrows on it.
-    presenceConnect: () => Promise<{ ok: true }>;
+    presenceConnect: (opts?: { hidden?: boolean }) => Promise<{ ok: true }>; // hidden = incognito (presence-socket.ts)
     presenceDisconnect: () => Promise<{ ok: true }>;
     // Honest receipt: { ok:false, status:0, message:'not connected' } when
     // no live socket exists — don't treat presenceSend as infallible.
@@ -1588,6 +1590,8 @@ interface ClaudeApi {
     // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
     renameProject?: (name: string, displayName: string) => Promise<{ ok: boolean; error?: string }>;
     stopProject?: (name: string) => Promise<{ ok: boolean; error?: string }>;
+    // Remove a synced project everywhere: stop + off every device's lists (backlog row 10).
+    removeProject?: (name: string) => Promise<{ ok: boolean; error?: string }>;
     // Conversation-lease takeover (Plan 2b Task 9). Optional so remote/Android
     // builds predating these members still typecheck; the Resume Browser gate
     // guards every call. leaseQuery answers who holds the session; leaseTakeover

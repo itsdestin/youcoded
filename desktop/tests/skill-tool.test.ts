@@ -15,7 +15,7 @@ function catalogOf(body: string): SkillCatalog {
     list: () => [{ id: 'journal', description: 'Write a journal entry' }],
     load: (id: string) => {
       if (id !== 'journal') throw new SkillNotFound(id, ['journal']);
-      return { id, displayName: 'Journal', description: 'Write a journal entry', body };
+      return { id, displayName: 'Journal', description: 'Write a journal entry', body, file: '/tmp/skills/journal/SKILL.md' };
     },
   };
 }

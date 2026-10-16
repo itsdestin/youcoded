@@ -1,0 +1,19 @@
+/* WHY: Settings uses the approved title divider; its content fade is the app's one
+   masked fade, so the drawer's real wallpaper shows through. */
+.settings-drawer-header { position: relative; }
+.settings-drawer-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  /* WHY --edge-card (theme deck YT-4, Destin: "the settings header divider line needs the
+     same thickness/color as the settings card borders"): every header divider now uses
+     the card outline colour, so the line and the cards below it read as one family. */
+  background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
+}
+/* Settings's scroll fade is the app's one fade (`.scroll-mask`, styles/scroll-mask.css) since
+   2026-10-15 — this file used to carry a private copy (42px, eased, with an unfaded 4% strip at
+   each side that Destin had already removed from dialogs: "the fade looks really strange"). */

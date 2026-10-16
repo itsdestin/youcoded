@@ -2,7 +2,7 @@
 //
 // Pins the hero's action collapse. The management actions (rename, the sync
 // action, and the destructive one) moved off the card and behind a cog menu;
-// only "New Conversation" stays visible. These tests exist so a later change
+// only "New conversation" stays visible. These tests exist so a later change
 // can't quietly strand one of them with no entry point — which is exactly how
 // Connect 4 became unreachable on narrow viewports.
 //
@@ -160,7 +160,7 @@ describe('ProjectHero on desktop', () => {
     expect(screen.queryByLabelText('Project settings')).toBeNull();
     expect(screen.getByText('Rename')).toBeTruthy();
     expect(screen.getByText('Remove from YouCoded')).toBeTruthy();
-    expect(screen.getByText('New Conversation')).toBeTruthy();
+    expect(screen.getByText('New conversation')).toBeTruthy();
   });
 
   it('keeps the sync action inline on the card', () => {
@@ -185,7 +185,7 @@ describe('ProjectHero on desktop', () => {
       canRemove: false,
       sync: { dot: { color: 'gray' }, spaceId: null, lastSynced: null, errorMessage: null, stopped: false },
     });
-    fireEvent.click(screen.getByLabelText('Sync status: Only on this computer'));
+    fireEvent.click(screen.getByLabelText('Sync status: Not synced'));
     expect(screen.getByText('Turn on sync for this project')).toBeTruthy();
   });
 
@@ -231,9 +231,9 @@ describe('ProjectHero on desktop', () => {
 });
 
 describe('ProjectHero action collapse (narrow)', () => {
-  it('keeps New Conversation on the card and nothing else', () => {
+  it('keeps New conversation on the card and nothing else', () => {
     renderHero();
-    expect(screen.getByText('New Conversation')).toBeTruthy();
+    expect(screen.getByText('New conversation')).toBeTruthy();
     // The old always-visible management buttons are gone from the card body.
     expect(screen.queryByText('Rename')).toBeNull();
     expect(screen.queryByText('Remove from YouCoded')).toBeNull();

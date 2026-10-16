@@ -10,6 +10,15 @@ import { buildSheet } from '../src/renderer/components/artifact-views/XlsxView';
 import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
 import { getSheetFind } from '../src/renderer/components/artifact-views/artifact-find-bridge';
 import { formatCellNumber } from '../src/renderer/components/artifact-views/exceljs-cell';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
+
+// WHY a CPU budget, not the suite's 30 s wall limit (2026-10-14): every test here renders or
+// searches a 2,000 x 100 sheet in jsdom — pure CPU, about 1.3 s for the heaviest alone. In
+// verify.sh --full at load ~65 on 32 threads, "a search with thousands of matches…" passed alone
+// and timed out at 30 s in the suite: the wall clock measured the machine, not the code. Each
+// test is now charged its own CPU (helpers/cpu-budget.ts), which still catches a search or render
+// turning quadratic, and each group's wall limit is only a hang guard.
+budgetCpuPerTest();
 import { ColumnFitter } from '../src/renderer/components/artifact-views/sheet-measure';
 import type { ArtifactViewProps } from '../src/renderer/components/artifact-views/types';
 
@@ -35,7 +44,7 @@ const colX = (container: HTMLElement, c: number) => {
   return 38 + widths.slice(0, c).reduce((a, b) => a + b, 0) + widths[c] / 2;
 };
 
-describe('copy returns the whole selection, from the data', () => {
+describe('copy returns the whole selection, from the data', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
   it('select all in a 2,000 x 100 sheet copies 2,000 lines of 100 fields, no blank lines', () => {
     const { container } = render(<CsvView {...csvProps(bigCsv(2000, 100))} />);
     const el = scroller(container);
@@ -105,7 +114,7 @@ describe('copy returns the whole selection, from the data', () => {
   });
 });
 
-describe('Find counts every match in the data and reaches each one', () => {
+describe('Find counts every match in the data and reaches each one', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
   function withBar(container: HTMLElement) {
     const ref = { current: container };
     return render(<ContentFindBar containerRef={ref} onClose={() => {}} resetKey="k" />);
@@ -162,7 +171,7 @@ describe('Find counts every match in the data and reaches each one', () => {
   });
 });
 
-describe('columns are sized from what is shown', () => {
+describe('columns are sized from what is shown', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
   it('a formatted number, a date and wide text get room; a number is never cut short', () => {
     const wb = new Workbook(); const ws = wb.addWorksheet('S');
     ws.getCell('A1').value = 1234567890.123; ws.getCell('A1').numFmt = '#,##0.00';
@@ -189,7 +198,7 @@ describe('columns are sized from what is shown', () => {
   });
 });
 
-describe('rows, accessibility and huge merges', () => {
+describe('rows, accessibility and huge merges', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
   it('a wrapped row that draws taller than estimated is corrected so blank space and drawn rows agree', () => {
     const wb = new Workbook(); const ws = wb.addWorksheet('S');
     for (let r = 1; r <= 300; r++) ws.addRow(['a', 'b']);

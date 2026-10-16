@@ -85,7 +85,11 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
 
   return (
     <div ref={rootRef} className="h-full flex flex-col">
-      <div role="toolbar" aria-label="Formatting" className="h-10 shrink-0 flex items-center gap-1 px-2 border-b border-edge-dim bg-panel select-none overflow-x-auto">
+      {/* WHY the bar's fill and line on an outer box (2026-10-15, the one scroll fade): on a narrow
+          pane the buttons scroll sideways and fade at the edge with more; the fade is a mask, so on
+          the bar itself it would fade the bar's fill and bottom line too. */}
+      <div className="h-10 shrink-0 flex border-b border-edge-dim bg-panel">
+      <div role="toolbar" aria-label="Formatting" className="scroll-mask scroll-mask--chips flex-1 min-w-0 flex items-center gap-1 px-2 select-none overflow-x-auto">
         {groups.map((g, i) => (
           <React.Fragment key={g[0].cmd}>
             {i > 0 && <span aria-hidden="true" className="w-px h-4 mx-1 bg-edge-dim shrink-0" />}
@@ -108,6 +112,7 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
             })}
           </React.Fragment>
         ))}
+      </div>
       </div>
       {/* A failed save shows its reason and the save-failed actions right above the document
           (I1, Task 6 fix round 1): Done and closing the panel wait on it rather than dropping

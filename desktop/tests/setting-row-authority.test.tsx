@@ -72,7 +72,7 @@ describe('SettingRow structure', () => {
   it('the description sits under the title, in the same column', () => {
     // THE one rule that retires all five shapes. The five were about placement,
     // not size: below the whole row (Sound), after the row (Buddy), as a K1
-    // section label (Session Defaults, Skip Permissions), and as a stray <p>
+    // section label (Session Defaults, Skip permissions), and as a stray <p>
     // outside the container (Buddy again — two placements in ONE popup).
     render(<SettingRow variant="item" title="Show buddy floater" description="A small mascot" control={<span />} />);
     const title = screen.getByText('Show buddy floater');
@@ -92,7 +92,7 @@ describe('SettingRow structure', () => {
   });
 
   it('a control row can take a whole-row click without double-firing', () => {
-    // This is what the <label> wrappers around the Remote Access toggles bought,
+    // This is what the <label> wrappers around the Remote access toggles bought,
     // and what PerformancePopup hand-rolled as a closest('[role="switch"]')
     // guard. Without the stopPropagation, clicking the toggle would fire the
     // row handler too and land straight back where it started.
@@ -156,11 +156,17 @@ describe('setting row adoption', () => {
         + 'the only row in the family whose label lives OUTSIDE it (in the tab above), '
         + 'so it has no title for the description to sit under',
     },
-    'SyncPanel.tsx': { count: 2, why: 'K6 sync-space list rows — a per-item list, not settings rows' },
+    // WHY count dropped 2 -> 1 (fix batch 1, 2026-09-24): the "Additional
+    // backups" master toggle moved into a SettingRow's control slot when that
+    // section was flattened out of its old border-dashed card (design guide
+    // "Groups are flat"). The one remaining exemption is the main sync status
+    // card's own enable toggle, which is not — the status card is a K6
+    // per-item surface, not a settings row.
+    'SyncPanel.tsx': { count: 1, why: 'K6 sync-space status card toggle — a per-item status surface, not a settings row' },
     'ProvidersSection.tsx': { count: 1, why: 'K6 provider list row' },
-    'SyncSetupWizard.tsx': { count: 1, why: 'a wizard step, not a settings menu' },
+    // SyncSetupWizard.tsx left the list 2026-10-13 (small-fixes-3): its switch is the setting row now.
     'ResumeBrowser.tsx': { count: 1, why: 'L1 drawer — out of the dialog family entirely' },
-    // The Resume browser's Skip Permissions / new-window switches, moved into a
+    // The Resume browser's Skip permissions / new-window switches, moved into a
     // shared file (2026-09-16) so the Projects preview draws the same block.
     'ResumeOptions.tsx': { count: 2, why: 'the Resume browser\'s launch switches, shared with the Projects preview — same drawer styling, not a settings menu' },
     'CloseSessionPrompt.tsx': { count: 1, why: 'dialog footer: "Don\'t show again" beside the confirm button — a footer convention, not a settings row (P-15, 2026-08-26)' },

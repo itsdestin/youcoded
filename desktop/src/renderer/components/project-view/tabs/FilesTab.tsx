@@ -128,7 +128,9 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon, ChatIcon } from '../../Icons';
-import { EmptyState, ErrorState } from '../../ui';
+import { EmptyState, ErrorState, SectionLabel } from '../../ui';
+import { TabHeading } from '../TabHeading';
+import { useScrollFade } from '../../../hooks/useScrollFade';
 import { useOfficeHeaderAction } from '../../office/use-office-edit-screen';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
@@ -169,7 +171,7 @@ function ListBox({ children, scrolls, scrollRef }: {
   // radius live on the outer div and the scrolling happens inside it.
   return (
     <div className="min-h-0 flex flex-col rounded-lg border border-edge-dim overflow-hidden">
-      <div ref={scrollRef} className="min-h-0 overflow-y-auto max-sm:overflow-visible">{children}</div>
+      <div ref={scrollRef} className="scroll-mask min-h-0 overflow-y-auto max-sm:overflow-visible">{children}</div>
     </div>
   );
 }
@@ -246,7 +248,7 @@ function FilesTabImpl({
 }) {
   // Root breadcrumb label + empty-state wording — constant now that this tab
   // renders only the one on-disk section.
-  const rootLabel = 'Project Files';
+  const rootLabel = 'Project files';
   const noun = 'files';
   // Searching OR an active type filter flattens the tree to matching FILES only
   // — no folder cards. When you're looking for something, folders are noise;
@@ -616,6 +618,10 @@ function FilesTabImpl({
   // on it), so the reveal watches the viewport there — same trade-off as
   // ConversationsTab.
   const flatScrollRef = useRef<HTMLDivElement>(null);
+  // WHY (2026-09-29, "fix scroll fade effects"): drives the see-through edge
+  // fade (.scroll-mask) — cards fade under the tab row and the window's edge
+  // instead of being cut off.
+  useScrollFade(flatScrollRef);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const noRoot = useRef<HTMLElement | null>(null);
   const narrowViewport = useNarrowViewport();
@@ -698,13 +704,13 @@ function FilesTabImpl({
         // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
         // same lift on desktop, guarded by @media (hover: hover) so a tap on the
         // Android WebView can't leave the card stuck at 1.02 (spec §9.E).
-        className={`layer-surface !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
+        // WHY card-raised (decisions "Card look" K-3, "Card shadow" F-3): file cards are raised
+        // cards with the one medium shadow. They were flat ("mixed elevation in one grid",
+        // 2026-07-08); the folder cards beside them stay flat for now — their tab-and-body
+        // shape has no single box to shadow (a known deviation in the design guide).
+        className={`layer-surface card-raised !rounded-lg relative flex flex-col h-44 overflow-hidden text-left hover-lift ${
           isActive ? 'border-accent' : ''
         } ${isDeleted ? 'opacity-60' : ''}`}
-        // No shadow: folder cards are flat, and mixed elevation in one grid read
-        // as inconsistent (user feedback 2026-07-08). Same override the seg
-        // control uses on its .layer-surface.
-        style={{ boxShadow: 'none' }}
         onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >
@@ -907,39 +913,10 @@ function FilesTabImpl({
           Rendered even when search/type-filter has flattened the tree (which
           hides the path itself): the switch has to stay reachable while you
           search, and a row that disappears under you reads as a bug. */}
-      <div className="flex items-center justify-between gap-3 shrink-0 min-w-0">
-        {!flat ? (
-        <div className="flex items-center gap-1 text-xs flex-wrap min-w-0">
-          <button
-            type="button"
-            onClick={() => setCurrentDir('')}
-            className={currentDir ? 'text-fg-muted hover:text-fg transition-colors' : 'text-fg-2 font-medium'}
-          >
-            {rootLabel}
-          </button>
-          {segments.map((seg, i) => {
-            const p = segments.slice(0, i + 1).join('/');
-            const last = i === segments.length - 1;
-            return (
-              <React.Fragment key={p}>
-                <span className="text-fg-faint">/</span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentDir(p)}
-                  className={`truncate max-w-[200px] ${last ? 'text-fg-2 font-medium' : 'text-fg-muted hover:text-fg transition-colors'}`}
-                >
-                  {seg}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </div>
-        ) : <span />}
-        {/* Minified switch: two bare icon buttons, no pill behind them — this
-            line is quieter than the toolbar row and a filled pill here would
-            outweigh the breadcrumb next to it. The active one is the accent
-            colour rather than an accent fill. */}
-        <div className="shrink-0 flex items-center gap-0.5" role="radiogroup" aria-label="File view">
+      {/* WHY TabHeading: the same heading row as the other two tabs — the
+          folder path is the heading, the view switch its tool. */}
+      <TabHeading action={(
+        <div className="flex items-center gap-0.5" role="radiogroup" aria-label="File view">
           {([
             { id: 'grid' as const, label: 'Grid view', icon: <GridViewIcon size={14} /> },
             { id: 'list' as const, label: 'List view', icon: <ListViewIcon size={14} /> },
@@ -963,13 +940,43 @@ function FilesTabImpl({
             );
           })}
         </div>
-      </div>
+      )}>
+        {!flat ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setCurrentDir('')}
+            className={currentDir ? 'text-fg-muted hover:text-fg transition-colors' : ''}
+          >
+            {rootLabel}
+          </button>
+          {segments.map((seg, i) => {
+            const p = segments.slice(0, i + 1).join('/');
+            const last = i === segments.length - 1;
+            return (
+              <React.Fragment key={p}>
+                <span className="text-fg-faint">/</span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentDir(p)}
+                  className={`truncate max-w-[200px] ${last ? '' : 'text-fg-muted hover:text-fg transition-colors'}`}
+                >
+                  {seg}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </>
+        ) : null}
+      </TabHeading>
 
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
+      {/* WHY full width, not a narrow centred card (error-notices-1#EN-8, 2026-10-12: "full
+          width"): the notice takes the place of the whole file list, so it spans that list. */}
       {flat && !allLoading && allError !== null && (
-        <div className="max-w-md mt-4 mx-auto">
+        <div className="mt-4">
           <ErrorState
             mode="recoverable"
             message={allError ? `Couldn’t load your files: ${allError}` : 'Couldn’t load your files.'}
@@ -981,7 +988,7 @@ function FilesTabImpl({
           never an empty folder (spec 2026-09-18 §8). The breadcrumb above
           stays, so the way back out is always one click. */}
       {!flat && !folderLoading && folderError !== null && (
-        <div className="max-w-md mt-4 mx-auto">
+        <div className="mt-4">
           <ErrorState
             mode="recoverable"
             message={folderErrorMessage(folderError.error, folderError.detail, currentDir === '', project.path)}
@@ -1013,8 +1020,8 @@ function FilesTabImpl({
           the p-2/-m-2 overflow room the grid does. */}
       <div ref={flatScrollRef} className={isList
         ? `flex-1 min-h-0 flex flex-col gap-2 content-start max-sm:overflow-visible ${
-            flat ? 'overflow-auto' : 'overflow-hidden'}`
-        : 'flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
+            flat ? 'scroll-mask scroll-mask--wide overflow-auto scrollbar-none' : 'overflow-hidden'}`
+        : 'scroll-mask scroll-mask--wide flex-1 overflow-auto scrollbar-none max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
         {flat
           ? (
             <>
@@ -1029,9 +1036,13 @@ function FilesTabImpl({
                   />
                 </div>
               )}
+              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
               {searching && !noSearchResults && (
-                <div className={`${fullW} text-3xs uppercase tracking-wider text-fg-muted mb-0.5 px-0.5`}>
-                  Matches by file name ({flatResults.length})
+                <div className={`${fullW} px-0.5`}>
+                  <SectionLabel className="mb-0.5">
+                    Matches by file name ({flatResults.length})
+                  </SectionLabel>
                 </div>
               )}
               {isList
@@ -1052,8 +1063,12 @@ function FilesTabImpl({
                 const capped = contentTruncated || displayCapped;
                 return (
                   <div className={`${fullW} min-w-0`}>
-                    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-2 mb-1.5 px-0.5">
-                      Matches by file contents ({shownRows}{capped ? '+' : ''})
+                    {/* Padding on this inner wrapper, not SectionLabel itself
+                        — it owns only margin/layout (design lint no-restyle). */}
+                    <div className="px-0.5">
+                      <SectionLabel className="mt-2 mb-1.5">
+                        Matches by file contents ({shownRows}{capped ? '+' : ''})
+                      </SectionLabel>
                     </div>
                     <div className="flex flex-col gap-2">
                       {groups.map((group) => {

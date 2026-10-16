@@ -188,8 +188,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     const r = reg.start(startSpec('seq 1 300', dir));
     if (!r.ok) throw new Error('start failed');
     await r.run.exited;
-    await new Promise((res) => setTimeout(res, 300));   // let a trailing debounce fire
-    expect(r.run.tail).toHaveLength(RING_LINES);
+    await vi.waitFor(() => expect(r.run.tail).toHaveLength(RING_LINES));
     expect(r.run.tail[0]).toBe('101');
     const last = views[views.length - 1];
     expect(last.status).toBe('exited');
@@ -506,14 +505,24 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
   it.skipIf(!posix)('a run that finishes before a mark emits nothing, and its pending marks are cleared on exit', async () => {
     const marks: number[] = [];
     reg.on('long-running', (_run, ms) => marks.push(ms));
+    const started = Date.now();
     const r = reg.start(startSpec('echo hi', dir));
     if (!r.ok) throw new Error('start failed');
     expect(r.run.longRunTimers).toHaveLength(2);
     await r.run.exited;
+    const ranMs = Date.now() - started;
     // The exit path clears the timers — the structural guard that nothing can
     // fire later for a run that is no longer running.
     expect(r.run.longRunTimers).toHaveLength(0);
-    expect(marks).toHaveLength(0);
+    // WHY measured, not assumed (2026-10-09): at load average ~45 even `echo` outlived the 60 ms
+    // mark, so a mark fired WHILE it ran — correct behaviour — and "no marks" failed a full run.
+    // The promise under test is "nothing fires after exit": wait past the last mark and check
+    // no mark arrived late. When the run did finish before the first mark, none fired at all.
+    const atExit = marks.length;
+    // settle (negative assertion): no mark may fire after exit.
+    await new Promise((res) => setTimeout(res, 200));
+    expect(marks).toHaveLength(atExit);
+    if (ranMs < 60 - JITTER_MS) expect(marks).toHaveLength(0);
   });
 
   it.skipIf(!posix)('an adopted hand-off counts the time it already ran in the foreground', async () => {
