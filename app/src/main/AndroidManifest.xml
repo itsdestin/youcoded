@@ -36,6 +36,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
+        android:extractNativeLibs="true"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -55,19 +56,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="youcoded" android:host="skill" />
-                <data android:scheme="youcoded" android:host="plugin" />
-            </intent-filter>
         </activity>
 
+        <!-- WHY (2026-10-14, Android clean rebuild): runs the assistant's backend (a Node process) while YouCoded is
+             in use, so a reply that is still streaming is not frozen when the screen turns off. specialUse
+             (not dataSync): Android 15 caps dataSync at six hours a day, which would cut long sessions. -->
         <service
-            android:name=".runtime.SessionService"
+            android:name=".runtime.BackendService"
             android:foregroundServiceType="specialUse"
-            android:exported="false" />
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the on-device AI assistant the user is chatting with, so replies and tool runs it started keep going while the screen is off." />
+        </service>
 
     </application>
 </manifest>

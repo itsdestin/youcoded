@@ -14,4 +14,3 @@ dependencyResolutionManagement {
 }
 rootProject.name = "youcoded"
 include(":app")
-include(":terminal-emulator-vendored")

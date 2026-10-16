@@ -263,20 +263,18 @@ describe('modes and defaults: same answer, same file, through either door', () =
 });
 
 describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () => {
-  // WHY a home of its own (2026-10-14): settings.json lives under os.homedir(), and the suite's
-  // throwaway HOME is shared by every test file running at once — several of which write
-  // settings.json. Under load (verify.sh --full at load ~20 on 32 threads) another file held its
-  // write lock past mutateFileUnderLock's 3 s wait, so "a real field written by a phone" got
-  // `false` back (3020 ms) and failed, while passing alone. A private home means no other file
-  // can hold this lock; the refusal and round-trip it checks are unchanged.
-  let ownHome = '';
+  // WHY a private home (CI, 2026-10-15): settings.json in the shared test home
+  // is written by test files in other workers at the same time; under load the
+  // write lock's 3 s wait ran out and the phone's save answered false.
+  let home = '';
+  let homeSpy: ReturnType<typeof vi.spyOn> | null = null;
   beforeAll(() => {
-    ownHome = fs.mkdtempSync(path.join(os.tmpdir(), 'r31-settings-home-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(ownHome);
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-settings-doors-'));
+    homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
   });
   afterAll(() => {
-    vi.mocked(os.homedir).mockRestore();
-    fs.rmSync(ownHome, { recursive: true, force: true });
+    homeSpy?.mockRestore();
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5 });
   });
   it('a paired phone cannot write onto Object.prototype, and neither can the computer', async () => {
     expect((await overRemote('settings:set', { field: '__proto__.polluted', value: 1 })).answer).toBe(false);
@@ -289,7 +287,7 @@ describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () =
     expect((await overRemote('settings:set', { field: 'r31Probe.nested', value: 'yes' })).answer).toBe(true);
     expect(await overIpc('settings:get', { field: 'r31Probe.nested' })).toBe('yes');
     // The write landed in this group's own home, not the suite's shared one.
-    expect(fs.readFileSync(path.join(ownHome, '.claude', 'settings.json'), 'utf8')).toContain('r31Probe');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).toContain('r31Probe');
     await overIpc('settings:set', { field: 'r31Probe', value: undefined });
   });
 });

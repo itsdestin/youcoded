@@ -476,8 +476,52 @@ function connectedPages(): PageDocument[] {
       // Rewritten since it was allowed: the band shows the quiet note.
       codeChanged: true,
     },
+    {
+      // Page start session (spec 2026-10-14): a project page that may open the
+      // new-conversation window with a message waiting. Opens on its approval
+      // card; after Allow its button calls youcoded.startSession.
+      ...base, id: 'page-weekly-briefing', name: 'Weekly briefing', icon: 'notes',
+      home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
+      description: 'What changed this week, and a button that starts the update in a new conversation.',
+      updatedAt: '2026-10-14T09:00:00.000Z', htmlStamp: 1791968400000,
+      html: WEEKLY_BRIEFING_HTML,
+      connections: [{ id: 'start-session', kind: 'session', approved: false }],
+    },
   ];
 }
+
+/** The start-session sample: a button that asks for the window, and the copy
+ *  box an older app (no startSession) falls back to. */
+const WEEKLY_BRIEFING_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Weekly briefing</title></head><body>
+<div class="yc-page yc-stack">
+  <div><div class="yc-eyebrow">youcoded · this week</div><h1>Weekly briefing</h1></div>
+  <div class="yc-card yc-stack" style="gap:10px">
+    <span class="yc-muted">Last updated 7 days ago.</span>
+    <button class="yc-button yc-button--primary" id="go">Update now</button>
+    <span class="yc-muted yc-small" id="note"></span>
+  </div>
+</div>
+<script>
+  document.getElementById('go').addEventListener('click', function () {
+    // Several lines on purpose (review F4): the window's message preview has to
+    // show a real page's long message scrolling inside its own box.
+    var prompt = [
+      'Run the weekly update for this project.',
+      '',
+      '1. Read what changed since last week: new commits, closed issues and any notes in the briefing folder.',
+      '2. For each change, write one plain sentence saying what a reader will notice.',
+      '3. Mark anything that still needs a decision, and say who has to make it.',
+      '4. Refresh the briefing page with the new list, newest first.',
+      '5. Keep last week\\'s list underneath, folded, so nothing is lost.',
+      '',
+      'Do not delete any older briefings. When you are done, tell me what changed in three lines or fewer.'
+    ].join('\\n');
+    var note = document.getElementById('note');
+    if (typeof window.youcoded.startSession !== 'function') { note.textContent = 'Copy this into a new conversation: ' + prompt; return; }
+    window.youcoded.startSession({ prompt: prompt }).then(function (r) { note.textContent = r.ok ? '' : 'The conversation window could not open.'; });
+  });
+</script>
+</body></html>`;
 
 export function seedPages(): PageDocument[] {
   return [

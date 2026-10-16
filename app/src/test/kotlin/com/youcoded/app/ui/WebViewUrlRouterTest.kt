@@ -34,7 +34,7 @@ class WebViewUrlRouterTest {
             (host == "my_desk.local" && port == 9900)
     }
 
-    private fun decide(url: String) = WebViewUrlPolicy.decide(url, paired)
+    private fun decide(url: String, devServersInApp: Boolean = true) = WebViewUrlPolicy.decide(url, paired, devServersInApp)
 
     private class FakeActions : WebViewUrlRouter.Actions {
         val downloads = mutableListOf<Pair<String, String>>()
@@ -93,6 +93,14 @@ class WebViewUrlRouterTest {
         )) {
             assertEquals(url, UrlDecision.LOAD, decide(url))
         }
+    }
+
+    @Test fun `a release build opens dev-server links outside the app`() {
+        // Claude Code runs on the phone: a link to a server it started must not replace the app's own page.
+        for (url in listOf("http://localhost:5173/", "http://10.0.2.2:5173/src/main.tsx")) {
+            assertEquals(url, UrlDecision.OPEN_EXTERNALLY, decide(url, devServersInApp = false))
+        }
+        assertEquals(UrlDecision.LOAD, decide("file:///android_asset/web/index.html", devServersInApp = false))
     }
 
     // A downloaded .html in the phone's storage, tapped, used to load AS the
@@ -264,8 +272,8 @@ class WebViewUrlRouterTest {
      * the router's own construction, not anywhere later in the file.
      * Gradle runs unit tests from the module directory (app/).
      */
-    @Test fun `WebViewHost drives the router from both the override and the download listener`() {
-        val src = File("src/main/kotlin/com/youcoded/app/ui/WebViewHost.kt").readText()
+    @Test fun `AppWebView drives the router from both the override and the download listener`() {
+        val src = File("src/main/kotlin/com/youcoded/app/ui/AppWebView.kt").readText()
             .replace(Regex("""/\*[\s\S]*?\*/"""), "")
             .replace(Regex("""(?<!:)//[^\n]*"""), "")
         val sig = src.indexOf("fun shouldOverrideUrlLoading(")

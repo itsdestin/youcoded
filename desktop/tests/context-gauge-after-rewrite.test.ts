@@ -179,10 +179,10 @@ describe('the compaction marker can finally say what it freed', () => {
   });
 
   it('native /compact marks its card awaitsResult so the 3-minute watchdog never guesses; CC does not', async () => {
-    // The Android app's own runtime has no host record, so its screen still raises the spinner itself (one-core R5-4a); on a host with a record
+    // A host with no record (an older computer) leaves the screen to raise the spinner itself (one-core R5-4a); on a host with a record
     // the host's event does, and tests/session-live-two-screens.test.ts covers that.
-    const { ANDROID_LOCAL_CAPABILITIES } = await import('../src/shared/capabilities');
-    vi.stubGlobal('window', { claude: { capabilities: ANDROID_LOCAL_CAPABILITIES } });
+    const { REMOTE_SCREEN_CAPABILITIES } = await import('../src/shared/capabilities');
+    vi.stubGlobal('window', { claude: { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: false } } });
     const { dispatchSlashCommand } = await import('../src/renderer/state/slash-command-dispatcher');
     for (const native of [true, false]) {
       const dispatch = vi.fn();

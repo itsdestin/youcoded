@@ -13,10 +13,9 @@ describe('hitch recorder wiring', () => {
     // WHY the contract, not types.ts: the preload's channel list is GENERATED from backend-contract.ts (generate-preload-channels.mjs).
     expect(src('src', 'shared', 'backend-contract.ts')).toContain(`PERF_HITCH_BATCH: '${HITCH_CHANNEL}'`);
   });
-  it('the channel is fire-only desktop: no remote shim, host or Android surface carries it', () => {
+  it('the channel is fire-only desktop: no remote shim or remote server carries it (the phone runs the desktop backend, so nothing else exists)', () => {
     expect(src('src', 'renderer', 'remote-shim.ts')).not.toContain(HITCH_CHANNEL);
     expect(src('src', 'main', 'remote-server.ts')).not.toContain(HITCH_CHANNEL);
-    expect(readSource(join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'))).not.toContain(HITCH_CHANNEL);
   });
   it('main wraps ipcMain before registering handlers and honours the off switch', () => {
     const main = src('src', 'main', 'main.ts');

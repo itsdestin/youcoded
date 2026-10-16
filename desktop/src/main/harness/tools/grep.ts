@@ -1,6 +1,5 @@
 // Bundled ripgrep (@vscode/ripgrep) — deterministic cross-platform search.
 import { spawn } from 'child_process';
-import { rgPath as bundledRgPath } from '@vscode/ripgrep';
 import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
@@ -8,6 +7,15 @@ import { defineTool, SEARCH_TIMEOUT_MS } from './registry';
 import { resolveP, toPosix, shellCwdMissHint, lunaPathRefused } from './guards';
 import { CREDENTIAL_EXCLUDE_GLOBS } from './credential-paths';
 import type { ResultBounds } from './types';
+
+/** The ripgrep this install ships. WHY lazy, and the override (2026-10-14, Android clean rebuild): the Android app
+ *  runs this backend with its own bundled rg (YOUCODED_RG_PATH), and `@vscode/ripgrep` throws at IMPORT on a
+ *  platform it has no build for — which stopped the whole backend from starting on the phone. */
+function bundledRgPath(): string {
+  if (process.env.YOUCODED_RG_PATH) return process.env.YOUCODED_RG_PATH;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- loaded only where it has a build
+  return (require('@vscode/ripgrep') as { rgPath: string }).rgPath;
+}
 
 /** Resolve the ripgrep binary the tool will actually spawn.
  *
@@ -23,7 +31,7 @@ import type { ResultBounds } from './types';
  * rewrote rgPath to point there. Mirror the pty-worker fix (session-manager.ts):
  * prefer the unpacked sibling when it exists, else fall back to the bundled
  * path (correct in dev, where there is no asar). Pure + exported for tests. */
-export function resolveRgPath(raw: string = bundledRgPath): string {
+export function resolveRgPath(raw: string = bundledRgPath()): string {
   const unpacked = raw.replace(/app\.asar(?!\.unpacked)([/\\])/, `app.asar.unpacked$1`);
   if (unpacked !== raw && fs.existsSync(unpacked)) return unpacked;
   return raw;

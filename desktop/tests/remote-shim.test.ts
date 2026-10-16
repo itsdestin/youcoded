@@ -1020,8 +1020,10 @@ describe('remote-shim — conversation status', () => {
     });
   });
 
+  // WHY (2026-10-14, Android clean rebuild): the Android app's own bridge is the desktop backend itself, so a
+  // conversation there is filled and watched exactly as from a computer (the old Kotlin runtime refused both).
   describe('watching on the Android app\'s own bridge', () => {
-    it('never sends session:unwatch to the on-device runtime: it is refused quietly, like session:open', async () => {
+    it('sends session:open and session:unwatch to the phone\'s own backend', async () => {
       vi.resetModules();
       FakeWebSocket.instances = [];
       (globalThis as any).WebSocket = FakeWebSocket;
@@ -1035,15 +1037,17 @@ describe('remote-shim — conversation status', () => {
       ws.open();
       ws.receive({ type: 'auth:ok', platform: 'android' });
       await p;
-      await expect((window as any).claude.session.unwatch('s1')).rejects.toThrow(/remote-unsupported: session:unwatch/);
-      await expect((window as any).claude.session.open({ sessionId: 's1' })).rejects.toThrow(/remote-unsupported: session:open/);
-      expect(ws.sentOf('session:unwatch')).toEqual([]);
-      expect(ws.sentOf('session:open')).toEqual([]);
+      void (window as any).claude.session.open({ sessionId: 's1' }).catch(() => {});
+      void Promise.resolve((window as any).claude.session.unwatch('s1')).catch(() => {});
+      expect(ws.sentOf('session:open').some((m: any) => m.payload?.sessionId === 's1')).toBe(true);
+      expect(ws.sentOf('session:unwatch').some((m: any) => m.payload?.sessionId === 's1')).toBe(true);
+      ws.close();
     });
   });
 
-  describe('remote:conversation-status on the Android app\'s own bridge', () => {
-    it('pushes nothing — that bridge is not filled from a computer, so there is no copy to describe', async () => {
+  // Destin, 2026-10-15: "this conversation may be out of date" banners for conversations running on the phone.
+  describe('remote:conversation-status on the Android app\'s own backend', () => {
+    it('never says a conversation may be out of date: there is no computer copy, and no fill round reports', async () => {
       vi.resetModules();
       FakeWebSocket.instances = [];
       (globalThis as any).WebSocket = FakeWebSocket;
@@ -1052,18 +1056,18 @@ describe('remote-shim — conversation status', () => {
       (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
       const local = await import('../src/renderer/remote-shim');
       local.installShim();
+      const seen: string[] = [];
+      (window as any).claude.on.remoteConversationStatus((st: { phase: string }) => seen.push(st.phase));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p = local.connect('android-local', false);
       const ws = FakeWebSocket.instances[0];
       ws.open();
       ws.receive({ type: 'auth:ok', platform: 'android' });
       await p;
-      const seen: string[] = [];
-      (window as any).claude.on.remoteConversationStatus((s: { phase: string }) => seen.push(s.phase));
-      (window as any).claude.on.sessionCreated(() => {});
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       vi.advanceTimersByTime(20_000);
       expect(seen).toEqual([]);
       vi.useRealTimers();
+      ws.close();
     });
   });
 });

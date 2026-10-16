@@ -8,7 +8,7 @@ export function browserState(over: Partial<BrowserSessionState> = {}): BrowserSe
   return {
     sessionId: 's1', run: 'running', windowShown: false, myChrome: false, browserLabel: 'Google Chrome',
     tabs: [{ index: 0, title: 'Catalog', url: 'https://library.example.org/catalog', active: true, loading: false, canGoBack: true, canGoForward: true }],
-    prompt: null, error: null, used: true, busy: false, downloadPercent: null, ...over,
+    prompt: null, error: null, used: true, busy: false, downloadPercent: null, zoom: { percent: 45, auto: true }, ...over,
   };
 }
 

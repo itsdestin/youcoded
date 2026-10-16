@@ -28,7 +28,6 @@ describe('in-app update installer IPC parity', () => {
   // by IPC constant); the progress push is sent by update-service.ts.
   const handler = read('src/main/ipc/update.ts') + read('src/main/update-service.ts');
   const constFor = (ch: string) => 'IPC.' + ch.toUpperCase().replace(/[:-]/g, '_');
-  const android = read('../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
 
   for (const channel of CHANNELS) {
     it(`preload.ts references "${channel}"`, () => {
@@ -39,9 +38,6 @@ describe('in-app update installer IPC parity', () => {
     });
     it(`the host references "${channel}"`, () => {
       expect(handler).toContain(channel === 'update:progress' ? channel : constFor(channel));
-    });
-    it(`SessionService.kt references "${channel}"`, () => {
-      expect(android).toContain(channel);
     });
   }
 });

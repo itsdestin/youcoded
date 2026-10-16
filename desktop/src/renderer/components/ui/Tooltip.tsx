@@ -104,6 +104,11 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressStart = useRef<{ x: number; y: number } | null>(null);
+  // True between a press on the control and its release. WHY (Destin, 2026-10-15: hints "appear and stick around
+  // after clicking" on desktop and the phone): a click or tap FOCUSES the control right after the press, and the
+  // keyboard path below opened the hint on every focus — so the press closed it and the focus reopened it, until
+  // focus went somewhere else. Focus that a press caused is not the keyboard and opens nothing.
+  const pressing = useRef(false);
   const id = useId();
 
   const child = React.Children.only(children) as React.ReactElement<Record<string, unknown>>;
@@ -219,6 +224,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
       close();
     },
     onPointerDown: (e: React.PointerEvent) => {
+      pressing.current = true;
       if (e.pointerType === 'mouse') {
         // Clicking the thing is an answer in itself; the hint gets out of the way.
         close();
@@ -241,6 +247,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
       }
     },
     onPointerUp: (e: React.PointerEvent) => {
+      pressing.current = false;
       if (e.pointerType === 'mouse') return;
       pressStart.current = null;
       // Cancel a hold that has not fired yet; one already on screen stays until
@@ -248,11 +255,12 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
       cancelTimer();
     },
     onPointerCancel: () => {
+      pressing.current = false;
       pressStart.current = null;
       cancelTimer();
     },
-    // Keyboard reaches the hint the same way it reaches everything else.
-    onFocus: () => { if (armed) setOpen(true); },
+    // Keyboard reaches the hint the same way it reaches everything else — but only the keyboard (see `pressing`).
+    onFocus: () => { if (armed && !pressing.current) setOpen(true); },
     onBlur: close,
   };
 

@@ -8,6 +8,7 @@ import './styles/globals.css';
 import App from './App';
 import { RemoteGate } from './remote-gate';
 import { defaultThemeFor, guessThemeDefault } from '../shared/theme-default';
+import { installChipCopy } from './components/context-menu/chip-copy';
 
 // Perf lab startup mark (read over CDP by youcoded-dev/scripts/perf-lab). Free.
 // WHY the name says "modules-evaluated" and not "start": ESM hoists EVERY import
@@ -19,6 +20,11 @@ import { defaultThemeFor, guessThemeDefault } from '../shared/theme-default';
 // (page navigation -> here) is recovered by the rig for free as
 // `modulesEvaluated - documentStart`, using performance.timeOrigin.
 performance.mark('yc:modules-evaluated');
+
+// Ctrl/Cmd+C over a file chip copies its full path, not the name it shows
+// (chip-copy.ts). Once, at the document, so every window this file boots —
+// main, buddy, a torn-off chat, a phone — behaves the same.
+installChipCopy();
 
 // A live-candidate pane (?mode=workbench&child=1&view=live) is addressed purely by URL: the
 // review deck embeds it from another origin and so cannot reach this origin's localStorage to

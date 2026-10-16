@@ -109,6 +109,22 @@ function templateSvg(dot, ink = '#000') {
   ${dot ? `<circle cx="12.6" cy="-0.6" r="2.1" fill="${ink}"/>` : ''}
 </svg>`;
 }
+/** The face as ONE solid shape with the eyes and mouth cut out and the sparkles left in — Android's themed
+ *  (one-colour) icon. WHY not the menu-bar outline (Destin, 2026-10-15, android-icon-choice I-1 and his
+ *  follow-up in chat): Samsung's One UI draws themed icons light-on-colour in BOTH light and dark mode, and
+ *  the outline drawn light turns the eyes into pale staring blobs; the solid face drawn light reads like the
+ *  real icon (soft face, dark eyes, white sparkles). On a Pixel's light mode (dark-on-pale) it flips — the
+ *  accepted trade. Its frame centres the face (the menu-bar frame leaves room above it for the alert dot). */
+function solidFaceSvg(ink = '#fff') {
+  const E = [[4.3, 5.2], [9.7, 4.9]];
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="-0.5 -1.5 15 15">
+  <defs><mask id="cut"><rect x="-1" y="-3" width="16" height="16" fill="#fff"/>
+  ${E.map(([x, y]) => `<ellipse cx="${x}" cy="${y}" rx="1.6" ry="2.2" fill="#000"/>`).join('')}
+  <path d="M5.6 8.35 Q7 8 8.4 8.35 Q8.9 8.5 8.7 8.95 Q8 10.25 7 10.25 Q6 10.25 5.3 8.95 Q5.1 8.5 5.6 8.35Z" fill="#000"/>
+  ${E.map(([x, y]) => `<circle cx="${x + .55}" cy="${y - .9}" r=".62" fill="#fff"/>`).join('')}</mask></defs>
+  <rect width="14" height="12" rx="4" fill="${ink}" mask="url(#cut)"/>
+</svg>`;
+}
 function macTrayIcons() {
   for (const [name, dot] of [['tray-macTemplate', false], ['tray-alert-macTemplate', true]]) {
     const svgPath = path.join(TMP, `${name}.svg`);
@@ -147,19 +163,22 @@ function liquidGlass() {
 // visible. The face panel's corner is its farthest point (~0.54 of its width from the centre), so a
 // 60dp-wide panel keeps every corner inside that circle. The tile is its own vector layer
 // (drawable/ic_launcher_background.xml).
+const MONO_DP = 50;
 function android() {
   const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
   const face = shoot('face', 'default', 1024);
-  // Monochrome (Android 13 themed icons) reads ALPHA only: the menu-bar face, so it keeps its features.
+  // Monochrome (Android 13 themed icons) reads ALPHA only: the solid face (solidFaceSvg — why there).
   const monoSvg = path.join(TMP, 'mono.svg');
-  fs.writeFileSync(monoSvg, templateSvg(false, '#fff'));
+  fs.writeFileSync(monoSvg, solidFaceSvg('#fff'));
   for (const [bucket, scale] of Object.entries(DENSITIES)) {
     const dir = path.join(RES, `mipmap-${bucket}`), px = Math.round(108 * scale), facePx = Math.round(64 * scale);
     fs.mkdirSync(dir, { recursive: true });
     execFileSync('magick', [face, '-filter', 'Lanczos', '-resize', `${facePx}x${facePx}`, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`,
       path.join(dir, 'ic_launcher_foreground.png')]);
     const mono = path.join(TMP, `mono-${bucket}.png`);
-    execFileSync('rsvg-convert', ['-w', String(Math.round(66 * scale)), '-h', String(Math.round(66 * scale)), monoSvg, '-o', mono]);
+    // 50dp, not the full 66dp safe zone: themed glyphs on a home screen sit at about half the tile (Destin,
+    // 2026-10-15: at 66dp the face's outline nearly touched the tile's edge).
+    execFileSync('rsvg-convert', ['-w', String(Math.round(MONO_DP * scale)), '-h', String(Math.round(MONO_DP * scale)), monoSvg, '-o', mono]);
     execFileSync('magick', [mono, '-background', 'none', '-gravity', 'center', '-extent', `${px}x${px}`, path.join(dir, 'ic_launcher_monochrome.png')]);
   }
 }

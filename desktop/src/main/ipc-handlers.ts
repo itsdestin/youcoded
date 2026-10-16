@@ -14,7 +14,7 @@ import { SAFE_ID_RE } from './session-browser';
 import { HookRelay } from './hook-relay';
 import { IPC, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
-import { setPermissionOverrides, forgetSessionAttention } from './main';
+import { setPermissionOverrides, forgetSessionAttention } from './app-signals';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller } from './integration-installer';

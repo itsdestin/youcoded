@@ -39,7 +39,8 @@ import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
-import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
+import { getPermissionOverrides, setForgetSessionAttention } from './app-signals';
+import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
@@ -449,14 +450,8 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
-// In-memory cache of user's permission overrides, loaded from defaults file
-// and updated by ipc-handlers.ts whenever defaults:set is called.
-let permissionOverrides: PermissionOverrides = { ...PERMISSION_OVERRIDES_DEFAULT };
-
-/** Called by ipc-handlers.ts on startup and after each defaults:set. */
-export function setPermissionOverrides(overrides: Partial<PermissionOverrides>) {
-  permissionOverrides = { ...PERMISSION_OVERRIDES_DEFAULT, ...overrides };
-}
+// The permission-overrides cache lives in app-signals.ts (2026-10-14): ipc-handlers.ts must not
+// import this file, which starts the Electron app at module scope.
 
 /**
  * First-run local models (2026-09-14): a finished local download hands setup on. Called by BOTH
@@ -581,13 +576,14 @@ const debouncedBroadcastAttention = (() => {
  *  session that died without one (crash, takeover, window reload mid-turn)
  *  kept its last state in the aggregate for the life of the process, and a
  *  "needs you" state there kept the buddy's attention signal lit. */
-export function forgetSessionAttention(sessionId: string): void {
+function forgetSessionAttention(sessionId: string): void {
   let mutated = false;
   for (const byWin of attentionReports.values()) {
     if (byWin.delete(sessionId)) mutated = true;
   }
   if (mutated) debouncedBroadcastAttention();
 }
+setForgetSessionAttention(forgetSessionAttention); // ipc-handlers reaches it through app-signals.ts
 
 // Shared BrowserWindow factory — used for the primary window AND for peer
 // windows spawned by the detach subsystem. Keeps webPreferences, security
@@ -1238,7 +1234,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
       // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
       // missing `permissionMode` all fall through to the ordinary ask below
       // (see permission-auto-approve.ts's own header for the full reasoning).
-      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
+      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, getPermissionOverrides()))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         autoApproved = true;
       }

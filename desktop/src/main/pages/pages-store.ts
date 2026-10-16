@@ -119,6 +119,8 @@ export class PagesStore {
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
         const allApproved = manifest.connections.length > 0
           && manifest.connections.every((c) => approvals[c.id]?.fingerprint === fingerprint(c));
+        const sessionIds = new Set(manifest.connections.filter((c) => c.kind === 'session').map((c) => c.id));
+        const reachesNetwork = manifest.connections.some((c) => c.kind !== 'session');
         const connections: PageConnectionStatus[] = manifest.connections.map((m) => {
           const approved = approvals[m.id]?.fingerprint === fingerprint(m);
           // An approved device is shown at the address the person allowed; one
@@ -142,12 +144,17 @@ export class PagesStore {
           ...(connections.length ? { connections } : {}),
           // The band only appears once the page can actually reach something:
           // a time beside a paused page would be a time for nothing.
-          ...(allApproved
+          // WHY a network line too: a page whose only line opens a new
+          // conversation (spec 2026-10-14) fetches nothing, so a permanent
+          // "Not updated yet" beside its name would be a time for nothing.
+          ...(allApproved && reachesNetwork
             ? { refresh: this.deps.refreshState?.(id) ?? { at: null, failed: false } }
             : {}),
           // Only once everything is approved: a page still waiting for a yes
-          // is already showing its approval card, which says more.
-          ...(allApproved && await this.codeMovedSince(dir, htmlStat.mtimeMs, Object.values(approvals).map((a) => a.htmlHash))
+          // is already showing its approval card, which says more. A session
+          // line's approval is not about the code (spec 2026-10-14, §3), so it
+          // is left out of the comparison even if a record carries a hash.
+          ...(allApproved && await this.codeMovedSince(dir, htmlStat.mtimeMs, Object.entries(approvals).filter(([cid]) => !sessionIds.has(cid)).map(([, a]) => a.htmlHash))
             ? { codeChanged: true }
             : {}),
         });

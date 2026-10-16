@@ -52,6 +52,8 @@ const ALLOWED: Array<{ file: string; type: string; scope: 'global' | 'split'; wh
   { file: 'remote-server.ts', type: "'session:created'", scope: 'global', why: 'the session list: everyone needs it' },
   { file: 'remote-server.ts', type: "'session:destroyed'", scope: 'global', why: 'the session list: everyone needs it' },
   { file: 'remote-server.ts', type: 'channel', scope: 'global', why: 'a change a phone made through the channel table, handed to every phone (tags and similar)' },
+  { file: 'headless/headless-boot.ts', type: "'syncspaces:event'", scope: 'global', why: 'sync state is about the device, not a session (same as main.ts)' },
+  { file: 'headless/headless-boot.ts', type: 'IPC.FIRST_RUN_STATE', scope: 'global', why: 'setup progress is about the app, not a session (the phone backend has no window to send it to)' },
   { file: 'ipc-handlers.ts', type: 'IPC.TAGS_CHANGED', scope: 'global', why: 'tags are shared by every conversation' },
   { file: 'ipc-handlers.ts', type: 'SESSION_SUMMARY_CHANNEL', scope: 'global', why: 'the per-session summary goes to everyone by design' },
   { file: 'ipc-handlers.ts', type: 'IPC.SESSION_MOVED', scope: 'global', why: 'reaches every main window, not the owner (the 2026-07-18 moved-pill bug)' },

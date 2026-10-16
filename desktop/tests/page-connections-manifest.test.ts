@@ -140,3 +140,30 @@ describe('a YouCoded connection that may change things', () => {
     expect(fingerprint(yc(['/a']))).not.toBe(fingerprint(yc(['/a', '/b'])));
   });
 });
+
+// Page start session (spec 2026-10-14): a page may open the new-conversation
+// window with a message waiting. It reaches no address, so it has no settings,
+// its approval is keyed to the declaration alone, and it is never part of the
+// whole-internet mixing rule.
+describe('a page that may open a new conversation', () => {
+  const session = { id: 'start-session', kind: 'session' };
+  it('parses with no settings, whatever else the manifest wrote on it', () => {
+    expect(parseConnections([{ ...session, address: 'evil.example', prompt: 'x' }])).toEqual([{ id: 'start-session', kind: 'session' }]);
+  });
+  it('is approved against the declaration alone', () => {
+    expect(fingerprint(parseConnections([session])[0])).toBe('session');
+    expect(fingerprint(parseConnections([{ ...session, id: 'renamed' }])[0])).toBe('session');
+  });
+  it('reaches no address, and allows no request', () => {
+    const c = parseConnections([session])[0];
+    expect(covers(c, 'api.youcoded.ai')).toBe(false);
+    expect(covers(c, new URL('https://example.com/'))).toBe(false);
+    expect(methodAllowed(c, 'GET')).toBe(false);
+  });
+  it('is not a credential, so it sits beside the whole internet', () => {
+    expect(parseConnections([{ id: 'o', kind: 'open' }, session])).toHaveLength(2);
+  });
+  it('is kept once per page', () => {
+    expect(parseConnections([session, { ...session, id: 'again' }])).toHaveLength(1);
+  });
+});

@@ -132,7 +132,40 @@ export type PageConnection =
    *  keys and every bank's sign-in (main/pages/plaid.ts). The key is saved
    *  like any other under service "Plaid" at the environment's address, so
    *  practice (sandbox) and real (production) keys never mix. */
-  | { id: string; kind: 'plaid'; environment: PlaidEnvironment; keyHelp?: { steps: string[] } };
+  | { id: string; kind: 'plaid'; environment: PlaidEnvironment; keyHelp?: { steps: string[] } }
+  /** Open the app's new-conversation window with a message the page wrote
+   *  (`youcoded.startSession`, spec 2026-10-14). Reaches no address and has no
+   *  settings. WHY its approval ignores the page's code: nothing is sent until
+   *  the person reads the message and presses Start, so a rebuilt page.html
+   *  (Frontier Lab bakes its data in weekly) must never re-ask. */
+  | { id: string; kind: 'session' };
+
+/** The longest message a page may put in the new-conversation window. A guard
+ *  against a broken page, not a content rule: the whole message is shown to
+ *  the person before anything is sent (spec 2026-10-14, §2). */
+export const MAX_PAGE_SESSION_PROMPT = 20_000;
+
+/** Characters a page's message may not carry (review F1): format characters
+ *  (Unicode category Cf — zero-width spaces and joiners U+200B–U+200F, word
+ *  joiners U+2060–U+2064, text-direction controls U+202A–U+202E and
+ *  U+2066–U+2069, U+FEFF, the soft hyphen…) and the tag block U+E0000–E007F.
+ *  WHY: they show nothing, or reorder what shows, in the composer, yet reach
+ *  the model — a page could hide "…and also delete X" inside a harmless-looking
+ *  message. Refused, not stripped, so the page's author finds out. The cost: an
+ *  emoji built with a zero-width joiner (👩‍💻) is refused too. One source for
+ *  the bootstrap (page-theme.ts, as `.source`) and the host (PageHost.tsx). */
+export const PAGE_SESSION_HIDDEN_CHARS = /[\p{Cf}\u{E0000}-\u{E007F}]/u;
+
+/** The plain reasons a page hears when startSession answers { ok: false }.
+ *  Written for the page's author; the bootstrap and the host share them. */
+export const PAGE_SESSION_REFUSED = {
+  notAllowed: 'This page has not been allowed to start conversations.',
+  badMessage: `The message is empty or longer than ${MAX_PAGE_SESSION_PROMPT.toLocaleString('en-US')} characters.`,
+  hidden: 'The message contains hidden characters (such as zero-width or text-direction marks), so it was not passed on.',
+  noClick: 'A conversation can only be started right after the person clicks on the page.',
+  alreadyOpen: 'The new-conversation window is already open.',
+  closed: 'The page was closed or changed before the window could open.',
+} as const;
 
 export type PlaidEnvironment = 'sandbox' | 'production';
 /** The saved-key address for a Plaid environment. */

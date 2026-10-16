@@ -33,6 +33,7 @@ import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } 
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
+import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
 
@@ -383,10 +384,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     if (initialAttachments?.length) setAttachments(initialAttachments.map((path) =>
       ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) })));
     // Focus the textarea so the user can review / edit / submit immediately.
+    // WHY (page start session, review F4): a message a page wrote gets the
+    // caret at its START, so a long one shows its beginning, not its tail.
+    // Every other prefill keeps it at the end, ready to type on.
+    const caret = takeCaretAtStart(initialInput ?? '') ? 0 : (initialInput ?? '').length;
     requestAnimationFrame(() => {
       if (inputRef.current) {
         inputRef.current.focus();
-        inputRef.current.setSelectionRange((initialInput ?? '').length, (initialInput ?? '').length);
+        inputRef.current.setSelectionRange(caret, caret);
+        if (caret === 0) inputRef.current.scrollTop = 0;
       }
     });
   }, [sessionId, initialInput, initialAttachments]);

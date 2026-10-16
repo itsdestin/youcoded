@@ -12,10 +12,10 @@
 // only when `visible`), it asks for pictures only while mounted and the app
 // window isn't hidden, and each picture is written straight to the <img> — no
 // React state per frame — then acknowledged so the next one may come.
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput } from '../ui';
+import { Button, Callout, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
@@ -107,8 +107,27 @@ function pagePointClamped(rect: { left: number; top: number; width: number; heig
   return { x: Math.round(x), y: Math.round(y) };
 }
 
+/** The zoom steps (percent) the − / + buttons move through, as in a browser.
+ *  The zoom itself lives in the browser (browser-service setZoom), shared with
+ *  the assistant; the default follows the panel's width. */
+const ZOOM_STEPS = [25, 33, 50, 67, 75, 80, 90, 100];
+
+/** The next step out from `percent` (null at the smallest). */
+function zoomStepOut(percent: number): number | null {
+  return [...ZOOM_STEPS].reverse().find((z) => z < percent) ?? null;
+}
+/** The next step in from `percent` (null at 100%). */
+function zoomStepIn(percent: number): number | null {
+  return ZOOM_STEPS.find((z) => z > percent) ?? null;
+}
+
 /** The live picture of the chat's current tab — also the person's way to use it. */
-const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: { sessionId: string; title: string; onPanelKey: (k: PanelKey) => void }) {
+const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey, zoom, onZoom }: {
+  sessionId: string; title: string; onPanelKey: (k: PanelKey) => void;
+  /** The page zoom to show in the pill; null hides it (pages can't be zoomed). */
+  zoom: { percent: number; auto: boolean } | null;
+  onZoom: (z: number | 'auto') => void;
+}) {
   const img = useRef<HTMLImageElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [hasFrame, setHasFrame] = useState(false);
@@ -138,8 +157,10 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
     return () => { off(); stop(); document.removeEventListener('visibilitychange', onVis); };
   }, [sessionId]);
 
-  // Tell the browser the picture area's size, so a hidden browser lays the
-  // page out to fit it. Debounced: dragging the panel edge relayouts once.
+  // Tell the browser the picture area's size; it lays the page out at that
+  // size divided by the zoom, so a zoomed-out page is wider than the panel and
+  // its picture is shrunk to fit (clicks map through the picture's scale —
+  // pagePoint). Debounced: dragging the panel edge relayouts once.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -155,6 +176,9 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
     ro.observe(el);
     return () => { ro.disconnect(); if (timer) clearTimeout(timer); };
   }, [sessionId]);
+
+  const zoomOut = zoom ? zoomStepOut(zoom.percent) : null;
+  const zoomIn = zoom ? zoomStepIn(zoom.percent) : null;
 
   // Ack after the picture is drawn, so a busy screen slows the stream instead of queueing.
   const onLoad = useCallback(() => { bridge().ackFrame(sessionId); }, [sessionId]);
@@ -383,6 +407,20 @@ const LivePicture = memo(function LivePicture({ sessionId, title, onPanelKey }: 
       {!hasFrame && <div className="my-6"><LoadingState what="the picture" verb="Waiting for" variant="inline" /></div>}
       {/* Photo-only build: the panel counts as showing once a picture is drawn. */}
       {hasFrame && <ScreenMark name="chat/browser" />}
+      {/* The page's zoom, as in any browser. Clicking the % returns to the
+          default (desktop-width page fitted to the panel). */}
+      {hasFrame && zoom && (
+        <ZoomPill
+          className="absolute bottom-2 right-2"
+          percent={zoom.percent}
+          canZoomOut={zoomOut !== null}
+          canZoomIn={zoomIn !== null}
+          zoomInDisabledReason="Already at actual size"
+          onZoomOut={() => { if (zoomOut !== null) onZoom(zoomOut); }}
+          onZoomIn={() => { if (zoomIn !== null) onZoom(zoomIn); }}
+          onReset={() => onZoom('auto')}
+        />
+      )}
     </div>
       {/* Outside the picture's box: React passes a portal's keys up its parents,
           and the box would send the menu's arrow keys on to the page. */}
@@ -411,9 +449,16 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // repeated here or it could never be seen (UX review 2, U1).
   const narrow = useNarrowViewport();
 
+  // WHY numbered loads (Destin, 2026-10-15: "Got it" sometimes wouldn't
+  // dismiss): a load begun before a change could land after it and put the old
+  // settings back. Only the newest answer counts.
+  const infoSeq = useRef(0);
   useEffect(() => {
     let live = true;
-    const load = () => { void bridge().info().then((i: BrowserInfo) => { if (live) setInfo(i); }).catch(() => {}); };
+    const load = () => {
+      const n = ++infoSeq.current;
+      void bridge().info().then((i: BrowserInfo) => { if (live && n === infoSeq.current) setInfo(i); }).catch(() => {});
+    };
     load();
     const off = bridge().onInfoChanged(load);
     return () => { live = false; off(); };
@@ -426,8 +471,16 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const myChrome = (running ? state?.myChrome : info?.settings.useMyChrome) ?? false;
   const webPage = !!active && /^https?:/i.test(active.url);
 
+  // Gone the moment it's pressed; the saved setting follows. A failed save
+  // only means it shows again next time.
+  const [explainerDismissed, setExplainerDismissed] = useState(false);
   const dismissExplainer = useCallback(async () => {
-    try { setInfo(await bridge().updateSettings({ explainerSeen: true })); } catch { /* stays visible; harmless */ }
+    setExplainerDismissed(true);
+    const n = ++infoSeq.current;
+    try {
+      const i = await bridge().updateSettings({ explainerSeen: true });
+      if (n === infoSeq.current) setInfo(i);
+    } catch { /* hidden for now; shows again next time */ }
   }, []);
 
   // The header's buttons match Session Files' (Destin, 2026-10-13): open
@@ -449,7 +502,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const addressBox = useRef<HTMLInputElement>(null);
-  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' | 'stop' } | { tab: 'new' | 'select' | 'close'; index?: number }) => {
+  const go = useCallback(async (req: { address: string } | { nav: 'back' | 'forward' | 'reload' | 'stop' } | { tab: 'new' | 'select' | 'close'; index?: number } | { zoom: number | 'auto' }) => {
     setOpenError(null);
     try {
       const r = await bridge().open({ sessionId, ...req });
@@ -458,6 +511,11 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       setOpenError(err instanceof Error ? err.message : "That page couldn't be opened.");
     }
   }, [sessionId]);
+  const onZoom = useCallback((z: number | 'auto') => { void go({ zoom: z }); }, [go]);
+  // Primitive parts, so the memo'd picture redraws only when the zoom changes.
+  const zoomPercent = state?.zoom?.percent;
+  const zoomAuto = state?.zoom?.auto;
+  const zoom = useMemo(() => (zoomPercent === undefined ? null : { percent: zoomPercent, auto: !!zoomAuto }), [zoomPercent, zoomAuto]);
   // A new tab is empty: the address box takes the typing straight away, as in Chrome.
   const newTab = useCallback(async () => {
     await go({ tab: 'new' });
@@ -517,7 +575,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
         {/* A new tab is a white page: say what to do instead (the picture is
             still drawn underneath it, so the stream stays warm). */}
         <div className="relative flex-1 min-h-0 flex flex-col rounded-lg border border-edge bg-panel overflow-hidden shadow-sm">
-          <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} />
+          <LivePicture sessionId={sessionId} title={active?.title ?? ''} onPanelKey={onPanelKey} zoom={zoom} onZoom={onZoom} />
           {blank && !active?.loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-panel pointer-events-none">
               <EmptyState message="Type an address or a search above." />
@@ -593,7 +651,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       {/* WHY the short error line (FieldError), not grey text (guide "Status and notices": a short
           error on an item is the notice box in miniature; never an error that reads as a hint). */}
       {openError && <div className="px-3 py-1.5"><FieldError as="p">{openError}</FieldError></div>}
-      {info && !info.settings.explainerSeen && (
+      {info && !info.settings.explainerSeen && !explainerDismissed && (
         // The notice's own button goes inside it through the shared box's actions (guide "Status
         // and notices"), not a hand-placed row under its words.
         <Callout className="mx-3 my-2" title="The assistant's own browser" actionsPlacement="below"

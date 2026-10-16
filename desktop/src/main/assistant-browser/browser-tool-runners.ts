@@ -274,7 +274,18 @@ function askOutcome(answer: PromptAnswer | 'cancelled' | 'timeout', what: string
 async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserNavigate'>): Promise<RunResult> {
   const sid = ctx.sessionId;
   const blocked = blockedByUser(env, ctx); if (blocked) return blocked;
-  if (!a.url && !a.go) return err('Give BrowserNavigate a url, or go: "back"/"forward".');
+  if (!a.url && !a.go && a.zoom === undefined) return err('Give BrowserNavigate a url, go: "back"/"forward", or a zoom.');
+  if (a.zoom !== undefined) {
+    // The zoom applies before any address opens, so the page loads at it once.
+    if (!env.service.canZoom()) return err('Zoom only works in the assistant\'s hidden browser — a shown window or the user\'s own Chrome keeps its own size.');
+    const pct = Math.round(env.service.setZoom(sid, a.zoom === 'auto' ? null : a.zoom / 100) * 100);
+    if (!a.url && !a.go) {
+      const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
+      // The new layout takes a moment to settle; the outline should show it.
+      await page.waitForTimeout(300).catch(() => undefined);
+      return pageReport(env, ctx, page, { lead: `Zoom is now ${pct}%${a.zoom === 'auto' ? ' (the default)' : ''}.` });
+    }
+  }
   if (a.go) {
     const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
     try {

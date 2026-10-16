@@ -871,62 +871,47 @@ describe('remote-shim — overlapping connections', () => {
       return desk;
     }
 
-    it('removing a computer goes to the phone’s own runtime, which answers it', async () => {
+    // WHY (2026-10-14, Android clean rebuild): the saved computers are the Android app's own, so they go to the
+    // app through the host object its WebView injects — never over a socket, and the connection to the computer
+    // is never touched.
+    const calls: Array<{ id: string; type: string; payload: unknown; token?: string }> = [];
+    beforeEach(() => {
+      calls.length = 0;
+      (globalThis as any).YouCodedHost = { invoke: (id: string, type: string, json: string, token: string) => calls.push({ id, type, payload: JSON.parse(json), token }) };
+    });
+    afterEach(() => { delete (globalThis as any).YouCodedHost; });
+    const reply = (i: number, value: unknown, error?: string) => (globalThis as any).__youcodedHost.reply(calls[i].id, JSON.stringify(value), error);
+
+    it('removing a computer goes to the Android app, which answers it', async () => {
       const desk = await paired();
+      const sockets = FakeWebSocket.instances.length;
       const removing = claude().android.removePairedDevice('desk', 9900);
-      const local = latest();
-      expect(local).not.toBe(desk);
-      expect(local.url).toBe('ws://localhost:9901');
-      local.open();
-      expect(local.sentOf('auth')).toEqual([{ type: 'auth', token: 'bt' }]);
-      local.receive({ type: 'auth:ok', platform: 'android' });
-      const [req] = local.sentOf('android:remove-paired-device');
-      expect(req.payload).toEqual({ host: 'desk', port: 9900 });
-      local.receive({ type: 'android:remove-paired-device:response', id: req.id, payload: true });
+      expect(calls.map(({ type, payload }) => ({ type, payload }))).toEqual([{ type: 'android:remove-paired-device', payload: { host: 'desk', port: 9900 } }]);
+      // The app answers only calls carrying this run's page token (it hands its object to every frame).
+      expect(calls[0].token).toBe('bt');
+      reply(0, true);
       await expect(removing).resolves.toBe(true);
-      expect(local.readyState).not.toBe(FakeWebSocket.OPEN);     // the short connection is closed
+      expect(FakeWebSocket.instances.length).toBe(sockets);       // no side connection
       expect(desk.sentOf('android:remove-paired-device')).toHaveLength(0);
       expect(claude().session.canSend()).toBe(true);             // the computer connection is untouched
     });
 
-    it('the list and a save reach the phone too', async () => {
+    it('the list and a save reach the app too', async () => {
       await paired();
       const listing = claude().android.getPairedDevices();
-      const local = latest();
-      local.open();
-      local.receive({ type: 'auth:ok', platform: 'android' });
-      const [req] = local.sentOf('android:get-paired-devices');
-      local.receive({ type: 'android:get-paired-devices:response', id: req.id, payload: { devices: [{ host: 'desk', port: 9900 }] } });
+      reply(0, { devices: [{ host: 'desk', port: 9900 }] });
       await expect(listing).resolves.toEqual({ devices: [{ host: 'desk', port: 9900 }] });
-
       const saving = claude().android.savePairedDevice({ name: 'Desk', host: 'desk', port: 9900, password: 'pw' });
-      const local2 = latest();
-      local2.open();
-      local2.receive({ type: 'auth:ok', platform: 'android' });
-      const [save] = local2.sentOf('android:save-paired-device');
-      local2.receive({ type: 'android:save-paired-device:response', id: save.id, payload: true });
+      expect(calls[1]).toMatchObject({ type: 'android:save-paired-device', payload: { name: 'Desk', host: 'desk', port: 9900, password: 'pw' } });
+      reply(1, true);
       await expect(saving).resolves.toBe(true);
     });
 
-    // 2026-09-29: About on a paired phone read "YouCoded " with no version — the
-    // shim answered an empty one instead of asking the phone that knows it.
-    it('the app version comes from the phone, not a blank', async () => {
-      const desk = await paired();
-      const asking = claude().android.getAbout();
-      const local = latest();
-      expect(local).not.toBe(desk);
-      local.open();
-      local.receive({ type: 'auth:ok', platform: 'android' });
-      const [req] = local.sentOf('android:get-about');
-      local.receive({ type: 'android:get-about:response', id: req.id, payload: { version: '1.3.0', build: '42' } });
-      await expect(asking).resolves.toEqual({ version: '1.3.0', build: '42' });
-    });
-
-    it('a phone runtime that never answers fails the call instead of pretending it worked', async () => {
+    it('an app that refuses fails the call instead of pretending it worked', async () => {
       await paired();
       const removing = claude().android.removePairedDevice('desk', 9900);
-      latest().fireClose(1006);
-      await expect(removing).rejects.toThrow();
+      reply(0, null, 'The phone could not remove it.');
+      await expect(removing).rejects.toThrow('The phone could not remove it.');
     });
   });
 
