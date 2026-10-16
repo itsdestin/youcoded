@@ -25,7 +25,7 @@
     "renderer/components/ResumeBrowser.tsx": 2074,
     "renderer/components/SessionDrawer.tsx": 1614,
     "main/preload.ts": 2620,
-    "renderer/components/StatusBar.tsx": 1812,
+    "renderer/components/StatusBar.tsx": 1813,
     "renderer/components/ToolCard.tsx": 1633,
     "main/doc-comments/docx-comments.ts": 2031,
     "main/doc-comments/xlsx-comments.ts": 2317

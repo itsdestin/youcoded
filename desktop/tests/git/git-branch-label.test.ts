@@ -42,10 +42,18 @@ describe('gitBranchLabel', () => {
     const gitdir = path.join(main, '.git', 'worktrees', 'wt');
     fs.mkdirSync(gitdir, { recursive: true });
     fs.writeFileSync(path.join(gitdir, 'HEAD'), 'ref: refs/heads/session/x\n');
+    fs.writeFileSync(path.join(gitdir, 'commondir'), '../..\n');
     const wt = path.join(root, 'wt');
     fs.mkdirSync(wt);
     fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${gitdir}\n`);
-    expect(await gitBranchLabel(wt)).toBe('wt/session/x');
+    // WHY: the worktree's folder ("wt") is named after its session; the label names the repo it belongs to
+    expect(await gitBranchLabel(wt)).toBe('main-checkout/session/x');
+  });
+
+  it('names the repo from its origin address when it has one', async () => {
+    const dir = repo('some-folder', 'ref: refs/heads/main\n');
+    fs.writeFileSync(path.join(dir, '.git', 'config'), '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://github.com/itsdestin/youcoded-dev.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n');
+    expect(await gitBranchLabel(dir)).toBe('youcoded-dev/main');
   });
 
   it('is null outside any repo, and for a folder that does not exist', async () => {

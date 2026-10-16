@@ -177,7 +177,15 @@ GIT_INFO=""
 if command -v git &>/dev/null; then
     _BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || _BRANCH=""
     if [[ -n "$_BRANCH" ]]; then
-        _REPO=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null) || _REPO=""
+        # WHY the origin's name, not the folder's (Destin, 2026-10-16): a session's worktree folder is named after
+        # the session, so "work-cards-20261014/session/work-cards-20261014" said nothing about which repo it was.
+        _URL=$(git remote get-url origin 2>/dev/null) || _URL=""
+        if [[ -n "$_URL" ]]; then
+            _REPO=$(basename "${_URL%/}" .git)
+        else
+            _COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || _COMMON=""
+            if [[ "$(basename "$_COMMON")" == ".git" ]]; then _REPO=$(basename "$(dirname "$_COMMON")"); else _REPO=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null) || _REPO=""; fi
+        fi
         if [[ -n "$_REPO" ]]; then
             GIT_INFO="${_REPO}/${_BRANCH}"
         else
