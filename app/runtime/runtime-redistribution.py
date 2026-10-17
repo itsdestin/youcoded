@@ -48,7 +48,10 @@ def metadata(text):
 def validate_metadata(data, index):
     fields = {'pkgname': 'P', 'pkgver': 'V', 'arch': 'A', 'origin': 'o', 'license': 'L', 'commit': 'c'}
     for field, key in fields.items():
-        if len(data.get(field, [])) != 1 or not index.get(key) or data[field][0] != index[key]:
+        # WHY: an architecture-neutral APK can be indexed in the arm repository
+        # with A:aarch64 while its original control metadata correctly says noarch.
+        accepted = {index.get(key)} | ({'noarch'} if field == 'arch' else set())
+        if len(data.get(field, [])) != 1 or not index.get(key) or data[field][0] not in accepted:
             raise ValueError(f'Missing or mismatched APK provenance {field}: {index.get("P")}')
     if not re.fullmatch('[0-9a-f]{40}', data['commit'][0]):
         raise ValueError('Missing exact aports commit')
@@ -96,7 +99,7 @@ def install(cache, destination, evidence, branch, roots):
         (evidence / 'pkginfo').mkdir(exist_ok=True)
         (evidence / metadata_path).write_bytes(raw)
         excluded = name in ('busybox', 'busybox-binsh', 'apk-tools') or name.startswith('alpine-baselayout')
-        record = {'name': name, 'version': version, 'repository': repo, 'architecture': index['A'],
+        record = {'name': name, 'version': version, 'repository': repo, 'architecture': data['arch'][0], 'repository_architecture': index['A'],
                   'origin': index['o'], 'license': index['L'], 'aports_commit': index['c'],
                   'url': url, 'sha256': sha, 'index_checksum': index.get('C'),
                   'pkginfo': metadata_path, 'pkginfo_sha256': digest(evidence / metadata_path),

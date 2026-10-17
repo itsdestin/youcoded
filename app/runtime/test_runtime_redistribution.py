@@ -74,6 +74,15 @@ class Fixtures(unittest.TestCase):
     def package_index(self):
         return {'P': 'bash', 'V': '5.3-r1', 'A': 'aarch64', 'o': 'bash', 'L': 'GPL-3.0-or-later', 'c': COMMIT}
 
+    def test_architecture_neutral_metadata_is_valid_in_arm_repository(self):
+        index = self.package_index()
+        data = r.metadata(self.pkginfo())
+        data['arch'] = ['noarch']
+        r.validate_metadata(data, index)
+        data['arch'] = ['x86_64']
+        with self.assertRaisesRegex(ValueError, 'provenance arch'):
+            r.validate_metadata(data, index)
+
     def pkginfo(self):
         return '\n'.join(f'{field} = {self.package_index()[key]}' for field, key in
                          {'pkgname': 'P', 'pkgver': 'V', 'arch': 'A', 'origin': 'o', 'license': 'L', 'commit': 'c'}.items()) + '\n'
