@@ -47,6 +47,7 @@ def satisfies(version, operator, wanted):
 def resolve(directory, roots):
     packages = {}
     providers = {}
+    duplicated = set()
     for repo in ('main', 'community'):
         for block in (Path(directory) / f'{repo}.idx').read_text().split('\n\n'):
             data = dict(line.split(':', 1) for line in block.splitlines() if len(line) > 2 and line[1] == ':')
@@ -55,7 +56,9 @@ def resolve(directory, roots):
             data['repo'] = repo
             name = data['P']
             if name in packages:
-                raise ValueError(f'Duplicate package across indexes: {name}')
+                # WHY: unrelated packages can occur in both repository snapshots.
+                # Reject ambiguous inputs only if this build actually selects them.
+                duplicated.add(name)
             packages[name] = data
             for provided in data.get('p', '').split():
                 virtual, op, version = requirement(provided)
@@ -78,6 +81,8 @@ def resolve(directory, roots):
         if len(candidates) != 1:
             raise ValueError(f'Unresolved or ambiguous dependency {value!r} from {parent!r}: {candidates}')
         actual = candidates[0][0]
+        if actual in duplicated:
+            raise ValueError(f'Duplicate selected package across indexes: {actual}')
         edges.append({'from': parent, 'requirement': value, 'package': actual})
         if actual not in selected:
             selected[actual] = packages[actual]

@@ -42,6 +42,14 @@ class Fixtures(unittest.TestCase):
         (self.root / 'main.idx').write_text(text)
         (self.root / 'community.idx').write_text('')
 
+    def test_unselected_duplicate_package_does_not_block_runtime_resolution(self):
+        self.indexes('P:bash\nV:5.3-r1\n\nP:dotnet-bash-completion\nV:1\n')
+        (self.root / 'community.idx').write_text('P:dotnet-bash-completion\nV:2\n')
+        result = r.resolver.resolve(self.root, ['bash'])
+        self.assertEqual([p['P'] for p in result['packages']], ['bash'])
+        with self.assertRaisesRegex(ValueError, 'Duplicate selected package'):
+            r.resolver.resolve(self.root, ['dotnet-bash-completion'])
+
     def package_index(self):
         return {'P': 'bash', 'V': '5.3-r1', 'A': 'aarch64', 'o': 'bash', 'L': 'GPL-3.0-or-later', 'c': COMMIT}
 
