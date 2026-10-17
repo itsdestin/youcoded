@@ -42,6 +42,10 @@ export default function setup() {
   // whole sandbox exists to remove.
   fs.rmSync(testHome, { recursive: true, force: true });
   fs.mkdirSync(path.join(testHome, '.claude'), { recursive: true });
+  // WHY: native Windows shell APIs may expand the redirected USERPROFILE and
+  // reject a missing known-folder target. Keep that target inside the sandbox,
+  // rather than restoring the developer's real profile for browser subprocesses.
+  fs.mkdirSync(path.join(testHome, 'AppData', 'Local'), { recursive: true });
   // git-service.ts's gitCommit shells out to real `git commit` with no author
   // env vars (that's the production code path) — it needs SOME identity to
   // resolve, and the redirected HOME above means it can no longer see the

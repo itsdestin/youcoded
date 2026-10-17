@@ -45,6 +45,14 @@ describe('test-suite home isolation', () => {
     expect(os.homedir()).not.toBe(real);
   });
 
+  it('creates the sandbox Local AppData folder before native child processes start', () => {
+    // WHY: Windows shell folder lookups can expand %USERPROFILE% and verify the
+    // folder exists. Chrome refuses debugging if it cannot determine that folder.
+    const local = path.join(os.homedir(), 'AppData', 'Local');
+    expect(fs.existsSync(local)).toBe(true);
+    expect(fs.statSync(local).isDirectory()).toBe(true);
+  });
+
   it('writing ~/.claude state cannot escape the sandbox', () => {
     // End-to-end proof rather than a restatement of the config: resolve a path
     // the way the app's modules do, write to it, and confirm the bytes landed

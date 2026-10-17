@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
+import WebSocket from 'ws';
 import { discoverBrowsers, defaultDiscoveryEnv } from '../src/main/assistant-browser/browser-discovery';
 import { createBrowserHost, type HostPort } from '../src/main/assistant-browser/browser-host';
 import { BrowserClient, type WorkerHandle } from '../src/main/assistant-browser/browser-client';
@@ -149,6 +150,54 @@ describe('Browser worker, through the main process\'s client', () => {
   }, 60_000);
 });
 
+/** Prepare the person's pre-existing tab before the app's CDP connection starts.
+ * WHY: DevToolsActivePort only proves a listener exists. macOS CI connected while
+ * the startup page still had an empty document; Playwright then waited forever
+ * for its first navigation. Raw CDP lets us observe the actual commit first. */
+async function prepareExistingTab(port: string, url: string): Promise<void> {
+  const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as Array<{ type: string; webSocketDebuggerUrl: string }>;
+  const page = pages.find(p => p.type === 'page');
+  expect(page, 'the isolated fixture browser exposes its initial tab').toBeTruthy();
+  const socket = new WebSocket(page!.webSocketDebuggerUrl);
+  let nextId = 0;
+  const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  let committed!: () => void;
+  let failed!: (error: Error) => void;
+  const navigation = new Promise<void>((resolve, reject) => { committed = resolve; failed = reject; });
+  void navigation.catch(() => {}); // observed below, including if the deadline fires during a command
+  // Same readiness budget as the existing DevToolsActivePort wait, not an extended timeout.
+  const deadline = setTimeout(() => failed(new Error(`Fixture page did not commit ${url}`)), 15_000);
+  const command = (method: string, params: object = {}) => new Promise<any>((resolve, reject) => {
+    const id = ++nextId;
+    pending.set(id, { resolve, reject });
+    socket.send(JSON.stringify({ id, method, params }));
+  });
+  socket.on('message', bytes => {
+    const message = JSON.parse(String(bytes));
+    if (message.id) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) waiter?.reject(new Error(JSON.stringify(message.error)));
+      else waiter?.resolve(message.result);
+    }
+    if (message.method === 'Page.frameNavigated' && message.params.frame.url === url && !message.params.frame.parentId) committed();
+    if (message.method === 'Network.loadingFailed') diagnostics.log('ERROR', 'Fixture navigation failed', message.params);
+  });
+  try {
+    await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    await command('Page.enable');
+    await command('Network.enable');
+    const result = await command('Page.navigate', { url });
+    expect(result.errorText, 'the fixture navigation is accepted').toBeUndefined();
+    await navigation;
+    diagnostics.log('INFO', 'Fixture existing page committed', { url });
+  } finally {
+    clearTimeout(deadline);
+    for (const waiter of pending.values()) waiter.reject(new Error('Fixture CDP closed'));
+    socket.close();
+  }
+}
+
 describe('My Chrome (Experimental), against a separately started Chrome', () => {
   let chrome: ChildProcess | null = null;
   let chromeDir = '';
@@ -181,12 +230,13 @@ describe('My Chrome (Experimental), against a separately started Chrome', () => 
     // A stand-in for the person's Chrome: its own profile folder with remote
     // debugging on, which writes DevToolsActivePort exactly like the real switch.
     chromeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-my-chrome-'));
-    chrome = spawn(FOUND[0].executablePath, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${chromeDir}`, '--no-first-run', `${base}/theirs`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    chrome = spawn(FOUND[0].executablePath, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${chromeDir}`, '--no-first-run', 'about:blank'], { stdio: ['ignore', 'pipe', 'pipe'] });
     diagnostics.child(chrome);
     await vi.waitFor(() => {
       expect(chrome!.exitCode, 'Fixture browser exited before DevToolsActivePort appeared; see child stderr/exit above').toBeNull();
       expect(fs.existsSync(path.join(chromeDir, 'DevToolsActivePort'))).toBe(true);
     }, { timeout: 15_000 });
+    await prepareExistingTab(fs.readFileSync(path.join(chromeDir, 'DevToolsActivePort'), 'utf8').split('\n')[0].trim(), `${base}/theirs`);
     process.env.YOUCODED_MY_CHROME_DIR = chromeDir;
     expect(await client.command<{ ok: boolean }>({ cmd: 'check-my-chrome' })).toMatchObject({ ok: true });
 
