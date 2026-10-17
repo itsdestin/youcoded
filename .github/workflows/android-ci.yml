@@ -59,6 +59,9 @@ jobs:
       # whenever desktop packaging did (2026-05-20 to 06). Desktop CI still
       # builds every installer on its Linux leg.
 
+      - name: Check runtime license preservation
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py'
+
       - name: Run unit tests
         run: ./gradlew test
 

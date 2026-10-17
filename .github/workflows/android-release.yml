@@ -101,6 +101,9 @@ jobs:
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release-keystore.jks
 
+      - name: Check runtime license preservation
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py'
+
       - name: Run unit tests
         run: ./gradlew test
 

@@ -49,15 +49,16 @@ cp -r "$DEPS/node_modules" "$STAGE/node_modules"
 say "trimming"
 NM="$STAGE/node_modules"
 # Other platforms' native builds: the phone is linux arm64 musl.
-rm -rf "$NM/node-pty/prebuilds" "$NM/node-pty/build" "$NM/node-pty/third_party"
+rm -rf "$NM/node-pty/prebuilds" "$NM/node-pty/build"
 if [ -d "$NM/koffi/build/koffi" ]; then
   find "$NM/koffi/build/koffi" -mindepth 1 -maxdepth 1 ! -name musl_arm64 -exec rm -rf {} +
 fi
 rm -rf "$NM"/@napi-rs/*-x64* "$NM"/@napi-rs/*-darwin* "$NM"/@napi-rs/*-win32* "$NM"/@napi-rs/*-gnu 2>/dev/null || true
 rm -rf "$NM"/@vscode/ripgrep/bin 2>/dev/null || true
-# Files Node never loads.
-find "$NM" \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.md' -o -name '*.markdown' \) -type f -delete
-find "$NM" -type d \( -name test -o -name tests -o -name __tests__ -o -name docs -o -name example -o -name examples \) -prune -exec rm -rf {} +
+# WHY: Markdown, documentation and vendored directories can carry LICENSE, NOTICE or
+# README-only copyright terms (e.g. jose/LICENSE.md and jszip/LICENSE.markdown).
+# Keep them in the shipped backend; only discard generated maps and type declarations.
+find "$NM" \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \) -type f -delete
 
 tar czf "$OUT/backend.tgz" -C "$STAGE" .
 say "done: $(du -h "$OUT/backend.tgz" | cut -f1) packed ($(du -sh "$STAGE" | cut -f1) unpacked)"

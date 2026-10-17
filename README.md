@@ -24,6 +24,13 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Folder switcher — quick-access saved directories for session creation
 - Permission mode cycling (Normal, Auto-Accept, Plan Mode)
 
+**Documents, Pages & Browser**
+- Edit Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`) files inside the desktop app, with autosave, version history and PDF export
+- Let the assistant add comments to documents and spreadsheets, including files open in the built-in Office editors
+- Build personal or project Pages with `/page-builder` and pin them in the header
+- Give the assistant a browser on desktop: read pages, click and type, with its own permission cards and a view you can follow
+- Office editing and the assistant's browser are desktop-only, not available through remote access
+
 **Social AI**
 - Create custom skills and share them with friends, classmates, or coworkers
 - Play multiplayer games (Connect Four and chess) while your assistant works
@@ -33,7 +40,7 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Browse and install community skills and tools from the marketplace
 - Create your own prompt skills and share them via deep links
 - Quick-launch chips for your most-used skills
-- Theme Builder and Marketplace Publisher ship pre-installed (auto-installed on every launch and not removable) so `/theme-builder` and plugin-publishing flows work out of the box
+- Theme Builder, Marketplace Publisher, Conversation Search and Page Builder are bundled (automatically installed if missing and not removable through the app)
 
 **Commands**
 - Browse and search slash commands directly in the command drawer
@@ -98,6 +105,8 @@ npm run build     # Build distributable installer
 
 ### Android
 
+The Android runtime currently builds on **Linux x64**; on Windows or macOS, use a Linux x64 environment such as WSL or a VM. It needs an Android SDK, JDK 21, Node.js/npm, Bash, Python 3, curl, tar, make, clang and lld. Gradle builds the shared React UI and desktop backend and downloads the pinned runtime programs. See [Android runtime](docs/android-runtime.md) for details and side-by-side development builds.
+
 ```bash
 git clone https://github.com/itsdestin/youcoded.git
 cd youcoded
@@ -111,7 +120,7 @@ Debug APK at `app/build/outputs/apk/debug/app-debug.apk`.
 ```
 youcoded/
   desktop/     # Electron app (Windows, macOS, Linux)
-  app/         # Android app (Kotlin + Jetpack Compose)
+  app/         # Android shell, WebView and bundled headless desktop backend
   scripts/     # Shared build scripts
 ```
 
@@ -128,7 +137,7 @@ Commits need a sign-off line (`git commit -s`) — see [CONTRIBUTING.md](./CONTR
 
 ## Related Projects
 
-- [YouCoded Core](https://github.com/itsdestin/youcoded-core) — Legacy bundled plugin (safety hooks + setup skills), currently being phased out
+- [YouCoded Core](https://github.com/itsdestin/youcoded-core) — Archived legacy plugin; current apps bundle their own safety hooks
 - [YouCoded Themes](https://github.com/itsdestin/wecoded-themes) — Community theme registry
 - [YouCoded Marketplace](https://github.com/itsdestin/wecoded-marketplace) — Skill marketplace registry
 

@@ -7,6 +7,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { z } from 'zod';
+import { chromium } from 'playwright-core';
+import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
 import { candidatePaths, discoverBrowsers, pickBrowser } from '../src/main/assistant-browser/browser-discovery';
 import { BrowserSettings, sanitizeBrowserPreferences, validatePatch, DEFAULT_BROWSER_PREFERENCES } from '../src/main/assistant-browser/browser-settings';
 import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress, personAddress } from '../src/main/assistant-browser/browser-net';
@@ -32,15 +34,18 @@ describe('finding a browser', () => {
     expect(candidatePaths('chromium', 'linux', {}, '/home/a')).not.toContain('/snap/bin/chromium');
   });
 
-  it('lists what exists in preference order, adding a downloaded Chromium last', async () => {
-    const files = new Set(['/usr/bin/microsoft-edge-stable', '/dl/chromium-1200/chrome-linux64/chrome', '/dl/chromium-1300/chrome-linux64/chrome']);
+  it.each(['/dl', 'C:\\dl'])('lists what exists in preference order, adding a downloaded Chromium last (%s)', async (downloadDir) => {
+    // WHY discovery joins downloaded paths with the host OS's separator, even
+    // when the browser layout under test belongs to Linux (including Windows CI).
+    const downloaded = (rev: string) => path.join(downloadDir, `chromium-${rev}`, 'chrome-linux64/chrome');
+    const files = new Set(['/usr/bin/microsoft-edge-stable', downloaded('1200'), downloaded('1300')]);
     const found = await discoverBrowsers({
-      platform: 'linux', env: {}, home: '/home/a', downloadDir: '/dl',
+      platform: 'linux', env: {}, home: '/home/a', downloadDir,
       isFile: async (p) => files.has(p),
       listDir: async () => ['chromium-1200', 'chromium-1300', 'other'],
     });
     expect(found.map((b) => b.kind)).toEqual(['edge', 'downloaded']);
-    expect(found[1].executablePath).toBe('/dl/chromium-1300/chrome-linux64/chrome'); // newest
+    expect(found[1].executablePath).toBe(downloaded('1300')); // newest
   });
 
   it('honours the person\'s pick while it is still installed, else the first found', () => {
@@ -53,6 +58,30 @@ describe('finding a browser', () => {
   it('presents a normal Chrome user agent for a hidden browser', () => {
     expect(normalUserAgent('155.0.8059.39', 'linux')).toBe('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36');
     expect(normalUserAgent('155.0.8059.39', 'linux')).not.toContain('Headless');
+  });
+});
+
+describe('browser test diagnostics', () => {
+  it('preserves the full launch error and tool text without changing either outcome', async () => {
+    const dir = tmp();
+    const output = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const diagnostics = browserDiagnostics('fixture');
+    try {
+      await diagnostics.start([]);
+      const error = await chromium.launchPersistentContext(path.join(dir, 'profile'), {
+        executablePath: path.join(dir, 'missing-browser'), headless: true,
+      }).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(Error);
+      expect(output.mock.calls.flat().join('\n')).toContain((error as Error).message);
+      expect(output.mock.calls.flat().join('\n')).toContain('Full browser launch error');
+      const result = { isError: true, text: 'first line\ncomplete tool detail' };
+      expect(await diagnostics.tool('BrowserNavigate', async () => result)).toBe(result);
+      expect(output.mock.calls.flat().join('\n')).toContain('complete tool detail');
+    } finally {
+      diagnostics.restore();
+      output.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    }
   });
 });
 
@@ -397,11 +426,27 @@ describe('one set of tools for both session kinds', () => {
 
 describe('the Claude Code relay\'s socket', () => {
   it.skipIf(process.platform === 'win32')('lives in a private folder, short enough for macOS', async () => {
-    const dir = path.join(tmp(), 'sock');
-    const p = await relaySocketPath('linux', dir);
-    expect(Buffer.byteLength(p)).toBeLessThan(100);
-    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
-    expect(BROWSER_MCP_DIR).toBe('claude-code-browser-mcp');
+    // WHY macOS's per-user os.tmpdir() can exceed the socket budget on its own.
+    // Use a unique private directory under the same short /tmp base as production.
+    const dir = fs.mkdtempSync('/tmp/yc-sock-');
+    try {
+      const p = await relaySocketPath('darwin', dir);
+      expect(Buffer.byteLength(p)).toBeLessThan(100);
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+      expect(BROWSER_MCP_DIR).toBe('claude-code-browser-mcp');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    }
+  });
+
+  it('rejects an overlong Unix socket path rather than weakening the macOS guard', async () => {
+    const root = tmp();
+    const dir = path.join(root, 'long-'.repeat(22));
+    try {
+      await expect(relaySocketPath('darwin', dir)).rejects.toThrow('Browser relay socket path too long:');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+    }
   });
 
   it('is a per-process named pipe on Windows', async () => {

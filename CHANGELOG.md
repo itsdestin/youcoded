@@ -4,7 +4,68 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
-Betas run on the `1.3.1-beta` line; the next release after 1.3.0 is **1.3.1**.
+## [1.3.1] — Unreleased
+
+**Claude Code CLI baseline:** v2.1.302 (desktop review); Android bundles v2.1.300.
+
+Changes since 1.3.0: built-in Office editing, the assistant's browser, expanded Pages capabilities, a rebuilt Android backend, and improvements to appearance, conversation continuity and performance. This entry is a release candidate; publication is pending release checks and approval.
+
+### Office editing — desktop
+
+- Create and edit Word (`.docx`), Excel (`.xlsx`) and PowerPoint (`.pptx`) files inside YouCoded.
+- Autosave, crash recovery, kept versions, Save As, PDF export and printing.
+- Assistant comments on files open in Office go through the editor, so the next editor save does not overwrite them.
+- Office editing is desktop-only; Android and remote browsers do not offer the built-in editors. Older Office formats and OpenDocument files are not opened for editing.
+
+### The assistant's browser — desktop
+
+- Native and Claude Code conversations can use the same browser tools to read pages, click, type and navigate.
+- Follow along or interact yourself in the Browser panel, with tabs, navigation and shared page zoom.
+- Browser permission cards ask before interacting with a site, with separate confirmation for final actions such as submitting a form.
+- Browser configuration is available in Assistant settings. The assistant's browser is not available on Android or through remote access.
+
+### Pages and connections
+
+- Pages can declare approved connections, restricted by host, request method and write paths; permission changes require approval again.
+- Added device socket requests, live connections and camera video played by the app.
+- A page can open the new-conversation window with a proposed message visible for review before sending.
+- Pages can access approved conversation information and run explicitly approved local program files, with file-content checks before execution.
+- Added app-style building blocks and a control for showing the theme background behind pages.
+- Added Plaid connection support for personal finance pages. Home Assistant and Money dashboards are personal, hand-installed pages, not dashboards bundled with the app.
+
+### Android
+
+- Replaced the separate Kotlin backend with the desktop backend running headlessly in bundled Node. The Android shell retains phone-specific services such as file picking, microphone access, notifications and opening links.
+- Bundles its own shell, Git, search tools and unmodified Claude Code. Unsupported desktop-only features remain gated by the phone's capabilities.
+- The runtime source build currently requires a Linux x64 environment; updated the build documentation with its prerequisites.
+
+### Appearance and interface
+
+- Added YouCoded and YouCoded Night themes, refreshed app icons and a glass buddy look.
+- New installations use the new default; existing users who never explicitly selected a theme retain Midnight.
+- Floating controls, global Look settings and theme-controlled roundness, with more consistent dialogs, error notices and file-viewer controls.
+
+### Models and conversation continuity
+
+- Recommended available plan and OpenRouter models, with improved local-model memory estimates, quantization detection and vision recognition.
+- Improved near-limit summarization and restore, preserving recent conversation history and asking before switching to a model too small for the conversation.
+- Improved prompt-cache reuse and ChatGPT session routing.
+- Provider-specific image limits, downscaling and recovery from oversized-image rejections.
+
+### Performance and reliability
+
+- Reduced background work in hidden chats and terminals and made session switching cheaper.
+- Streamed code blocks update in smaller pieces; chat redraws adapt to the display rate, and desktop scrolling stays native.
+- CSV and XLSX viewers draw visible cells rather than building the entire sheet at once.
+- Improved terminal flow control and preservation of output at process exit.
+- Phone reconnects refresh theme, pinned pages and session information.
+
+### Security and updates
+
+- Tightened remote file and secret access, upload limits and permission checks around sensitive reads and destructive commands.
+- Backup staging excludes secrets and protects unmanaged or conflicting local files.
+- Linux updates select the installed package format; macOS updates select a compatible architecture.
+- Added Azure signing and signature verification to Windows release builds.
 
 ## [1.3.0] — 2026-09-20
 

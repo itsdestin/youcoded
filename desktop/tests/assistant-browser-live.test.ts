@@ -15,7 +15,11 @@ import { discoverBrowsers, defaultDiscoveryEnv, type FoundBrowser } from '../src
 import { BrowserService, type BrowserPrompt, type PromptAnswer } from '../src/main/assistant-browser/browser-service';
 import { BrowserSettings } from '../src/main/assistant-browser/browser-settings';
 import { BrowserInstaller } from '../src/main/assistant-browser/browser-installer';
-import { BrowserPolicy, navigationVerdict, openForPerson, runBrowserTool, type RunnerEnv } from '../src/main/assistant-browser/browser-tool-runners';
+import { BrowserPolicy, navigationVerdict, openForPerson, runBrowserTool as executeBrowserTool, type RunnerEnv } from '../src/main/assistant-browser/browser-tool-runners';
+import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
+
+const diagnostics = browserDiagnostics('assistant-browser-live');
+const runBrowserTool: typeof executeBrowserTool = (...args) => diagnostics.tool(`${args[3].sessionId} ${args[1]}`, () => executeBrowserTool(...args));
 
 const PAGES: Record<string, string> = {
   '/': `<!doctype html><title>Home</title><h1>Fixture home</h1>
@@ -71,6 +75,7 @@ if (!FOUND.length) console.warn('assistant-browser-live: no Chromium-family brow
 beforeAll(async () => {
   browser = FOUND[0] ?? null;
   if (!browser) return;
+  await diagnostics.start(FOUND);
   server = http.createServer((req, res) => {
     const u = new URL(req.url ?? '/', 'http://x');
     if (u.pathname === '/file.txt') {
@@ -89,6 +94,7 @@ beforeAll(async () => {
   service = new BrowserService({
     rootDir: root,
     chromium,
+    log: diagnostics.log,
     forceHeadless: true,
     sessionIdleMs: 1500,
     browserIdleMs: 60_000,
@@ -108,9 +114,11 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  await service?.dispose();
-  await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
-  if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  try {
+    await service?.dispose();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  } finally { diagnostics.restore(); }
 });
 
 beforeEach(() => {

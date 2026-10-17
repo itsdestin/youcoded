@@ -4,7 +4,7 @@
 // Covers: tool calls + the ask round trip, live pictures, show/hide restarts,
 // clearing sign-ins, and My Chrome against a separately started Chrome.
 // Skipped (visibly) when no browser is installed.
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -15,6 +15,9 @@ import { createBrowserHost, type HostPort } from '../src/main/assistant-browser/
 import { BrowserClient, type WorkerHandle } from '../src/main/assistant-browser/browser-client';
 import type { BrowserSessionState } from '../src/shared/browser-types';
 import type { MainToWorker, WorkerToMain } from '../src/main/assistant-browser/browser-protocol';
+import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
+
+const diagnostics = browserDiagnostics('assistant-browser-host');
 
 const FOUND = await discoverBrowsers(defaultDiscoveryEnv(null));
 const live = FOUND.length ? it : it.skip;
@@ -56,6 +59,7 @@ function answerNext(sessionId: string, kind: string, answer: 'allow_chat' | 'onc
 
 beforeAll(async () => {
   if (!FOUND.length) return;
+  await diagnostics.start(FOUND);
   server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(`<!doctype html><title>Page ${req.url}</title><h1>Hello from ${req.url}</h1><a href="/two">two</a>`);
@@ -65,50 +69,68 @@ beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-browser-host-'));
   const ch = channel();
   host = createBrowserHost(ch.port, root, { forceHeadless: true, discover: async () => FOUND, cliPath: '' });
-  client = new BrowserClient({ fork: () => ch.handle });
+  client = new BrowserClient({ fork: () => ch.handle, log: diagnostics.log });
+  diagnostics.client(client);
   client.on('state', (s: BrowserSessionState) => states.set(s.sessionId, s));
   client.on('frame', () => { frames++; });
 }, 60_000);
 
 afterAll(async () => {
-  await host?.service.dispose();
-  await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
-  if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  try {
+    await host?.service.dispose();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  } finally { diagnostics.restore(); }
 });
 
 describe('Browser worker, through the main process\'s client', () => {
   live('runs a tool, raising the card through state and taking the answer back', async () => {
     answerNext('c1', 'local', 'allow_chat');
     const r = await client.callTool('c1', 'BrowserNavigate', { url: `${base}/one` }, { vision: true });
-    expect(r.isError).toBeFalsy();
+    expect(r.isError, r.text).toBeFalsy();
     expect(r.text).toContain('Hello from /one');
     expect(states.get('c1')).toMatchObject({ run: 'running', used: true, busy: false });
     expect(states.get('c1')?.tabs[0].url).toBe(`${base}/one`);
   }, 60_000);
 
   live('streams live pictures only while watched, acknowledged one at a time', async () => {
-    await client.command({ cmd: 'watch', sessionId: 'c1' });
+    // WHY each test opens its own page: a launch failure must not cascade into
+    // missing pictures (and this test must also run with -t on its own).
+    answerNext('c-stream', 'local', 'allow_chat');
+    const opened = await client.callTool('c-stream', 'BrowserNavigate', { url: `${base}/one` }, { vision: true });
+    expect(opened.isError, opened.text).toBeFalsy();
+    frames = 0;
+    await client.command({ cmd: 'watch', sessionId: 'c-stream' });
     await vi.waitFor(() => expect(frames).toBeGreaterThan(0));
     const seen = frames;
     // Without an ack the worker holds the next picture back.
-    await client.callTool('c1', 'BrowserNavigate', { url: `${base}/two` }, { vision: true });
+    const second = await client.callTool('c-stream', 'BrowserNavigate', { url: `${base}/two` }, { vision: true });
+    expect(second.isError, second.text).toBeFalsy();
     expect(frames - seen).toBeLessThanOrEqual(1);
-    await client.command({ cmd: 'ack', sessionId: 'c1' });
-    await client.command({ cmd: 'unwatch', sessionId: 'c1' });
+    await client.command({ cmd: 'ack', sessionId: 'c-stream' });
+    await client.command({ cmd: 'unwatch', sessionId: 'c-stream' });
     const after = frames;
-    await client.callTool('c1', 'BrowserNavigate', { url: `${base}/three` }, { vision: true });
+    const third = await client.callTool('c-stream', 'BrowserNavigate', { url: `${base}/three` }, { vision: true });
+    expect(third.isError, third.text).toBeFalsy();
     expect(frames).toBe(after);
   }, 60_000);
 
   live('showing the window restarts the browser and reopens the conversation\'s pages', async () => {
+    answerNext('c-restart', 'local', 'allow_chat');
+    const opened = await client.callTool('c-restart', 'BrowserNavigate', { url: `${base}/three` }, { vision: true });
+    expect(opened.isError, opened.text).toBeFalsy();
     await client.command({ cmd: 'set-show-window', show: true });
-    const r = await client.callTool('c1', 'BrowserSnapshot', {}, { vision: true });
+    const r = await client.callTool('c-restart', 'BrowserSnapshot', {}, { vision: true });
     expect(r.text).toContain('Hello from /three');
     expect(r.text).toContain('The browser restarted');
     await client.command({ cmd: 'set-show-window', show: false });
   }, 90_000);
 
   live('clearing sign-ins stops the browser and empties its saved data', async () => {
+    answerNext('c-clear', 'local', 'allow_chat');
+    const opened = await client.callTool('c-clear', 'BrowserNavigate', { url: `${base}/one` }, { vision: true });
+    expect(opened.isError, opened.text).toBeFalsy();
+    expect(fs.existsSync(path.join(root, 'profile'))).toBe(true);
     const info = await client.command<{ running: boolean }>({ cmd: 'clear-signins' });
     expect(info.running).toBe(false);
     expect(fs.existsSync(path.join(root, 'profile'))).toBe(false);
@@ -116,9 +138,11 @@ describe('Browser worker, through the main process\'s client', () => {
 
   live('a conversation that ends closes its tabs, never another\'s', async () => {
     answerNext('c2', 'local', 'allow_chat');
-    await client.callTool('c2', 'BrowserNavigate', { url: `${base}/c2` }, { vision: true });
+    const first = await client.callTool('c2', 'BrowserNavigate', { url: `${base}/c2` }, { vision: true });
+    expect(first.isError, first.text).toBeFalsy();
     answerNext('c3', 'local', 'allow_chat');
-    await client.callTool('c3', 'BrowserNavigate', { url: `${base}/c3` }, { vision: true });
+    const other = await client.callTool('c3', 'BrowserNavigate', { url: `${base}/c3` }, { vision: true });
+    expect(other.isError, other.text).toBeFalsy();
     await client.command({ cmd: 'close-session', sessionId: 'c2', forget: true });
     expect((await client.command<BrowserSessionState>({ cmd: 'state', sessionId: 'c3' })).tabs).toHaveLength(1);
     expect((await client.command<BrowserSessionState>({ cmd: 'state', sessionId: 'c2' })).tabs).toHaveLength(0);
@@ -128,6 +152,18 @@ describe('Browser worker, through the main process\'s client', () => {
 describe('My Chrome (Experimental), against a separately started Chrome', () => {
   let chrome: ChildProcess | null = null;
   let chromeDir = '';
+
+  beforeEach(async () => {
+    if (!FOUND.length) return;
+    // WHY: a failed preceding assertion must not leave a live CDP connection that
+    // makes the unavailable-Chrome case reuse a reachable browser.
+    await client.command({ cmd: 'stop' });
+  });
+  afterEach(async () => {
+    if (!FOUND.length) return;
+    try { await client.command({ cmd: 'stop' }); }
+    finally { await client.command({ cmd: 'update-settings', patch: { useMyChrome: false } }); }
+  });
 
   afterAll(async () => {
     delete process.env.YOUCODED_MY_CHROME_DIR;
@@ -145,8 +181,12 @@ describe('My Chrome (Experimental), against a separately started Chrome', () => 
     // A stand-in for the person's Chrome: its own profile folder with remote
     // debugging on, which writes DevToolsActivePort exactly like the real switch.
     chromeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-my-chrome-'));
-    chrome = spawn(FOUND[0].executablePath, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${chromeDir}`, '--no-first-run', `${base}/theirs`], { stdio: 'ignore' });
-    await vi.waitFor(() => expect(fs.existsSync(path.join(chromeDir, 'DevToolsActivePort'))).toBe(true), { timeout: 15_000 });
+    chrome = spawn(FOUND[0].executablePath, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${chromeDir}`, '--no-first-run', `${base}/theirs`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    diagnostics.child(chrome);
+    await vi.waitFor(() => {
+      expect(chrome!.exitCode, 'Fixture browser exited before DevToolsActivePort appeared; see child stderr/exit above').toBeNull();
+      expect(fs.existsSync(path.join(chromeDir, 'DevToolsActivePort'))).toBe(true);
+    }, { timeout: 15_000 });
     process.env.YOUCODED_MY_CHROME_DIR = chromeDir;
     expect(await client.command<{ ok: boolean }>({ cmd: 'check-my-chrome' })).toMatchObject({ ok: true });
 

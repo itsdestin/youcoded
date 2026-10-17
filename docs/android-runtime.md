@@ -72,6 +72,8 @@ links whenever the app version or the native-lib folder changes.
 
 ## Developing
 
+The runtime build currently requires a **Linux x64 host**: `build-runtime.sh` downloads an x86_64 Linux `patchelf` and uses GNU tools such as `nproc`. Use a Linux x64 environment (for example WSL or a VM) rather than running the runtime build directly on Windows, macOS or Linux ARM. Install the Android SDK, JDK 21, Node.js/npm, Bash, Python 3, curl, tar, make, clang and lld first.
+
 - Build: `JAVA_HOME=<JDK 21> ANDROID_HOME=$HOME/.android-sdk ./gradlew :app:assembleDebug` (needs clang + lld,
   python3, curl; downloads are cached in `app/build/runtime-cache`). Debug installs as **YouCoded Dev**
   (`com.youcoded.app.dev`, port 9951) beside the real app.
