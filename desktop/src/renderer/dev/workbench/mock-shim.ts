@@ -4219,6 +4219,10 @@ function createPagesMock(empty: boolean): PagesBridge {
     plaid: async (_id, req) => (req?.op === 'connect' || req?.op === 'reconnect'
       ? { ok: false as const, op: req.op, code: 'UNSUPPORTED', message: 'The practice app cannot sign in to banks. Try this in YouCoded on your computer.' }
       : { ok: false as const, op: req?.op ?? 'status', code: 'NO_KEYS', message: 'No Plaid keys in the practice app.' }),
+    // Programs (spec 2026-10-16): the practice app runs nothing on anyone's computer. It answers a canned,
+    // clearly-labelled result so a page's "Run" button can be operated end to end.
+    runProgram: async (_id, file, input) => ({ ok: true as const, output: JSON.stringify({ practice: true, file, inputBytes: input.length }), exitCode: 0 }),
+    stopPrograms: async () => ({ ok: true as const }),
     fetch: async (id, req) => {
       const page = pages.find((p) => p.id === id);
       const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);

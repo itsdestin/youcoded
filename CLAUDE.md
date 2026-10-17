@@ -10,7 +10,7 @@ This repo contains the YouCoded app — two platforms side by side:
 This repo is one component of the YouCoded product. Development is coordinated from the **youcoded-dev workspace repo**: https://github.com/itsdestin/youcoded-dev — if it isn't on this machine, clone it and run `bash setup.sh` (it clones every sub-repo and carries the working rules, path-scoped rules, and cross-repo docs).
 
 - **Lifecycle documents** (specs, plans, handoffs, investigations) do NOT live in this repo — they go to the workspace: `youcoded-dev/docs/active/` (in flight) → `youcoded-dev/docs/archive/` (done). Don't create `docs/plans/`, `docs/specs/`, or `docs/superpowers/` trees here.
-- **Planning** happens in the workspace roadmap — one roadmap for the whole product: `ROADMAP.md` is the index, the backlogs are `docs/roadmap/<area>.md` (pick the file whose `Filing test:` line says yes; the index's "Filing an item" section has the grammar). Capture future work there, not in per-repo TODO files.
+- **Planning** happens in the workspace's work items — one file per piece of work in `youcoded-dev/cards/` (`node scripts/cards.mjs index` lists them; the idea-intake skill files new ones; the roadmap was retired 2026-10-15). Capture future work there, not in per-repo TODO files.
 - This repo's `docs/` holds **living reference only** (subsystem depth docs, `cc-dependencies.md`, etc.).
 
 **The React UI is shared.** Android's WebView loads the same React bundle built from `desktop/src/renderer/` via `scripts/build-web-ui.sh`. The `app/build.gradle.kts` `bundleWebUi` task auto-runs the script before every APK build with input/output tracking, so a stale or missing bundle can no longer ship a blank-WebView APK. Run the script manually only when iterating outside Gradle.

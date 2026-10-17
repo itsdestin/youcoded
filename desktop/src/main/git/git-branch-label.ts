@@ -5,7 +5,7 @@
 // native session — which has no status line — showed nothing even inside a
 // repo (Destin, 2026-08-25). buildStatusData asks this for native sessions.
 //
-// Same shape as the status line writes — "<repo folder>/<branch>", "HEAD" when
+// Same shape as the status line writes — "<repo name>/<branch>", "HEAD" when
 // detached (what `git rev-parse --abbrev-ref HEAD` prints) — so the chip reads
 // the same in both kinds of session. Plain file reads, no git subprocess: it
 // runs on every status push for every native session.
@@ -34,10 +34,26 @@ export async function gitBranchLabel(cwd: string): Promise<string | null> {
       const head = await fs.promises.readFile(path.join(gitDir, 'HEAD'), 'utf8').catch(() => null);
       if (head === null) return null;
       const ref = /^ref:\s*refs\/heads\/(.+?)\s*$/m.exec(head);
-      return `${path.basename(dir)}/${ref ? ref[1] : 'HEAD'}`;
+      return `${await repoName(gitDir, dir)}/${ref ? ref[1] : 'HEAD'}`;
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * The repository's own name, not the folder's.
+ * WHY (Destin, 2026-10-16: "can the git tag include the parent repo? sessions/blahblah is not a useful tag"):
+ * a worktree's folder is named after its session (worktrees/sessions/work-cards-20261014), so the folder name
+ * said nothing about which repo it was. The name comes from the origin remote's address ("…/youcoded-dev.git"
+ * → "youcoded-dev"); with no origin, the main checkout's folder (a worktree's `commondir` leads back to it).
+ */
+async function repoName(gitDir: string, worktreeDir: string): Promise<string> {
+  const common = await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8')
+    .then(t => path.resolve(gitDir, t.trim())).catch(() => gitDir);
+  const config = await fs.promises.readFile(path.join(common, 'config'), 'utf8').catch(() => '');
+  const origin = /\[remote "origin"\][^[]*?^\s*url\s*=\s*(\S+)/m.exec(config);
+  if (origin) return path.basename(origin[1].replace(/\/+$/, '')).replace(/\.git$/, '');
+  return path.basename(common) === '.git' ? path.basename(path.dirname(common)) : path.basename(worktreeDir);
 }

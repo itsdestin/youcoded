@@ -1443,6 +1443,12 @@ export interface PastSession {
    *  noteModelUsed). Absent for legacy-only rows and for a store record no
    *  turn has landed on yet. Task 6 uses it to pre-fill the resume selector. */
   lastUsedModel?: PortableModelRef;
+  /** Git branch at the last message (the transcript's `gitBranch`); absent for native, store-only rows or none recorded. */
+  branch?: string;
+  /** When it began (ms), from its Conversation Store record. */
+  created?: number;
+  /** Set only by `session:browse` with `includeOpen`: this conversation is open right now (a page's chat list). */
+  open?: boolean;
 }
 
 export interface HistoryMessage {

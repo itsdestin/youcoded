@@ -45,6 +45,10 @@ export interface PageApproval {
    *  differ from the page's suggestion (home-device deck, Q-address). What is
    *  contacted is this, never the manifest. */
   address?: string;
+  /** A `program` line only: SHA-256 of the program file as it was when the person allowed it
+   *  (spec 2026-10-16). The listing treats the line as approved only while the file still hashes to this,
+   *  so an edited program asks again — "changed code never inherits trust" (Pages scope §9). */
+  programHash?: string;
 }
 
 /** Where a saved key lives and how the service takes it. */
@@ -284,6 +288,8 @@ function cleanPages(raw: unknown): Record<string, Record<string, PageApproval>> 
       // a device approval into one for a website.
       const address = cleanDeviceAddress(e.address);
       if (address) kept[connId].address = address;
+      // A 64-character hex digest or nothing: anything else reads as "no hash", i.e. not approved.
+      if (typeof e.programHash === 'string' && /^[0-9a-f]{64}$/.test(e.programHash)) kept[connId].programHash = e.programHash;
     }
     if (Object.keys(kept).length) out[pageKey] = kept;
   }

@@ -39,6 +39,9 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     fetch: (id: string, request: any) => invoke('pages:fetch', { id, request }),
     // Desktop only: the computer refuses it from a phone (a bank sign-in opens a browser there).
     plaid: (id: string, request: any) => invoke('pages:plaid', { id, request }),
+    // Desktop only: the computer refuses both from a phone (a program runs with the computer account's full access).
+    runProgram: (id: string, file: string, input: string) => invoke('pages:run-program', { id, file, input }),
+    stopPrograms: (id: string) => invoke('pages:stop-programs', { id }),
     socketOpen: async (req) => {
       const r = await invoke('pages:socket-open', req);
       if (r?.ok) live.add(r.socket);

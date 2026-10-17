@@ -459,3 +459,98 @@ describe('opening a new conversation from a page', () => {
     await expect(p).resolves.toEqual({ ok: false, reason: 'The new-conversation window is already open.' });
   });
 });
+
+// Chats and programs (spec 2026-10-16). Like startSession, a page gets the calls only when its manifest line
+// is allowed — and only the access it was allowed (a look-up line has no way to change anything at all).
+describe('seeing chats from a page', () => {
+  const chats = (access: 'lookup' | 'full', approved = true) => [{ kind: 'chats', id: 'chats', approved, access }];
+  const api = (r: ReturnType<typeof runBootstrap>) => r.yc.chats as unknown as Record<string, (...a: unknown[]) => Promise<unknown>> | undefined;
+
+  it('is only there when the page declares it and the person allowed it', () => {
+    expect(runBootstrap().yc.chats).toBeUndefined();
+    expect(runBootstrap('<p>hi</p>', chats('lookup', false)).yc.chats).toBeUndefined();
+    expect(Object.keys(api(runBootstrap('<p>hi</p>', chats('lookup')))!).sort()).toEqual(['list', 'resume']);
+  });
+
+  it('offers changing tags, notes and marks only with full access', () => {
+    expect(Object.keys(api(runBootstrap('<p>hi</p>', chats('full')))!).sort()).toEqual(['list', 'resume', 'setMark', 'setNote', 'setTag']);
+  });
+
+  it('asks the host, and believes only the host\'s answer to that very call', async () => {
+    const r = runBootstrap('<p>hi</p>', chats('lookup'));
+    const p = api(r)!.list();
+    expect(r.posted).toEqual([{ type: 'youcoded:chats', id: expect.any(String), request: { op: 'list' } }]);
+    let settled = false;
+    void p.then(() => { settled = true; });
+    // From another window: ignored. Under another call's id: ignored.
+    r.deliver({ type: 'youcoded:chats:result', id: r.posted[0].id, result: { ok: true, chats: [] } }, { name: 'popup' });
+    r.deliver({ type: 'youcoded:chats:result', id: 'c999', result: { ok: true, chats: [] } });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    r.deliver({ type: 'youcoded:chats:result', id: r.posted[0].id, result: { ok: true, chats: [] } });
+    await expect(p).resolves.toEqual({ ok: true, chats: [] });
+  });
+
+  it('does not let a fetch answer, or a program answer, settle a chats call', async () => {
+    const r = runBootstrap('<p>hi</p>', chats('lookup'));
+    let settled = false;
+    void api(r)!.list().then(() => { settled = true; });
+    r.deliver({ type: 'youcoded:fetch:result', id: r.posted[0].id, result: { ok: true, status: 200, headers: {}, body: '{}' } });
+    r.deliver({ type: 'youcoded:program:result', id: r.posted[0].id, result: { ok: true, output: '', exitCode: 0 } });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    r.deliver({ type: 'youcoded:chats:result', id: r.posted[0].id, result: { ok: true, chats: [] } });
+    await Promise.resolve();
+    expect(settled).toBe(true);
+  });
+
+  it('sends the change calls with their arguments, and opening a chat needs a click', async () => {
+    const r = runBootstrap('<p>hi</p>', chats('full'));
+    void api(r)!.setTag('c1', 'Work', 1);
+    void api(r)!.setNote('c1', 'hello');
+    void api(r)!.setMark('c1', 'pinned', false);
+    expect(r.posted.map((m) => m.request)).toEqual([
+      { op: 'setTag', chat: 'c1', tag: 'Work', on: true },
+      { op: 'setNote', chat: 'c1', text: 'hello' },
+      { op: 'setMark', chat: 'c1', mark: 'pinned', on: false },
+    ]);
+    (r.win.navigator as { userActivation: { isActive: boolean } }).userActivation.isActive = false;
+    await expect(api(r)!.resume('c1')).resolves.toEqual({ ok: false, reason: expect.stringMatching(/click/) });
+    expect(r.posted).toHaveLength(3);
+    (r.win.navigator as { userActivation: { isActive: boolean } }).userActivation.isActive = true;
+    void api(r)!.resume('c1');
+    expect(r.posted[3].request).toEqual({ op: 'resume', chat: 'c1' });
+  });
+});
+
+describe('running a program from a page', () => {
+  const programs = (...files: string[]) => files.map((file) => ({ kind: 'program', id: `p-${file}`, file, approved: true }));
+  const run = (r: ReturnType<typeof runBootstrap>) => (r.yc.program as unknown as { run: (...a: unknown[]) => Promise<unknown> }).run;
+
+  it('is only there for a page with an allowed program line', () => {
+    expect(runBootstrap().yc.program).toBeUndefined();
+    expect(runBootstrap('<p>hi</p>', [{ kind: 'program', id: 'p', file: 'a.mjs', approved: false } as never]).yc.program).toBeUndefined();
+    expect(typeof run(runBootstrap('<p>hi</p>', programs('a.mjs')))).toBe('function');
+  });
+
+  it('refuses a file the page was not allowed to run, without asking the host', async () => {
+    const r = runBootstrap('<p>hi</p>', programs('a.mjs'));
+    await expect(run(r)('b.mjs', '')).resolves.toEqual({ ok: false, reason: expect.stringMatching(/not been allowed/) });
+    await expect(run(r)(undefined, '')).resolves.toEqual({ ok: false, reason: expect.stringMatching(/not been allowed/) });
+    await expect(run(r)('a.mjs', { not: 'text' })).resolves.toEqual({ ok: false, reason: expect.stringMatching(/not valid/) });
+    await expect(run(r)('a.mjs', 'x'.repeat(1_000_001))).resolves.toEqual({ ok: false, reason: expect.stringMatching(/not valid/) });
+    expect(r.posted).toHaveLength(0);
+  });
+
+  it('sends an allowed file with its input and hands back the host\'s answer to that call', async () => {
+    const r = runBootstrap('<p>hi</p>', programs('a.mjs', 'b.mjs'));
+    const p = run(r)('b.mjs', '{"n":1}');
+    expect(r.posted).toEqual([{ type: 'youcoded:program', id: expect.any(String), file: 'b.mjs', input: '{"n":1}' }]);
+    r.deliver({ type: 'youcoded:program:result', id: r.posted[0].id, result: { ok: true, output: '42', exitCode: 0 } }, { name: 'popup' });
+    r.deliver({ type: 'youcoded:program:result', id: r.posted[0].id, result: { ok: true, output: '42', exitCode: 0 } });
+    await expect(p).resolves.toEqual({ ok: true, output: '42', exitCode: 0 });
+    // Input is optional.
+    void run(r)('a.mjs');
+    expect(r.posted[1]).toMatchObject({ file: 'a.mjs', input: '' });
+  });
+});

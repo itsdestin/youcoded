@@ -1221,6 +1221,22 @@ describe('RemoteServer session meta + browse', () => {
       expect([...activeIdsArg]).toEqual(['native-new']); // a Claude desktop id still matches no transcript and stays out
     });
 
+    // A page's chat list (spec 2026-10-16) wants the open conversations too, marked, because "Working" comes only
+    // from "open now". Everyone else's answer is unchanged, and the shared scan result is never edited in place.
+    it('with includeOpen it lists open conversations too, marked open, and edits no row another caller holds', async () => {
+      const server = await phoneServer();
+      await bindOps({ map: { 'desktop-1': 'claude-1' } });
+      const rows = [{ sessionId: 'claude-1', name: 'open one' }, { sessionId: 'past-1', name: 'past one' }];
+      mockSessionBrowser.listPastSessions.mockResolvedValue(rows);
+
+      const sent = await sendAndCollect(server, { type: 'session:browse', id: 'b5', payload: { includeOpen: true } });
+
+      const [activeIdsArg] = mockSessionBrowser.listPastSessions.mock.calls[0];
+      expect(activeIdsArg).toBeUndefined(); // nothing is left out of the scan
+      expect(sent[0].payload).toEqual([{ sessionId: 'claude-1', name: 'open one', open: true }, { sessionId: 'past-1', name: 'past one' }]);
+      expect(rows[0]).not.toHaveProperty('open');
+    });
+
     // Bug 1 (2026-07-13 dogfood): a stale map entry for a CLOSED session must not hide it from the list.
     it('a stale map entry for a session that is no longer open does not hide its conversation', async () => {
       const server = await phoneServer();

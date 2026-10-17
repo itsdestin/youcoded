@@ -90,7 +90,47 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
     // safety: the message is shown in full and nothing is sent until Start.
     case 'session':
       return { what: 'Open a new-conversation window with a message this page writes.', limit: "You'll see the message and choose the project before anything is sent." };
+    // Pages read and change chats (spec 2026-10-16, deck Q-1/Q-2). The scope is
+    // named exactly as the page asked for it; the limit says what stays out of
+    // reach, which main enforces: never what was said, never rename or delete.
+    case 'chats': {
+      const which = 'all' in c.scope ? 'your chats'
+        : 'projects' in c.scope ? `your chats in ${listWords(c.scope.projects)}`
+        : `your chats tagged "${c.scope.tag}"`;
+      return c.access === 'lookup'
+        ? { what: `See ${which}: names, dates, tags, notes, projects and models, and reopen one when you click.`, limit: 'Cannot see what was said in them, and cannot change anything.' }
+        : { what: `See ${which}: names, dates, tags, notes, projects and models, reopen one when you click, and change their tags, notes and pinned or complete marks.`, limit: 'Cannot see what was said in them, rename them or delete them.' };
+    }
+    // Computer programs (Pages scope §9): the blunt line, like the whole
+    // internet's, never softened. The limit is what the app really controls.
+    case 'program':
+      return { what: `Run ${c.file} on this computer.`, limit: 'It can do anything your account on this computer can.' };
   }
+}
+
+/** "a", "a and b", "a, b and c" — a page's named projects, as read aloud. */
+function listWords(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** What running a program means in practice, under its sentence — the same
+ *  treatment as the whole internet (review round 1, C-4), because it is the
+ *  widest power a page can ask for (Pages scope §9: "explicit broad
+ *  permission"; approval follows the exact version; stopping does not undo). */
+const PROGRAM_MEANS = [
+  'It can read and change your files, use your sign-ins, and reach the internet.',
+  'Allowed for this exact version of the file. If the file changes, the page asks again.',
+  'Closing the page stops it running, but cannot undo what it already did.',
+];
+
+/** Pages scope §6, "explain combined access": a page that can see chats and
+ *  also reach somewhere else could carry the chat list there. Shown once, under
+ *  the chats line, only when such a second connection exists. A program counts:
+ *  it can reach the internet. Starting a conversation does not: you see and
+ *  send that message yourself. */
+const CHATS_COMBINED = 'With its other permissions, this page could send your chat list outside this computer.';
+function reachesOutside(c: PageConnection): boolean {
+  return c.kind !== 'chats' && c.kind !== 'session';
 }
 
 /** Extra plain lines for a device whose manifest asks for more than ordinary look-ups: a live connection
@@ -492,6 +532,14 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
               <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-open-internet-means>
                 {OPEN_INTERNET_MEANS.map((t) => <li key={t}>{t}</li>)}
               </ul>
+            )}
+            {c.kind === 'program' && (
+              <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-program-means>
+                {PROGRAM_MEANS.map((t) => <li key={t}>{t}</li>)}
+              </ul>
+            )}
+            {c.kind === 'chats' && all.some(reachesOutside) && (
+              <div className="text-xs text-fg-muted leading-relaxed" data-chats-combined>{CHATS_COMBINED}</div>
             )}
             {c.kind === 'device' && (
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />

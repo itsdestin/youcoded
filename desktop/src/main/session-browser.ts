@@ -296,6 +296,13 @@ export interface SessionTranscriptMeta {
    * the read to 256KB recovers only 2 of them — not worth 4x the IO per browse.
    */
   lastModelId: string | null;
+  /**
+   * `gitBranch` from the last transcript line that records one, or null. Claude Code stamps the branch its
+   * working folder was on onto every user/assistant line, so the tail chunk that is already read for the
+   * timestamp and model answers this too — no extra IO. Null for a transcript with none (native sessions,
+   * very old files), never a guess. Added 2026-10-16 for a page's chat list ("which branch is this chat on").
+   */
+  gitBranch: string | null;
 }
 
 /** Collapse whitespace and trim a derived title to a word boundary. */
@@ -333,6 +340,7 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
     // --- Tail: last parseable line's timestamp, and the last model used ---
     let lastTimestampMs: number | null = null;
     let lastModelId: string | null = null;
+    let gitBranch: string | null = null;
     const tailLen = Math.min(TAIL_CHUNK_BYTES, size);
     if (tailLen > 0) {
       const tailBuf = Buffer.alloc(tailLen);
@@ -347,7 +355,7 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
       // is usually a tool result, and the assistant line carrying the model can
       // be several entries further back.
       for (let i = tailLines.length - 1; i >= 0; i--) {
-        if (lastTimestampMs !== null && lastModelId !== null) break;
+        if (lastTimestampMs !== null && lastModelId !== null && gitBranch !== null) break;
         const line = tailLines[i];
         if (!line.trim() || line.includes('\x00')) continue;
         let parsed: any;
@@ -355,6 +363,11 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
         if (lastTimestampMs === null) {
           const ts = Date.parse(parsed.timestamp);
           if (!Number.isNaN(ts)) lastTimestampMs = ts;
+        }
+        // CC-coupled (docs/cc-dependencies.md): `gitBranch` is a plain string on transcript lines. An empty string
+        // (a folder with no git) is "none", and a very long value is not a branch name.
+        if (gitBranch === null && typeof parsed.gitBranch === 'string' && parsed.gitBranch && parsed.gitBranch.length <= 200) {
+          gitBranch = parsed.gitBranch;
         }
         // Fix: skip Claude Code's own placeholder ids. CC stamps
         // `"model": "<synthetic>"` on assistant lines IT generated rather than
@@ -404,9 +417,9 @@ export async function readSessionTranscriptMeta(jsonlPath: string, wantTitle: bo
       }
     }
 
-    return { fallbackTitle, lastTimestampMs, lastModelId };
+    return { fallbackTitle, lastTimestampMs, lastModelId, gitBranch };
   } catch {
-    return { fallbackTitle: null, lastTimestampMs: null, lastModelId: null };
+    return { fallbackTitle: null, lastTimestampMs: null, lastModelId: null, gitBranch: null };
   } finally {
     try { await fh?.close(); } catch {}
   }
@@ -438,9 +451,9 @@ const metaCache = new Map<string, MetaEntry>();
 // Only real Claude Code transcripts under ~/.claude/projects are remembered —
 // never a test's temp tree. See scan-cache.ts.
 type DiskMeta = { wantTitle: boolean; meta: SessionTranscriptMeta };
-let diskMeta: ScanCache<DiskMeta> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+let diskMeta: ScanCache<DiskMeta> = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 2);
 const isRealTranscript = (p: string) => p.startsWith(PROJECTS_DIR + path.sep);
-const failedMeta = (m: SessionTranscriptMeta) => m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null;
+const failedMeta = (m: SessionTranscriptMeta) => m.fallbackTitle === null && m.lastTimestampMs === null && m.lastModelId === null && m.gitBranch === null;
 
 async function readMetaThroughDisk(jsonlPath: string, stat: { size: number; mtimeMs: number }, wantTitle: boolean): Promise<SessionTranscriptMeta> {
   const d = await diskMeta.get(jsonlPath, stat);
@@ -478,7 +491,7 @@ function pruneTranscriptMetaCache(seen: Set<string>) {
 export function __clearTranscriptMetaCacheForTests() {
   metaCache.clear();
   r1Answers = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'slug-r1.json'), 1);
-  diskMeta = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 1);
+  diskMeta = createScanCache(path.join(os.homedir(), '.youcoded', 'cache', 'transcript-meta.json'), 2);
 }
 
 /**
@@ -594,6 +607,7 @@ export async function listPastSessions(
           projectPath,
           lastModified: meta.lastTimestampMs ?? stat.mtimeMs,
           size: stat.size,
+          ...(meta.gitBranch ? { branch: meta.gitBranch } : {}),
           ...(joinedFlags ? { flags: joinedFlags } : {}),
           // Model chip on the Resume Browser card. providerType is the literal
           // 'claude-code' rather than one of the native provider types, which
@@ -734,6 +748,8 @@ export async function listPastSessions(
           if (tags.length) legacy.tags = tags;
           if (note) legacy.note = note;
           legacy.device = rec.device || undefined;
+          const createdMs = Date.parse(rec.createdAt);
+          if (Number.isFinite(createdMs)) legacy.created = createdMs;
           legacy.provider = rec.provider;
           if (rec.lastUsedModel) legacy.lastUsedModel = rec.lastUsedModel;
           // Prefer the store's UNAMBIGUOUS project resolution for the resume cwd.
@@ -783,6 +799,7 @@ export async function listPastSessions(
             ...(tags.length ? { tags } : {}),
             ...(note ? { note } : {}),
             device: rec.device || undefined,
+            ...(Number.isFinite(Date.parse(rec.createdAt)) ? { created: Date.parse(rec.createdAt) } : {}),
             provider: rec.provider,
             ...(rec.lastUsedModel ? { lastUsedModel: rec.lastUsedModel } : {}),
             // Two distinct resume-blocked sub-cases so the renderer can word

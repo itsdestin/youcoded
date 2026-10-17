@@ -2068,7 +2068,8 @@ export function installShim(): void {
       onRefill: (_cb: (sessionId: string) => void) => () => {},
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
-      browse: () => invoke('session:browse'),
+      // includeOpen: also list the chats open right now, marked `open` (a page's chat list; the Resume list leaves them out).
+      browse: (opts?: { includeOpen?: boolean }) => invoke('session:browse', opts?.includeOpen ? { includeOpen: true } : undefined),
       // Fix: parameter order MUST match preload.ts — (sessionId, projectSlug, count, all).
       // The shim previously declared (sessionId, count, all, projectSlug), so every
       // caller's project slug landed in `count` and 10 landed in `all` (truthy),

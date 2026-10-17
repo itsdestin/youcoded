@@ -37,7 +37,8 @@ export interface SessionChannelTypes {
   'session:terminal-repaint': { request: { sessionId: string }; response: void };
   'session:menu-lock': { request: { sessionId: string; holder: string; action: 'acquire' | 'release' }; response: boolean };
   // Browsing and history.
-  'session:browse': { request: void; response: PastSession[] };
+  // includeOpen: also list the chats open right now, marked `open` (a page's chat list; spec 2026-10-16).
+  'session:browse': { request: { includeOpen?: boolean } | void; response: PastSession[] };
   'session:history': { request: { sessionId: string; projectSlug: string; count?: number; all?: boolean }; response: HistoryMessage[] };
   'transcript:read-meta': { request: { path: string } | string; response: { model: string; contextPercent: number | null } | null };
   'transcript:page': { request: TranscriptPageRequest; response: TranscriptPageResult };

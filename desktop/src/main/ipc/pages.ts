@@ -113,6 +113,27 @@ export const pagesChannels: MainChannelDef[] = [
       (await getPagesService()?.plaid(str(p?.id), p?.request))
         ?? { ok: false as const, op: 'status' as const, code: 'UNAVAILABLE', message: NOT_AVAILABLE },
   }),
+  // Programs a page runs from its own folder (spec 2026-10-16). Desktop only: a program runs with this computer
+  // account's full access, and widening what a PHONE may call is Destin's decision (phone-open-channels.json),
+  // so a phone is refused until he says otherwise. The owner (calling window) comes from the door, never the
+  // request, so closing that window stops what it started and one window cannot stop another's.
+  defineChannel({
+    name: IPC.PAGES_RUN_PROGRAM, kind: 'handle', desktopOnly: true,
+    handler: async (p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      if (!svc) return { ok: false as const, reason: NOT_AVAILABLE };
+      return owner ? svc.runProgram(owner.key, str(p?.id), str(p?.file), typeof p?.input === 'string' ? p.input : '') : { ok: false as const, reason: NO_OWNER.message };
+    },
+  }),
+  defineChannel({
+    name: IPC.PAGES_STOP_PROGRAMS, kind: 'handle', desktopOnly: true,
+    handler: async (p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      return svc && owner ? svc.stopPrograms(owner.key, str(p?.id)) : { ok: true as const };
+    },
+  }),
   defineChannel({
     name: IPC.PAGES_SOCKET_OPEN, kind: 'handle', remoteOnError: socketFailure,
     handler: async (p, ctx) => {

@@ -15,7 +15,7 @@
 // An approval is recorded against a FINGERPRINT, not an id: widen the access or
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
-import type { KeyScheme, PageAccess, PageConnection, VideoProfile } from '../../shared/pages-types';
+import type { KeyScheme, PageAccess, PageChatScope, PageConnection, VideoProfile } from '../../shared/pages-types';
 import { PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
 import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
 
@@ -289,6 +289,23 @@ export function parseConnections(raw: unknown): PageConnection[] {
         c = { id, kind: 'session' };
         break;
       }
+      // Pages read and change chats (spec 2026-10-16). One per page, like
+      // session: two lines would be two cards for the same list. A scope the
+      // parser cannot vouch for drops the line rather than widening to "all".
+      case 'chats': {
+        if (out.some((x) => x.kind === 'chats')) break;
+        const scope = cleanChatScope(o.scope);
+        if (scope) c = { id, kind: 'chats', access: cleanAccess(o.access), scope };
+        break;
+      }
+      // Computer programs (Pages scope §9). The file is a bare name inside the
+      // page's own folder — no folders, no "..", nothing hidden — so the card's
+      // "Run work-items.mjs" names the only thing that can run.
+      case 'program': {
+        const file = cleanProgramFile(o.file);
+        if (file && !out.some((x) => x.kind === 'program' && x.file === file)) c = { id, kind: 'program', file };
+        break;
+      }
       default: break;
     }
     if (!c) continue;
@@ -299,7 +316,9 @@ export function parseConnections(raw: unknown): PageConnection[] {
   const hasOpen = out.some((c) => c.kind === 'open');
   // A device counts as credentialled even without a key: a page that could
   // read the home AND send anywhere is the bridge the block exists to stop.
-  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device' || c.kind === 'plaid');
+  // WHY chats too (spec 2026-10-16): a chat list is private like a sign-in, and
+  // a page that could read it AND send anywhere is the same bridge.
+  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device' || c.kind === 'plaid' || c.kind === 'chats');
   if (hasOpen && hasCredential) return [];
   return out;
 }
@@ -361,7 +380,46 @@ export function fingerprint(c: PageConnection): string {
     // A constant: the approval is keyed to the declaration alone (spec
     // 2026-10-14, §3, Q-7), so no edit to the page can make it ask again.
     case 'session': return 'session';
+    // Widening read → change, or the chats covered, asks again (deck Q-1/Q-2).
+    case 'chats': return `chats|${c.access}|${chatScopeKey(c.scope)}`;
+    // The file's CONTENTS are not in here (fingerprint is manifest-only); the
+    // approval records the program's hash beside it and the listing re-asks
+    // when the file changes (Pages scope §9: changed code never inherits trust).
+    case 'program': return `program|${c.file}`;
   }
+}
+
+/** A chat scope as one stable string: projects sorted, so their order in the
+ *  manifest never re-asks. */
+function chatScopeKey(s: PageChatScope): string {
+  return 'all' in s ? 'all' : 'projects' in s ? `projects:${[...s.projects].sort().join(',')}` : `tag:${s.tag}`;
+}
+
+const MAX_SCOPE_ITEMS = 10;
+const MAX_SCOPE_NAME = 80;
+
+/** `"all"`, absent, `{ projects: [...] }` or `{ tag: "..." }`; anything else is
+ *  null so the line is dropped (a typo must never read as "every chat"). */
+function cleanChatScope(raw: unknown): PageChatScope | null {
+  if (raw === undefined || raw === 'all') return { all: true };
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  if (Array.isArray(o.projects)) {
+    const projects = [...new Set(o.projects.filter((p): p is string => typeof p === 'string').map((p) => p.trim()).filter((p) => p && p.length <= MAX_SCOPE_NAME))];
+    return projects.length && projects.length <= MAX_SCOPE_ITEMS ? { projects } : null;
+  }
+  if (typeof o.tag === 'string' && o.tag.trim() && o.tag.trim().length <= MAX_SCOPE_NAME) return { tag: o.tag.trim() };
+  return null;
+}
+
+/** A bare file name inside the page's folder: letters, digits, dot, dash and
+ *  underscore; not hidden; not page.html/page.json/data.json (the page's own
+ *  files are never programs). */
+function cleanProgramFile(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const f = raw.trim();
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(f) || f.includes('..')) return null;
+  return ['page.html', 'page.json', 'data.json'].includes(f.toLowerCase()) ? null : f;
 }
 
 /** A device connection carries the address the person ALLOWED once approved,
@@ -396,7 +454,11 @@ export function covers(c: PageConnection, target: string | URL): boolean {
     // (plaid.ts), so a page cannot aim the Plaid keys at an address of its own.
     case 'plaid': return false;
     // Not a network destination: opening a conversation window reaches nothing.
-    case 'session': return false;
+    // Chats and programs are app abilities, never an address for youcoded.fetch.
+    case 'session':
+    case 'chats':
+    case 'program':
+      return false;
   }
 }
 
@@ -416,7 +478,7 @@ export function methodAllowed(c: PageConnection, method: string, pathname = '/')
   // WHY explicit: covers() already refuses every address for it, but a kind
   // that is not a network connection must not read as "every method allowed"
   // to any later caller that checks this alone.
-  if (c.kind === 'session') return false;
+  if (c.kind === 'session' || c.kind === 'chats' || c.kind === 'program') return false;
   if (c.kind === 'youcoded') {
     if (m === 'GET' || m === 'HEAD') return true;
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(m) || pathname.includes('%')) return false;

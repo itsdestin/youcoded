@@ -344,6 +344,32 @@ describe('listPastSessions — last model used (Claude Code)', () => {
   });
 });
 
+describe('listPastSessions — the git branch a conversation was on', () => {
+  const line = (uuid: string, gitBranch?: string) => ({
+    type: 'user', uuid, timestamp: '2026-06-01T10:06:00Z', ...(gitBranch !== undefined ? { gitBranch } : {}), message: { content: 'tool noise' },
+  });
+
+  it('reads the branch from the newest line that records one', async () => {
+    writeTranscript('C--proj-alpha', SID_A, { trailing: [line('t1', 'old-branch'), line('t2', '12-login-fix'), line('t3')] });
+    const sessions = await listSessions();
+    expect(sessions[0].branch).toBe('12-login-fix');
+  });
+
+  it('has no branch when the transcript never recorded one, or recorded an empty one', async () => {
+    writeTranscript('C--proj-alpha', SID_A, { trailing: [line('t1'), line('t2', '')] });
+    const sessions = await listSessions();
+    expect(sessions[0].branch).toBeUndefined();
+  });
+
+  it('keeps reading the model and the time when the branch is found first', async () => {
+    writeTranscript('C--proj-alpha', SID_A, { model: 'claude-opus-5', trailing: [line('t1', 'main')] });
+    const row = (await listSessions())[0];
+    expect(row).toMatchObject({ branch: 'main', lastUsedModel: { modelId: 'claude-opus-5' } });
+    // The newest line (the trailing one) still sets the time.
+    expect(row.lastModified).toBe(Date.parse('2026-06-01T10:06:00Z'));
+  });
+});
+
 describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
   // Build a real store rooted under the stubbed home and stash it in the holder
   // the mocked service reads. Records live at <root>/claude/<id>.json.
@@ -427,6 +453,16 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
     expect(row.missingProject).toBe(true);
     // No local project → empty slug (resume has no cwd to resume into here).
     expect(row.projectSlug).toBe('');
+  });
+
+  it('carries when the conversation began, from its record', async () => {
+    const store = seedStore();
+    writeTranscript('C--proj-alpha', SID_A);
+    await store.upsert({ id: SID_A, provider: 'claude', title: 'T', lastActive: '2026-06-25T00:00:00Z', device: 'phone' });
+    const rec = await store.get('claude', SID_A);
+    const row = (await listSessions())[0];
+    expect(row.created).toBe(Date.parse(rec!.createdAt));
+    expect(Number.isFinite(row.created)).toBe(true);
   });
 
   it('collapses a store record + local transcript into ONE row (store metadata wins, local slug kept)', async () => {
