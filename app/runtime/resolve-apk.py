@@ -44,7 +44,8 @@ def satisfies(version, operator, wanted):
     return compare(version, wanted) in operator
 
 
-def resolve(directory, roots):
+def resolve(directory, roots, provider_choices=None):
+    provider_choices = provider_choices or {}
     packages = {}
     providers = {}
     duplicated = set()
@@ -77,7 +78,23 @@ def resolve(directory, roots):
         name, operator, version = requirement(value)
         candidates = [(name, packages[name]['V'])] if name in packages else providers.get(name, [])
         candidates = [(pkg, ver) for pkg, ver in candidates if (not operator or ver) and satisfies(ver, operator, version)]
-        # WHY: choosing the first provider in an index is not evidence it satisfies the build.
+        if name in provider_choices:
+            candidates = [(pkg, ver) for pkg, ver in candidates if pkg == provider_choices[name]]
+        if len(candidates) > 1:
+            # WHY: APKINDEX declares provider_priority as k (busybox-binsh and
+            # icu-data-en have higher priority than their alternatives). Honor it
+            # instead of treating an explicit repository default as ambiguous.
+            priority = max(int(packages[pkg].get('k', '0')) for pkg, _ in candidates)
+            candidates = [(pkg, ver) for pkg, ver in candidates if int(packages[pkg].get('k', '0')) == priority]
+        if len(candidates) > 1 and all(ver for _, ver in candidates):
+            # Versioned virtual providers can coexist (e.g. libisl sonames). Use
+            # Alpine's own comparator after priority, not index order or semver.
+            newest = candidates[0][1]
+            for _, offered in candidates[1:]:
+                if compare(offered, newest) == '>':
+                    newest = offered
+            candidates = [(pkg, ver) for pkg, ver in candidates if compare(ver, newest) == '=']
+        # WHY: equally preferred providers still require an explicit build choice.
         if len(candidates) != 1:
             raise ValueError(f'Unresolved or ambiguous dependency {value!r} from {parent!r}: {candidates}')
         actual = candidates[0][0]

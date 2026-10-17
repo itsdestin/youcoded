@@ -58,7 +58,10 @@ def validate_metadata(data, index):
 
 def install(cache, destination, evidence, branch, roots):
     cache, destination, evidence = map(Path, (cache, destination, evidence))
-    resolution = resolver.resolve(cache, roots)
+    # WHY: preserve the existing build's busybox-binsh metadata choice, which is
+    # explicitly excluded below. Android supplies the actual shell; do not pick
+    # dash/yash from repository order or start shipping another executable.
+    resolution = resolver.resolve(cache, roots, provider_choices={'/bin/sh': 'busybox-binsh'})
     evidence.mkdir(parents=True, exist_ok=True)
     for repo in ('main', 'community'):
         shutil.copyfile(cache / f'{repo}.idx', evidence / f'{repo}.idx')

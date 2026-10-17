@@ -50,6 +50,27 @@ class Fixtures(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Duplicate selected package'):
             r.resolver.resolve(self.root, ['dotnet-bash-completion'])
 
+    def test_explicit_shell_provider_preserves_the_runtime_build_choice(self):
+        self.indexes('P:nodejs\nV:1\nD:/bin/sh\n\nP:busybox-binsh\nV:1\np:/bin/sh\n\nP:dash-binsh\nV:1\np:/bin/sh\n')
+        with self.assertRaisesRegex(ValueError, 'ambiguous'):
+            r.resolver.resolve(self.root, ['nodejs'])
+        self.assertIn('provider_choices', __import__('inspect').signature(r.resolver.resolve).parameters)
+        result = r.resolver.resolve(self.root, ['nodejs'], provider_choices={'/bin/sh': 'busybox-binsh'})
+        self.assertEqual([p['P'] for p in result['packages']], ['nodejs', 'busybox-binsh'])
+        with self.assertRaisesRegex(ValueError, 'Unresolved'):
+            r.resolver.resolve(self.root, ['nodejs'], provider_choices={'/bin/sh': 'missing'})
+
+    def test_repository_provider_priority_selects_the_actual_icu_default(self):
+        self.indexes('P:icu-libs\nV:78.1-r0\nD:icu-data=78.1-r0\n\nP:icu-data-en\nV:78.1-r0\np:icu-data=78.1-r0\nk:100\n\nP:icu-data-full\nV:78.1-r0\np:icu-data=78.1-r0\nk:10\n')
+        result = r.resolver.resolve(self.root, ['icu-libs'])
+        self.assertEqual([p['P'] for p in result['packages']], ['icu-libs', 'icu-data-en'])
+
+    def test_versioned_provider_tie_uses_alpines_version_ordering(self):
+        self.indexes('P:gcc\nV:1\nD:so:libisl.so.23\n\nP:isl25\nV:0.25\np:so:libisl.so.23=23.2.0\n\nP:isl26\nV:0.26\np:so:libisl.so.23=23.3.0\n')
+        with patch.object(r.resolver, 'compare', side_effect=lambda a, b: '=' if a == b else ('>' if a == '23.3.0' else '<')):
+            result = r.resolver.resolve(self.root, ['gcc'])
+        self.assertEqual([p['P'] for p in result['packages']], ['gcc', 'isl26'])
+
     def package_index(self):
         return {'P': 'bash', 'V': '5.3-r1', 'A': 'aarch64', 'o': 'bash', 'L': 'GPL-3.0-or-later', 'c': COMMIT}
 
