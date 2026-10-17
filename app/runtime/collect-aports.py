@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
@@ -37,22 +38,37 @@ def checksum_inputs(text):
 
 
 def recipe_members(archive, origin):
-    # WHY: select the entire recipe directory, never just APKBUILD/known patches.
-    members = []
+    # WHY: retain the complete recipe. Alpine legitimately aliases install hooks
+    # with relative links (e.g. bash.post-upgrade -> bash.post-install). Materialize
+    # only recipe-contained links as bytes; never create archive links on the host.
+    members = {}
     with tarfile.open(archive) as tree:
         for member in tree:
             parts = Path(member.name).parts
             if len(parts) >= 4 and parts[1] in ('main', 'community', 'testing') and parts[2] == origin:
                 relative = Path(*parts[3:])
-                if relative.is_absolute() or '..' in relative.parts or not (member.isfile() or member.isdir()):
+                if relative.is_absolute() or '..' in relative.parts or not (member.isfile() or member.isdir() or member.issym()):
                     raise ValueError(f'Unsafe recipe archive member: {member.name}')
-                if member.isfile():
-                    if any(name == str(relative) for name, _ in members):
+                if not member.isdir():
+                    name = relative.as_posix()
+                    if name in members:
                         raise ValueError(f'Ambiguous duplicate recipe member: {relative}')
-                    members.append((str(relative), tree.extractfile(member).read()))
-    if not any(name == 'APKBUILD' for name, _ in members):
-        raise ValueError(f'Exact aports archive has no recipe for {origin}')
-    return members
+                    members[name] = member
+        def content(name, visiting):
+            if name in visiting:
+                raise ValueError(f'Recipe link cycle: {name}')
+            member = members.get(name)
+            if member is None:
+                raise ValueError(f'Unsafe missing recipe link target: {name}')
+            if member.isfile():
+                return tree.extractfile(member).read()
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+            if posixpath.isabs(member.linkname) or target == '..' or target.startswith('../'):
+                raise ValueError(f'Unsafe recipe link: {name} -> {member.linkname}')
+            return content(target, visiting | {name})
+        if 'APKBUILD' not in members:
+            raise ValueError(f'Exact aports archive has no recipe for {origin}')
+        return [(name, content(name, set())) for name in members]
 
 
 def notices(root, origin_dir, inputs):

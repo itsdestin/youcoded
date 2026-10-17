@@ -413,6 +413,28 @@ class Fixtures(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Locked crate SHA256 mismatch'):
             r.collector.cargo_notices(self.root, origin, [source])
 
+    def test_recipe_local_symlinks_are_materialized_but_escaping_and_cycles_fail(self):
+        for target, accepted in [('bash.post-install', True), ('../../outside', False), ('bash.post-upgrade', False)]:
+            with self.subTest(target=target):
+                stream = io.BytesIO()
+                with tarfile.open(fileobj=stream, mode='w:gz') as tree:
+                    for name, content in [('APKBUILD', b'pkgname=bash'), ('bash.post-install', b'install script')]:
+                        member = tarfile.TarInfo(f'aports-{COMMIT}/main/bash/{name}')
+                        member.size = len(content)
+                        tree.addfile(member, io.BytesIO(content))
+                    link = tarfile.TarInfo(f'aports-{COMMIT}/main/bash/bash.post-upgrade')
+                    link.type = tarfile.SYMTYPE
+                    link.linkname = target
+                    tree.addfile(link)
+                archive = self.root / 'symlinks.tar.gz'
+                archive.write_bytes(stream.getvalue())
+                if accepted:
+                    files = dict(r.collector.recipe_members(archive, 'bash'))
+                    self.assertEqual(files['bash.post-upgrade'], b'install script')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Unsafe|cycle'):
+                        r.collector.recipe_members(archive, 'bash')
+
     def test_recipe_substitution_is_rejected_without_review_paperwork(self):
         evidence, sources, manifest = self.dossier()
         manifest['origins'][0]['recipe'] = entry(sources, 'recipes/bash/APKBUILD', 'substituted recipe')

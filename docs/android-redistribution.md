@@ -95,8 +95,10 @@ is `app/build/runtime/<variant>/sources/`, generated from that variant's evidenc
 
 - `aports/<commit>.tar.gz`: retained GitHub aports archive bytes from the exact
   `.PKGINFO` commit, shared across origins at the same commit.
-- `origins/<origin>/<commit>/recipe/`: every regular file in that origin's exact
-  recipe directory, including patches, install scripts and triggers.
+- `origins/<origin>/<commit>/recipe/`: every file in that origin's exact recipe
+  directory, including patches, install scripts and triggers. Relative links to
+  files inside the recipe are materialized as their original target bytes; escaping,
+  missing and cyclic targets fail. The retained aports archive preserves original links.
 - `distfiles/` below each origin: every evaluated `sha512sums` input. Local inputs
   are copied from the recipe; remote inputs come from `abuild fetch verify`.
 - `sha512sums.txt`: evaluated checksums from the container. Unsupported, empty or
