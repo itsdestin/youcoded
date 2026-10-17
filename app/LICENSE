@@ -1,30 +1,26 @@
 YouCoded Android Application License
 ====================================
 
-The YouCoded Android application — the source code in this `app/` directory
-and the compiled Android Package (.apk / .aab) built from it — is licensed
-under the MIT License, the full text of which follows below. This is the same
-license as the rest of the YouCoded repository (see `../LICENSE`).
+YouCoded-authored source code in this `app/` directory is licensed under the
+MIT License below, as is the YouCoded-authored code elsewhere in this repository.
+This does not license the compiled APK/AAB and its bundled third-party programs
+wholesale under MIT, or replace any third-party license or redistribution terms.
 
 Third-party notice
 ------------------
 
-The Android app includes a vendored copy of the Termux project's
-terminal-emulator library (`../terminal-emulator-vendored/`, from
-github.com/termux/termux-app tag v0.118.1, which in turn derives from
-jackpal/Android-Terminal-Emulator). That library is licensed under the
-Apache License, Version 2.0 — NOT GPLv3. Termux's own LICENSE.md carves the
-terminal-emulator library out of the GPLv3 that covers the rest of the Termux
-app. See `../terminal-emulator-vendored/LICENSE` for the Apache 2.0 text and
-`../terminal-emulator-vendored/NOTICE` for the preserved copyright notices.
+The current Android app bundles an Alpine-based runtime, Node, command-line
+programs, native libraries, npm dependencies and an unmodified Claude Code binary.
+They retain their respective licenses and terms, including copyleft obligations
+where applicable. Running a component as a subprocess does not remove its own
+redistribution requirements. The retired Termux-based architecture is not the
+current runtime.
 
-The Apache License 2.0 requires that NOTICE file to accompany any
-redistribution of the library, in source or binary form. If you redistribute
-the YouCoded Android app or a build of it, keep that NOTICE with it.
-
-Termux packages (.deb) that the app downloads at runtime are separate programs
-run as subprocesses; they are not part of this software and carry their own
-licenses.
+See `../docs/android-redistribution.md` for executable source collection, retained
+notices, and explicitly unresolved coverage and permission requirements. Generated
+`assets/legal/` and `backend.tgz:legal/` carry build-specific inventories/notices.
+Successful collection or a development build is not complete source coverage or
+permission to distribute third-party components.
 
 ----------------------------------------------------------------------------
 

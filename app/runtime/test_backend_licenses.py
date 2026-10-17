@@ -24,7 +24,9 @@ class BackendLicensesTest(unittest.TestCase):
                 file = modules / relative
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text("copyright and permission notice\n")
-            subprocess.run(["bash", "-eu", "-c", trim], env={**os.environ, "STAGE": root}, check=True)
+            here = str(Path(__file__).parent.resolve())
+            subprocess.run(["python3", "-I", str(Path(here) / "preserve-npm-legal.py"), str(modules), str(stage / "legal")], check=True)
+            subprocess.run(["bash", "-eu", "-c", trim], env={**os.environ, "STAGE": root, "HERE": here}, check=True)
             for relative in legal_files:
                 self.assertTrue((modules / relative).is_file(), f"trim deleted legal material: {relative}")
                 self.assertEqual((modules / relative).read_text(), "copyright and permission notice\n")

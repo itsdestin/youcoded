@@ -45,6 +45,8 @@ if ! cmp -s "$DESKTOP/package-lock.json" "$DEPS/package-lock.json" 2>/dev/null |
   (cd "$DEPS" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null)
 fi
 cp -r "$DEPS/node_modules" "$STAGE/node_modules"
+# WHY: retain original notices independently before platform binaries are trimmed.
+python3 -I "$HERE/preserve-npm-legal.py" "$STAGE/node_modules" "$STAGE/legal"
 
 say "trimming"
 NM="$STAGE/node_modules"
@@ -60,5 +62,6 @@ rm -rf "$NM"/@vscode/ripgrep/bin 2>/dev/null || true
 # Keep them in the shipped backend; only discard generated maps and type declarations.
 find "$NM" \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \) -type f -delete
 
+python3 -I "$HERE/preserve-npm-legal.py" --mark-retained "$NM" "$STAGE/legal"
 tar czf "$OUT/backend.tgz" -C "$STAGE" .
 say "done: $(du -h "$OUT/backend.tgz" | cut -f1) packed ($(du -sh "$STAGE" | cut -f1) unpacked)"

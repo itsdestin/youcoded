@@ -1,22 +1,19 @@
 YouCoded License
 ================
 
-YouCoded is licensed under the MIT License, the full text of which follows
-below. This covers everything in this repository — the desktop application
-(`desktop/`), the shared React user interface (`desktop/src/renderer/`), the
-Android application (`app/`), build scripts (`scripts/`), and documentation
-(`docs/`) — with one exception:
+YouCoded-authored application code, shared user interface, build scripts and
+documentation are licensed under the MIT License below, unless a file states
+otherwise. Copies of the MIT text also live at desktop/LICENSE and app/LICENSE.
 
-  • `terminal-emulator-vendored/` is a vendored copy of the Termux project's
-    terminal-emulator library (github.com/termux/termux-app, itself derived
-    from jackpal/Android-Terminal-Emulator). It is upstream code, licensed
-    under the Apache License, Version 2.0. Its license text and preserved
-    copyright notices live at `terminal-emulator-vendored/LICENSE` and
-    `terminal-emulator-vendored/NOTICE`; the Apache License requires that
-    NOTICE to accompany redistributions of the library. See
-    `terminal-emulator-vendored/VENDORED.md` for what was vendored and how.
-
-Copies of the MIT text also live at `desktop/LICENSE` and `app/LICENSE`.
+Third-party code, programs, libraries, data, fonts and other bundled components
+retain their respective licenses and copyright notices; this MIT grant does
+not relicense them. Android bundles Alpine runtime components (including
+GPL/LGPL-licensed programs and libraries), modified musl, npm dependencies and
+Claude Code, whose separate terms apply. Consult the release-specific component
+inventory, preserved notices and corresponding-source materials accompanying
+the Android build. An inventory or an upstream URL alone is not a complete
+corresponding-source distribution. Development builds may have incomplete
+redistribution materials and are not evidence of redistribution clearance.
 
 ----------------------------------------------------------------------------
 

@@ -1,0 +1,234 @@
+"""Collect exact aports recipes/distfiles; execute recipes only in a disposable container."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tarfile
+import tomllib
+import urllib.request
+import zipfile
+
+IMAGE = 'youcoded-source-collector:alpine3.24'
+NOTICE = re.compile(r'^(licen[cs]e|copying|copyright|notice|authors|patents)([.\-_].*)?$', re.I)
+
+
+def sha(path, algorithm='sha256'):
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, algorithm).hexdigest()
+
+
+def reference(root, path):
+    return {'path': str(path.relative_to(root)), 'sha256': sha(path)}
+
+
+def checksum_inputs(text):
+    result = {}
+    for line in text.strip().splitlines():
+        match = re.fullmatch(r'([0-9a-f]{128})  ([^/\s]+)', line.strip())
+        if not match or match[2] in result or match[2] in ('.', '..'):
+            raise ValueError(f'Unsupported/duplicate source checksum: {line}')
+        result[match[2]] = match[1]
+    if not result:
+        raise ValueError('Empty evaluated sha512sums; source coverage not established')
+    return result
+
+
+def recipe_members(archive, origin):
+    # WHY: select the entire recipe directory, never just APKBUILD/known patches.
+    members = []
+    with tarfile.open(archive) as tree:
+        for member in tree:
+            parts = Path(member.name).parts
+            if len(parts) >= 4 and parts[1] in ('main', 'community', 'testing') and parts[2] == origin:
+                relative = Path(*parts[3:])
+                if relative.is_absolute() or '..' in relative.parts or not (member.isfile() or member.isdir()):
+                    raise ValueError(f'Unsafe recipe archive member: {member.name}')
+                if member.isfile():
+                    if any(name == str(relative) for name, _ in members):
+                        raise ValueError(f'Ambiguous duplicate recipe member: {relative}')
+                    members.append((str(relative), tree.extractfile(member).read()))
+    if not any(name == 'APKBUILD' for name, _ in members):
+        raise ValueError(f'Exact aports archive has no recipe for {origin}')
+    return members
+
+
+def notices(root, origin_dir, inputs):
+    output = []
+    target = origin_dir / 'notices'
+    def save(label, name, content):
+        # Use an ordinal rather than upstream paths (which can contain traversal).
+        path = target / f'{len(output):05d}-{Path(name).name}'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        output.append(dict(reference(root, path), source=label, member=name))
+    for path in inputs:
+        if NOTICE.match(path.name):
+            save(path.name, path.name, path.read_bytes())
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path) as tree:
+                for member in tree:
+                    if member.isfile() and NOTICE.match(Path(member.name).name):
+                        save(path.name, member.name, tree.extractfile(member).read())
+        elif zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as tree:
+                for name in tree.namelist():
+                    if not name.endswith('/') and NOTICE.match(Path(name).name):
+                        save(path.name, name, tree.read(name))
+    return output
+
+
+def verify_tree(root):
+    """Never follow a container-created symlink in subsequent host operations."""
+    root = Path(root)
+    for path in [root, *root.rglob('*')]:
+        if path.is_symlink():
+            raise ValueError(f'Container output contains symlink: {path}')
+        if not path.is_file() and not path.is_dir():
+            raise ValueError(f'Unsupported container output: {path}')
+
+
+def locked_crates(inputs):
+    locks = []
+    for source in inputs:
+        if not tarfile.is_tarfile(source):
+            continue
+        with tarfile.open(source) as tree:
+            for member in tree:
+                if member.isfile() and Path(member.name).name == 'Cargo.lock':
+                    locks.append(tomllib.loads(tree.extractfile(member).read().decode()))
+    if not locks:
+        raise ValueError('ripgrep source has no Cargo.lock for embedded dependency notices')
+    result = {}
+    for lock in locks:
+        for package in lock.get('package', []):
+            origin = package.get('source')
+            if not origin:  # workspace package: its source/notices are in the origin archive
+                continue
+            if origin != 'registry+https://github.com/rust-lang/crates.io-index':
+                raise ValueError(f'Unsupported embedded crate source: {origin}')
+            name, version, checksum = package['name'], package['version'], package.get('checksum', '')
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', name) or not re.fullmatch(r'[0-9A-Za-z.+_-]+', version) or not re.fullmatch(r'[0-9a-f]{64}', checksum):
+                raise ValueError('Invalid locked crate identity/checksum')
+            filename = f'{name}-{version}.crate'
+            if filename in result and result[filename][2] != checksum:
+                raise ValueError('Conflicting Cargo.lock crate checksums')
+            result[filename] = name, version, checksum
+    return result
+
+
+def validate_cargo_archives(root, inputs, entries):
+    required = locked_crates(inputs)
+    actual = {Path(entry['path']).name: Path(root) / entry['path'] for entry in entries}
+    if len(actual) != len(entries) or set(actual) != set(required):
+        raise ValueError('Retained embedded crate set differs from Cargo.lock')
+    for name, archive in actual.items():
+        if archive.is_symlink() or not archive.resolve().is_relative_to(Path(root).resolve()) or sha(archive) != required[name][2]:
+            raise ValueError(f'Embedded Cargo.lock checksum mismatch: {name}')
+
+
+def cargo_notices(root, origin_dir, inputs):
+    """Keep locked crate archives and their original notices; never run Cargo code."""
+    archives = []
+    for filename, (name, version, checksum) in locked_crates(inputs).items():
+        target = origin_dir / 'crates' / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            temporary = target.with_suffix('.partial')
+            urllib.request.urlretrieve(f'https://static.crates.io/crates/{name}/{name}-{version}.crate', temporary)
+            temporary.replace(target)
+        if target.is_symlink() or sha(target) != checksum:
+            raise ValueError(f'Locked crate SHA256 mismatch: {name}@{version}')
+        archives.append(target)
+    embedded_notices = []
+    for index, archive in enumerate(archives):
+        found = notices(root, origin_dir / 'embedded' / str(index), [archive])
+        if not found:
+            raise ValueError(f'No embedded crate notices retained: {archive.name}')
+        embedded_notices.extend(found)
+    return [reference(root, archive) for archive in archives], embedded_notices
+
+
+def collect(evidence, sources):
+    evidence, sources = Path(evidence), Path(sources)
+    inputs = json.loads((evidence / 'inputs.json').read_text())
+    keys = sorted({(p['origin'], p['aports_commit']) for p in inputs['packages'] if p['extracted']})
+    sources.mkdir(parents=True, exist_ok=True)
+    verify_tree(sources)
+    # No host shell eval, docker socket mount, privileges, or host source-tree mount.
+    subprocess.run(['docker', 'build', '-t', IMAGE, '-'], input=(
+        'FROM alpine:3.24\nRUN apk add --no-cache abuild build-base git curl\n'
+        f'RUN addgroup -g {os.getgid()} collector && adduser -D -u {os.getuid()} -G collector collector\n'
+        'ENV HOME=/tmp CARCH=aarch64 CHOST=aarch64-alpine-linux-musl\n').encode(), check=True)
+    origins = []
+    for origin, commit in keys:
+        if origin in ('.', '..') or not re.fullmatch(r'[a-zA-Z0-9+_.-]+', origin) or not re.fullmatch(r'[0-9a-f]{40}', commit):
+            raise ValueError('Invalid aports identity')
+        archive = sources / 'aports' / f'{commit}.tar.gz'
+        archive.parent.mkdir(exist_ok=True)
+        url = f'https://github.com/alpinelinux/aports/archive/{commit}.tar.gz'
+        if not archive.exists():
+            temporary = archive.with_suffix('.partial')
+            urllib.request.urlretrieve(url, temporary)
+            temporary.replace(archive)
+        work = sources / 'origins' / origin / commit
+        recipe = work / 'recipe'
+        recipe.mkdir(parents=True, exist_ok=True)
+        for name, content in recipe_members(archive, origin):
+            destination = recipe / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(content)
+        (work / 'distfiles').mkdir(exist_ok=True)
+        # Append a collector command only to a disposable recipe copy: abuild
+        # fetch/verify and checksum capture then use the SAME evaluated variables.
+        evaluation = work / 'evaluation'
+        if evaluation.exists():
+            shutil.rmtree(evaluation)
+        shutil.copytree(recipe, evaluation)
+        with (evaluation / 'APKBUILD').open('a') as stream:
+            stream.write('\nyoucoded_collect() { printf "%s\\n" "$sha512sums" > /work/sha512sums.txt; }\n')
+        command = ('cd /work/evaluation && export SRCDEST=/work/distfiles && '
+                   'abuild fetch verify youcoded_collect')
+        subprocess.run(['docker', 'run', '--rm', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+                        '--user', f'{os.getuid()}:{os.getgid()}', '-v', f'{work.resolve()}:/work',
+                        IMAGE, 'sh', '-ec', command], check=True)
+        shutil.rmtree(evaluation)  # abuild's working src/ symlinks are not retained source files.
+        # WHY: upstream recipes ran in a writable mount. Validate all ancestry
+        # before copying local distfiles or reading/writing notices on the host.
+        verify_tree(work)
+        sums = checksum_inputs((work / 'sha512sums.txt').read_text())
+        retained = []
+        for name, expected in sums.items():
+            path = work / 'distfiles' / name
+            if not path.exists() and (recipe / name).is_file():
+                shutil.copyfile(recipe / name, path)
+            if not path.is_file() or path.is_symlink() or sha(path, 'sha512') != expected:
+                raise ValueError(f'Missing or changed abuild input: {origin}: {name}')
+            retained.append(path)
+        found = notices(sources, work, retained + [p for p in recipe.rglob('*') if p.is_file()])
+        embedded = []
+        if origin == 'ripgrep':
+            embedded, crate_notices = cargo_notices(sources, work, retained)
+            found.extend(crate_notices)
+        origins.append({'origin': origin, 'commit': commit, 'aports_archive': reference(sources, archive),
+                        'aports_url': url, 'recipe': reference(sources, recipe / 'APKBUILD'),
+                        'recipe_files': [reference(sources, p) for p in sorted(recipe.rglob('*')) if p.is_file()],
+                        'checksums': reference(sources, work / 'sha512sums.txt'),
+                        'inputs': [reference(sources, p) for p in retained], 'notices': found,
+                        'embedded_inputs': embedded})
+    # WHY: objective missing inputs/checksums/notices fail above. MIT/Apache code
+    # does not acquire a source-delivery obligation merely by accompanying GPL
+    # subprocesses; provenance and legal judgments are not fake automated failures.
+    residual = []
+    manifest = {'schema': 2, 'evidence_sha256': sha(evidence / 'inputs.json'),
+                'build_inputs_sha256': sha(evidence / 'non-apk-inputs.json'),
+                'origins': origins, 'additional_notices': [], 'residual': residual,
+                'review_notes': [
+                    'Verify version-specific component notices, license choices and actual linked combinations.',
+                    'Claude preinstallation is subject to its published Commercial Terms, unchanged binary/authentication and users own billing.',
+                    'APK authentication and fully offline rebuilds are separate security/reproducibility checks, not blanket license requirements.',
+                ]}
+    (sources / 'coverage.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+    return manifest

@@ -149,6 +149,6 @@ Commits need a sign-off line (`git commit -s`) — see [CONTRIBUTING.md](./CONTR
 
 ## License
 
-YouCoded is **MIT** — desktop, Android, shared UI, scripts, and docs. See the root [LICENSE](LICENSE); copies also live at [desktop/LICENSE](desktop/LICENSE) and [app/LICENSE](app/LICENSE).
+YouCoded-authored code, shared UI, scripts and docs are **MIT** unless stated otherwise. See the root [LICENSE](LICENSE); copies also live at [desktop/LICENSE](desktop/LICENSE) and [app/LICENSE](app/LICENSE).
 
-One exception: `terminal-emulator-vendored/` is a vendored copy of Termux's terminal-emulator library (Apache License 2.0, upstream Termux / jackpal). Its [LICENSE](terminal-emulator-vendored/LICENSE) and [NOTICE](terminal-emulator-vendored/NOTICE) stay with it, and Apache 2.0 requires the NOTICE to accompany redistributions of the Android app.
+Bundled third-party components retain their own licenses. Android includes Alpine programs and libraries (including GPL/LGPL components), modified musl, npm packages and Claude Code under separate terms. The release-specific inventory, offline notices and corresponding-source materials must accompany redistribution; the app's MIT license does not replace their requirements. See [Android redistribution](docs/android-redistribution.md) for the fail-closed packaging gate and unresolved review requirements.

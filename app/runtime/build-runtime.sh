@@ -54,30 +54,34 @@ fetch_index main; fetch_index community
 # install <dest> <pkg…>: each package and its dependencies, extracted into dest.
 install_pkgs() {
   local dest=$1; shift
-  (cd "$CACHE" && python3 -I "$HERE/resolve-apk.py" "$@") | while read -r repo name ver _; do
-    case "$name" in busybox|busybox-binsh|alpine-baselayout*|apk-tools) continue;; esac
-    local f="$CACHE/apk/$name-$ver.apk"
-    [ -s "$f" ] || curl -fsSL -o "$f" "$ALPINE/$repo/aarch64/$name-$ver.apk"
-    tar xzf "$f" -C "$dest" 2>/dev/null || true
-  done
+  # WHY: keep each APK's original metadata and exact hash before extraction can overwrite it.
+  python3 -I "$HERE/runtime-redistribution.py" install "$CACHE" "$dest" "$OUT/evidence/$(basename "$dest")" "$ALPINE_BRANCH" "$@"
 }
 say "Alpine $ALPINE_BRANCH: $RUNTIME_PACKAGES"
 rm -rf "$CACHE/root"; mkdir -p "$CACHE/root"
 install_pkgs "$CACHE/root" $RUNTIME_PACKAGES
-[ -x "$CACHE/sysroot/usr/include/node/node.h" ] || [ -f "$CACHE/sysroot/usr/include/node/node.h" ] || install_pkgs "$CACHE/sysroot" $SYSROOT_PACKAGES
+# Re-extract the locked sysroot too: a pre-existing node.h proves neither provenance nor completeness.
+rm -rf "$CACHE/sysroot"; mkdir -p "$CACHE/sysroot"
+install_pkgs "$CACHE/sysroot" $SYSROOT_PACKAGES
 R="$CACHE/root"; SR="$CACHE/sysroot"
 
 # --- musl, patched ------------------------------------------------------------------------------
 MUSL_SO="$CACHE/musl-$MUSL_VERSION/lib/libc.so"
+MUSL_TGZ="$CACHE/musl-$MUSL_VERSION.tar.gz"
+# Retain the original input, including for caches created before provenance was recorded.
+[ -s "$MUSL_TGZ" ] || curl -fsSL -o "$MUSL_TGZ" "https://musl.libc.org/releases/musl-$MUSL_VERSION.tar.gz"
+# WHY: never pair a cached libc with a new compiler/sysroot/patch without rebuilding it.
+rm -rf "$CACHE/musl-$MUSL_VERSION"
 if [ ! -s "$MUSL_SO" ]; then
   say "musl $MUSL_VERSION"
-  curl -fsSL "https://musl.libc.org/releases/musl-$MUSL_VERSION.tar.gz" | tar xz -C "$CACHE"
+  tar xzf "$MUSL_TGZ" -C "$CACHE"
   python3 -I "$HERE/patch-musl.py" "$CACHE/musl-$MUSL_VERSION"
   CRT="$(find "$SR" -name 'libclang_rt.builtins-aarch64.a' | head -1)"
   (cd "$CACHE/musl-$MUSL_VERSION" && CC="clang --target=aarch64-linux-musl -fuse-ld=lld" \
     ./configure --target=aarch64-linux-musl --prefix=/ --syslibdir=/lib LIBCC="$CRT" >/dev/null && make -j"$(nproc)" lib/libc.so >/dev/null)
 fi
 cp "$MUSL_SO" "$JNI/libldmusl.so"
+python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/sysroot" "$SR" "$CRT" "$JNI/libldmusl.so"
 
 # --- shim and node-pty -------------------------------------------------------------------------
 CCX=(--target=aarch64-alpine-linux-musl --sysroot="$SR" -fuse-ld=lld)
@@ -109,6 +113,7 @@ for pair in $RUNTIME_EXECUTABLES; do
   cp -L "$src" "$JNI/$so"
   "$PATCHELF" --set-interpreter "$INTERP" --set-rpath "$RPATH" "$JNI/$so"
   "$PATCHELF" --add-needed libycshim.so "$JNI/$so"
+  python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$src" "$JNI/$so"
   echo "$so $rel" >> "$ASSETS/binmap.txt"
 done
 
@@ -123,6 +128,7 @@ while IFS= read -r f; do
   so="lib_$(echo "$soname" | tr -c 'a-zA-Z0-9\n' '_').so"
   cp -L "$f" "$JNI/$so"
   "$PATCHELF" --set-rpath "$RPATH" "$JNI/$so" 2>/dev/null || true
+  python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$f" "$JNI/$so"
   echo "$so $soname" >> "$ASSETS/libmap.txt"
 done < <(find "$R/lib" "$R/usr/lib" -maxdepth 1 -name '*.so*' \( -type f -o -type l \) | sort)
 echo "libldmusl.so libc.musl-aarch64.so.1" >> "$ASSETS/libmap.txt"
@@ -149,4 +155,15 @@ cp "$R/etc/ssl/certs/ca-certificates.crt" "$ASSETS/ca-certificates.crt"
 (cd "$R/usr/share" && tar czf "$ASSETS/share.tgz" $(for d in terminfo git-core; do [ -d "$d" ] && echo "$d"; done))
 [ -d "$R/etc/terminfo" ] && (cd "$R/etc" && tar czf "$ASSETS/etc-terminfo.tgz" terminfo) || true
 echo "$APP_ID" > "$ASSETS/app-id.txt"
+# Record packaged data ownership as well as executable/library ownership.
+python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$R/etc/ssl/certs/ca-certificates.crt" "$ASSETS/ca-certificates.crt"
+for d in terminfo git-core; do
+  if [ -d "$R/usr/share/$d" ]; then
+    python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$R/usr/share/$d" "$ASSETS/share.tgz"
+  fi
+done
+if [ -d "$R/etc/terminfo" ]; then
+  python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/root" "$R" "$R/etc/terminfo" "$ASSETS/etc-terminfo.tgz"
+fi
+python3 -I "$HERE/runtime-redistribution.py" finalize "$OUT" "$CACHE" "$MUSL_TGZ" "$CC_TGZ"
 say "done: $(du -sh "$JNI" | cut -f1) of programs for $APP_ID"
