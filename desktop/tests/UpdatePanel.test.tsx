@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import UpdatePanel from '../src/renderer/components/UpdatePanel';
 
@@ -62,6 +62,7 @@ describe('UpdatePanel — the version pill popup', () => {
         changelog: vi.fn().mockResolvedValue(CHANGELOG_OK),
         // New methods — no-op defaults so UpdatePanel's useEffects don't crash in tests.
         onProgress: vi.fn().mockReturnValue(() => {}),
+        onInstallProgress: vi.fn().mockReturnValue(() => {}),
         getCachedDownload: vi.fn().mockResolvedValue(null),
         download: vi.fn().mockResolvedValue({ jobId: 'test-job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
         cancel: vi.fn().mockResolvedValue({ success: true }),
@@ -243,6 +244,7 @@ describe('UpdatePanel — the update button after a failure', () => {
       update: {
         changelog: vi.fn().mockResolvedValue({ markdown: null, entries: [], fromCache: false }),
         onProgress: vi.fn().mockReturnValue(() => {}),
+        onInstallProgress: vi.fn().mockReturnValue(() => {}),
         getCachedDownload: vi.fn().mockResolvedValue(null),
         download: vi.fn().mockResolvedValue({ jobId: 'job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
         cancel: vi.fn().mockResolvedValue({ success: true }),
@@ -312,6 +314,139 @@ describe('UpdatePanel — the update button after a failure', () => {
       expect(screen.getByText(/asks for your password/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /run in terminal/i }));
       await waitFor(() => expect((window as any).claude.engine.runInTerminal).toHaveBeenCalledWith(COMMAND));
+    });
+
+    it('shows real installer activity and ignores another job’s output', async () => {
+      let finish!: (result: unknown) => void;
+      (window as any).claude.update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+      await clickUpdate();
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      expect(await screen.findByRole('button', { name: 'Preparing the installer…' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Preparing the installer…' })).toHaveClass('w-full');
+      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      act(() => progress({ jobId: 'other', phase: 'installing', output: 'Unrelated output' }));
+      expect(screen.queryByText('Unrelated output')).not.toBeInTheDocument();
+      act(() => progress({ jobId: 'job', phase: 'authorizing', output: '' }));
+      expect(screen.getByRole('button', { name: 'Waiting for administrator approval…' })).toBeDisabled();
+      act(() => progress({ jobId: 'job', phase: 'installing', output: 'upgrading youcoded…' }));
+      expect(screen.getByRole('button', { name: 'upgrading youcoded…' })).toBeDisabled();
+      expect(screen.queryByText('Details')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Installer output')).not.toBeInTheDocument();
+      expect(screen.queryByText(/restarts automatically when installation finishes/i)).not.toBeInTheDocument();
+      act(() => progress({ jobId: 'job', phase: 'installing', output: 'upgrading youcoded…\nRunning post-install hooks…\n' }));
+      expect(screen.getByRole('button', { name: 'Running post-install hooks…' })).toBeDisabled();
+      expect(screen.queryByText('upgrading youcoded…')).not.toBeInTheDocument();
+      act(() => progress({ jobId: 'job', phase: 'restarting', output: 'upgrading youcoded…' }));
+      await act(async () => finish({ success: true, quitPending: true }));
+      expect(screen.getByRole('button', { name: 'Restarting YouCoded…' })).toBeDisabled();
+    });
+
+    it('does not preserve a running install after the browser fallback completed', async () => {
+      (window as any).claude.update.launch.mockResolvedValue({ success: true, quitPending: false, fallback: 'browser' });
+      const onClose = vi.fn();
+      const view = render(<UpdatePanel open onClose={onClose} updateStatus={STATUS} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      view.rerender(<UpdatePanel open={false} onClose={onClose} updateStatus={STATUS} />);
+      view.rerender(<UpdatePanel open onClose={onClose} updateStatus={STATUS} />);
+      expect(await screen.findByRole('button', { name: /update now/i })).toBeEnabled();
+    });
+
+    it('keeps an in-flight install when the popup closes and reopens', async () => {
+      (window as any).claude.update.launch = vi.fn(() => new Promise(() => {}));
+      const props = { onClose: () => {}, updateStatus: STATUS };
+      const view = render(<UpdatePanel open {...props} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      view.rerender(<UpdatePanel open={false} {...props} />);
+      view.rerender(<UpdatePanel open {...props} />);
+      expect(await screen.findByText('Preparing the installer…')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /update now|launch installer/i })).not.toBeInTheDocument();
+      expect((window as any).claude.update.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it('restores progress received while the popup was hidden', async () => {
+      (window as any).claude.update.launch = vi.fn(() => new Promise(() => {}));
+      const props = { onClose: () => {}, updateStatus: STATUS };
+      const view = render(<UpdatePanel open {...props} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      view.rerender(<UpdatePanel open={false} {...props} />);
+      act(() => progress({ jobId: 'job', phase: 'installing', output: 'Running post-install hooks…' }));
+      view.rerender(<UpdatePanel open {...props} />);
+      expect(await screen.findByRole('button', { name: 'Running post-install hooks…' })).toBeDisabled();
+      expect(screen.queryByText('Details')).not.toBeInTheDocument();
+    });
+
+    it.each(['install-failed', 'install-timeout'])('retains %s received while closed', async (error) => {
+      let finish!: (result: unknown) => void;
+      (window as any).claude.update.launch = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+      const props = { onClose: () => {}, updateStatus: STATUS };
+      const view = render(<UpdatePanel open {...props} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      view.rerender(<UpdatePanel open={false} {...props} />);
+      await act(async () => finish({ success: false, error, output: 'Last installer output', command: COMMAND }));
+      view.rerender(<UpdatePanel open {...props} />);
+      expect(await screen.findByText(error === 'install-timeout' ? "Couldn't confirm the installation result." : "Your package manager wouldn't install the update.")).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /launch installer|update now/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText('Details'));
+      expect(screen.getByText('Last installer output')).toBeInTheDocument();
+      if (error === 'install-timeout') expect(screen.queryByRole('button', { name: /try again|run in terminal|open in browser/i })).not.toBeInTheDocument();
+    });
+
+    it('a rejected launch shows an unknown outcome with the real error, never a stuck button', async () => {
+      (window as any).claude.update.launch = vi.fn().mockRejectedValue(new Error('connection closed'));
+      await clickUpdate();
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Details'));
+      expect(screen.getByText('connection closed')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /open in browser/i })).not.toBeInTheDocument();
+    });
+
+    it('a launch refused because another installation is active offers no parallel installation', async () => {
+      await launchWith({ success: false, error: 'busy' });
+      expect(await screen.findByText('Another update installation is already running.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /try again|run in terminal|open in browser/i })).not.toBeInTheDocument();
+    });
+
+    it('an install timeout warns that it may still be running without offering another install', async () => {
+      await launchWith({ success: false, error: 'install-timeout', command: COMMAND, output: 'Running post-install hooks…' });
+      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      expect(screen.getByText(/may still be running/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /run in terminal|open in browser/i })).not.toBeInTheDocument();
+    });
+
+    it('replaces a timed-out outcome with a confirmed late cancellation, even while hidden', async () => {
+      (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'install-timeout' });
+      const props = { onClose: () => {}, updateStatus: STATUS };
+      const view = render(<UpdatePanel open {...props} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+      expect(await screen.findByText("Couldn't confirm the installation result.")).toBeInTheDocument();
+      const progress = (window as any).claude.update.onInstallProgress.mock.calls[0][0];
+      view.rerender(<UpdatePanel open={false} {...props} />);
+      act(() => progress({ jobId: 'job', phase: 'failed', error: 'install-cancelled', output: 'Authentication cancelled', command: COMMAND }));
+      view.rerender(<UpdatePanel open {...props} />);
+      expect(await screen.findByText('The password prompt was closed, so nothing was installed.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+      expect(screen.getByText(COMMAND)).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Details'));
+      expect(screen.getByText('Authentication cancelled')).toBeInTheDocument();
+    });
+
+    it('keeps a failed package manager’s output inside the error’s Details', async () => {
+      await launchWith({ success: false, error: 'install-failed', command: COMMAND, output: 'error: failed to lock database' });
+      expect(await screen.findByText("Your package manager wouldn't install the update.")).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Details'));
+      expect(screen.getByText('error: failed to lock database')).toBeInTheDocument();
     });
 
     it('a dismissed password prompt offers Retry and the command, not a dead end', async () => {

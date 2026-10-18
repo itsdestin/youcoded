@@ -14,7 +14,8 @@ import path from 'path';
 import https from 'https';
 import { randomUUID } from 'crypto';
 import { spawn as nodeSpawn, type SpawnOptions } from 'child_process';
-import type { UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult } from '../shared/update-install-types';
+import { StringDecoder } from 'string_decoder';
+import type { UpdateInstallProgressEvent, UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult } from '../shared/update-install-types';
 
 // Domains we'll accept release-asset downloads from. GitHub Releases redirects
 // the download URL from github.com to a CDN host; both need to be allowed. A
@@ -479,6 +480,9 @@ export interface LaunchInstallerDeps {
   // Override for Linux AppImage detection — prod reads process.env.APPIMAGE.
   envAppImage?: string;
   // Linux package installs: where pkexec lives, and how to test for it.
+  onInstallProgress?: (event: UpdateInstallProgressEvent) => void;
+  // A timeout returns unknown while the child lives. Notify the owner when it eventually closes.
+  onLateInstallResult?: (result: UpdateLaunchResult) => void;
   pkexecPath?: string;
   exists?: (p: string) => boolean;
 }
@@ -497,6 +501,22 @@ export interface LaunchInstallerInput {
 export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
   const platform = deps.platform ?? process.platform;
   const spawnFn = deps.spawn ?? (nodeSpawn as any);
+  let busy = false;
+
+  // WHY keep the slot through timeout and quitPending: neither means the package manager
+  // is safely retryable. A second window/job must never run a parallel package command.
+  async function guardedLaunch(input: LaunchInstallerInput): Promise<UpdateLaunchResult> {
+    if (busy) return { success: false, error: 'busy' };
+    busy = true;
+    try {
+      const result = await launch(input);
+      if (!(result.success ? result.quitPending : result.error === 'install-timeout')) busy = false;
+      return result;
+    } catch (error) {
+      busy = false;
+      throw error;
+    }
+  }
 
   async function launch(input: LaunchInstallerInput): Promise<UpdateLaunchResult> {
     // Guard: make sure the file wasn't cleaned up between download and launch.
@@ -517,7 +537,7 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
 
     if (platform === 'linux') {
       const pkg = nativePackageSpec(input.filePath);
-      if (pkg) return await installNativePackage(pkg, input.filePath);
+      if (pkg) return await installNativePackage(pkg, input);
 
       if (input.filePath.endsWith('.AppImage')) {
         // AppImage self-replace: overwrite the currently-running AppImage, then relaunch.
@@ -561,7 +581,9 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
         } catch {
           return { success: false, error: 'spawn-failed' };
         }
-        // Trigger Electron's built-in relaunch so the new AppImage starts after quit.
+        // WHY notify before relaunch: this is a confirmed Linux restart, not an
+        // external installer handoff like Windows/macOS.
+        deps.onInstallProgress?.({ jobId: input.jobId, phase: 'restarting', output: '' });
         deps.appRelaunch();
         return { success: true, quitPending: true };
       }
@@ -590,8 +612,9 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
    */
   async function installNativePackage(
     spec: NativePackageSpec,
-    filePath: string,
+    input: LaunchInstallerInput,
   ): Promise<UpdateLaunchResult> {
+    const { filePath } = input;
     const manualCommand = spec.manual(filePath);
     const exists = deps.exists ?? ((p: string) => fs.existsSync(p));
     const pkexec = deps.pkexecPath ?? '/usr/bin/pkexec';
@@ -599,39 +622,107 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
       return { success: true, quitPending: false, fallback: 'manual', command: manualCommand, filePath };
     }
 
-    const status = await runToCompletion(pkexec, spec.args(filePath));
-    if (status === 0) {
-      // The package manager has replaced the files under /opt; the running
-      // process keeps its own inode until it exits, so relaunch is what picks
-      // up the new version.
-      deps.appRelaunch();
-      return { success: true, quitPending: true };
-    }
-    // 126 = the dialog was dismissed or authorisation was refused; 127 = pkexec
-    // could not run the command at all. Both are the user's prompt, not a broken
-    // download, so neither should read as "the update failed".
-    if (status === 126 || status === 127) {
-      return { success: false, error: 'install-cancelled', command: manualCommand };
-    }
-    return { success: false, error: 'install-failed', command: manualCommand };
+    return runToCompletion(pkexec, spec.args(filePath), input.jobId, manualCommand);
   }
 
-  /** Run a child to completion and hand back its exit status (null if it never
-   *  started, or outran the timeout). */
-  function runToCompletion(cmd: string, args: string[]): Promise<number | null> {
+  function runToCompletion(cmd: string, args: string[], jobId: string, command: string): Promise<UpdateLaunchResult> {
     return new Promise((resolve) => {
-      let settled = false;
-      const done = (status: number | null) => { if (!settled) { settled = true; resolve(status); } };
+      let output = '';
+      let dirty = false;
+      let finished = false;
+      let timedOut = false;
+      let flushTimer: NodeJS.Timeout | undefined;
+      let timeout: NodeJS.Timeout | undefined;
+      const emit = (phase: Exclude<UpdateInstallProgressEvent['phase'], 'failed'>) => deps.onInstallProgress?.({ jobId, phase, output });
+      const flush = () => {
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = undefined;
+        if (dirty) { dirty = false; emit('installing'); }
+      };
+      const append = (text: string) => {
+        if (!text || finished) return;
+        // WHY byte-bound and UTF-8 aligned: a noisy package script must not grow either
+        // memory or IPC payloads, nor split the first character into replacement glyphs.
+        const bytes = Buffer.from(output + text);
+        let start = Math.max(0, bytes.length - 8192);
+        while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+        output = bytes.subarray(start).toString('utf8');
+        dirty = true;
+        flushTimer ??= setTimeout(flush, PROGRESS_THROTTLE_MS);
+      };
+      // WHY state per pipe: escape sequences and UTF-8 characters can span chunks.
+      // Only a tiny parser state is retained, never an unbounded unfinished OSC string.
+      function reader() {
+        const decoder = new StringDecoder('utf8');
+        let state: 'text' | 'escape' | 'csi' | 'osc' | 'osc-escape' = 'text';
+        const consume = (text: string) => {
+          let clean = '';
+          for (const char of text) {
+            if (state === 'osc') { if (char === '\u0007' || char === '\u009c') state = 'text'; else if (char === '\u001b') state = 'osc-escape'; continue; }
+            if (state === 'osc-escape') { state = char === '\\' ? 'text' : 'osc'; continue; }
+            if (state === 'csi') { if (char >= '@' && char <= '~') state = 'text'; continue; }
+            if (state === 'escape') { state = char === '[' ? 'csi' : char === ']' || char === 'P' || char === '^' || char === '_' ? 'osc' : char >= ' ' && char <= '/' ? 'escape' : 'text'; continue; }
+            if (char === '\u001b') { state = 'escape'; continue; }
+            if (char === '\u009b') { state = 'csi'; continue; }
+            if (char === '\u009d' || char === '\u0090' || char === '\u009e' || char === '\u009f') { state = 'osc'; continue; }
+            const code = char.codePointAt(0)!;
+            if (char === '\n' || char === '\t' || char === '\r' || (code >= 32 && !(code >= 127 && code <= 159))) clean += char;
+          }
+          append(clean);
+        };
+        return { data: (chunk: Buffer) => consume(decoder.write(chunk)), end: () => consume(decoder.end()) };
+      }
+      const stdout = reader();
+      const stderr = reader();
+      const done = (status: number | null, error?: Error) => {
+        if (finished) return;
+        stdout.end(); stderr.end();
+        flush();
+        if (error && !output) {
+          // A spawn diagnostic is not evidence that installation started. Preserve it
+          // in the result, but never manufacture an installing progress event for it.
+          stderr.data(Buffer.from(error.message));
+          dirty = false;
+          flush();
+        }
+        finished = true;
+        child?.stdout?.removeListener('data', stdout.data);
+        child?.stderr?.removeListener('data', stderr.data);
+        if (timeout) clearTimeout(timeout);
+        const result: UpdateLaunchResult = status === 0
+          ? { success: true, quitPending: true }
+          : { success: false, error: status === 126 ? 'install-cancelled' : 'install-failed', command, ...(output ? { output } : {}) };
+        if (status === 0) { emit('restarting'); deps.appRelaunch(); }
+        if (timedOut) {
+          if (!result.success) busy = false;
+          deps.onLateInstallResult?.(result);
+          // WHY terminal push: the timeout already resolved the invoke. Only actual
+          // child completion makes a retry/manual command safe and clears unknown UI.
+          if (!result.success) deps.onInstallProgress?.({ jobId, phase: 'failed', output, error: result.error, command: result.command });
+        } else resolve(result);
+      };
+      emit('authorizing');
       let child: any;
       try {
-        child = spawnFn(cmd, args, { stdio: 'ignore' });
-      } catch {
-        done(null);
+        child = spawnFn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (error) {
+        done(null, error as Error);
         return;
       }
-      const timer = setTimeout(() => done(null), PRIVILEGED_INSTALL_TIMEOUT_MS);
-      child.on?.('error', () => { clearTimeout(timer); done(null); });
-      child.on?.('exit', (code: number | null) => { clearTimeout(timer); done(code); });
+      child.stdout?.on('data', stdout.data);
+      child.stderr?.on('data', stderr.data);
+      // WHY close, not exit: the final stderr/stdout data can arrive after exit.
+      child.once('close', (code: number | null) => done(code));
+      child.once('error', (error: Error) => {
+        // A spawn failure has no live process. Other errors do not prove it stopped.
+        if (!child.pid) done(null, error);
+      });
+      timeout = setTimeout(() => {
+        flush();
+        timedOut = true;
+        // No manual command here: the child still owns the package-manager lock.
+        resolve({ success: false, error: 'install-timeout', ...(output ? { output } : {}) });
+      }, PRIVILEGED_INSTALL_TIMEOUT_MS);
     });
   }
 
@@ -710,5 +801,5 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
     });
   }
 
-  return launch;
+  return guardedLaunch;
 }

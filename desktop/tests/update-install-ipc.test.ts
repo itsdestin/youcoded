@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 
-// These seven strings are the entire in-app-update IPC surface. If you add an
-// eighth, add it here first and the test will tell you which files haven't
-// been updated yet.
+// Keep the in-app installer request and push surface in parity across bridges.
+// Add a channel here first to prove that missing plumbing is detected.
 const CHANNELS = [
   'update:download',
   'update:cancel',
   'update:launch',
   'update:progress',
+  'update:install-progress',
   'update:get-cached-download',
   'update:get-beta-channel',
   'update:set-beta-channel',
@@ -37,7 +37,7 @@ describe('in-app update installer IPC parity', () => {
       expect(shim).toContain(channel);
     });
     it(`the host references "${channel}"`, () => {
-      expect(handler).toContain(channel === 'update:progress' ? channel : constFor(channel));
+      expect(handler).toContain(channel === 'update:progress' || channel === 'update:install-progress' ? channel : constFor(channel));
     });
   }
 });

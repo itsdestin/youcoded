@@ -294,7 +294,7 @@ describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () =
 
 // WHY (2026-09-30 one-core R3-2): dev, update and account moved in.
 describe('dev, update and account: every channel is in the table, and phones are refused as before', () => {
-  const PUSHES = new Set(['update:progress', 'dev:install-progress']);
+  const PUSHES = new Set(['update:progress', 'update:install-progress', 'dev:install-progress']);
   it('every dev:*, update:* and account:* name in the contract has a table entry (pushes excepted)', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => /^(dev|update|account):/.test(v) && !PUSHES.has(v));
