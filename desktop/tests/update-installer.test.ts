@@ -383,7 +383,7 @@ describe('launchInstaller', () => {
     if (overrides.errorOnSpawn) {
       setImmediate(() => emitter.emit('error', new Error('ENOENT')));
     } else if (overrides.exitCode !== undefined) {
-      setTimeout(() => emitter.emit('exit', overrides.exitCode), overrides.exitDelay ?? 10);
+      setTimeout(() => { emitter.emit('exit', overrides.exitCode); emitter.emit('close', overrides.exitCode); }, overrides.exitDelay ?? 10);
     }
     return emitter;
   }
@@ -475,12 +475,17 @@ describe('launchInstaller', () => {
     const downloaded = path.join(tmpDir, 'YouCoded-1.2.3.AppImage');
     fs.writeFileSync(running, 'old');
     fs.writeFileSync(downloaded, 'new');
+    const progress = vi.fn();
     let relaunched = false;
     const launch = makeLaunchInstaller({
       platform: 'linux',
       spawn: () => fakeChild({ exitCode: 0, exitDelay: 5000 }),
       shellOpenExternal: async () => {},
-      appRelaunch: () => { relaunched = true; },
+      onInstallProgress: progress,
+      appRelaunch: () => {
+        expect(progress).toHaveBeenLastCalledWith({ jobId: 'j', phase: 'restarting', output: '' });
+        relaunched = true;
+      },
       fallbackDownloadUrl: () => '',
       envAppImage: running,
     });
@@ -615,6 +620,135 @@ describe('launchInstaller', () => {
       expect(r).toMatchObject({ success: false, error: 'install-failed' });
       expect((r as any).command).toMatch(/^sudo apt-get install -y /);
       expect(relaunched).toBe(0);
+    });
+
+    describe('live package progress', () => {
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      function controlledLaunch() {
+        const filePath = path.join(tmpDir, 'youcoded.deb');
+        fs.writeFileSync(filePath, 'x');
+        const child = Object.assign(new EventEmitter(), {
+          stdout: new EventEmitter(), stderr: new EventEmitter(),
+        });
+        const progress = vi.fn();
+        const relaunch = vi.fn();
+        const late = vi.fn();
+        const spawn = vi.fn((_cmd: string, _args: string[], _opts: unknown) => child);
+        const launch = linuxLaunch({ spawn, onInstallProgress: progress, appRelaunch: relaunch, onLateInstallResult: late });
+        return { child, progress, relaunch, late, spawn, launch, input: { jobId: 'job', filePath } };
+      }
+
+      it('announces authorizing before spawn, then only real output advances to installing', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        expect(c.progress.mock.calls[0]?.[0]).toEqual({ jobId: 'job', phase: 'authorizing', output: '' });
+        expect(c.progress.mock.invocationCallOrder[0]).toBeLessThan(c.spawn.mock.invocationCallOrder[0]);
+        expect(c.spawn.mock.calls[0]?.[2]).toEqual({ stdio: ['ignore', 'pipe', 'pipe'] });
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(c.progress).toHaveBeenCalledTimes(1);
+        c.child.stdout.emit('data', Buffer.from('\u001b[32mUnpacking\u001b[0m\n'));
+        c.child.stderr.emit('data', Buffer.from('warning\u0000\n'));
+        await vi.advanceTimersByTimeAsync(250);
+        expect(c.progress).toHaveBeenLastCalledWith({ jobId: 'job', phase: 'installing', output: 'Unpacking\nwarning\n' });
+        c.child.emit('exit', 0);
+        c.child.emit('close', 0);
+        expect(await pending).toEqual({ success: true, quitPending: true });
+        expect(c.progress).toHaveBeenLastCalledWith({ jobId: 'job', phase: 'restarting', output: 'Unpacking\nwarning\n' });
+        expect(c.relaunch).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('coalesces bursts into a bounded sanitized tail and flushes final diagnostics', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        c.child.stdout.emit('data', Buffer.from('\u001b['));
+        c.child.stdout.emit('data', Buffer.from('31m' + 'x'.repeat(20000)));
+        for (let i = 0; i < 1000; i++) c.child.stderr.emit('data', Buffer.from('é'));
+        expect(c.progress).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBeLessThanOrEqual(2);
+        await vi.advanceTimersByTimeAsync(250);
+        expect(c.progress).toHaveBeenCalledTimes(2);
+        c.child.stderr.emit('data', Buffer.from('\u001b]title\u0007\u0000\u001b(B\u009b31mfinal error\u009b0m\n'));
+        c.child.emit('exit', 1);
+        c.child.emit('close', 1);
+        const result = await pending;
+        expect(result).toMatchObject({ success: false, error: 'install-failed', output: expect.stringContaining('final error\n') });
+        const output = (result as any).output;
+        expect(Buffer.byteLength(output)).toBeLessThanOrEqual(8192);
+        expect(output).not.toMatch(/[\u001b\u0000\ufffd]/);
+        expect(c.progress.mock.lastCall?.[0].output).toBe(output);
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('refuses simultaneous jobs and keeps timeout outcome unknown until late success', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        expect(await c.launch({ ...c.input, jobId: 'different' })).toMatchObject({ success: false, error: 'busy' });
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(await pending).toMatchObject({ success: false, error: 'install-timeout' });
+        expect(await c.launch(c.input)).toMatchObject({ success: false, error: 'busy' });
+        expect(c.spawn).toHaveBeenCalledTimes(1);
+        c.child.emit('exit', 0);
+        c.child.emit('close', 0);
+        await Promise.resolve();
+        expect(c.relaunch).toHaveBeenCalledTimes(1);
+        expect(c.late).toHaveBeenCalledWith({ success: true, quitPending: true });
+        expect(c.progress.mock.lastCall?.[0].phase).toBe('restarting');
+        expect(await c.launch(c.input)).toMatchObject({ success: false, error: 'busy' });
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('drains output after exit and keeps ownership until close', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        c.child.emit('exit', 1);
+        expect(await c.launch(c.input)).toMatchObject({ error: 'busy' });
+        c.child.stderr.emit('data', Buffer.from('last diagnostic'));
+        c.child.emit('close', 1);
+        expect(await pending).toMatchObject({ error: 'install-failed', output: 'last diagnostic' });
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('preserves spawn diagnostics without claiming installation started', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        c.child.emit('error', new Error('\u001b[31mCannot execute\u001b[0m'));
+        expect(await pending).toMatchObject({ error: 'install-failed', output: 'Cannot execute' });
+        expect(c.progress).toHaveBeenCalledTimes(1);
+        expect(c.relaunch).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it.each([{ status: 1, error: 'install-failed' }, { status: 126, error: 'install-cancelled' }])('publishes definitive late $error only after close and releases the guard', async ({ status, error }) => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(await pending).toMatchObject({ error: 'install-timeout' });
+        c.child.stderr.emit('data', Buffer.from('package refused'));
+        c.child.emit('exit', status);
+        expect(c.progress.mock.calls.some(([event]) => event.phase === 'failed')).toBe(false);
+        expect(await c.launch(c.input)).toMatchObject({ error: 'busy' });
+        c.child.emit('close', status);
+        expect(c.progress).toHaveBeenLastCalledWith({ jobId: 'job', phase: 'failed', error, output: 'package refused', command: expect.stringContaining('sudo apt-get') });
+        expect(c.late).toHaveBeenCalledWith(expect.objectContaining({ error, output: 'package refused' }));
+        expect(c.relaunch).not.toHaveBeenCalled();
+        const retry = c.launch({ ...c.input, jobId: 'retry' });
+        expect(c.spawn).toHaveBeenCalledTimes(2);
+        c.child.emit('close', 126);
+        expect(await retry).toMatchObject({ error: 'install-cancelled' });
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it('reports pkexec inability as failure, not a dismissed dialog', async () => {
+        const c = controlledLaunch();
+        const pending = c.launch(c.input);
+        c.child.stderr.emit('data', Buffer.from('Authorization failed'));
+        c.child.emit('exit', 127);
+        c.child.emit('close', 127);
+        expect(await pending).toMatchObject({ success: false, error: 'install-failed', output: 'Authorization failed', command: expect.stringContaining('sudo apt-get') });
+      });
     });
 
     it('quotes a path with a space in the command it shows', async () => {
