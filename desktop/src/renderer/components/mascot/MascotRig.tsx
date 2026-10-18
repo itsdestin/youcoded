@@ -24,6 +24,8 @@ interface MascotRigProps {
   motionStyle?: MotionStyle;
   /** 0.5–2× multiplier on idle amplitude, sway, and twitches. */
   intensity?: number;
+  /** The floating buddy hit-tests painted shapes; decorative rigs stay click-through. */
+  hitTestable?: boolean;
 }
 
 interface Parts {
@@ -57,7 +59,7 @@ type SpringId = (typeof SPRING_IDS)[number];
  * - Curious-face pupils track the cursor.
  */
 export function MascotRig({
-  svgUrl, pose, motionRef, reducedEffects, motionStyle = 'chill', intensity = 1,
+  svgUrl, pose, motionRef, reducedEffects, motionStyle = 'chill', intensity = 1, hitTestable = false,
 }: MascotRigProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [svgHtml, setSvgHtml] = useState<string | null>(null);
@@ -452,7 +454,9 @@ export function MascotRig({
   return (
     <div
       ref={hostRef}
-      style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
+      // WHY: elementFromPoint cannot see SVG shapes inheriting 'none'. Only the
+      // floating buddy opts in; decorative mascots must not intercept page clicks.
+      style={{ width: '100%', height: '100%', pointerEvents: hitTestable ? 'auto' : 'none' }}
       // Sanitized upstream — sanitizeRigSvg is the security boundary.
       dangerouslySetInnerHTML={svgMarkup}
     />

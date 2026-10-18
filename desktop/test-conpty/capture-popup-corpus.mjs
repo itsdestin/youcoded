@@ -55,7 +55,7 @@ function viewportText(term) {
 }
 
 /** Claude Code's ordinary message box is on screen and ready (idle). */
-const READY = /^❯ ?.*$\n^─{10,}$/m;
+const READY = /^[❯>] ?.*$\n^─{10,}$/m;
 
 export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
   const cols = s.cols ?? 100;
@@ -76,7 +76,9 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
   }
   const claudeJson = {
     hasCompletedOnboarding: true, theme: 'dark', numStartups: 3,
-    projects: { [cwd]: { hasTrustDialogAccepted: true, ...(s.project ?? {}) } },
+    // WHY: Claude Code keys Windows projects with forward slashes. A native
+    // backslash key leaves this isolated test project at the trust dialog.
+    projects: { [cwd.replaceAll('\\', '/')]: { hasTrustDialogAccepted: true, ...(s.project ?? {}) } },
     ...(s.cfg ?? {}),
   };
   fs.writeFileSync(path.join(iso.configDir, '.claude.json'), JSON.stringify(claudeJson, null, 2));

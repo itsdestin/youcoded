@@ -5,7 +5,13 @@ import '@testing-library/jest-dom/vitest';
 // "Simmering" forever while Claude Code never received the message. origin/master refuses such a send; the one-core branch had lost that gate.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
+import fs from 'node:fs';
+import path from 'node:path';
+import { Terminal } from '@xterm/headless';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { visibleScreenTextOf } from '../src/shared/terminal-screen-text';
+import { readInputFocus, inputIsBlocked, type InputBlock } from '../src/shared/cc-input-focus';
 
 // The real "Switch model?" screen, as Claude Code 2.1.287 draws it (message box gone, a rule and the pop-up body in its place).
 const POPUP = [
@@ -56,17 +62,17 @@ describe('screenInputBlock on the Android own runtime (no record: reads its own 
 
 describe('InputBar while Claude Code shows a pop-up', () => {
   const sendInput = vi.fn();
-  const mount = (onToast?: (m: string) => void) => {
+  const mount = (onToast?: (m: string) => void, onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']) => {
     (global as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
     (window as any).claude = {
       session: { sendInput },
       skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
     };
-    render(<ChatProvider><SkillProvider><InputBar sessionId="sess-1" provider="claude" onToast={onToast} /></SkillProvider></ChatProvider>);
+    render(<ChatProvider><SkillProvider><InputBar sessionId="sess-1" provider="claude" onToast={onToast} onSendBlocked={onSendBlocked} /></SkillProvider></ChatProvider>);
     return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
   };
-  beforeEach(() => { sendInput.mockClear(); });
-  afterEach(() => { cleanup(); });
+  beforeEach(() => { sendInput.mockReset(); });
+  afterEach(() => { cleanup(); clearScreenInputBlocks(); });
 
   it('refuses the send (nothing reaches the terminal, the draft stays) and says where to look', () => {
     screenText = POPUP;
@@ -78,6 +84,39 @@ describe('InputBar while Claude Code shows a pop-up', () => {
     expect(onToast).toHaveBeenCalledWith('Claude Code is waiting on something — answer it first.');
     expect(box.value).toBe('hi');
   });
+  it('Send anyway resumes after Escape returns to the real Windows message box', async () => {
+    const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/popup-corpus/win-idle-typing.json'), 'utf8')) as { cols: number; rows: number; chunks: { b64: string }[] };
+    const term = new Terminal({ cols: fx.cols, rows: fx.rows, allowProposedApi: true });
+    term.loadAddon(new Unicode11Addon() as never);
+    term.unicode.activeVersion = '11';
+    let windowsScreen: string;
+    try {
+      for (const chunk of fx.chunks) await new Promise<void>(resolve => term.write(Buffer.from(chunk.b64, 'base64').toString('utf8'), resolve));
+      windowsScreen = visibleScreenTextOf(term.buffer.active, term.rows);
+    } finally { term.dispose(); }
+    const onBlocked = vi.fn();
+    const onToast = vi.fn();
+    const box = mount(onToast, onBlocked);
+    (window as any).claude.capabilities = { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true };
+    setScreenInputBlock('sess-1', { kind: 'popup', heading: '' });
+    fireEvent.change(box, { target: { value: 'hi' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(box.value).toBe('hi');
+    expect(onBlocked).toHaveBeenCalledTimes(1);
+    // The host publishes its real screen reading after Escape. Before the fix,
+    // ConPTY's joined rule/input rows keep this verdict blocked indefinitely.
+    sendInput.mockImplementationOnce((_sid: string, input: string) => {
+      expect(input).toBe('\x1b');
+      const focus = readInputFocus(windowsScreen);
+      setScreenInputBlock('sess-1', inputIsBlocked(focus) ? focus as InputBlock : null);
+    });
+    act(() => onBlocked.mock.calls[0][0]());
+    await waitFor(() => expect(sendInput).toHaveBeenCalledWith('sess-1', 'hi\r', undefined, expect.any(String)));
+    expect(sendInput).toHaveBeenCalledTimes(2);
+    expect(onToast).not.toHaveBeenCalled();
+  });
+
   it('sends normally when the message box is live', async () => {
     screenText = BOX;
     const box = mount();

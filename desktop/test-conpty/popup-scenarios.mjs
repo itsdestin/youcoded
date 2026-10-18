@@ -19,8 +19,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ESC = '\u001b';
-// Claude Code's message box: a rule, the input row, a rule.
-export const BOX = '^─{20,}\\s*\\n^(❯|!).*\\n^─{20,}';
+// Claude Code's message box: a rule, the input row, a rule. Windows desktop
+// launches can draw the ASCII prompt instead of the Unicode chevron.
+export const BOX = '^─{20,}\\s*\\n^(❯|>|!).*\\n^─{20,}';
 
 const QUOTED_MENU = [
   'When Claude Code asks for permission it looks like this:',
