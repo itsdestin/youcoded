@@ -11,7 +11,7 @@
     "build": "node scripts/fetch-office.mjs --release --required && node scripts/generate-preload-channels.mjs && tsc && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && node -e \"require('fs').mkdirSync('dist/renderer/data',{recursive:true})\" && node -e \"require('fs').cpSync('src/renderer/data/skill-registry.json','dist/renderer/data/skill-registry.json')\" && vite build && electron-builder",
     "build:main": "node scripts/generate-preload-channels.mjs && tsc",
     "build:web": "node -e \"require('fs').mkdirSync('dist/renderer/data',{recursive:true})\" && node -e \"require('fs').cpSync('src/renderer/data/skill-registry.json','dist/renderer/data/skill-registry.json')\" && vite build",
-    "build:site": "VITE_WORKBENCH=1 vite build --outDir ../../../docs/site --emptyOutDir",
+    "build:site": "VITE_WORKBENCH=1 vite build --outDir ../docs/site --emptyOutDir",
     "test": "vitest",
     "knip": "node scripts/knip-ratchet.js",
     "lint": "oxlint --type-aware",
