@@ -132,6 +132,16 @@ describe('createRuntime with a temp folder and a fake platform', () => {
     expect(typeof runtime.cleanup).toBe('function');
   });
 
+  it('routes native skill discovery through the off-thread service', async () => {
+    const { sessionDiscovery } = await import('../src/main/session-discovery');
+    const discovery = vi.spyOn(sessionDiscovery, 'skills').mockResolvedValue([]);
+    try {
+      const catalog = await (runtime.nativeHost as any).prepareSkillCatalog(userData);
+      expect(discovery).toHaveBeenCalledWith(userData);
+      expect(catalog.list()).toEqual([]);
+    } finally { discovery.mockRestore(); }
+  });
+
   it('keeps API keys through the platform it was given, in the folder it was given', async () => {
     const ref = await runtime.secretsStore.set('sk-fake-key');
     expect(encrypted).toContain('sk-fake-key');

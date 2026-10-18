@@ -169,7 +169,7 @@ describe('renderer hitch recorder (inlined in preload)', () => {
     expect(json).not.toContain('SECRET'); expect(json).not.toContain('"key"'); expect(json).not.toContain('secret');
   });
 
-  it('hard-caps detailed entries at 30 per minute per window and tallies the rest', () => {
+  it('retains the first-30 cap for sub-second details per minute per window and tallies the rest', () => {
     const t = boot();
     t.emit('long-animation-frame', Array.from({ length: 80 }, () => loaf()));
     t.fire(5000);
@@ -180,6 +180,38 @@ describe('renderer hitch recorder (inlined in preload)', () => {
     t.emit('long-animation-frame', [loaf()]);
     t.fire(5000);
     expect(t.sent[1].b.entries).toHaveLength(1);
+  });
+
+  it('reserves five severe overflow entries after 30 inputs across flushes and resets both budgets on rollover', () => {
+    const t = boot();
+    const input = (duration = 150) => ({ name: 'input', startTime: 5000, duration, processingStart: 5000, processingEnd: 5100, target: null });
+    t.emit('event', Array.from({ length: 30 }, () => input()));
+    t.fire(5000);
+    expect(t.sent[0].b.entries).toHaveLength(30);
+    t.emit('long-animation-frame', [loaf({ duration: 999 }), loaf({ duration: 1000 }), loaf({ duration: 2300 })]);
+    t.emit('event', [input(2000), input(3000), input(4000), input(5000), input()]);
+    t.fire(5000);
+    expect(t.sent[1].b.entries.map((e: any) => [e.k, e.d])).toEqual([
+      ['frame', 1000], ['frame', 2300], ['event', 2000], ['event', 3000], ['event', 4000],
+    ]);
+    expect(t.sent[1].b).toMatchObject({ tally: { over: 3, oms: 999 + 5000 + 150 }, dropped: 0 });
+    t.advance(60_000);
+    t.emit('event', Array.from({ length: 30 }, () => input()));
+    t.emit('long-animation-frame', Array.from({ length: 6 }, () => loaf({ duration: 1000 })));
+    t.fire(5000);
+    expect(t.sent[2].b.entries).toHaveLength(35);
+    expect(t.sent[2].b).toMatchObject({ tally: { over: 1, oms: 1000 }, dropped: 0 });
+  });
+
+  it('bounds an all-severe burst including longtask fallback and preserves the pending-buffer dropped count', () => {
+    const t = boot({ types: ['longtask', 'event'] });
+    for (let i = 0; i < 6; i++) {
+      t.emit('longtask', Array.from({ length: 80 }, () => ({ startTime: 5000, duration: 2000 })));
+      if (i < 5) t.advance(60_000); // leave the flush pending across minute windows
+    }
+    t.fire(5000);
+    expect(t.sent[0].b.entries).toHaveLength(200); // existing buffer cap: 6 * 35 - 200
+    expect(t.sent[0].b).toMatchObject({ dropped: 10, tally: { over: 270, oms: 540_000 } });
   });
 
   it('sends at most every 5 s (one timer for any burst) and arms nothing while nothing is slow', () => {

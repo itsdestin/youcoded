@@ -199,9 +199,9 @@ describe('McpManager startup wiring', () => {
     expect(capturedCtorArgs).toBeDefined();
     // WHY avoid pinning total constructor arity: trailing host dependencies may
     // grow independently of MCP. The semantic contract is that the MCP slot is
-    // populated by a working manager, while the preceding optional skill slot
-    // remains intentionally empty at this wiring site.
-    expect(capturedCtorArgs![9]).toBeUndefined();
+    // populated by a working manager; the preceding skill slot is now an
+    // asynchronous discovery factory, not an MCP manager shifted left.
+    expect(typeof capturedCtorArgs![9]).toBe('function');
 
     const mcpManager = capturedCtorArgs![10] as {
       acquire(sessionId: string): Promise<{ servers: Array<{ id: string; label: string; tools: unknown[] }> }>;

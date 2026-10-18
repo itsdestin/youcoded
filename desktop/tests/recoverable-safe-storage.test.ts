@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { performance } from 'node:perf_hooks';
+import { log } from '../src/main/logger';
+vi.mock('../src/main/logger', () => ({ log: vi.fn() }));
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
 import { RecoverableSafeStorage } from '../src/main/providers/recoverable-safe-storage';
 
 function setup(platform: NodeJS.Platform = 'linux') {
@@ -13,6 +17,16 @@ function setup(platform: NodeJS.Platform = 'linux') {
 }
 
 describe('recoverable safeStorage', () => {
+  it('reports slow native keychain work without recording plaintext or ciphertext', async () => {
+    const h = setup();
+    vi.spyOn(performance, 'now').mockReturnValueOnce(10).mockReturnValueOnce(27010);
+    await expect(h.storage.decryptString(Buffer.from('cipher:private-token'))).resolves.toBe('private-token');
+    expect(log).toHaveBeenCalledWith('INFO', 'SessionSetup', 'slow setup stage', {
+      stage: 'keychain-decrypt', durationMs: 27000, outcome: 'ok',
+    });
+    expect(JSON.stringify(vi.mocked(log).mock.calls)).not.toContain('private-token');
+    expect(JSON.stringify(vi.mocked(log).mock.calls)).not.toContain('cipher:');
+  });
   it('uses native safeStorage normally, without starting a helper', async () => {
     const h = setup();
     expect(await h.storage.isEncryptionAvailable()).toBe(true);

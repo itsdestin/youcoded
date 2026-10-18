@@ -72,6 +72,10 @@ export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
 /** A tick-to-tick gap or stall this long (ms) is a suspend/resume, never an app hitch. */
 const SLEEP_GAP_MS = 60_000;
 const PER_WINDOW_PER_MIN = 30;
+// WHY: small interactions can exhaust the first-30 budget before a multi-second freeze arrives.
+// Keep five additional >=1 s details, never an unlimited severe-event bypass. Mirrored in preload (sandbox).
+const SEVERE_PER_WINDOW_PER_MIN = 5;
+const SEVERE_MS = 1000;
 /** Switch lines per window per minute (separate from the 30 above: a rapid A-B-A-B flip is 4 a second, and every one is wanted). */
 const SWITCHES_PER_WINDOW_PER_MIN = 120;
 const BATCHES_PER_WINDOW_PER_MIN = 40;
@@ -131,7 +135,7 @@ export interface RecorderDeps {
   env?: NodeJS.ProcessEnv;
 }
 
-interface WindowState { id: string; minStart: number; minCount: number; batchStart: number; batchCount: number; swStart: number; swCount: number }
+interface WindowState { id: string; minStart: number; minCount: number; severeCount: number; batchStart: number; batchCount: number; swStart: number; swCount: number }
 const mb = (bytes: number) => Math.round(bytes / 1048576 * 10) / 10;
 const r1 = (ms: number) => Math.round(ms * 10) / 10;
 
@@ -179,7 +183,7 @@ export class HitchRecorder {
     let w = this.windows.get(id);
     if (!w) {
       if (this.windows.size >= 64) return null;
-      w = { id: `w${this.nextWindow++}`, minStart: 0, minCount: 0, batchStart: 0, batchCount: 0, swStart: 0, swCount: 0 };
+      w = { id: `w${this.nextWindow++}`, minStart: 0, minCount: 0, severeCount: 0, batchStart: 0, batchCount: 0, swStart: 0, swCount: 0 };
       this.windows.set(id, w);
       // WHY: without pruning, a long launch that opens and closes 64 windows would silently drop every later batch.
       try { sender?.once?.('destroyed', () => this.windows.delete(id)); } catch { /* ignore */ }
@@ -198,13 +202,15 @@ export class HitchRecorder {
       if (!b) { this.minuteTally.rejected++; return; }
       this.minuteTally.frames += b.tally.f; this.minuteTally.framesMs += b.tally.fms;
       this.minuteTally.over += b.tally.over; this.minuteTally.overMs += b.tally.oms; this.minuteTally.dropped += b.dropped; this.minuteTally.rejected += b.rejected;
-      if (t - w.minStart >= 60_000) { w.minStart = t; w.minCount = 0; }
+      if (t - w.minStart >= 60_000) { w.minStart = t; w.minCount = 0; w.severeCount = 0; }
       const sessions = this.d.getSessionCount();
       const windows = this.d.getWindowCount();
       for (const e of b.entries) {
-        // Second, independent cap: 30 detailed entries per window per minute no matter what the renderer says.
-        if (w.minCount >= PER_WINDOW_PER_MIN) { this.minuteTally.over++; this.minuteTally.overMs += e.d; continue; }
-        w.minCount++;
+        // Independent trust-boundary cap: first 30 of any duration, then only five validated severe details.
+        // WHY validate first: a renderer-supplied priority flag or malformed duration cannot buy a reserved slot.
+        if (w.minCount < PER_WINDOW_PER_MIN) w.minCount++;
+        else if (e.d >= SEVERE_MS && w.severeCount < SEVERE_PER_WINDOW_PER_MIN) w.severeCount++;
+        else { this.minuteTally.over++; this.minuteTally.overMs += e.d; continue; }
         this.minuteTally.entries++;
         const { k, t: et, ...rest } = e;
         this.line(k, { ...rest, sessions, windows, ...(b.kind !== 'main' ? { window: b.kind } : {}), src: b.mode }, w.id, et);
@@ -281,6 +287,7 @@ export class HitchRecorder {
       const h = this.hist;
       const nowMs = this.now();
       const gap = nowMs - this.lastTick;
+      const timerDelay = this.lastTick ? Math.max(0, gap - 1000) : 0;
       this.lastTick = nowMs;
       // WHY (suspend guard): after a sleep the first tick is hours late (Windows' monotonic clock even counts the sleep).
       // A wall-clock gap or a "stall" over a minute is not a hitch of this app; discard it and its histogram.
@@ -294,8 +301,11 @@ export class HitchRecorder {
       // The histogram records tick-to-tick gaps, so a quiet loop reads ~res; the delay is the excess. A stall of S ms makes
       // the next tick late by anywhere in (S-res, S], so S is estimated at delay + res/2 (accurate to +/- res/2) and a line is
       // written when that estimate reaches STALL_MS.
-      let maxMs = 0;
-      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - this.res) + this.res / 2;
+      // WHY: the 1 s callback can run before the sampler catches up, then reset away a real block.
+      // Timer lateness is an independent lower bound, even with an empty/quiet histogram; take the
+      // maximum, not the sum. Sleep exclusions above still apply and backwards clock jumps clamp to zero.
+      const histogramMs = h.count > 0 ? Math.max(0, h.max / 1e6 - this.res) + this.res / 2 : 0;
+      const maxMs = Math.max(histogramMs, timerDelay);
       if (h.count > 0) this.fold(h);
       h.reset();
       if (maxMs >= STALL_MS) {

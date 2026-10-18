@@ -30,6 +30,8 @@ import { EngineManager } from './engine/engine-manager';
 import { ModelManager } from './models/model-manager';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { createSkillCatalog } from './harness/skills/skill-catalog';
+import { sessionDiscovery } from './session-discovery';
 import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { ImagePreparer } from './harness/image-prepare';
@@ -407,12 +409,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // "catalog not loaded" (the null default this closure replaces).
       modelCatalog: async () => modelCatalog.get(await providerRegistry.list()),
     },
-    // skillCatalog (9th param, shifted from 10th by fix pass 2 collapsing the
-    // context and slot-count closures back into one): NOT wired yet — a
-    // different task's scope (see task-7b-brief.md "Explicitly NOT in
-    // scope"). Passed explicitly so mcpManager lands in the 10th positional
-    // slot instead of silently taking skillCatalog's place.
-    undefined,
+    // WHY: discovery walks installed and project skill trees synchronously.
+    // Both desktop and Android prepare the inventory on a worker, before the
+    // host constructs a session; the catalog's list remains an in-memory read.
+    async (cwd) => createSkillCatalog(await sessionDiscovery.skills(cwd)),
     // mcpManager (10th param, Task 7b — shifted from 11th by the same
     // collapse): makes the whole native-MCP stack reachable — see the
     // construction comment above.
