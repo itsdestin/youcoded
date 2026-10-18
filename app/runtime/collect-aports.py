@@ -13,7 +13,9 @@ import urllib.request
 import zipfile
 
 IMAGE = 'youcoded-source-collector:alpine3.24'
-NOTICE = re.compile(r'^(licen[cs]e|copying|copyright|notice|authors|patents)([.\-_].*)?$', re.I)
+# certdata.txt carries Mozilla's original MPL notice in the certificate data itself;
+# Alpine's CA source has no separate LICENSE file. Keep those original bytes too.
+NOTICE = re.compile(r'^(?:(licen[cs]e|copying|copyright|notice|authors|patents)([.\-_].*)?|certdata\.txt)$', re.I)
 
 
 def sha(path, algorithm='sha256'):
@@ -205,7 +207,11 @@ def collect(evidence, sources):
         shutil.copytree(recipe, evaluation)
         with (evaluation / 'APKBUILD').open('a') as stream:
             stream.write('\nyoucoded_collect() { printf "%s\\n" "$sha512sums" > /work/sha512sums.txt; }\n')
-        command = ('cd /work/evaluation && export SRCDEST=/work/distfiles && '
+        # WHY: Alpine's official distfile mirror serves the exact checksummed
+        # sources when an upstream forge refuses automated fetches (HTTP 418).
+        # abuild still validates the unchanged recipe SHA512 and can fall back upstream.
+        command = ('cd /work/evaluation && export SRCDEST=/work/distfiles '
+                   'DISTFILES_MIRROR=https://distfiles.alpinelinux.org/distfiles/v3.24 && '
                    'abuild fetch verify youcoded_collect')
         subprocess.run(['docker', 'run', '--rm', '--cap-drop=ALL', '--security-opt=no-new-privileges',
                         '--user', f'{os.getuid()}:{os.getgid()}', '-v', f'{work.resolve()}:/work',

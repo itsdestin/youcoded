@@ -358,6 +358,7 @@ class Fixtures(unittest.TestCase):
                 (work / 'sha512sums.txt').write_text(sums)
                 self.assertIn('--cap-drop=ALL', command)
                 self.assertIn('youcoded_collect', command[-1])
+                self.assertIn('DISTFILES_MIRROR=https://distfiles.alpinelinux.org/distfiles/v3.24', command[-1])
         with patch.object(r.collector.urllib.request, 'urlretrieve', side_effect=download), \
                 patch.object(r.collector.subprocess, 'run', side_effect=docker):
             manifest = r.collector.collect(evidence, output)
@@ -423,6 +424,14 @@ class Fixtures(unittest.TestCase):
         self.assertIn('runtime-redistribution.py bind_backend', section)
         self.assertIn('runtime-redistribution.py release', section)
         self.assertIn('app/build/outputs/apk/releaseTest/*.apk', section)
+
+    def test_certificate_data_keeps_its_original_embedded_mpl_notice(self):
+        content = '# This Source Code Form is subject to the Mozilla Public License, v. 2.0.\ncertificate data'
+        source = self.root / 'certificates.tar.gz'
+        source.write_bytes(self.apk({'ca-certificates/certdata.txt': content}))
+        found = r.collector.notices(self.root, self.root / 'notices-proof', [source])
+        self.assertEqual(len(found), 1)
+        self.assertEqual((self.root / found[0]['path']).read_text(), content)
 
     def test_recipe_local_symlinks_are_materialized_but_escaping_and_cycles_fail(self):
         for target, accepted in [('bash.post-install', True), ('../../outside', False), ('bash.post-upgrade', False)]:
