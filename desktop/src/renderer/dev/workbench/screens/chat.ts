@@ -181,10 +181,20 @@ export const CHAT: readonly ScreenEntry[] = [
   // The reading view of the Word and Excel files whose comments office/*-comments shows in
   // Office's own panel — the two are compared side by side (finish plan Task 6).
   chat('chat/files/open/a-launch-brief', 'pane', 'viewer'),
+  { ...chat('chat/files/open/a-launch-brief#collapsed-comments', 'pane', 'viewer'),
+    open: ['Comments 3', 'Shrink panel',
+      { do: 'hover', target: { role: 'clickable', label: 'Beta opens to 500 customers on March 10' } }],
+    waitMs: 600 },
   // Git review (Review changes): a commit card opened and pointed at — the card lights as one,
   // no hard line above the changes (submit-ticket-5#ST5-Q2). Marked by the drawer itself
   // ('chat/files'): the review replaces the viewer, whose own mark goes with it.
   { ...chat('chat/files/open/a-launch-brief#git-review', 'pane', 'viewer'), mark: 'chat/files',
     open: ['Review changes', '▸ a1b2c3d chat: cache the per-session selector…', { do: 'hover', target: { role: 'button', labelStarts: '▸ a1b2c3d chat: cache the per-session selector' } }] },
   chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
+  // WHY exercise the actual Add comment action rather than seed an already-open draft.
+  { ...chat('chat/files/open/a-q3-sales-comments#new-comment', 'pane', 'viewer'),
+    open: [
+      { do: 'right-click', target: { role: 'clickable', labelStarts: 'A B C D E F G H I J K L' } },
+      { do: 'click', target: { role: 'menuitem', label: 'Add comment' } },
+    ] },
 ];

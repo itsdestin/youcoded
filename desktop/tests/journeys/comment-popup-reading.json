@@ -1,0 +1,27 @@
+{
+  "start": {
+    "scenario": "default",
+    "screen": "chat/files/open/a-q3-sales-comments",
+    "width": 1440,
+    "height": 900,
+    "theme": "meadow-mist",
+    "latency": 150,
+    "params": ""
+  },
+  "steps": [
+    { "do": "expect", "control": { "role": "button", "label": "Comments 3" } },
+    {
+      "do": "right-click",
+      "target": {
+        "role": "clickable",
+        "labelStarts": "A B C D E F G H I J K L",
+        "nth": 1
+      }
+    },
+    {
+      "do": "click",
+      "target": { "role": "menuitem", "label": "Add comment", "nth": 1 }
+    },
+    { "do": "expect", "control": { "role": "textbox", "label": "New comment" } }
+  ]
+}

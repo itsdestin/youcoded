@@ -48,10 +48,9 @@ export function CommentableDocument({
   // F3 (T5 review): projectRoot threaded through so a repeated relative path
   // across two open projects highlights only ITS OWN comments.
   useRefSourceHighlight(contentRef, path, projectRoot);
-  // Round 13: the wide comment list is its own scroller BESIDE the document
-  // (cards stack from the top, no longer pinned to their highlights). Only
-  // the narrow marker rail still lives inside the document's scroller, since
-  // its markers do sit level with their highlights.
+  // WHY only two views: a narrow pane keeps the same hoverable highlights as
+  // Reading mode, with no marker rail. Only the expanded view gets a full comment list
+  // beside the document (Destin, comment-popup-review#2 follow-up).
   const wideComments = commentsMode === 'comments' && !narrow;
   const content = (
     <div
@@ -73,12 +72,12 @@ export function CommentableDocument({
       {children}
     </div>
   );
-  const inline = commentsMode === 'comments'
-    ? (narrow && <CommentsMargin containerRef={contentRef} path={path} narrow openThreadId={focusThreadId} projectRoot={projectRoot} />)
+  const inline = wideComments
+    ? null
     // A spreadsheet has no text selection to comment on — its cells are
     // commented by right-clicking them (build-menu.ts) — so the auto-popping
     // selection menu stays off there.
-    : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} selectionMenu={source !== 'sheet'} projectRoot={projectRoot} />;
+    : <ReadingHighlights containerRef={contentRef} path={path} onOpenComments={onOpenComments ?? (() => {})} selectionMenu={source !== 'sheet'} popoverOnTouch={narrow} projectRoot={projectRoot} />;
   return (
     <div ref={rootRef} className="flex h-full">
       {fill ? (

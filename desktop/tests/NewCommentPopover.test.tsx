@@ -51,6 +51,13 @@ function renderPopover(text: string) {
 }
 
 describe('NewCommentPopover — same send control as ReplyField (no Cancel/Comment buttons)', () => {
+  it('paints its glass outside the file viewer backdrop and scroll-mask roots', () => {
+    const { container } = renderPopover('');
+    const panel = screen.getByRole('textbox', { name: 'New comment' }).closest('.layer-surface');
+    expect(panel?.parentElement).toBe(document.body);
+    expect(container.contains(panel)).toBe(false);
+  });
+
   it('renders no "Cancel" or "Comment" buttons', () => {
     renderPopover('');
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();

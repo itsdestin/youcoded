@@ -12,6 +12,20 @@ import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 import { addComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
 
+const commentLayout = vi.hoisted(() => ({
+  narrow: false, expanded: undefined as boolean | undefined,
+  dispatch: undefined as ReturnType<typeof vi.fn> | undefined,
+}));
+vi.mock('../src/renderer/hooks/use-container-narrow', async (original) => ({
+  ...await original<typeof import('../src/renderer/hooks/use-container-narrow')>(),
+  useNarrowByRef: () => commentLayout.narrow,
+}));
+vi.mock('../src/renderer/state/ArtifactContext', async (original) => ({
+  ...await original<typeof import('../src/renderer/state/ArtifactContext')>(),
+  useArtifactDispatchOptional: () => commentLayout.dispatch,
+  useArtifactSelectorOptional: () => commentLayout.expanded,
+}));
+
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
 // 1. THE §2.2 EMPTY-FILE GUARANTEE — while content is null (fetch transient /
 //    orphan / binary) a save must be hard-blocked: both hosts setContent(null)
@@ -807,6 +821,44 @@ describe('first save without a conflict token', () => {
  * switch at all — see CodeCommentPopover.tsx and ActiveArtifactView.tsx's
  * own WHY at the old effect's former call site.
  */
+describe('shrinking the comments panel', () => {
+  afterEach(() => {
+    commentLayout.narrow = false;
+    commentLayout.expanded = undefined;
+    commentLayout.dispatch = undefined;
+  });
+
+  it('returns to reading without re-expanding, and Comments can open the panel again', async () => {
+    (window as any).claude = { artifacts: { onChanged: () => () => {} } };
+    commentLayout.narrow = true;
+    commentLayout.expanded = false;
+    commentLayout.dispatch = vi.fn();
+    const ref = React.createRef<ActiveArtifactHandle>();
+    const onCommentsStateChange = vi.fn();
+    const props = {
+      artifact: { id: 'md-collapse', kind: 'internal', path: 'notes.md' } as any,
+      content: 'A document to discuss.', projectRoot: '/proj', projectId: 'p1',
+      projectName: 'Proj', sessionId: 's1', onContentChange: vi.fn(), onCommentsStateChange,
+    };
+    const { rerender } = render(<ActiveArtifactView ref={ref} {...props} />);
+    await waitFor(() => expect(ref.current).toBeTruthy());
+    act(() => { ref.current!.toggleComments(); });
+    expect(commentLayout.dispatch).toHaveBeenCalledTimes(1);
+
+    commentLayout.expanded = true;
+    commentLayout.narrow = false;
+    rerender(<ActiveArtifactView ref={ref} {...props} />);
+    commentLayout.expanded = false;
+    commentLayout.narrow = true;
+    rerender(<ActiveArtifactView ref={ref} {...props} />);
+
+    expect(onCommentsStateChange).toHaveBeenLastCalledWith(expect.objectContaining({ active: false, paneVisible: false }));
+    expect(commentLayout.dispatch).toHaveBeenCalledTimes(1);
+    act(() => { ref.current!.toggleComments(); });
+    expect(commentLayout.dispatch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('code files show the small popover for a fresh draft, not the panel', () => {
   const get = vi.fn();
   const PATH = 'total.py';
@@ -829,7 +881,7 @@ describe('code files show the small popover for a fresh draft, not the panel', (
   });
   afterEach(() => { __resetDocCommentsStoreForTest(); });
 
-  it('renders the popover in place, and commentsMode never switches to comments', async () => {
+  it('renders the popover above the viewer, and commentsMode never switches to comments', async () => {
     // The same call build-menu.ts's "Add comment" makes from the right-click
     // menu on a code file's selection.
     addComment(PATH, 'result += p', 'line 3 · total.py', {
@@ -850,7 +902,8 @@ describe('code files show the small popover for a fresh draft, not the panel', (
     );
     // CodeCommentPopover renders the draft's own auto-focused note box — the
     // same "Add a comment…" textarea a text file's popover shows.
-    await waitFor(() => expect(container.querySelector('[placeholder="Add a comment…"]')).toBeTruthy());
+    // WHY body: the composer escapes the viewer's backdrop/mask roots so its glass can frost.
+    await waitFor(() => expect(within(document.body).getByRole('textbox', { name: 'New comment' })).toBeTruthy());
     // Never switched into the full panel — no auto-open-panel effect exists
     // anymore, and the panel's own chrome (Show Resolved) is absent.
     expect(onCommentsStateChange).not.toHaveBeenCalledWith(expect.objectContaining({ active: true }));
