@@ -93,10 +93,31 @@ jobs:
           YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
         run: ./gradlew assembleReleaseTest
 
-      # WHY: verify collection on a disposable CI runner, without tagging or
-      # publishing a release. Partial evidence remains inspectable after a failure.
+      - name: Verify packaged runtime and source archive
+        if: inputs.collect_sources
+        run: |
+          python3 -I app/runtime/runtime-redistribution.py bind_backend \
+            app/build/runtime/releaseTest/sources app/build/backend-assets/backend.tgz
+          python3 -I app/runtime/runtime-redistribution.py release \
+            app/build/runtime/releaseTest app/build/runtime/releaseTest/sources \
+            app/build/outputs/android-source-preflight.tar.xz \
+            app/build/outputs/apk/releaseTest/*.apk
+
+      - name: Upload inspected source preflight archive
+        if: inputs.collect_sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-source-preflight-archive
+          path: |
+            app/build/outputs/android-source-preflight.tar.xz
+            app/build/outputs/android-source-preflight.tar.xz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      # WHY: retain raw evidence only on failure, not a duplicate of a successful
+      # source archive. Nothing here tags or publishes a GitHub Release.
       - name: Retain source preflight evidence
-        if: always() && inputs.collect_sources
+        if: always() && inputs.collect_sources && failure()
         uses: actions/upload-artifact@v7
         with:
           name: android-source-preflight

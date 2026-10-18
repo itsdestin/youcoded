@@ -413,6 +413,17 @@ class Fixtures(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Locked crate SHA256 mismatch'):
             r.collector.cargo_notices(self.root, origin, [source])
 
+    def test_source_preflight_exercises_final_apk_and_archive_gate(self):
+        # WHY: the cross-file CI/CLI contract must test the actual package before
+        # publication; collecting files alone does not exercise release inspection.
+        workflow = (HERE.parents[1] / '.github/workflows/android-ci.yml').read_text()
+        self.assertIn('- name: Verify packaged runtime and source archive\n', workflow)
+        section = workflow.split('- name: Verify packaged runtime and source archive\n')[1].split('\n      - name:')[0]
+        self.assertIn('if: inputs.collect_sources', section)
+        self.assertIn('runtime-redistribution.py bind_backend', section)
+        self.assertIn('runtime-redistribution.py release', section)
+        self.assertIn('app/build/outputs/apk/releaseTest/*.apk', section)
+
     def test_recipe_local_symlinks_are_materialized_but_escaping_and_cycles_fail(self):
         for target, accepted in [('bash.post-install', True), ('../../outside', False), ('bash.post-upgrade', False)]:
             with self.subTest(target=target):
