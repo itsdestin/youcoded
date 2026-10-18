@@ -220,6 +220,15 @@ describe('only his drawn body catches the pointer', () => {
     expect(toggleChat).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the real rig shapes eligible for browser hit testing', () => {
+    const view = render(<BuddyMascot />);
+    const shape = view.container.querySelector('svg path, svg rect, svg circle')!;
+    expect(shape).not.toBeNull();
+    // WHY: mocking elementFromPoint below hid an inherited pointer-events:none
+    // on MascotRig, which makes every real Windows/macOS body hit miss.
+    expect(getComputedStyle(shape).pointerEvents).not.toBe('none');
+  });
+
   it('tells main when the pointer reaches and leaves his body', () => {
     withBridge();
     const view = render(<BuddyMascot />);

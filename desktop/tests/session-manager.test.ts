@@ -440,6 +440,14 @@ describe('SessionManager', () => {
     expect(received).toEqual(['hello world']);
   });
 
+  it('publishes the spawn geometry before session-created observers build their terminal', () => {
+    let initialSize: { cols: number; rows: number } | null = null;
+    manager.on('session-created', info => { initialSize = manager.getPtySize(info.id); });
+    manager.createSession({ name: 'wide', cwd: tmpDir, skipPermissions: false, cols: 100, rows: 35 });
+    expect(initialSize).toEqual({ cols: 100, rows: 35 });
+    expect(mockWorker.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'spawn', cols: 100, rows: 35 }));
+  });
+
   // The PTY worker is the ONE authority on the terminal's size (it reports every change in stream order): a resize REQUEST changes
   // nothing the manager reports until the worker's 'size' message arrives, and that message reaches getPtySize() and 'pty-size'.
   it("takes the terminal's size from the worker's 'size' report, not from the resize request", () => {

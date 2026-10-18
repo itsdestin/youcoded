@@ -233,9 +233,18 @@ describe('sendBlock — the screen blocks what the chat state cannot see', () =>
     });
   });
 
-  it('the live message box does not block', async () => {
-    await withScreen('s-box', ['history', RULE, '❯ ', RULE, '  ⏵⏵ auto mode on (shift+tab to cycle)'], () => {
+  it.each(['❯', '>', '!'])('the live message box with prompt %s does not block', async (prompt) => {
+    await withScreen('s-box', ['history', RULE, `${prompt} `, RULE, '  ⏵⏵ auto mode on (shift+tab to cycle)'], () => {
       expect(sendBlock(createSessionChatState(), 's-box')).toBeNull();
+    });
+  });
+
+  it('an ASCII menu arrow or quote without the message-box structure still blocks', async () => {
+    await withScreen('s-ascii-popup', ['history', RULE, '  Choose an option', '  > 1. Yes', '    2. No', '  Esc to cancel'], () => {
+      expect(sendBlock(createSessionChatState(), 's-ascii-popup')?.kind).toBe('screen');
+    });
+    await withScreen('s-quote', ['> a quoted reply, not a message box'], () => {
+      expect(sendBlock(createSessionChatState(), 's-quote')?.kind).toBe('screen');
     });
   });
 

@@ -12,7 +12,10 @@
 //   renderer's `evt.artifactId === artifact.id` filter never matches and the
 //   conflict banner stays dead for exactly the files that matter
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'fs';
+import fs, { type Stats } from 'fs';
+import chokidar, { FSWatcher } from 'chokidar';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 import os from 'os';
 import path from 'path';
 import {
@@ -20,6 +23,7 @@ import {
   WATCH_SKIP_DIRS,
   initProjectWatchers,
   watchProject,
+  stopProjectWatchers,
   unwatchProject,
   dropSubscriber,
   noteOwnWrite,
@@ -65,6 +69,146 @@ describe('isWatchIgnoredPath', () => {
     expect(block, 'SKIP_DIRS not found in project-file-discovery.ts').toBeTruthy();
     const discovered = [...block![1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
     expect(new Set(discovered)).toEqual(WATCH_SKIP_DIRS);
+  });
+});
+
+describe('project watcher metadata probes', () => {
+  const root = path.join(os.tmpdir(), 'watch-metadata');
+  const directory = { isDirectory: () => true } as Stats;
+  const file = { isDirectory: () => false } as Stats;
+  let ignored: (p: string, stats?: Stats) => boolean;
+  let watcher: EventEmitter & { add: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+  let releases: (() => void)[];
+
+  beforeEach(() => {
+    releases = [];
+    const add = vi.fn().mockResolvedValue(undefined);
+    watcher = Object.assign(new EventEmitter(), {
+      add, close: vi.fn().mockResolvedValue(undefined),
+      _nodeFsHandler: { _addToNodeFs: (dir: string) => add(dir) },
+      _incrReadyCount: vi.fn(), _emitReady: vi.fn(),
+    });
+    vi.spyOn(chokidar, 'watch').mockImplementation((_paths, options) => {
+      ignored = options!.ignored as typeof ignored;
+      queueMicrotask(() => watcher.emit('ready'));
+      return watcher as unknown as FSWatcher;
+    });
+  });
+  afterEach(async () => {
+    stopProjectWatchers();
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vi.restoreAllMocks();
+    __resetProjectWatchersForTest();
+  });
+
+  it('defers directory metadata without sync calls, while the event loop and raw file events stay free', async () => {
+    const sync = vi.spyOn(fs, 'accessSync').mockImplementation(() => { throw new Error('must not block main'); });
+    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
+      releases.push(() => reject(new Error('ENOENT')));
+    }));
+    await watchProject(root, 1);
+    const dir = path.join(root, 'ordinary');
+    expect(ignored(dir, directory)).toBe(true);
+    expect(sync).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 100; i++) {
+      expect(ignored(path.join(root, `file-${i}.txt`))).toBe(false);
+      expect(ignored(path.join(root, `file-${i}.txt`), file)).toBe(false);
+      expect(ignored(dir, directory)).toBe(true);
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(access).toHaveBeenCalledTimes(1);
+    expect(watcher.add).not.toHaveBeenCalled();
+    releases.shift()!();
+    await vi.waitFor(() => expect(watcher.add).toHaveBeenCalledWith(dir));
+    expect(ignored(dir, directory)).toBe(false);
+    expect(ignored(dir)).toBe(false);
+  });
+
+  it('bounds concurrent probes, deduplicates queued directories, and discards the queue on stop', async () => {
+    vi.spyOn(fs, 'accessSync').mockImplementation(() => { throw new Error('must not block main'); });
+    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
+      releases.push(() => reject(new Error('ENOENT')));
+    }));
+    await watchProject(root, 1);
+    for (let repeat = 0; repeat < 3; repeat++) {
+      for (let i = 0; i < 100; i++) ignored(path.join(root, `dir-${i}`), directory);
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(access).toHaveBeenCalledTimes(2);
+    releases.shift()!();
+    await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(3));
+    expect(watcher.add).toHaveBeenCalledTimes(1);
+    stopProjectWatchers();
+    for (const release of releases.splice(0)) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(access).toHaveBeenCalledTimes(3);
+    expect(watcher.add).toHaveBeenCalledTimes(1);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares two actual access slots across roots, parked watchers, and close/reopen', async () => {
+    const filters: typeof ignored[] = [];
+    vi.mocked(chokidar.watch).mockImplementation((_paths, options) => {
+      filters.push(options!.ignored as typeof ignored);
+      const fake = Object.assign(new EventEmitter(), {
+        _nodeFsHandler: { _addToNodeFs: vi.fn().mockResolvedValue(undefined) },
+        _incrReadyCount: vi.fn(), _emitReady: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+      queueMicrotask(() => fake.emit('ready'));
+      return fake as unknown as FSWatcher;
+    });
+    const access = vi.spyOn(fs.promises, 'access').mockImplementation(() => new Promise<void>((_resolve, reject) => {
+      releases.push(() => reject(new Error('ENOENT')));
+    }));
+    __setWatchGraceMsForTest(60_000);
+    for (let i = 0; i < 3; i++) {
+      const r = path.join(root, `root-${i}`);
+      await watchProject(r, 1);
+      filters[i](path.join(r, 'child'), directory);
+      unwatchProject(r, 1);
+    }
+    expect(access).toHaveBeenCalledTimes(2);
+    stopProjectWatchers();
+    await watchProject(root, 2);
+    filters[3](path.join(root, 'reopened'), directory);
+    expect(access).toHaveBeenCalledTimes(2); // closed in-flight I/O still owns its slots
+    releases.shift()!();
+    await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(3));
+    expect(access.mock.calls[2][0]).toBe(path.join(root, 'reopened', '.git'));
+    releases.shift()!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(access).toHaveBeenCalledTimes(3); // closed root-2's queued request was removed
+  });
+
+  it('retains fail-open live refresh after unknown metadata errors without repeated raw probes', async () => {
+    const access = vi.spyOn(fs.promises, 'access').mockRejectedValue(Object.assign(new Error('provider unavailable'), { code: 'EIO' }));
+    await watchProject(root, 1);
+    const dir = path.join(root, 'cloud');
+    expect(ignored(dir, directory)).toBe(true);
+    await vi.waitFor(() => expect(watcher.add).toHaveBeenCalled());
+    expect(ignored(dir)).toBe(false);
+    expect(ignored(dir, directory)).toBe(false);
+    expect(access).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches repository exclusions and enforces original-root depth on re-added directories', async () => {
+    vi.spyOn(fs, 'accessSync').mockImplementation(() => { throw new Error('must not block main'); });
+    const access = vi.spyOn(fs.promises, 'access').mockResolvedValue(undefined);
+    await watchProject(root, 1);
+    const repo = path.join(root, 'repo');
+    expect(ignored(repo, directory)).toBe(true);
+    await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(ignored(repo)).toBe(true);
+    expect(ignored(repo, directory)).toBe(true);
+    expect(watcher.add).not.toHaveBeenCalled();
+    const tooDeep = path.join(root, ...Array.from({ length: 7 }, (_, i) => `d${i}`));
+    expect(ignored(tooDeep, directory)).toBe(true);
+    expect(ignored(path.join(tooDeep, 'file.txt'), file)).toBe(true);
+    expect(access).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -142,7 +286,7 @@ describe('project watcher lifecycle', () => {
   });
   afterEach(async () => {
     __resetProjectWatchersForTest();
-    await fs.promises.rm(root, { recursive: true, force: true });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5 });
   });
 
   it('emits by:external with kind add/edit, and never agent', async () => {
@@ -159,6 +303,162 @@ describe('project watcher lifecycle', () => {
       expect(e.by).toBe('external');
       expect(e.artifactId).toBe('a.ts'); // discovered id IS the relative path
     }
+  });
+
+  it('keeps root edits live while provider metadata is blocked, then watches the deferred directory', async () => {
+    const dir = path.join(root, 'cloud-folder');
+    await fs.promises.mkdir(dir);
+    const access = fs.promises.access.bind(fs.promises);
+    let release!: () => void;
+    const blocked = new Promise<void>((_resolve, reject) => {
+      release = () => reject(new Error('ENOENT'));
+    });
+    const probe = vi.spyOn(fs.promises, 'access').mockImplementation((p, mode) =>
+      p === path.join(dir, '.git') ? blocked : access(p, mode));
+    try {
+      await watchProject(root, 1);
+      await seen(() => expect(probe).toHaveBeenCalledWith(path.join(dir, '.git')));
+      await untilLive(root);
+      await fs.promises.writeFile(path.join(root, 'responsive.txt'), 'still live');
+      await seen(() => expect(events.map((e) => e.artifactId)).toContain('responsive.txt'));
+      release();
+      await untilLive(dir);
+      await fs.promises.writeFile(path.join(dir, 'ordinary.txt'), 'one');
+      await seen(() => expect(events.some((e) => e.artifactId === 'cloud-folder/ordinary.txt' && e.kind === 'add')).toBe(true));
+      await fs.promises.writeFile(path.join(dir, 'ordinary.txt'), 'two');
+      await seen(() => expect(events.some((e) => e.artifactId === 'cloud-folder/ordinary.txt' && e.kind === 'edit')).toBe(true));
+    } finally {
+      release();
+      probe.mockRestore();
+    }
+  });
+
+  it('preserves root-relative depth after deferred directories are re-added', async () => {
+    const atLimit = path.join(root, 'a', 'b', 'c', 'd', 'e', 'f');
+    const beyond = path.join(atLimit, 'g');
+    await fs.promises.mkdir(beyond, { recursive: true });
+    await watchProject(root, 1);
+    await untilLive(atLimit);
+    await fs.promises.writeFile(path.join(beyond, 'hidden.txt'), 'beyond original depth');
+    await fs.promises.writeFile(path.join(atLimit, 'visible.txt'), 'at original depth');
+    await seen(() => expect(events.map((e) => e.artifactId)).toContain('a/b/c/d/e/f/visible.txt'));
+    await settle(); // positive boundary signal first; settle for the excluded write
+    expect(events.map((e) => e.artifactId)).not.toContain('a/b/c/d/e/f/g/hidden.txt');
+  });
+
+  it('reports files populated during a new directory probe without rewriting them', async () => {
+    await watchProject(root, 1);
+    await untilLive(root);
+    const dir = path.join(root, 'populated');
+    const access = fs.promises.access.bind(fs.promises);
+    let release!: () => void;
+    const blocked = new Promise<void>((_resolve, reject) => { release = () => reject(new Error('ENOENT')); });
+    const probe = vi.spyOn(fs.promises, 'access').mockImplementation((p, mode) => p === path.join(dir, '.git') ? blocked : access(p, mode));
+    try {
+      await fs.promises.mkdir(dir);
+      await seen(() => expect(probe).toHaveBeenCalledWith(path.join(dir, '.git')));
+      await fs.promises.mkdir(path.join(dir, 'child'));
+      await fs.promises.writeFile(path.join(dir, 'one.txt'), 'only write');
+      await fs.promises.writeFile(path.join(dir, 'child', 'two.txt'), 'only write');
+      await fs.promises.mkdir(path.join(dir, 'repo', '.git'), { recursive: true });
+      await fs.promises.writeFile(path.join(dir, 'repo', 'excluded.txt'), 'nested repo');
+      await fs.promises.writeFile(path.join(dir, 'excluded.tmp'), 'atomic temp');
+      release();
+      await seen(() => expect(events.some((e) => e.artifactId === 'populated/one.txt' && e.kind === 'add')).toBe(true));
+      await seen(() => expect(events.some((e) => e.artifactId === 'populated/child/two.txt' && e.kind === 'add')).toBe(true));
+      await settle(); // positive populated-file signals first, then excluded paths
+      expect(events.map((e) => e.artifactId)).not.toContain('populated/repo/excluded.txt');
+      expect(events.map((e) => e.artifactId)).not.toContain('populated/excluded.tmp');
+    } finally { release(); probe.mockRestore(); }
+  });
+
+  it('waits for root enumeration when a deferred startup child finishes first', async () => {
+    const early = path.join(root, 'early');
+    const late = path.join(root, 'late');
+    await fs.promises.mkdir(early);
+    await fs.promises.mkdir(late);
+    await fs.promises.writeFile(path.join(late, 'startup.txt'), 'already existed');
+    let releaseRoot!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseRoot = resolve; });
+    let childFinished!: () => void;
+    const childDone = new Promise<void>((resolve) => { childFinished = resolve; });
+    const readdirp = FSWatcher.prototype._readdirp;
+    // Keep real chokidar/stat/watch behavior; only schedule its real enumeration
+    // entries so a probed child completes while the root stream is still open.
+    const streams = vi.spyOn(FSWatcher.prototype, '_readdirp').mockImplementation(function (this: FSWatcher, dir, options) {
+      const source = readdirp.call(this, dir, options);
+      if (dir !== root || !source) return source;
+      const held = new PassThrough({ objectMode: true });
+      const entries: unknown[] = [];
+      source.on('data', (entry) => entries.push(entry));
+      source.on('error', (error) => held.destroy(error));
+      source.on('end', () => {
+        const first = entries.find((entry: any) => entry.basename === 'early');
+        held.write(first);
+        void gate.then(() => {
+          for (const entry of entries) if (entry !== first) held.write(entry);
+          held.end();
+        });
+      });
+      return held as unknown as ReturnType<typeof readdirp>;
+    });
+    const watch = chokidar.watch.bind(chokidar);
+    let ready = false;
+    let addSpy: ReturnType<typeof vi.spyOn> | undefined;
+    const factory = vi.spyOn(chokidar, 'watch').mockImplementation((paths, options) => {
+      const watcher = watch(paths, options);
+      watcher.once('ready', () => { ready = true; });
+      const add = watcher._nodeFsHandler._addToNodeFs.bind(watcher._nodeFsHandler);
+      addSpy = vi.spyOn(watcher._nodeFsHandler, '_addToNodeFs').mockImplementation(async (...args) => {
+        const result = await add(...args);
+        if (args[0] === early && !watcher._isIgnored(early)) childFinished();
+        return result;
+      });
+      return watcher;
+    });
+    const starting = watchProject(root, 1);
+    try {
+      await childDone;
+      await new Promise<void>((resolve) => setImmediate(resolve)); // drain ready's nextTick
+      expect(ready).toBe(false);
+      releaseRoot();
+      await starting;
+      await untilLive(late);
+      await settle(); // late directory is live; settle for unwanted startup adds
+      expect(events).toEqual([]);
+    } finally {
+      releaseRoot();
+      await starting;
+      addSpy?.mockRestore();
+      factory.mockRestore();
+      streams.mockRestore();
+    }
+  });
+
+  it('keeps the entire deferred startup tree silent while later directories emit populated files', async () => {
+    const initial = path.join(root, 'initial', 'child');
+    await fs.promises.mkdir(initial, { recursive: true });
+    await fs.promises.writeFile(path.join(initial, 'existing.txt'), 'initial bytes');
+    await watchProject(root, 1);
+    await untilLive(initial);
+    await settle(); // live signal first; initial files must not appear as external adds
+    expect(events).toEqual([]);
+    const later = path.join(initial, 'later');
+    await fs.promises.mkdir(later);
+    await fs.promises.writeFile(path.join(later, 'new.txt'), 'single write');
+    await seen(() => expect(events.some((e) => e.artifactId === 'initial/child/later/new.txt' && e.kind === 'add')).toBe(true));
+  });
+
+  it('live-refreshes edits inside directories created after startup', async () => {
+    await watchProject(root, 1);
+    await untilLive(root);
+    const dir = path.join(root, 'new-folder');
+    await fs.promises.mkdir(dir);
+    await untilLive(dir);
+    await fs.promises.writeFile(path.join(dir, 'new.txt'), 'one');
+    await seen(() => expect(events.some((e) => e.artifactId === 'new-folder/new.txt' && e.kind === 'add')).toBe(true));
+    await fs.promises.writeFile(path.join(dir, 'new.txt'), 'two');
+    await seen(() => expect(events.some((e) => e.artifactId === 'new-folder/new.txt' && e.kind === 'edit')).toBe(true));
   });
 
   it('suppresses the app own-write echo', async () => {
@@ -296,15 +596,19 @@ describe('project watcher lifecycle', () => {
     const nested = path.join(root, 'vendored');
     await fs.promises.mkdir(path.join(nested, 'src'), { recursive: true });
     await fs.promises.writeFile(path.join(nested, '.git'), 'gitdir: /elsewhere'); // worktree form
+    const clone = path.join(root, 'clone');
+    await fs.promises.mkdir(path.join(clone, '.git'), { recursive: true });
     const sibling = path.join(root, 'mine');
     await fs.promises.mkdir(sibling, { recursive: true });
     await watchProject(root, 1);
     await untilLive(sibling);
     await fs.promises.writeFile(path.join(nested, 'src/inside.ts'), 'nested repo');
+    await fs.promises.writeFile(path.join(clone, 'inside.ts'), 'nested clone');
     await fs.promises.writeFile(path.join(sibling, 'outside.ts'), 'my own tree');
     await seen(() => expect(events.map((e) => e.artifactId)).toContain('mine/outside.ts'));
     await settle(); // the nested write went first; give it its window to (wrongly) appear
     expect(events.map((e) => e.artifactId)).not.toContain('vendored/src/inside.ts');
+    expect(events.map((e) => e.artifactId)).not.toContain('clone/inside.ts');
   });
 
   // 2026-09-16 C8: an event names the windows subscribed to its root, so the

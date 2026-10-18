@@ -105,19 +105,88 @@ export function isWatchIgnoredPath(root: string, absPath: string): boolean {
   return false;
 }
 
-/**
- * Is `dirPath` itself a git repository? A `.git` DIRECTORY, or a `.git` FILE
- * (git worktrees and submodules use a file). Mirrors `isGitRepo` in
- * project-file-discovery — sync here because chokidar's `ignored` matcher is
- * synchronous.
- */
-function isNestedRepoDir(dirPath: string): boolean {
-  try { fs.accessSync(path.join(dirPath, '.git')); return true; }
-  catch { return false; }
+// WHY process-global and below libuv's default four workers: parked and active
+// roots must leave fs workers available for IPC reads, not each claim four more.
+const MAX_REPO_PROBES = 2;
+interface RepoProbe {
+  owner: object;
+  dir: string;
+  done: (nested: boolean) => void;
+}
+const repoProbeQueue = new Set<RepoProbe>();
+let activeRepoProbes = 0;
+
+function pumpRepoProbes(): void {
+  while (activeRepoProbes < MAX_REPO_PROBES && repoProbeQueue.size) {
+    const probe = repoProbeQueue.values().next().value!;
+    repoProbeQueue.delete(probe);
+    activeRepoProbes++;
+    // Keep the slot until the REAL access settles, even after its owner closes.
+    void fs.promises.access(path.join(probe.dir, '.git')).then(
+      () => true,
+      // Preserve the existing fail-open policy for ENOENT, ENOTDIR AND unknown
+      // provider errors: a transient error must not permanently disable refresh.
+      () => false,
+    ).then(probe.done).catch(() => { /* owner closed or watcher unavailable */ })
+      .finally(() => { activeRepoProbes--; pumpRepoProbes(); });
+  }
+}
+
+function repoWatchFilter(root: string, depth: number, readd: (dir: string, initial: boolean, dirDepth: number) => Promise<unknown>) {
+  const canonRoot = canonicalize(root, null);
+  const cache = new Map<string, boolean | 'pending'>();
+  const owner = {};
+  // Inherit initial-vs-live from the PARENT'S current scan, not the root ready
+  // event: deferred startup descendants may be found long after root ready.
+  const initialScans = new Set<string>([canonRoot]);
+  let stopped = false;
+
+  return {
+    ignored(p: string, stats?: Stats): boolean {
+      if (stopped || isWatchIgnoredPath(root, p)) return true;
+      const canon = canonicalize(p, null);
+      if (canon === canonRoot) return false;
+      const rel = path.relative(root, p);
+      if (rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return true;
+      const segments = rel.split(path.sep);
+      // Keep a second ORIGINAL-root boundary in the matcher for both directories
+      // and files, including no-stat events, regardless of chokidar's add path.
+      if (segments.length - (stats?.isDirectory() ? 0 : 1) > depth) return true;
+      const cached = cache.get(canon);
+      if (cached !== undefined) return cached !== false;
+      // Raw file events have no stats: let chokidar stat them, never probe them.
+      if (!stats?.isDirectory()) return false;
+      const base = segments[segments.length - 1];
+      if (base.startsWith('.') || WATCH_SKIP_DIRS.has(base)) return true;
+      cache.set(canon, 'pending');
+      const initial = initialScans.has(canonicalize(path.dirname(p), null));
+      if (initial) initialScans.add(canon);
+      repoProbeQueue.add({ owner, dir: p, done: (nested) => {
+        if (stopped) return;
+        cache.set(canon, nested);
+        if (nested) { initialScans.delete(canon); return; }
+        // Do not occupy a metadata slot while chokidar scans the directory.
+        void readd(p, initial, segments.length).catch(() => { /* no live refresh */ })
+          .finally(() => initialScans.delete(canon));
+      } });
+      pumpRepoProbes();
+      // Defer traversal until the probe resolves. Returning a Promise here would
+      // be truthy to chokidar and silently disable live refresh.
+      return true;
+    },
+    ready(): void { initialScans.delete(canonRoot); },
+    stop(): void {
+      stopped = true;
+      for (const probe of repoProbeQueue) if (probe.owner === owner) repoProbeQueue.delete(probe);
+      cache.clear();
+      initialScans.clear();
+    },
+  };
 }
 
 interface WatchEntry {
   watcher: FSWatcher | null;
+  stopProbes?: () => void;
   // subscriberId (webContents id) → subscribe count. A single renderer can hold
   // two hosts on the same project (SessionDrawer + ProjectView) — both must
   // unsubscribe before the renderer stops counting.
@@ -258,25 +327,25 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     // longer live-refreshes when an OUTSIDE editor changes it. Agent edits still
     // do: APPEND_VERSION broadcasts artifacts:changed itself, and the viewer
     // refetches on any changed event for its id regardless of `by`.
-    const canonRoot = canonicalize(projectRoot, null);
-    const nestedRepoCache = new Map<string, boolean>();
+    const filter = repoWatchFilter(projectRoot, watchDepthFor(projectRoot), async (dir, initial, dirDepth) => {
+      if (entry.stopped || watcher.closed) return;
+      // WHY internal chokidar API: public add() unconditionally treats a path as
+      // an initial scan, suppressing populated NEW directories with ignoreInitial.
+      // It also resets depth. This async method preserves both the parent's scan
+      // mode and root-relative depth, and its completion bounds initialScans.
+      // Pinned against the installed chokidar by real tests: populated-during-
+      // probe adds (including descendants), deferred startup silence, and depth.
+      // Match public add()'s readiness accounting (chokidar index.js): each
+      // internal add calls _emitReady, so it needs its own count BEFORE starting.
+      // Otherwise a fast deferred child can announce ready during the root scan
+      // and misclassify remaining startup directories as live additions.
+      watcher._incrReadyCount();
+      const result = await watcher._nodeFsHandler._addToNodeFs(dir, initial, undefined, dirDepth);
+      if (result) watcher._emitReady();
+    });
+    entry.stopProbes = filter.stop;
     const watcher = chokidar.watch(projectRoot, {
-      ignored: (p: string, stats?: Stats) => {
-        if (isWatchIgnoredPath(projectRoot, p)) return true;
-        if (stats && !stats.isDirectory()) return false;   // only a directory can be a repo root
-        const canon = canonicalize(p, null);
-        if (canon === canonRoot) return false;             // the root itself is always watched,
-        // even though it is normally a repo — ignoring it would watch NOTHING, silently.
-        const cached = nestedRepoCache.get(canon);
-        if (cached !== undefined) return cached;
-        const nested = isNestedRepoDir(p);
-        // Cache DIRECTORY answers only. chokidar also calls this with no stats for
-        // every raw event path, and caching those would grow the map by one entry
-        // per file the watcher ever sees — for the whole of its now-longer life.
-        // The initial walk does supply stats, which is the pass worth caching.
-        if (stats?.isDirectory()) nestedRepoCache.set(canon, nested);
-        return nested;
-      },
+      ignored: filter.ignored,
       ignoreInitial: true,
       followSymlinks: false,
       depth: watchDepthFor(projectRoot),
@@ -286,7 +355,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     // Both 'ready' and 'error' resolve so a watch failure cannot hang the IPC
     // response (sync-spaces engine precedent).
     await new Promise<void>((resolve) => {
-      watcher.once('ready', () => resolve());
+      watcher.once('ready', () => { filter.ready(); resolve(); });
       watcher.once('error', () => resolve());
     });
     // Torn down while awaiting ready (all subscribers left): close, don't strand.
@@ -302,6 +371,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     // chokidar unavailable / root missing — subscribers stay registered so a
     // later retry could upgrade, but there is no live refresh. Marked so the
     // grace period does not cache this failure for another minute.
+    entry.stopProbes?.();
     entry.failed = true;
     return { ok: false };
   }
@@ -382,6 +452,7 @@ export function dropSubscriber(subscriberId: number): void {
 
 function closeEntry(key: string, entry: WatchEntry): void {
   entry.stopped = true;
+  entry.stopProbes?.();
   if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
   entry.graceAt = null;
   entries.delete(key);
