@@ -743,9 +743,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // row "alongside the other actions" — same imperative-handle + state
   // callback pattern the header already uses for Edit/Save.
   useEffect(() => {
-    // paneVisible: MarkdownView collapses its margin to a marker rail below
-    // the same 640px pane width narrowPane measures here; the code rail is
-    // always full width.
+    // paneVisible reports the full panel only: text viewers keep hoverable
+    // highlights below 640px instead of a slim rail; code's panel stays full width.
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
     onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: openCount, paneVisible, ...paneGeom });
   }, [showComments, showCodeRail, narrowPane, commentsMode, openCount, paneGeom, onCommentsStateChange]);

@@ -1,6 +1,6 @@
 // CommentableDocument — the one layout every commentable file viewer shares:
-// the document, plus EITHER Reading mode's highlights (full width) OR
-// Comments mode's pane (a marker rail when the pane is narrow). Lifted out of
+// the document with hoverable highlights at full width, OR the full Comments
+// pane beside it when expanded. Narrow panes never show a marker rail. Lifted out of
 // MarkdownView (rounds 2–17 built it there) when Word documents and
 // spreadsheets joined (Destin, questions deck Q-4 + chat follow-up: Word and
 // Excel comments "work fully natively"), so the three viewers can never
