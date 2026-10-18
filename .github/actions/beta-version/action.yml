@@ -1,0 +1,25 @@
+name: Resolve beta version
+description: Number betas from the latest official release, not the lifetime Actions counter
+inputs:
+  base:
+    description: Next-patch beta prefix; blank selects it automatically after the official release
+    required: false
+    default: ''
+outputs:
+  version:
+    description: Resolved version, shared by installers and their signed manifest
+    value: ${{ steps.resolve.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      id: resolve
+      env:
+        BETA_BASE: ${{ inputs.base }}
+      with:
+        script: |
+          const { pathToFileURL } = require('node:url');
+          const { resolveBetaVersion } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/beta-version.mjs`).href);
+          const version = await resolveBetaVersion({ github, context, base: process.env.BETA_BASE });
+          core.setOutput('version', version);
+          core.info(`Beta version: ${version}`);

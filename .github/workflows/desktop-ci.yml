@@ -135,6 +135,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
+      # WHY: release numbering lives outside desktop/, so Vitest never discovers it.
+      - name: Test beta version numbering
+        run: node --test ../scripts/beta-version.test.mjs
+
       - name: Install dependencies
         run: npm ci
 
