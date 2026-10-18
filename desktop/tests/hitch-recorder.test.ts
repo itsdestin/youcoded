@@ -59,7 +59,7 @@ describe('renderer batches', () => {
     expect(lines.map((l) => l.win)).toEqual(['w1', 'w2', 'w1']);
   });
 
-  it('hard rate limit: at most 30 detailed entries per minute per window, the rest tallied', () => {
+  it('retains the first-30 cap for sub-second details per minute per window, the rest tallied', () => {
     const { lines, send, advance, rec } = setup();
     // 5 batches of 20 within the minute (the renderer would never send this; main must not trust it)
     for (let i = 0; i < 5; i++) { send(batch(Array.from({ length: 20 }, () => frame()))); advance(1000); }
@@ -71,6 +71,40 @@ describe('renderer batches', () => {
     const minute = lines.at(-1);
     expect(minute.rend.over).toBe(70);
     expect(minute.rend.overMs).toBe(70 * 200);
+  });
+
+  it('reserves five severe overflow entries after the first 30 inputs, with bounded tallies and rollover', () => {
+    const { lines, send, advance, rec } = setup();
+    const input = (d = 150) => ({ k: 'event', t: NOW, d, type: 'input' });
+    send(batch(Array.from({ length: 30 }, () => input())));
+    // Untrusted flags cannot buy a reservation; only validated duration can.
+    send(batch([frame(999), { ...input(), severe: true },
+      { ...frame(4000), d: Infinity }, { ...frame(4000), d: '4000' },
+      { ...frame(4000), k: 'SECRET' }, frame(1000), input(2000),
+      { k: 'task', t: NOW, d: 3000 }, frame(4000), frame(5000), frame(6000)],
+    { dropped: 3, tally: { f: 2, fms: 120, over: 4, oms: 600 } }));
+    expect(lines).toHaveLength(35);
+    expect(lines.slice(30).map((e) => [e.kind, e.d])).toEqual([
+      ['frame', 1000], ['event', 2000], ['task', 3000], ['frame', 4000], ['frame', 5000],
+    ]);
+    rec.onMinute();
+    expect(lines.at(-1).rend).toMatchObject({ entries: 35, over: 7, overMs: 600 + 999 + 150 + 6000, rejected: 3, dropped: 3 });
+    advance(60_000);
+    send(batch([...Array.from({ length: 30 }, () => input()), ...Array.from({ length: 6 }, () => frame(1000))]));
+    expect(lines.filter((e) => e.kind !== 'minute')).toHaveLength(70);
+    rec.onMinute();
+    expect(lines.at(-1).rend).toMatchObject({ entries: 35, over: 1, overMs: 1000, rejected: 0, dropped: 0 });
+  });
+
+  it('bounds a hostile all-severe flood independently per window and keeps the batch cap', () => {
+    const { lines, send, rec } = setup();
+    send(batch(Array.from({ length: 1000 }, () => frame(2000))));
+    send(batch(Array.from({ length: 100 }, () => frame(2000))));
+    expect(lines).toHaveLength(35);
+    send(batch([frame(2000)]), 2);
+    expect(lines).toHaveLength(36);
+    rec.onMinute();
+    expect(lines.at(-1).rend).toMatchObject({ entries: 36, over: 165, overMs: 330_000, rejected: 900 });
   });
 
   it('limits batches per window per minute', () => {
@@ -104,6 +138,33 @@ describe('main-process stalls', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 410, resMs: 20, lastIpc: 'session:create', sessions: 5 });
     expect(lines[0].lastIpcAgoMs).toBe(400);
+  });
+
+  it.each([0, 20])('records timer lateness when the histogram missed the block (sample %i ms)', (sample) => {
+    const { lines, hist, rec, advance } = setup();
+    advance(1000); hist.set(20); rec.onSecond(); // establish a normal tick
+    advance(3300);
+    if (sample) hist.set(sample); // reset erased the block: quiet or empty histogram
+    rec.onSecond();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 2300 });
+    advance(1000); rec.onSecond();
+    expect(lines).toHaveLength(1); // baseline advances; do not report the gap twice
+  });
+
+  it('uses the larger of timer lateness and histogram estimate, not their sum', () => {
+    const { lines, rec, hist, advance } = setup();
+    advance(1000); rec.onSecond();
+    advance(3300); hist.set(3010); rec.onSecond();
+    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 3000 });
+  });
+
+  it('does not invent timer delay at startup or after a backwards clock adjustment', () => {
+    const { lines, rec, advance } = setup();
+    rec.onSecond();
+    advance(-5000); rec.onSecond();
+    advance(1000); rec.onSecond();
+    expect(lines).toEqual([]);
   });
 
   it('writes nothing for a quiet second or a small hiccup', () => {
@@ -279,6 +340,18 @@ describe('traceIpc', () => {
 });
 
 describe('suspend / resume', () => {
+  it('discards timer-only gaps over a minute and the first tick after an explicit sleep', () => {
+    const { lines, rec, advance } = setup();
+    advance(1000); rec.onSecond();
+    advance(60_001); rec.onSecond(); // quiet histogram, still a suspension
+    rec.noteSleep();
+    advance(3300); rec.onSecond(); // an otherwise reportable timer delay must be skipped
+    expect(lines).toEqual([]);
+    advance(3300); rec.onSecond();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 2300 });
+  });
+
   it('a 6-hour sleep is not a stall and does not pollute the minute line', () => {
     const { lines, hist, rec, advance } = setup();
     hist.set(25); rec.onSecond();

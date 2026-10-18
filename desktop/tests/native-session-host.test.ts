@@ -221,6 +221,20 @@ function throwOnceFactory() {
 
 describe('NativeSessionHost', () => {
   let root: string; let host: NativeSessionHost;
+
+  it('awaits project skill discovery before creating and resuming a session', async () => {
+    const catalog = { list: () => [{ id: 'project-skill', description: 'Project skill' }], load: vi.fn() };
+    const discover = vi.fn(async (_cwd: string) => catalog);
+    host = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT,
+      async () => null, async () => null, undefined, undefined, undefined, undefined, discover);
+    await host.create({ sessionId: 'discovery', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    expect(discover).toHaveBeenCalledWith(root);
+    expect((host as any).live.get('discovery').session.opts.skillCatalog).toBe(catalog);
+    await host.destroy('discovery');
+    await host.resume('discovery', root);
+    expect(discover).toHaveBeenCalledTimes(2);
+    expect((host as any).live.get('discovery').session.opts.skillCatalog).toBe(catalog);
+  });
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-host-'));
     host = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);

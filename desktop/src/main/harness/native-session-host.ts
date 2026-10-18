@@ -41,6 +41,7 @@ import { prepareProjectInstructions, type ProjectInstructionFile } from './injec
 import { resolveProfile, effectiveContextForModel, IMAGE_LIMITS_DEFAULT, type CapabilityProfile, type ProfileProviderType, type ImageLimits } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
+import { timeSessionSetup } from '../session-setup-timing';
 import { createSkillCatalog, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
 import { canonicalize, resolveP } from './tools/guards';
 import { isUnderRoot } from '../artifacts/read-binary-access';
@@ -2285,10 +2286,9 @@ export class NativeSessionHost extends EventEmitter {
     // the real wiring (ipc-handlers) injects { search: searchService }.
     private toolServices?: ToolServices,
     // Installed-skill source for /skill-name and the Skill tool (M3 item 1).
-    // Injected + LAST so existing constructions still compile, and so a test can
-    // supply a fake instead of scanning the real ~/.claude — which makes "no
-    // skills installed" an expressible state rather than an environment accident.
-    private skillCatalog?: SkillCatalog,
+    // The runtime supplies async off-thread discovery; embedders/tests may
+    // provide a fixed catalog, including an explicitly empty one.
+    private skillCatalog?: SkillCatalog | ((cwd: string) => Promise<SkillCatalog>),
     // The process-level MCP connection pool (Task 4, mcp-manager.ts). Optional +
     // LAST so existing constructions still compile. Its destroyAll() was
     // already wired at this host's own app-quit path (destroyAll() below)
@@ -2756,7 +2756,14 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[]): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
+  private async prepareSkillCatalog(cwd: string): Promise<SkillCatalog> {
+    // WHY: the runtime supplies off-thread discovery. Keep an injected catalog
+    // usable by embedders/tests without importing Electron or spawning workers.
+    return timeSessionSetup('native-skills', async () => typeof this.skillCatalog === 'function' ? this.skillCatalog(cwd)
+      : this.skillCatalog ?? createSkillCatalog(undefined, cwd));
+  }
+
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[], skillCatalog: SkillCatalog): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2804,9 +2811,8 @@ export class NativeSessionHost extends EventEmitter {
       // buildAiTools when the profile can afford its catalog. Threading the
       // catalog (rather than letting the session scan on its own) means the host
       // and the session agree on one source, and a test can inject a fake.
-      // Fix: project .claude/skills are session-scoped. Build their catalog from
-      // this session's cwd so one workspace's workflows never appear in another.
-      skillCatalog: this.skillCatalog ?? createSkillCatalog(undefined, cwd),
+      // Prepared for this cwd: another project's workflows must not leak in.
+      skillCatalog,
       decide: this.buildDecide(sessionId, cwd, preset.presetRules),
       // Stamp the CURRENT mode on every ask (read at call time, not wiring
       // time — a mid-session mode flip must show on the next ask). The
@@ -3500,7 +3506,7 @@ export class NativeSessionHost extends EventEmitter {
     const harness = stepGuard === null
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: stepGuard } };
-    const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(opts.binding);
+    const { contextLength, profile, pricing, free, slotsUnknown } = await timeSessionSetup('native-profile', () => this.resolveContextAndProfile(opts.binding));
     await this.store.create({
       v: 1,
       sessionId: opts.sessionId,
@@ -3519,30 +3525,25 @@ export class NativeSessionHost extends EventEmitter {
     // must not be called before ensureFresh() has resolved at least once for
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
-    await this.specialistCatalog.ensureFresh(opts.cwd);
+    await timeSessionSetup('native-specialists', () => this.specialistCatalog.ensureFresh(opts.cwd));
     // The <env> git line, read off the main thread before anything is built
     // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
-    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd), prepareProjectInstructions(opts.cwd, profile.injectionBudgetTokens)]);
+    const [gitSnapshot, triggers, projectInstructionFiles, skillCatalog] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd), timeSessionSetup('native-instructions', () => prepareProjectInstructions(opts.cwd, profile.injectionBudgetTokens)), this.prepareSkillCatalog(opts.cwd)]);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
-    const mcpLease = await this.acquireMcp(opts.sessionId);
+    const mcpLease = await timeSessionSetup('native-mcp', () => this.acquireMcp(opts.sessionId));
     const mcpServers = mcpLease?.servers;
     let session: HarnessSession;
     try {
-      // Fix pass 1 / Finding 3: this whole block is fallible synchronous work
-      // (toolWiring() calls assembleSystemPrompt()) that
-      // runs AFTER the mcp acquire() above but BEFORE wire() ever registers
-      // this id in `this.live`. destroy() early-returns for a non-live id, so
-      // a throw here — with no catch — would strand the acquired MCP hold
-      // (and the pooled server's spawned child process) for the rest of the
-      // app's lifetime. Release the hold and rethrow the ORIGINAL error
-      // unchanged (never guess/replace a cause — error-message-standards.md).
+      // WHY: fallible construction follows MCP acquisition but precedes wire().
+      // destroy() cannot release a not-yet-live session: release this lease on
+      // failure and preserve the original error rather than stranding its server.
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(opts.sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles, skillCatalog) },
         this.modelFactory,
       );
     } catch (err) {
@@ -4009,7 +4010,7 @@ export class NativeSessionHost extends EventEmitter {
     // the header. Profiling header.binding here would size the context window and
     // tool posture for the wrong model on every overridden resume.
     const binding = bindingOverride ?? header.binding;
-    const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
+    const { contextLength, profile, pricing, free, slotsUnknown } = await timeSessionSetup('native-profile', () => this.resolveContextAndProfile(binding));
     // Seed the STARTING mode: the user's saved choice for this conversation,
     // else the preset default (an explicit setPermissionMode always wins).
     // WHY the saved choice: without it, "Ask first" on a Coder conversation
@@ -4018,7 +4019,7 @@ export class NativeSessionHost extends EventEmitter {
     // Task 4 (plan 1c) — same reasoning as create()'s own call: awaited BEFORE
     // toolWiring() reads this.specialistCatalog.roster(cwd) below, so a
     // resumed session's first turn never ships an empty roster either.
-    await this.specialistCatalog.ensureFresh(cwd);
+    await timeSessionSetup('native-specialists', () => this.specialistCatalog.ensureFresh(cwd));
     // Acquire this session's MCP servers (Task 6). A RESUMED session reuses its
     // old sessionId, so this acquire() can overlap a release() still in flight
     // from a destroy() of the SAME id. That used to be the bug: both
@@ -4028,28 +4029,23 @@ export class NativeSessionHost extends EventEmitter {
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
     // The <env> git line + trigger index, off the main thread, before the session is built (C3, B8).
-    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd), prepareProjectInstructions(cwd, profile.injectionBudgetTokens)]);
-    const mcpLease = await this.acquireMcp(sessionId);
+    const [gitSnapshot, triggers, projectInstructionFiles, skillCatalog] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd), timeSessionSetup('native-instructions', () => prepareProjectInstructions(cwd, profile.injectionBudgetTokens)), this.prepareSkillCatalog(cwd)]);
+    const mcpLease = await timeSessionSetup('native-mcp', () => this.acquireMcp(sessionId));
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: header.stepGuard } };
     let session: HarnessSession;
     try {
-      // Fix pass 1 / Finding 3 — same leak as create(): everything in this
-      // block (construction, then the history rebuild) is fallible synchronous
-      // work that runs after the mcp acquire() above but before wire() ever
-      // registers this id in `this.live`. A throw anywhere in here — with no
-      // catch — would strand the acquired MCP hold permanently (destroy()
-      // early-returns for a non-live id). Release and rethrow the ORIGINAL
-      // error unchanged (error-message-standards.md).
+      // WHY: as on create(), construction/history rebuild can fail before wire().
+      // Release the acquired MCP lease here; destroy() cannot see it yet.
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles, skillCatalog) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -4739,7 +4735,11 @@ export class NativeSessionHost extends EventEmitter {
     try {
       // Match the session's Skill tool: a slash invocation must see this
       // project's .claude/skills too, including on smaller models without Skill.
-      loaded = (this.skillCatalog ?? createSkillCatalog(undefined, entry.cwd)).load(skill);
+      const catalog = await this.prepareSkillCatalog(entry.cwd);
+      // Discovery yields: a close/takeover or another turn may have won meanwhile.
+      if (this.live.get(sessionId) !== entry || entry.quiescing) return { ok: false, reason: 'not-live' };
+      if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+      loaded = catalog.load(skill);
     } catch (err: any) {
       // SkillNotFound is the ordinary case — the user typed a Claude Code command
       // or a skill they haven't installed — so it is a coded refusal, not an error.

@@ -94,6 +94,14 @@ vi.mock('../src/main/providers/provider-registry', async (importOriginal) => {
   };
 });
 
+// Worker lifecycle is covered by session-discovery.test.ts and the built-worker
+// smoke. This ownership fixture exercises the real context builder behind an
+// async boundary, without asking Node to load an uncompiled TS worker entry.
+vi.mock('../src/main/session-discovery', async () => {
+  const { buildClaudeCodeContext } = await import('../src/main/claude-code-context');
+  return { sessionDiscovery: { claudeContext: vi.fn(async (cwd: string, model: string | null) => buildClaudeCodeContext(cwd, model)) } };
+});
+
 // NativeSessionHost is constructed inside registerIpcHandlers. Stub it so the
 // native branch is deterministic — and crucially so `resume()` is a REAL async
 // suspension point (`async () => true`), which is what lets the nextTick queue
@@ -303,6 +311,9 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
 
+  if (opts?.provider === 'claude' && mockSessionManager.createSession.mock.calls.length) {
+    await vi.waitFor(() => expect(rec.sends.some((s) => s.channel === IPC.NATIVE_SESSION_CONTEXT)).toBe(true));
+  }
   return { order: [...rec.order], sends: [...rec.sends], assignSession, result, createSession: mockSessionManager.createSession };
 }
 
@@ -387,6 +398,19 @@ describe('session:create — assignSession must precede the SESSION_CREATED forw
 // "this chat was given nothing".
 // ---------------------------------------------------------------------------
 describe('session:create — a Claude Code chat is described too', () => {
+  it('announces ownership before a delayed context discovery finishes', async () => {
+    const { sessionDiscovery } = await import('../src/main/session-discovery');
+    const { buildClaudeCodeContext } = await import('../src/main/claude-code-context');
+    let release!: (context: ReturnType<typeof buildClaudeCodeContext>) => void;
+    vi.mocked(sessionDiscovery.claudeContext).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const creating = runSessionCreate({ provider: 'claude', cwd: '/tmp' });
+    await vi.waitFor(() => expect(rec.order).toContain('SESSION_CREATED send'));
+    expect(rec.sends.some((s) => s.channel === IPC.NATIVE_SESSION_CONTEXT)).toBe(false);
+    release(buildClaudeCodeContext('/tmp', null));
+    const result = await creating;
+    assertAssignBeforeCreated(result.order, result.sends, 'delayed context');
+    expect(result.sends.find((s) => s.channel === IPC.NATIVE_SESSION_CONTEXT)?.window).toBe('wc:2');
+  });
   it('sends the context record, and it says Claude Code assembled it', async () => {
     const { sends } = await runSessionCreate({ provider: 'claude', cwd: '/tmp' });
     const pushed = sends.find((s) => s.channel === 'native:session-context');
