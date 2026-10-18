@@ -4,11 +4,11 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
-## [1.3.1] — Unreleased
+## [1.3.1] — 2026-10-17
 
 **Claude Code CLI baseline:** v2.1.302 (desktop review); Android bundles v2.1.300.
 
-Changes since 1.3.0: built-in Office editing, the assistant's browser, expanded Pages capabilities, a rebuilt Android backend, and improvements to appearance, conversation continuity and performance. This entry is a release candidate; publication is pending release checks and approval.
+Changes since 1.3.0: built-in Office editing, the assistant's browser, expanded Pages capabilities, a rebuilt Android backend, and improvements to appearance, conversation continuity and performance.
 
 ### Office editing — desktop
 
@@ -72,6 +72,9 @@ Changes since 1.3.0: built-in Office editing, the assistant's browser, expanded 
 - Some reopened conversations can show the reopen time rather than the original message time.
 - Large-project search is not exhaustive: file discovery can be truncated, and searching inside files stops at 200 matches without continuation. Tracked files can supplement the discovered list; ordinary folder browsing is separately paginated.
 - Native personal and project filesystem skills still use `~/.claude/skills` and `<project>/.claude/skills`. Skills work through those locations; a separate YouCoded-owned skills home is not included in this release.
+
+- Mac builds retain ad-hoc signing and are not Developer ID–signed or notarized; macOS may show an unverified-developer warning. Developer ID signing/notarization is deferred to 1.3.2.
+- DOCX previews use an older bundled XML parser with reported denial-of-service issues. Opening a crafted document could hang the app window; avoid untrusted DOCX files pending the deferred hardening work. No code-execution or zero-interaction exploit was demonstrated in this review.
 
 ## [1.3.0] — 2026-09-20
 
