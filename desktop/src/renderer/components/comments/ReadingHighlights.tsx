@@ -55,6 +55,8 @@ interface Props {
   /** Pop the right-click menu when a text selection is released. Off for
    *  spreadsheets, whose cells are commented by right-clicking the cell. */
   selectionMenu?: boolean;
+  /** Narrow views have no marker rail: a finger tap opens the hover card instead. */
+  popoverOnTouch?: boolean;
   /** T5: forwarded to `useDocComments` for the real docComments:* IPC. */
   projectRoot?: string;
 }
@@ -71,7 +73,7 @@ if (typeof document !== 'undefined') {
 // to act on — the menu opens once the selection has stopped changing.
 const TOUCH_SELECTION_SETTLE_MS = 500;
 
-export function ReadingHighlights({ containerRef, path, onOpenComments, selectionMenu: selectionMenuOn = true, projectRoot }: Props) {
+export function ReadingHighlights({ containerRef, path, onOpenComments, selectionMenu: selectionMenuOn = true, popoverOnTouch = false, projectRoot }: Props) {
   // WHY no `addComment` here: a new comment now always comes from
   // buildContextMenu's "Add comment" entry (selection-release menu OR the
   // real right-click menu), which writes straight to the store itself — see
@@ -100,6 +102,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
   // only on Esc or a click outside it (effect below).
   const engagedRef = useRef(false);
   const [engaged, setEngaged] = useState(false);
+  const [touchOpened, setTouchOpened] = useState(false);
   const onEngagedChange = useCallback((v: boolean) => { engagedRef.current = v; setEngaged(v); }, []);
   const scheduleClose = () => {
     clearCloseTimer();
@@ -129,6 +132,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
         }, HOVER_OPEN_MS);
       };
       const leave = () => {
+        if (lastPointerWasTouch) return; // a tapped card closes explicitly, not on synthetic mouseleave
         clearOpenTimer();
         scheduleClose();
       };
@@ -138,6 +142,14 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
       const click = () => {
         clearOpenTimer();
         clearCloseTimer();
+        // WHY: with no slim rail, a phone still needs a way to read/reply to its
+        // highlighted comments. A tap pins the same card a mouse can hover.
+        if (popoverOnTouch && lastPointerWasTouch) {
+          setHoveredId(id);
+          setCardRect(segmentsRect(segs));
+          setTouchOpened(true);
+          return;
+        }
         setHoveredId(null);
         onOpenComments(id);
       };
@@ -156,13 +168,15 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
       clearCloseTimer();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onOpenComments is the host's stable callback; marks is the real trigger
-  }, [marks]);
+  }, [marks, popoverOnTouch]);
 
   // An engaged card (reply being typed) closes on Esc or a click outside it,
   // like every other popover — never on pointer drift.
   useEffect(() => {
-    if (!engaged) return;
-    const close = () => { onEngagedChange(false); setHoveredId(null); };
+    if (!hoveredId || (!engaged && !touchOpened)) return;
+    // WHY separate touch-open state: ReplyField reports its own empty/unfocused state
+    // on mount, but that must not remove outside-tap dismissal from a tapped-open card.
+    const close = () => { setTouchOpened(false); onEngagedChange(false); setHoveredId(null); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     const onDown = (e: MouseEvent) => {
       if (!(e.target as Element | null)?.closest?.('[data-hover-card]')) close();
@@ -173,7 +187,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments, selectio
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('mousedown', onDown);
     };
-  }, [engaged, onEngagedChange]);
+  }, [engaged, touchOpened, hoveredId, onEngagedChange]);
 
   useEffect(() => {
     for (const [id, segs] of marks) for (const mark of segs) {

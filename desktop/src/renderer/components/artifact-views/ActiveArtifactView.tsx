@@ -743,9 +743,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // row "alongside the other actions" — same imperative-handle + state
   // callback pattern the header already uses for Edit/Save.
   useEffect(() => {
-    // paneVisible: MarkdownView collapses its margin to a marker rail below
-    // the same 640px pane width narrowPane measures here; the code rail is
-    // always full width.
+    // paneVisible reports the full panel only: text viewers keep hoverable
+    // highlights below 640px instead of a slim rail; code's panel stays full width.
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
     onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: openCount, paneVisible, ...paneGeom });
   }, [showComments, showCodeRail, narrowPane, commentsMode, openCount, paneGeom, onCommentsStateChange]);
@@ -791,6 +790,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const dispatch = useArtifactDispatchOptional();
   const drawerExpanded = useArtifactSelectorOptional((s) => s.drawerExpanded);
   const autoExpandedRef = useRef(false);
+  const previousExpandedRef = useRef(drawerExpanded);
   // Round 3 coordinator review (defect 1): `narrowPane` starts `false` and
   // only becomes `true` once useNarrowByRef's ResizeObserver fires — one or
   // more frames after commentsMode flips to 'comments'. A deps array of just
@@ -801,6 +801,17 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // narrowPane/drawerExpanded too makes the effect re-check as they settle;
   // `autoExpandedRef` still guards it to firing (and un-firing) exactly once.
   useEffect(() => {
+    const justShrank = previousExpandedRef.current === true && drawerExpanded === false;
+    previousExpandedRef.current = drawerExpanded;
+    // WHY: Shrink means return to hover comments, not leave a hidden Comments mode active.
+    // Release the expansion we owned before changing mode so neither this effect nor its
+    // reading-mode cleanup toggles the drawer straight back open.
+    if (justShrank && commentsMode === 'comments') {
+      autoExpandedRef.current = false;
+      setCommentsMode('reading');
+      setFocusThreadId(undefined);
+      return;
+    }
     if (!dispatch) return; // no provider (e.g. a unit test rendering this in isolation) — nothing to reuse
     if (commentsMode === 'comments') {
       if (narrowPane && !drawerExpanded && !autoExpandedRef.current) {

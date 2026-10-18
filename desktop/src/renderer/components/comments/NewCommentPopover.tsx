@@ -21,6 +21,7 @@
 // placeBubble's own clamp/flip treats that band as already outside the
 // panel — the popup either sits higher or flips above, but never over it.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ErrorState } from '../ui/states';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { placeBubble } from '../ui/anchor-position';
@@ -99,7 +100,10 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
     return () => window.removeEventListener('mousedown', onDown, true);
   }, [comment.text, onDone, onCancel]);
 
-  return (
+  // WHY portal: the file pane's glass and scroll masks are backdrop roots. A popup
+  // inside them cannot frost the content behind the pane, and may be clipped by its fade.
+  // Keep the shared theme-controlled surface and the viewer-bound positioning above.
+  return createPortal(
     // Round 7: shared popup surface, same as the right-click menu (see
     // HighlightHoverCard); p-3 = the guide's 12px card padding.
     <OverlayPanel
@@ -141,6 +145,7 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
       {comment.error && (
         <ErrorState className="mt-1.5" message={comment.error.message} onRetry={comment.error.onRetry} />
       )}
-    </OverlayPanel>
+    </OverlayPanel>,
+    document.body,
   );
 }

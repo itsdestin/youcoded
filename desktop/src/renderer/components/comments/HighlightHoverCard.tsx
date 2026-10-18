@@ -14,6 +14,7 @@
 // now also gives it an open delay + a close grace period, and its own
 // onMouseEnter/onMouseLeave keep it open while the pointer travels onto it.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
@@ -89,7 +90,9 @@ export function HighlightHoverCard({
     setPos({ left, top });
   }, [comment.id, anchorRect, boundsEl]);
 
-  return (
+  // WHY portal: just like the new-comment composer, this glass card must escape
+  // the document's scroll mask/backdrop roots to frost the words behind it.
+  return createPortal(
     // Round 7: the app's shared popup surface (OverlayPanel/.layer-surface —
     // what the right-click menu uses) instead of a hand-rolled bg-panel +
     // shadow, so glass themes render it like every other popover.
@@ -222,7 +225,8 @@ export function HighlightHoverCard({
         <ReplyField onSend={onReply} onFocusChange={setFocused} onDraftChange={setHasText} />
       )}
     </OverlayPanel>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
