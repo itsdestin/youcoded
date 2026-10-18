@@ -19,7 +19,7 @@ export function BrandWordmark({ size, tagline }: { size: number | string; taglin
           (rejected, deck first-run-6). */}
       {tagline === 'stack' && (
         <div style={{ marginTop: `${-6 / 36}em`, fontSize: `${16 / 36}em`, lineHeight: 'normal' }}>
-          <span className="brand-tagline inline-block" style={{ fontSize: `${0.34 * 36 / 16}em` }}>agents for everyone</span>
+          <span className="brand-tagline inline-block" style={{ fontSize: `${0.34 * 36 / 16}em` }}>open source everything</span>
         </div>
       )}
     </div>
