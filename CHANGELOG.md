@@ -67,6 +67,12 @@ Changes since 1.3.0: built-in Office editing, the assistant's browser, expanded 
 - Linux updates select the installed package format; macOS updates select a compatible architecture.
 - Added Azure signing and signature verification to Windows release builds.
 
+### Known limitations
+
+- Some reopened conversations can show the reopen time rather than the original message time.
+- Large-project search is not exhaustive: file discovery can be truncated, and searching inside files stops at 200 matches without continuation. Tracked files can supplement the discovered list; ordinary folder browsing is separately paginated.
+- Native personal and project filesystem skills still use `~/.claude/skills` and `<project>/.claude/skills`. Skills work through those locations; a separate YouCoded-owned skills home is not included in this release.
+
 ## [1.3.0] — 2026-09-20
 
 **Claude Code CLI baseline:** v2.1.278
