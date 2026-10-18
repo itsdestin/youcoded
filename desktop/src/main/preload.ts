@@ -630,13 +630,13 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const supported: string[] = PO.supportedEntryTypes || [];
   const mode = supported.includes('long-animation-frame') ? 'loaf' : supported.includes('longtask') ? 'longtask' : 'none';
   if (mode === 'none') return { mode };
-  let buf: any[] = [];
-  let swBuf: any[] = []; // switch lines (their own array and cap, see the switch marks block)
+  let buf: any[] = [], swBuf: any[] = []; // switch lines have their own array and cap (switch marks block)
   let tally = { f: 0, fms: 0, over: 0, oms: 0 }; // 50-100 ms frames (count, summed ms); entries past the rate limit (count, summed ms)
   let dropped = 0;
   let timer: unknown = null;
-  let winStart = 0;
-  let winCount = 0;
+  let winStart = 0, winCount = 0, severeCount = 0;
+  // WHY: small inputs must not crowd out severe evidence. Main independently enforces this bounded 30 + 5 policy.
+  const SEVERE_PER_MIN = 5, SEVERE_MS = 1000;
   let elsAt = -1e9;
   let els = 0;
   let startupSent = false;
@@ -693,16 +693,16 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const arm = () => { if (!timer) timer = env.setTimeout(flush, 5000); };
   const keep = (e: any) => {
     const t = env.now();
-    if (t - winStart >= 60_000) { winStart = t; winCount = 0; }
-    if (winCount >= 30) { tally.over++; tally.oms += r(e.d); arm(); return; } // hard cap: 30 detailed entries/min/window
-    winCount++;
+    if (t - winStart >= 60_000) { winStart = t; winCount = 0; severeCount = 0; }
+    if (winCount < 30) winCount++;
+    else if (e.d >= SEVERE_MS && severeCount < SEVERE_PER_MIN) severeCount++;
+    else { tally.over++; tally.oms += r(e.d); arm(); return; }
     e.ctx = ctx();
     if (buf.length >= 200) { buf.shift(); dropped++; }
     buf.push(e);
     arm();
   };
   const t0 = (e: any) => r(env.perf.timeOrigin + e.startTime);
-
   // ── Switch marks (2026-10-05) ───────────────────────────────────────────────────────────
   // WHAT: one `switch` line per session switch (format + privacy: docs/hitch-recorder.md, validation: hitch-validate.ts).
   // HOW IT HEARS ABOUT A SWITCH: the page (renderer/state/switch-marks.ts) dispatches a DOM event on `document` — nothing is added

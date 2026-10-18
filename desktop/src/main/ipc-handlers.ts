@@ -4,7 +4,9 @@ import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { randomUUID } from 'crypto';
-import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
+import { readWholeContextFile } from './claude-code-context';
+import { sessionDiscovery } from './session-discovery';
+import { timeSessionSetup } from './session-setup-timing';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager } from './session-manager';
@@ -845,13 +847,13 @@ export function registerIpcHandlers(
       // nextTick for the same reason the SESSION_CREATED forward defers: the
       // renderer must have the session in state before a record about it lands.
       // Never fatal — a chat that will not start is worse than an unexplained one.
-      process.nextTick(() => {
-        try {
-          const payload = { sessionId: info.id, context: buildClaudeCodeContext(info.cwd, info.model ?? null) };
-          publish(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
-        } catch (err) {
-          log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
-        }
+      // WHY: nextTick only postpones synchronous scans; it still freezes all
+      // windows. The worker keeps filesystem discovery off the main thread.
+      void timeSessionSetup('claude-context', () => sessionDiscovery.claudeContext(info.cwd, info.model ?? null)).then((context) => {
+        if (!sessionManager.getSession(info.id)) return; // closed during discovery
+        publish(info.id, IPC.NATIVE_SESSION_CONTEXT, { sessionId: info.id, context });
+      }).catch((err) => {
+        log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
       });
     }
     checkWindow();
