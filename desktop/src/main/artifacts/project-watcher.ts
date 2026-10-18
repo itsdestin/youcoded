@@ -132,7 +132,63 @@ function pumpRepoProbes(): void {
   }
 }
 
-function repoWatchFilter(root: string, depth: number, readd: (dir: string, initial: boolean, dirDepth: number) => Promise<unknown>) {
+// Chokidar's _handleRead removes entries absent from its FILTERED snapshot at
+// end, using the then-current mutable watched set. A probe must not re-add a
+// deferred directory until every parent snapshot has finished that cleanup.
+function parentScanBarrier(watcher: FSWatcher) {
+  const scans = new Map<string, Set<Promise<void>>>();
+  const finishes = new Set<() => void>();
+  let stopped = false;
+  const readdirp = watcher._readdirp.bind(watcher);
+  watcher._readdirp = (dir, options) => {
+    if (stopped || watcher.closed) return;
+    const key = canonicalize(dir, null);
+    const pending = scans.get(key) ?? new Set<Promise<void>>();
+    scans.set(key, pending);
+    let resolve!: () => void;
+    const done = new Promise<void>((r) => { resolve = r; });
+    pending.add(done);
+    const stream = readdirp(dir, options);
+    const finish = () => {
+      stream?.removeListener('end', finish);
+      stream?.removeListener('close', finish);
+      stream?.removeListener('error', finish);
+      finishes.delete(finish);
+      pending.delete(done);
+      if (!pending.size) scans.delete(key);
+      // Promise continuations run AFTER all synchronous end/close/error
+      // listeners, including chokidar's mutable-previous removal pass.
+      resolve();
+    };
+    finishes.add(finish);
+    if (!stream) finish();
+    else {
+      stream.once('end', finish);
+      stream.once('close', finish);
+      stream.once('error', finish);
+    }
+    return stream;
+  };
+  return {
+    async run(dir: string, action: () => Promise<unknown>): Promise<void> {
+      const key = canonicalize(path.dirname(dir), null);
+      // A scan can start while an older scan's completion is being dispatched.
+      // Recheck ALL current streams after every await, then start synchronously.
+      while (!stopped) {
+        const pending = scans.get(key);
+        if (!pending?.size) { await action(); return; }
+        await Promise.all([...pending]);
+      }
+    },
+    stop(): void {
+      stopped = true;
+      for (const finish of [...finishes]) finish();
+      scans.clear();
+    },
+  };
+}
+
+function repoWatchFilter(root: string, depth: number, readd: (dir: string, initial: boolean, dirDepth: number, allow: () => void) => Promise<unknown>) {
   const canonRoot = canonicalize(root, null);
   const cache = new Map<string, boolean | 'pending'>();
   const owner = {};
@@ -163,10 +219,11 @@ function repoWatchFilter(root: string, depth: number, readd: (dir: string, initi
       if (initial) initialScans.add(canon);
       repoProbeQueue.add({ owner, dir: p, done: (nested) => {
         if (stopped) return;
-        cache.set(canon, nested);
-        if (nested) { initialScans.delete(canon); return; }
-        // Do not occupy a metadata slot while chokidar scans the directory.
-        void readd(p, initial, segments.length).catch(() => { /* no live refresh */ })
+        if (nested) { cache.set(canon, true); initialScans.delete(canon); return; }
+        // Keep it pending through parent cleanup, so concurrent rescans cannot
+        // independently add it while an older snapshot still excludes it.
+        // Do not occupy a metadata slot while waiting/scanning.
+        void readd(p, initial, segments.length, () => cache.set(canon, false)).catch(() => { /* no live refresh */ })
           .finally(() => initialScans.delete(canon));
       } });
       pumpRepoProbes();
@@ -187,6 +244,7 @@ function repoWatchFilter(root: string, depth: number, readd: (dir: string, initi
 interface WatchEntry {
   watcher: FSWatcher | null;
   stopProbes?: () => void;
+  cancelStart?: () => void;
   // subscriberId (webContents id) → subscribe count. A single renderer can hold
   // two hosts on the same project (SessionDrawer + ProjectView) — both must
   // unsubscribe before the renderer stops counting.
@@ -327,7 +385,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     // longer live-refreshes when an OUTSIDE editor changes it. Agent edits still
     // do: APPEND_VERSION broadcasts artifacts:changed itself, and the viewer
     // refetches on any changed event for its id regardless of `by`.
-    const filter = repoWatchFilter(projectRoot, watchDepthFor(projectRoot), async (dir, initial, dirDepth) => {
+    const filter = repoWatchFilter(projectRoot, watchDepthFor(projectRoot), async (dir, initial, dirDepth, allow) => {
       if (entry.stopped || watcher.closed) return;
       // WHY internal chokidar API: public add() unconditionally treats a path as
       // an initial scan, suppressing populated NEW directories with ignoreInitial.
@@ -340,8 +398,12 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
       // Otherwise a fast deferred child can announce ready during the root scan
       // and misclassify remaining startup directories as live additions.
       watcher._incrReadyCount();
-      const result = await watcher._nodeFsHandler._addToNodeFs(dir, initial, undefined, dirDepth);
-      if (result) watcher._emitReady();
+      await barrier.run(dir, async () => {
+        if (entry.stopped || watcher.closed) return;
+        allow();
+        const result = await watcher._nodeFsHandler._addToNodeFs(dir, initial, undefined, dirDepth);
+        if (result) watcher._emitReady();
+      });
     });
     entry.stopProbes = filter.stop;
     const watcher = chokidar.watch(projectRoot, {
@@ -351,13 +413,20 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
       depth: watchDepthFor(projectRoot),
       awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
     });
+    // chokidar starts stat asynchronously, so install before its first _readdirp.
+    const barrier = parentScanBarrier(watcher);
+    entry.stopProbes = () => { filter.stop(); barrier.stop(); };
     watchersStarted++;
     // Both 'ready' and 'error' resolve so a watch failure cannot hang the IPC
     // response (sync-spaces engine precedent).
     await new Promise<void>((resolve) => {
+      // A stopped entry may own deferred readiness reservations waiting on a
+      // parent scan. Shutdown must not depend on that provider stream finishing.
+      entry.cancelStart = resolve;
       watcher.once('ready', () => { filter.ready(); resolve(); });
       watcher.once('error', () => resolve());
     });
+    entry.cancelStart = undefined;
     // Torn down while awaiting ready (all subscribers left): close, don't strand.
     if (entry.stopped) { await watcher.close(); return { ok: false }; }
     watcher.on('all', (event: string, absPath: string) => {
@@ -453,6 +522,7 @@ export function dropSubscriber(subscriberId: number): void {
 function closeEntry(key: string, entry: WatchEntry): void {
   entry.stopped = true;
   entry.stopProbes?.();
+  entry.cancelStart?.();
   if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
   entry.graceAt = null;
   entries.delete(key);

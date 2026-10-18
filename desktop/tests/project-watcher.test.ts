@@ -86,7 +86,7 @@ describe('project watcher metadata probes', () => {
     watcher = Object.assign(new EventEmitter(), {
       add, close: vi.fn().mockResolvedValue(undefined),
       _nodeFsHandler: { _addToNodeFs: (dir: string) => add(dir) },
-      _incrReadyCount: vi.fn(), _emitReady: vi.fn(),
+      _incrReadyCount: vi.fn(), _emitReady: vi.fn(), _readdirp: vi.fn(),
     });
     vi.spyOn(chokidar, 'watch').mockImplementation((_paths, options) => {
       ignored = options!.ignored as typeof ignored;
@@ -154,7 +154,7 @@ describe('project watcher metadata probes', () => {
       filters.push(options!.ignored as typeof ignored);
       const fake = Object.assign(new EventEmitter(), {
         _nodeFsHandler: { _addToNodeFs: vi.fn().mockResolvedValue(undefined) },
-        _incrReadyCount: vi.fn(), _emitReady: vi.fn(),
+        _incrReadyCount: vi.fn(), _emitReady: vi.fn(), _readdirp: vi.fn(),
         close: vi.fn().mockResolvedValue(undefined),
       });
       queueMicrotask(() => fake.emit('ready'));
@@ -192,6 +192,74 @@ describe('project watcher metadata probes', () => {
     expect(ignored(dir)).toBe(false);
     expect(ignored(dir, directory)).toBe(false);
     expect(access).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for concurrent parent scans and synchronous cleanup before re-adding with a readiness reservation', async () => {
+    const first = new PassThrough({ objectMode: true });
+    const second = new PassThrough({ objectMode: true });
+    const third = new PassThrough({ objectMode: true });
+    // watchProject wraps this instance method before any real enumeration starts.
+    const originalFactory = vi.mocked(chokidar.watch).getMockImplementation()!;
+    vi.mocked(chokidar.watch).mockImplementation((paths, options) => {
+      const fake = originalFactory(paths, options);
+      vi.mocked(fake._readdirp).mockReturnValueOnce(first as unknown as ReturnType<FSWatcher['_readdirp']>).mockReturnValueOnce(second as unknown as ReturnType<FSWatcher['_readdirp']>).mockReturnValueOnce(third as unknown as ReturnType<FSWatcher['_readdirp']>);
+      return fake;
+    });
+    const access = vi.spyOn(fs.promises, 'access').mockRejectedValue(new Error('ENOENT'));
+    await watchProject(root, 1);
+    const fake = watcher as unknown as FSWatcher;
+    fake._readdirp(root);
+    fake._readdirp(root);
+    let cleaned = false;
+    first.on('end', () => { fake._readdirp(root); }); // rescan starts during end cleanup
+    second.on('end', () => { cleaned = true; });
+    const dir = path.join(root, 'deferred');
+    expect(ignored(dir, directory)).toBe(true);
+    await vi.waitFor(() => expect(access).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(watcher.add).not.toHaveBeenCalled();
+    expect(ignored(dir, directory)).toBe(true); // pending through all parent scans
+    first.resume(); first.end();
+    second.resume(); second.end();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(cleaned).toBe(true);
+    expect(watcher.add).not.toHaveBeenCalled(); // third scan is still active
+    let cleanupObserved = false;
+    watcher.add.mockImplementation(() => { cleanupObserved = cleaned; return Promise.resolve(); });
+    third.resume(); third.end();
+    await vi.waitFor(() => expect(watcher.add).toHaveBeenCalledWith(dir));
+    expect(cleanupObserved).toBe(true);
+    expect(fake._incrReadyCount).toHaveBeenCalledTimes(1);
+    expect(ignored(dir, directory)).toBe(false);
+  });
+
+  it.each(['close', 'error', 'stop'] as const)('releases a waiting parent scan on %s without stranding or resurrecting it', async (terminal) => {
+    const stream = new PassThrough({ objectMode: true });
+    const originalFactory = vi.mocked(chokidar.watch).getMockImplementation()!;
+    vi.mocked(chokidar.watch).mockImplementation((paths, options) => {
+      const fake = originalFactory(paths, options);
+      vi.mocked(fake._readdirp).mockReturnValue(stream as unknown as ReturnType<FSWatcher['_readdirp']>);
+      return fake;
+    });
+    vi.spyOn(fs.promises, 'access').mockRejectedValue(new Error('ENOENT'));
+    await watchProject(root, 1);
+    const fake = watcher as unknown as FSWatcher;
+    fake._readdirp(root);
+    const dir = path.join(root, 'waiting');
+    ignored(dir, directory);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(watcher.add).not.toHaveBeenCalled();
+    if (terminal === 'stop') stopProjectWatchers();
+    else if (terminal === 'error') stream.emit('error', new Error('provider stream failed'));
+    else stream.emit('close');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (terminal === 'stop') {
+      stream.emit('close');
+      expect(watcher.add).not.toHaveBeenCalled();
+    } else expect(watcher.add).toHaveBeenCalledWith(dir);
+    expect(stream.listenerCount('close')).toBe(0);
+    expect(stream.listenerCount('error')).toBe(0);
+    expect(stream.listenerCount('end')).toBe(0);
   });
 
   it('caches repository exclusions and enforces original-root depth on re-added directories', async () => {
@@ -372,77 +440,105 @@ describe('project watcher lifecycle', () => {
     } finally { release(); probe.mockRestore(); }
   });
 
-  it('waits for root enumeration when a deferred startup child finishes first', async () => {
-    const early = path.join(root, 'early');
-    const late = path.join(root, 'late');
-    await fs.promises.mkdir(early);
-    await fs.promises.mkdir(late);
-    await fs.promises.writeFile(path.join(late, 'startup.txt'), 'already existed');
+  it.each(['startup', 'live', 'stopped'] as const)('orders deferred directory adds after their parent snapshot (%s)', async (phase) => {
+    const scanRoot = phase === 'live' ? path.join(root, 'populated-parent') : root;
+    const staging = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-snapshot-'));
+    await fs.promises.mkdir(path.join(staging, 'early'));
+    await fs.promises.mkdir(path.join(staging, 'late'));
+    await fs.promises.writeFile(path.join(staging, 'late', 'startup.txt'), 'already existed');
+    const early = path.join(scanRoot, 'early');
+    const late = path.join(scanRoot, 'late');
     let releaseRoot!: () => void;
     const gate = new Promise<void>((resolve) => { releaseRoot = resolve; });
-    let childFinished!: () => void;
-    const childDone = new Promise<void>((resolve) => { childFinished = resolve; });
+    let probeSettled = false;
+    let enumerationFinished = false;
+    const access = fs.promises.access.bind(fs.promises);
+    const probes = vi.spyOn(fs.promises, 'access').mockImplementation((p, mode) =>
+      access(p, mode).finally(() => {
+        if (path.resolve(String(p)) === path.resolve(early, '.git')) probeSettled = true;
+      }));
     const readdirp = FSWatcher.prototype._readdirp;
-    // Keep real chokidar/stat/watch behavior; only schedule its real enumeration
-    // entries so a probed child completes while the root stream is still open.
+    let heldRoot = false;
+    // Faithful filtered snapshot: only delay END, never re-filter or invent data.
+    // A fast metadata probe can finish while an OS directory stream remains open.
     const streams = vi.spyOn(FSWatcher.prototype, '_readdirp').mockImplementation(function (this: FSWatcher, dir, options) {
       const source = readdirp.call(this, dir, options);
-      if (dir !== root || !source) return source;
+      if (path.resolve(dir) !== path.resolve(scanRoot) || heldRoot || !source) return source;
+      heldRoot = true;
       const held = new PassThrough({ objectMode: true });
-      const entries: unknown[] = [];
-      source.on('data', (entry) => entries.push(entry));
+      source.on('data', (entry) => held.write(entry));
       source.on('error', (error) => held.destroy(error));
       source.on('end', () => {
-        const first = entries.find((entry: any) => entry.basename === 'early');
-        held.write(first);
-        void gate.then(() => {
-          for (const entry of entries) if (entry !== first) held.write(entry);
-          held.end();
-        });
+        enumerationFinished = true;
+        void gate.then(() => held.end());
       });
       return held as unknown as ReturnType<typeof readdirp>;
     });
     const watch = chokidar.watch.bind(chokidar);
     let ready = false;
-    let addSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let watcher!: FSWatcher;
+    const removals: string[] = [];
     const factory = vi.spyOn(chokidar, 'watch').mockImplementation((paths, options) => {
-      const watcher = watch(paths, options);
+      watcher = watch(paths, options);
       watcher.once('ready', () => { ready = true; });
-      const add = watcher._nodeFsHandler._addToNodeFs.bind(watcher._nodeFsHandler);
-      addSpy = vi.spyOn(watcher._nodeFsHandler, '_addToNodeFs').mockImplementation(async (...args) => {
-        const result = await add(...args);
-        if (args[0] === early && !watcher._isIgnored(early)) childFinished();
-        return result;
-      });
+      watcher.on('unlinkDir', (dir) => removals.push(path.resolve(dir)));
       return watcher;
     });
-    const starting = watchProject(root, 1);
+    let starting: Promise<unknown> | undefined;
+    let startFinished = false;
     try {
-      await childDone;
-      await new Promise<void>((resolve) => setImmediate(resolve)); // drain ready's nextTick
-      expect(ready).toBe(false);
+      if (phase === 'live') {
+        await watchProject(root, 1);
+        await untilLive(root);
+        await fs.promises.rename(staging, scanRoot);
+      } else {
+        await fs.promises.rename(path.join(staging, 'early'), early);
+        await fs.promises.rename(path.join(staging, 'late'), late);
+        starting = watchProject(root, 1).finally(() => { startFinished = true; });
+      }
+      await seen(() => { expect(enumerationFinished).toBe(true); expect(probeSettled).toBe(true); });
+      await new Promise<void>((resolve) => setImmediate(resolve)); // drain probe continuations
+      expect(Object.keys(watcher.getWatched()).map((dir) => path.resolve(dir))).not.toContain(path.resolve(early));
+      expect(ready).toBe(phase === 'live');
+      if (phase === 'stopped') {
+        stopProjectWatchers();
+        await seen(() => { expect(startFinished).toBe(true); expect(watcher.closed).toBe(true); });
+        expect(await starting).toEqual({ ok: false });
+        releaseRoot();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(Object.keys(watcher.getWatched())).toEqual([]);
+        return;
+      }
       releaseRoot();
-      await starting;
+      if (starting) { await seen(() => expect(startFinished).toBe(true)); await starting; }
       await untilLive(late);
       await settle(); // late directory is live; settle for unwanted startup adds
-      expect(events).toEqual([]);
+      // WHY: ignoreInitial suppresses discovery ADDs, not native CHANGE events.
+      // macOS can deliver an edit during setup; suppressing it in production
+      // would hide a real concurrent edit. The ready assertion above and this
+      // add-only assertion pin the startup-discovery regression precisely.
+      if (phase === 'startup') expect(events.filter((event) => event.kind === 'add')).toEqual([]);
+      else await seen(() => expect(events.some((event) => event.kind === 'add' && event.artifactId === 'populated-parent/late/startup.txt')).toBe(true));
+      expect(removals).not.toContain(path.resolve(early));
+      expect(removals).not.toContain(path.resolve(late));
     } finally {
       releaseRoot();
-      await starting;
-      addSpy?.mockRestore();
+      stopProjectWatchers();
       factory.mockRestore();
       streams.mockRestore();
+      probes.mockRestore();
+      await fs.promises.rm(staging, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 
-  it('keeps the entire deferred startup tree silent while later directories emit populated files', async () => {
+  it('does not announce deferred startup files as new while later directories emit populated files', async () => {
     const initial = path.join(root, 'initial', 'child');
     await fs.promises.mkdir(initial, { recursive: true });
     await fs.promises.writeFile(path.join(initial, 'existing.txt'), 'initial bytes');
     await watchProject(root, 1);
     await untilLive(initial);
     await settle(); // live signal first; initial files must not appear as external adds
-    expect(events).toEqual([]);
+    expect(events.filter((event) => event.kind === 'add')).toEqual([]);
     const later = path.join(initial, 'later');
     await fs.promises.mkdir(later);
     await fs.promises.writeFile(path.join(later, 'new.txt'), 'single write');
