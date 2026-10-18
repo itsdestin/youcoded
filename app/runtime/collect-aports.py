@@ -77,6 +77,10 @@ def notices(root, origin_dir, inputs):
     output = []
     target = origin_dir / 'notices'
     def save(label, name, content):
+        # WHY: zstd includes an empty LICENSE placeholder. It contains no notice
+        # to preserve separately; the unchanged source archive still retains it.
+        if not content:
+            return
         # Use an ordinal rather than upstream paths (which can contain traversal).
         path = target / f'{len(output):05d}-{Path(name).name}'
         path.parent.mkdir(parents=True, exist_ok=True)

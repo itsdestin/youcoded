@@ -462,6 +462,14 @@ class Fixtures(unittest.TestCase):
                         r.collector.upstream_crate_notice(self.root, self.root / 'unsafe-notices', crate)
                     request.assert_not_called()
 
+    def test_empty_license_placeholders_do_not_replace_real_original_notices(self):
+        source = self.root / 'zstd-fixture.tar.gz'
+        source.write_bytes(self.apk({'zstd/LICENSE': 'real copyright and permission text',
+                                     'zstd/placeholder/LICENSE': ''}))
+        found = r.collector.notices(self.root, self.root / 'license-proof', [source])
+        self.assertEqual(len(found), 1)
+        self.assertEqual((self.root / found[0]['path']).read_text(), 'real copyright and permission text')
+
     def test_recipe_local_symlinks_are_materialized_but_escaping_and_cycles_fail(self):
         for target, accepted in [('bash.post-install', True), ('../../outside', False), ('bash.post-upgrade', False)]:
             with self.subTest(target=target):
