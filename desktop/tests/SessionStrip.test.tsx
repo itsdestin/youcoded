@@ -270,7 +270,56 @@ describe('All sessions menu reordering', () => {
       expect(bar.querySelectorAll('[data-session-idx]').length).toBeGreaterThan(0);
     });
 
-    it('pressing the row anywhere else still reaches the pointer path', async () => {
+    it('menu rows allow native vertical touch panning', () => {
+      const g = openMenu();
+      // jsdom cannot scroll from gestures; pin the browser's touch-action contract.
+      for (const row of g.rows) {
+        expect(row.classList.contains('touch-pan-y')).toBe(true);
+        expect(row.classList.contains('touch-none')).toBe(false);
+      }
+    });
+
+    it('a touch swipe leaves the menu open without starting a session drag', async () => {
+      const g = openMenu();
+      const name = within(g.rows[1]).getByText('beta');
+      fireEvent.pointerDown(name, { button: 0, clientX: 200, clientY: 200, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerMove(name, { buttons: 1, clientX: 200, clientY: 120, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerUp(name, { clientX: 200, clientY: 120, pointerId: 1, pointerType: 'touch' });
+      await flushDropResolution(); // settle any incorrectly-started pointer drop
+      expect(detach.dropResolve).not.toHaveBeenCalled();
+      expect(detach.detachLive).not.toHaveBeenCalled();
+      expect(g.onReorderSessions).not.toHaveBeenCalled();
+      expect(g.onSelectSession).not.toHaveBeenCalled();
+      expect(g.list.isConnected).toBe(true);
+    });
+
+    it('a touch tap still selects the session and closes the menu', async () => {
+      const g = openMenu();
+      const name = within(g.rows[1]).getByRole('button', { name: 'beta' });
+      fireEvent.pointerDown(name, { button: 0, clientX: 200, clientY: 200, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerUp(name, { clientX: 200, clientY: 200, pointerId: 1, pointerType: 'touch' });
+      fireEvent.click(name);
+      await flushDropResolution();
+      expect(g.onSelectSession).toHaveBeenCalledTimes(1);
+      expect(g.onSelectSession).toHaveBeenCalledWith('b');
+      expect(detach.dropResolve).not.toHaveBeenCalled();
+      expect(g.list.isConnected).toBe(false);
+    });
+
+    it('touch presses on header pills still use the pill drag path', async () => {
+      const g = openMenu();
+      const pill = g.container.querySelector('[data-session-strip] [data-session-id="b"]') as HTMLElement;
+      expect(pill).toBeTruthy();
+      expect(pill.classList.contains('touch-none')).toBe(true);
+      fireEvent.pointerDown(pill, { button: 0, clientX: 100, clientY: 10, pointerId: 1, pointerType: 'touch' });
+      expect(g.onSelectSession).toHaveBeenCalledWith('b');
+      fireEvent.pointerMove(pill, { buttons: 1, clientX: 180, clientY: 10, pointerId: 1, pointerType: 'touch' });
+      fireEvent.pointerUp(pill, { clientX: 180, clientY: 10, pointerId: 1, pointerType: 'touch' });
+      await flushDropResolution();
+      expect(detach.dropResolve).toHaveBeenCalledTimes(1);
+    });
+
+    it('pressing the row with a mouse still reaches the pointer path', async () => {
       // The menu's tear-off-to-a-new-window on Windows/macOS rides that path;
       // narrowing the bail to the grip is what keeps it alive. This is the
       // positive control for the test above — same wait, opposite expectation.
@@ -806,6 +855,13 @@ describe('sessions in other windows', () => {
       expect(dt.dropEffect).toBe('move');
       fireEvent.drop(localList, { dataTransfer: dt });
       expect(detach.dragAdopt).toHaveBeenCalledWith({ sessionId: 'theirs' });
+    });
+
+    it('peer session rows allow native vertical touch panning', () => {
+      const { peerList } = mount();
+      const row = within(peerList).getByLabelText('Close session').closest('[draggable]') as HTMLElement;
+      expect(row.classList.contains('touch-pan-y')).toBe(true);
+      expect(row.classList.contains('touch-none')).toBe(false);
     });
 
     it('shows the peer session as Working when the cross-window feed says green', () => {

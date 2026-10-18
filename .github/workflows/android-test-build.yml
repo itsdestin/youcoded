@@ -5,14 +5,15 @@ on:
     inputs:
       base:
         description: >-
-          Version PREFIX to stamp into the dogfood APKs. This workflow's run
-          counter is appended automatically (e.g. 1.3.1-beta.12), and the build
-          type adds its own suffix on top, so the APKs report
-          1.3.1-beta.12-dev and 1.3.1-beta.12-releasetest. Leave it alone
-          unless the release line changes (1.3.0-beta → 1.3.1-beta when 1.3.0
-          was released, 2026-09-20 — the beta line sits one patch ahead).
+          Next-patch beta prefix. Blank selects it automatically after the official
+          release, with beta numbers restarting at 1. Build types add -dev or
+          -releasetest, e.g. 1.3.2-beta.1-releasetest after release 1.3.1.
         required: false
-        default: '1.3.1-beta'
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   build:
@@ -35,10 +36,17 @@ jobs:
       # it here would block installing a LOCAL build (still the hand-set 20)
       # over a CI one — Android refuses a lower versionCode. The analytics
       # problem is versionName's alone, so versionName is all this touches.
+      # WHY: use the same release-scoped numbering policy as public installers.
+      - uses: ./.github/actions/beta-version
+        id: beta
+        with:
+          base: ${{ inputs.base }}
+
       - name: Stamp dogfood version
         shell: bash
+        env:
+          NAME: ${{ steps.beta.outputs.version }}
         run: |
-          NAME="${{ inputs.base }}.${{ github.run_number }}"
           sed -i -E "s/versionName = \"[^\"]+\"/versionName = \"${NAME}\"/" app/build.gradle.kts
           grep -nE 'versionCode|versionName' app/build.gradle.kts | head -2
 

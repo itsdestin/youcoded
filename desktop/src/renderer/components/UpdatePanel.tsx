@@ -5,10 +5,12 @@
 // Cache lives main-side (see changelog-service.ts).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { UpdateLaunchResult } from '../../shared/update-install-types';
+import type { UpdateInstallProgressEvent, UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
-import { Button, Callout, CARD_LEVEL_1, Dialog, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, ErrorState, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
+import BrailleSpinner from './BrailleSpinner';
+import { BugReportPopup } from './development/BugReportPopup';
 import { BetaChannelRow } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
@@ -65,6 +67,7 @@ function updateErrorMessage(code: string): string {
 function updateFailureSentence(code: string, stage: 'download' | 'launch'): string {
   const own = updateErrorMessage(code);
   if (own !== 'Launch failed') return own;
+  if (stage === 'launch' && code === 'busy') return 'Another update installation is already running.';
   return stage === 'launch' ? "The installer didn't start." : "The update didn't download.";
 }
 
@@ -123,23 +126,65 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     | { kind: 'idle' }
     | { kind: 'downloading'; jobId: string | null; percent: number }
     | { kind: 'ready'; jobId: string; filePath: string }
-    | { kind: 'launching' }
+    | { kind: 'launching'; jobId: string; phase: 'preparing' | 'handoff' | Exclude<UpdateInstallProgressEvent['phase'], 'failed'>; output: string }
     // `stage` is which step failed. WHY (error inventory 2026-09-10, false message 17):
     // the label used to be chosen by retriability alone, so every failure retry could
     // not fix — including a refused or busy DOWNLOAD — read "Launch failed".
     // Linux system package with no way to ask for a password: the download is
     // on disk and `command` finishes it (2026-09-20).
     | { kind: 'manual'; command: string; filePath: string }
-    | { kind: 'error'; code: string; stage: 'download' | 'launch'; command?: string };
+    | { kind: 'error'; code: string; stage: 'download' | 'launch'; command?: string; output?: string };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
+  const [reportMode, setReportMode] = useState<'report' | 'diagnose' | null>(null);
+  const launchJobRef = useRef<string | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const lastInstallProgress = useRef<UpdateInstallProgressEvent | null>(null);
+  const unknownOutcome = installState.kind === 'error'
+    && (installState.code === 'install-timeout' || installState.code === 'launch-unknown');
+  // WHY retain only this job's bounded snapshot while closed: closing a view cannot
+  // cancel the system package manager, nor should hidden output redraw the popup.
+  const watchInstall = open || launchJobRef.current !== null;
+  useEffect(() => {
+    if (!watchInstall) return;
+    return window.claude.update.onInstallProgress((event) => {
+      if (event.jobId !== launchJobRef.current) return;
+      lastInstallProgress.current = event;
+      if (!openRef.current) return;
+      if (event.phase === 'failed') {
+        launchJobRef.current = null;
+        setInstallState({ kind: 'error', stage: 'launch', code: event.error, command: event.command, output: event.output });
+        return;
+      }
+      setInstallState(prev => prev.kind === 'launching'
+        || (prev.kind === 'error' && event.phase === 'restarting'
+          && (prev.code === 'install-timeout' || prev.code === 'launch-unknown'))
+        ? { kind: 'launching', ...event }
+        : prev);
+    });
+  }, [watchInstall]);
+  useEffect(() => {
+    if (!open || !lastInstallProgress.current) return;
+    const event = lastInstallProgress.current;
+    if (event.phase === 'failed') {
+      launchJobRef.current = null;
+      setInstallState({ kind: 'error', stage: 'launch', code: event.error, command: event.command, output: event.output });
+      return;
+    }
+    setInstallState(prev => prev.kind === 'launching'
+      || (prev.kind === 'error' && event.phase === 'restarting'
+        && (prev.code === 'install-timeout' || prev.code === 'launch-unknown'))
+      ? { kind: 'launching', ...event }
+      : prev);
+  }, [open]);
   // The one command that finishes a Linux package update by hand — shown when
   // there is no password dialog to raise, or when the install was refused.
   const [copiedCommand, setCopiedCommand] = useState(false);
   const [runningCommand, setRunningCommand] = useState(false);
   const [terminalError, setTerminalError] = useState<string | null>(null);
   const finishCommand = installState.kind === 'manual' ? installState.command
-    : installState.kind === 'error' ? installState.command
+    : installState.kind === 'error' && !unknownOutcome ? installState.command
     : undefined;
 
   const copyFinishCommand = useCallback(async (command: string) => {
@@ -177,6 +222,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // Content-Length) so the button can render an indeterminate "Downloading…"
   // label — don't clamp here.
   useEffect(() => {
+    if (!open) return;
     const unsub = window.claude.update.onProgress((ev) => {
       setInstallState(prev => {
         if (prev.kind !== 'downloading') return prev;
@@ -185,7 +231,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       });
     });
     return unsub;
-  }, []);
+  }, [open]);
 
   // When the popup opens and a completed download is already cached for this
   // version, jump straight to ready state (skip the re-download).
@@ -220,29 +266,52 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       window.claude.update.cancel(activeJobIdRef.current);
       activeJobIdRef.current = null;
     }
-    setInstallState({ kind: 'idle' });
+    // WHY preserve launch outcomes too: an error can arrive while closed, and
+    // reopening must not offer a second install over an uncertain first one.
+    setInstallState(prev => prev.kind === 'launching' || prev.kind === 'manual'
+      || (prev.kind === 'error' && prev.stage === 'launch') ? prev : { kind: 'idle' });
   }, [open]);
 
   const runLaunch = useCallback(async (jobId: string, filePath: string) => {
-    setInstallState({ kind: 'launching' });
-    const result: UpdateLaunchResult = await window.claude.update.launch(jobId, filePath);
+    if (launchJobRef.current) return;
+    launchJobRef.current = jobId;
+    lastInstallProgress.current = null;
+    setInstallState({ kind: 'launching', jobId, phase: 'preparing', output: '' });
+    let result: UpdateLaunchResult;
+    try {
+      result = await window.claude.update.launch(jobId, filePath);
+    } catch (error) {
+      // A broken transport is NOT evidence that the package manager stopped.
+      setInstallState({ kind: 'error', code: 'launch-unknown', stage: 'launch', output: plainMessage(error) });
+      return;
+    }
     if (!result.success) {
       // A Linux package install hands back the command that would finish the
       // job by hand, so a refusal is not a dead end (2026-09-20).
-      setInstallState({ kind: 'error', code: result.error, stage: 'launch', command: result.command });
+      if (result.error !== 'install-timeout') launchJobRef.current = null;
+      setInstallState({ kind: 'error', code: result.error, stage: 'launch', command: result.command, output: result.output });
       return;
     }
     if ('fallback' in result && result.fallback === 'manual') {
+      launchJobRef.current = null;
       setInstallState({ kind: 'manual', command: result.command, filePath: result.filePath });
       return;
     }
     if ('fallback' in result && result.fallback === 'browser') {
-      // .deb or missing-APPIMAGE — browser opened; close the popup.
+      // Missing APPIMAGE — browser opened; no process remains to track on reopening.
+      launchJobRef.current = null;
+      lastInstallProgress.current = null;
+      setInstallState({ kind: 'idle' });
       onClose();
       return;
     }
-    // Happy path: main process will app.quit() in ~500ms. Leave the button in
-    // "launching" state — the app is about to disappear.
+    // WHY distinguish success: “Launching” hid the completed installation during
+    // the quit grace period. The backend schedules quit only after a real success.
+    // Windows/macOS only handed off to an external installer; they did not
+    // report a finished installation. Only Linux's confirmed restart says so.
+    const progress = lastInstallProgress.current as UpdateInstallProgressEvent | null;
+    setInstallState({ kind: 'launching', jobId,
+      phase: progress?.phase === 'restarting' ? 'restarting' : 'handoff', output: progress?.output ?? '' });
   }, [onClose]);
 
   const handleUpdate = useCallback(async () => {
@@ -377,22 +446,40 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 where a fresh attempt can help (guide "A failed action replaces the buttons it
                 came from"; small-fixes-1#SF-1). No browser fallback for a damaged download:
                 that file is the one the check refused (2026-09-10 #7 review). */}
-            {installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
-              <Callout
-                tone="danger"
-                actions={(
-                  <>
-                    {installState.code !== 'verify-failed' && (
-                      <Button size="sm" variant="secondary" onClick={handleFallbackBrowser}>Open in browser instead</Button>
-                    )}
-                    {isRetriableErrorCode(installState.code) && (
-                      <Button size="sm" onClick={handleUpdate}>Try again</Button>
-                    )}
-                  </>
-                )}
-              >
-                {updateFailureSentence(installState.code, installState.stage)}
-              </Callout>
+            {installState.kind === 'launching' ? (
+              <div role="status" aria-live="polite">
+                {/* WHY retain the button (LU-1/LU-2/LU-5 review): Destin rejected bare
+                    status text. Keep the original full-width action shape as its label
+                    names each confirmed step; disabled prevents a duplicate installer. */}
+                <Button size="lg" className="w-full" disabled aria-busy="true">
+                  <span aria-hidden="true"><BrailleSpinner size="sm" colorCycle={false} className="text-inherit" /></span>
+                  {/* WHY only the last reported action: Destin asked for the button
+                      itself to update, with no extra text or expandable log below it.
+                      Main bounds/sanitizes output; cap the label too for noisy scripts. */}
+                  <span className="min-w-0 truncate">
+                    {installState.phase === 'preparing' ? 'Preparing the installer…'
+                      : installState.phase === 'authorizing' ? 'Waiting for administrator approval…'
+                      : installState.phase === 'restarting' ? 'Restarting YouCoded…'
+                      : installState.phase === 'handoff' ? 'Opening the installer…'
+                      : installState.output.trim().split(/[\r\n]+/).at(-1)?.trim().slice(0, 160) || 'Running the installer…'}
+                  </span>
+                </Button>
+              </div>
+            ) : installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
+              <ErrorState
+                {...(unknownOutcome ? {
+                  title: "Couldn't confirm the installation result.",
+                  explainer: 'The installer may still be running. Check your system’s package manager before trying another installation.',
+                  onDiagnose: () => setReportMode('diagnose'),
+                } : { message: updateFailureSentence(installState.code, installState.stage) })}
+                onReportBug={() => setReportMode('report')}
+                onRetry={isRetriableErrorCode(installState.code) ? handleUpdate : undefined}
+                details={installState.output}
+                moreActions={!unknownOutcome && installState.code !== 'verify-failed'
+                  && !(installState.stage === 'launch' && installState.code === 'busy') ? [
+                  { label: 'Open in browser instead', onClick: handleFallbackBrowser },
+                ] : undefined}
+              />
             ) : (
             <Button
               size="lg"
@@ -400,7 +487,6 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               onClick={handleUpdate}
               disabled={
                 installState.kind === 'downloading' ||
-                installState.kind === 'launching' ||
                 // The download is done and waiting on a terminal — the block
                 // below is the next step, not this button.
                 installState.kind === 'manual' ||
@@ -413,7 +499,6 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
               )}
               {installState.kind === 'ready' && 'Launch installer'}
-              {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
               {/* Only a blocked update still reaches here in the error state; every other failure
                   is the notice above. WHY the stage picks the sentence there (error inventory
@@ -441,13 +526,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                     : 'You can finish the update yourself with this command:'}
                 </p>
                 <div className="flex items-start gap-1.5 rounded-md bg-inset px-2 py-1.5">
-                  <pre className="flex-1 min-w-0 text-3xs font-mono whitespace-pre-wrap break-words select-all">{finishCommand}</pre>
+                  {/* WHY explicit ink: the system command inherited black on dark themes. */}
+                  <pre className="flex-1 min-w-0 text-3xs text-fg-2 font-mono whitespace-pre-wrap break-words select-all">{finishCommand}</pre>
                   <Button size="sm" variant="ghost" onClick={() => void copyFinishCommand(finishCommand)} className="shrink-0 -my-1">
                     {copiedCommand ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
-                <div className="flex gap-1.5 mt-1.5">
-                  <Button size="sm" onClick={() => void runFinishCommand(finishCommand)} disabled={runningCommand}>
+                <div className="flex justify-end gap-1.5 mt-1.5">
+                  <Button size="sm" variant="secondary" onClick={() => void runFinishCommand(finishCommand)} disabled={runningCommand}>
                     Run in terminal
                   </Button>
                 </div>
@@ -477,6 +563,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         {body}
         <BetaChannelRow card />
       </Dialog>
+      <BugReportPopup open={reportMode !== null} onClose={() => setReportMode(null)} context={{
+        surface: 'App update', diagnose: reportMode === 'diagnose',
+        error: installState.kind === 'error' ? installState.output ?? installState.code : undefined,
+      }} />
     </>,
     document.body,
   );

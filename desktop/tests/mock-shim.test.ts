@@ -23,6 +23,19 @@ describe('channels', () => {
     createMockShim(createStore(scenario)) as any;
 
   describe('workbench channels', () => {
+    it('replays Linux installer activity without launching a program', async () => {
+      vi.stubGlobal('location', { search: '?updateInstall=installing' });
+      try {
+        const c = shim();
+        const heard: any[] = [];
+        const off = c.update.onInstallProgress((event: any) => heard.push(event));
+        // This scenario intentionally keeps the launch pending for a stable photo.
+        void c.update.launch('wb-update-1', '/tmp/youcoded.pacman');
+        expect(heard).toContainEqual(expect.objectContaining({ jobId: 'wb-update-1', phase: 'installing' }));
+        expect(heard.at(-1).output).toContain('upgrading youcoded');
+        off();
+      } finally { vi.unstubAllGlobals(); }
+    });
     // WHY (submit-ticket friction, proposal 21): the Sync log was stamped with the real clock,
     // so every before/after picture of Backup & sync came out "changed" in the log lines alone.
     it('stamps the practice Sync log with a fixed clock, so two runs read the same', async () => {

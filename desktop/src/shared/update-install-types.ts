@@ -17,11 +17,12 @@ export type UpdateInstallErrorCode =
   | 'unsupported-platform'  // platform/arch combination we don't handle
   | 'install-cancelled'     // Linux package install: the password prompt was dismissed
   | 'install-failed'        // Linux package install: the package manager itself refused
+  | 'install-timeout'       // Still running after ten minutes: outcome unknown, not safe to retry
   | 'remote-unsupported'    // attempted from a remote-browser session
   | 'network-failed'        // download failed mid-stream
   | 'disk-full'             // ENOSPC during write
   | 'url-rejected'          // failed HTTPS / domain allowlist check
-  | 'busy'                  // another download is already active (different URL)
+  | 'busy'                  // another download or installer launch is already active
   | 'verify-failed'         // manifest/hash/size/version mismatch — corrupt download, retry once
   | 'signature-invalid'     // manifest signature didn't verify — do NOT retry, do NOT offer browser
   | 'not-supported';        // Android stub's universal error
@@ -39,6 +40,12 @@ export interface UpdateProgressEvent {
   percent: number;     // 0-100, or -1 if bytesTotal unknown
 }
 
+/** Recent real installer output; deliberately no estimated percentage. */
+export type UpdateInstallProgressEvent =
+  | { jobId: string; phase: 'authorizing' | 'installing' | 'restarting'; output: string }
+  // A timed-out invoke cannot deliver its eventual failure: push it only once the child closes.
+  | { jobId: string; phase: 'failed'; output: string; error: UpdateInstallErrorCode; command?: string };
+
 export type UpdateLaunchResult =
   | { success: true; quitPending: true }                         // installer spawned, app.quit() scheduled
   | { success: true; quitPending: false; fallback: 'browser' }   // missing-APPIMAGE: shell.openExternal, app keeps running
@@ -47,7 +54,7 @@ export type UpdateLaunchResult =
   | { success: true; quitPending: false; fallback: 'manual'; command: string; filePath: string }
   // `command` rides along on a failed package install so the UI can offer the
   // same manual finish instead of a dead end.
-  | { success: false; error: UpdateInstallErrorCode; command?: string };
+  | { success: false; error: UpdateInstallErrorCode; command?: string; output?: string };
 
 export interface UpdateCachedDownload {
   filePath: string;

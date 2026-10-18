@@ -149,6 +149,7 @@ export const IPC = {
   UPDATE_CANCEL: 'update:cancel',
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
+  UPDATE_INSTALL_PROGRESS: 'update:install-progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
   UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
@@ -1177,9 +1178,7 @@ interface ClaudeApi {
   terminal: {
     getScreenText: (sessionId: string, tailRows?: number) => Promise<string>;
   };
-  // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
-  // main/changelog-service.ts). When you edit one, edit all three — this copy
-  // isn't covered by the ipc-channels.test.ts parity test and will drift silently.
+  // Shared update results keep both bridges typed against the same protocol.
   update: {
     changelog: (opts: { forceRefresh: boolean }) => Promise<UpdateChangelogResult>;
     // In-app update installer (Task 7). Mirrors preload.ts + remote-shim.ts.
@@ -1193,6 +1192,7 @@ interface ClaudeApi {
     getBetaChannel: () => Promise<UpdateBetaChannelState>;
     setBetaChannel: (enabled: boolean) => Promise<UpdateBetaChannelState>;
     onProgress: (handler: (ev: import('./update-install-types').UpdateProgressEvent) => void) => () => void;
+    onInstallProgress: (handler: (ev: import('./update-install-types').UpdateInstallProgressEvent) => void) => () => void;
   };
   remote: {
     getConfig: () => Promise<any>;
