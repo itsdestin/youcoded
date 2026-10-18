@@ -168,6 +168,15 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // Actual panel driven through its launch callback; only the backend is faked.
+  ...['authorizing', 'installing', 'restarting', 'failed', 'timeout'].map(phase => ({
+    ...chat(`chat/update#${phase}`, 'dialog', 'update-install'),
+    params: { update: 'available', updateInstall: phase },
+    open: ['Launch installer'],
+  })),
+  { ...chat('chat/update#installing-phone', 'dialog', 'narrow'),
+    params: { update: 'available', updateInstall: 'installing' },
+    open: ['Launch installer'], viewport: { width: 390, height: 844 } },
   // The update's download failed: the notice box with its sentence, Open in browser instead and
   // Try again, in the Update button's place (small-fixes-2).
   { ...chat('chat/update#download-failed', 'dialog', 'error-state'), params: { update: 'available', fail: 'update.download' }, open: ['Update now…'] },

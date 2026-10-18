@@ -20,13 +20,8 @@ if (['buddy-mascot', 'buddy-chat', 'buddy-bar'].includes(buddyMode ?? '')) {
   webFrame.setZoomFactor(1);
 }
 
-// Mirrored type — must match ChangelogResult in src/main/changelog-service.ts.
-interface ChangelogIpcResult {
-  markdown: string | null;
-  entries: Array<{ version: string; date?: string; body: string }>;
-  fromCache: boolean;
-  error?: boolean;
-}
+// WHY type-only shared alias: avoid a drifting mirrored update result in the sandbox.
+type ChangelogIpcResult = import('../shared/update-install-types').UpdateChangelogResult;
 
 // IPC channel names inlined here because Electron's sandboxed preload
 // cannot resolve relative imports to other modules. The list below is GENERATED from
@@ -101,6 +96,7 @@ const IPC = {
   UPDATE_CANCEL: 'update:cancel',
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
+  UPDATE_INSTALL_PROGRESS: 'update:install-progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',
   UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',
@@ -1519,13 +1515,14 @@ contextBridge.exposeInMainWorld('claude', {
     cancel: (jobId: string) => ipcRenderer.invoke(IPC.UPDATE_CANCEL, { jobId }),
     launch: (jobId: string, filePath: string) => ipcRenderer.invoke(IPC.UPDATE_LAUNCH, { jobId, filePath }),
     getCachedDownload: (version: string) => ipcRenderer.invoke(IPC.UPDATE_GET_CACHED_DOWNLOAD, { version }),
-    // `betaChannel` is the saved answer (null = never chosen); `effective` is what
-    // the next check will actually use, which for an unchosen install is whether
-    // this build is itself a beta. The toggle renders `effective`.
-    getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
-      ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
-    setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
-      ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, { enabled }),
+    // Shared UpdateBetaChannelState documents saved versus effective channel.
+    getBetaChannel: (): Promise<import('../shared/update-install-types').UpdateBetaChannelState> => ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
+    setBetaChannel: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateBetaChannelState> => ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, { enabled }),
+    onInstallProgress: (handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => {
+      const wrap = (_event: unknown, ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => handler(ev);
+      ipcRenderer.on(IPC.UPDATE_INSTALL_PROGRESS, wrap);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_INSTALL_PROGRESS, wrap);
+    },
     onProgress: (handler: (ev: { jobId: string; bytesReceived: number; bytesTotal: number; percent: number }) => void) => {
       const wrap = (_event: unknown, ev: any) => handler(ev);
       ipcRenderer.on(IPC.UPDATE_PROGRESS, wrap);

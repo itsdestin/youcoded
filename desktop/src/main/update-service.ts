@@ -162,7 +162,27 @@ function createUpdateService() {
     },
   });
 
+  let launchActive = false;
+  let quitScheduled = false;
+  function scheduleQuit() {
+    if (quitScheduled) return;
+    quitScheduled = true;
+    // Keep launch ownership during the grace period too: a new launch cannot race quit.
+    setTimeout(() => app.quit(), 500);
+  }
+
   const launchInstaller = makeLaunchInstaller({
+    onInstallProgress: (event) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('update:install-progress', event);
+      }
+    },
+    onLateInstallResult: (result) => {
+      // WHY timeout is not termination: keep the guard until the real close event,
+      // and still restart a successful update even after the invoke returned unknown.
+      if (result.success && result.quitPending) scheduleQuit();
+      else launchActive = false;
+    },
     shellOpenExternal: (url: string) => shell.openExternal(url),
     appRelaunch: () => app.relaunch(),
     fallbackDownloadUrl: () => cachedUpdateStatus?.download_url ?? '',
@@ -295,6 +315,20 @@ function createUpdateService() {
   }
 
   async function launch(payload: { jobId: string; filePath: string }) {
+    // WHY acquire before the first await: verification itself can overlap across windows.
+    if (launchActive) return { success: false as const, error: 'busy' as const };
+    launchActive = true;
+    try {
+      const result = await launchVerified(payload);
+      if (!(result.success ? result.quitPending : result.error === 'install-timeout')) launchActive = false;
+      return result;
+    } catch (error) {
+      launchActive = false;
+      throw error;
+    }
+  }
+
+  async function launchVerified(payload: { jobId: string; filePath: string }) {
     if (devFakeUpdate) {
       // Never actually launch anything in dev — just surface the cached file in
       // the OS file manager so Destin can confirm it exists.
@@ -313,8 +347,7 @@ function createUpdateService() {
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
     if (result.success && result.quitPending) {
-      // 500ms grace so the child installer process has detached cleanly before we exit.
-      setTimeout(() => app.quit(), 500);
+      scheduleQuit();
     }
     return result;
   }
