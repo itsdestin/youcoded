@@ -6,13 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: 'Beta base version (the run number is appended, e.g. 1.3.1-beta.30)'
-        required: true
-        default: '1.3.1-beta'
+        description: 'Next-patch beta prefix; leave blank to select it automatically. Beta numbers reset after each official release.'
+        required: false
+        default: ''
         type: string
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -21,26 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # WHY: every CI build used to inherit build.gradle.kts's hand-edited
-      # versionCode 20 / versionName "1.2.4" — the May release — so every beta
-      # APK on GitHub was byte-for-byte the same identity as v1.2.4: the About
-      # screen lied, a phone could not tell a beta was newer, and Play would
-      # reject the duplicate versionCode (found 2026-09-10, audit §6). Mirror of
-      # desktop-test-build.yml's "Stamp beta version": the version name is the
-      # tag for a tag build and <base>.<run_number> for a dispatched beta; the
-      # versionCode is 100 + this workflow's own always-increasing run number
-      # (25 runs when this landed, so the first stamped build is 126) — above
-      # the hand-set 20, monotonic across betas AND tag releases because both
-      # come through this one workflow, and it maps an installed build straight
-      # back to its run in the Actions tab. Local builds keep the hand-set
-      # values; they are never distributed.
+      - uses: ./.github/actions/beta-version
+        if: github.event_name == 'workflow_dispatch'
+        id: beta
+        with:
+          base: ${{ inputs.base }}
+
+      # WHY: visible beta numbers reset after each official release, but Android's
+      # internal versionCode must keep increasing across both betas and releases.
+      # Tagged builds keep the exact tag version and never resolve a beta.
       - name: Stamp version
         shell: bash
+        env:
+          BETA_VERSION: ${{ steps.beta.outputs.version }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             NAME="${GITHUB_REF#refs/tags/v}"
           else
-            NAME="${{ inputs.base }}.${{ github.run_number }}"
+            NAME="$BETA_VERSION"
           fi
           CODE=$((100 + ${{ github.run_number }}))
           sed -i -E "s/versionCode = [0-9]+/versionCode = ${CODE}/; s/versionName = \"[^\"]+\"/versionName = \"${NAME}\"/" app/build.gradle.kts
