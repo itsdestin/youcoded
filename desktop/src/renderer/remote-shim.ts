@@ -2463,6 +2463,8 @@ export function installShim(): void {
         invoke('update:get-beta-channel'),
       setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
         invoke('update:set-beta-channel', { enabled }),
+      // WHY no socket listener: update:install-progress is desktop-only, just like launch.
+      onInstallProgress: (_handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => () => {},
       onProgress: (_handler: (ev: any) => void) => {
         // No-op on remote browsers — they never emit progress.
         return () => {};

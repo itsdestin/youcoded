@@ -42,6 +42,7 @@ import { playReply, resolvePermission, parseReplyScript, isControl, splitTurns, 
 import { JAKE_ID, JAKE_USERNAME } from './fake-party';
 import { MIRA_ID, arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
 import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
+import type { UpdateInstallProgressEvent, UpdateLaunchResult } from '../../../shared/update-install-types';
 import type {
   GitFileStatusResult, GitFileReviewResult, GitLogEntry, GitCommitFileDiffResult, GitOpResult,
 } from '../../../shared/git-types';
@@ -269,7 +270,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Update panel can be opened and its download made to fail. onProgress is left to the
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
-  'update.getBetaChannel', 'update.setBetaChannel',
+  'update.getBetaChannel', 'update.setBetaChannel', 'update.onInstallProgress',
   // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
   // hand-written so the workbench serves the seeded comment fixtures instead
   // of the catch-all's `[]`, which the store's own `list()` would read as
@@ -3845,13 +3846,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // The app's own update flow (UpdatePanel). Only reachable with ?update=available — without
   // it no pill renders. WHY hand-written: the catch-all's `[]` from getCachedDownload is
   // TRUTHY, so the panel jumped straight to "Launch Installer" and never downloaded.
+  // WHY scripted installer output: show the real panel's waiting/activity/failure
+  // states without ever asking for privileges or modifying an installed app.
+  const updateInstall = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('updateInstall') : null;
+  const updateInstallListeners = new Set<(event: UpdateInstallProgressEvent) => void>();
   const update = {
+    onInstallProgress: (handler: (event: UpdateInstallProgressEvent) => void) => {
+      updateInstallListeners.add(handler);
+      return () => { updateInstallListeners.delete(handler); };
+    },
     changelog: async () => ({
       markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
       entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
       fromCache: false,
     }),
-    getCachedDownload: async () => null,
+    getCachedDownload: async () => updateInstall ? { filePath: '/tmp/youcoded-1.3.0.pacman', version: '1.3.0' } : null,
     // The About → Updates toggle reads this on mount. `effective: false` is the
     // ordinary case (a release build that never chose), so the workbench shows
     // the row in the state most people see.
@@ -3859,7 +3868,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     setBetaChannel: async (enabled: boolean) => ({ betaChannel: enabled, effective: enabled }),
     download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
     cancel: async () => undefined,
-    launch: async () => ({ success: true as const, quitPending: false as const, fallback: 'browser' as const }),
+    launch: async (jobId: string): Promise<UpdateLaunchResult> => {
+      if (!updateInstall) return { success: true, quitPending: false, fallback: 'browser' };
+      if (updateInstall === 'failed') return {
+        success: false, error: 'install-failed',
+        command: 'sudo pacman -U /tmp/youcoded-1.3.0.pacman',
+        output: 'error: failed to init transaction (unable to lock database)\nerror: could not lock database: File exists',
+      };
+      if (updateInstall === 'timeout') return {
+        success: false, error: 'install-timeout', output: 'Running post-install hooks…',
+      };
+      const phase = updateInstall === 'authorizing' ? 'authorizing' : updateInstall === 'restarting' ? 'restarting' : 'installing';
+      const event: UpdateInstallProgressEvent = {
+        jobId, phase,
+        output: phase === 'authorizing' ? '' : 'checking package integrity…\nloading package files…\nupgrading youcoded…\nRunning post-install hooks…',
+      };
+      for (const handler of updateInstallListeners) handler(event);
+      return new Promise(() => {}); // parked at this real lifecycle stage for a stable photo
+    },
   };
 
   return {
