@@ -11,6 +11,15 @@ import { POSES } from '../src/renderer/components/mascot/mascot-poses';
 describe('rig animation continuity', () => {
   afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+  it('keeps decorative rig shapes click-through unless explicitly interactive', () => {
+    const motionRef = { current: { vx: 0, vy: 0, dragging: false } };
+    const view = render(<MascotRig svgUrl={null} pose="idle" motionRef={motionRef} reducedEffects />);
+    const shape = view.container.querySelector('svg path, svg rect, svg circle')!;
+    expect(getComputedStyle(shape).pointerEvents).toBe('none');
+    view.rerender(<MascotRig svgUrl={null} pose="idle" motionRef={motionRef} reducedEffects hitTestable />);
+    expect(getComputedStyle(shape).pointerEvents).toBe('auto');
+  });
+
   it('keeps the animated SVG mounted across pose changes', () => {
     const motionRef = { current: { vx: 0, vy: 0, dragging: false } };
     const view = render(<MascotRig svgUrl={null} pose="peek-left" motionRef={motionRef} reducedEffects={false} />);

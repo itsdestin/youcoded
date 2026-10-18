@@ -40,8 +40,11 @@ const ANSI = /\x1b\[[0-9;?]*[a-zA-Z]/g;
 // 10, not more: a phone-width terminal draws a short box (review F11).
 const EDGE = /^[─━]{10,}\s*$/;
 
-/** The first row inside the message box: the prompt mark, or bash mode's "!". */
-const INPUT_ROW = /^(❯|!)(\s|$)/;
+/** The first row inside the message box: Unicode/ASCII prompt, or bash mode's "!".
+ * WHY: a Windows desktop launch without a Unicode-terminal environment draws
+ * `>` (observed CC 2.1.302), not `❯`. The enclosing two rules still establish
+ * a message box; a bare quote or indented menu arrow is never enough. */
+const INPUT_ROW = /^(❯|>|!)(\s|$)/;
 
 // Modes that keep a box on screen but take the keyboard away from the
 // message. Wording, unavoidably — the box looks identical — so the drift check

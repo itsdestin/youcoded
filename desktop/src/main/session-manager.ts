@@ -404,6 +404,11 @@ export class SessionManager extends EventEmitter {
 
     const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
     this.sessions.set(id, session);
+    // WHY: session-created observers immediately construct the host's screen
+    // reader. Publish the same geometry we send to the worker BEFORE that event;
+    // otherwise a 100-column ConPTY screen is decoded as 80 columns until resize.
+    const spawnSize = { cols: opts.cols || 80, rows: opts.rows || 24 };
+    this.ptySizes.set(id, spawnSize);
     this.emit('session-created', info);
 
     // Handle spawn failure (e.g., node not on PATH) — without this,
@@ -538,8 +543,7 @@ export class SessionManager extends EventEmitter {
         command: isShell ? shellCommand : 'claude',
         args,
         cwd: resolvedCwd,
-        cols: opts.cols || 80,
-        rows: opts.rows || 24,
+        ...spawnSize,
         // Session ID + pipe name for hook event correlation. Both are blanked
         // for a shell session: there is no hook pipe for it, so if the user
         // happens to start Claude Code inside this terminal it must not report
@@ -548,7 +552,6 @@ export class SessionManager extends EventEmitter {
         sessionId: isShell ? '' : id,
         pipeName: isShell ? '' : this.pipeName,
       });
-      this.ptySizes.set(id, { cols: opts.cols || 80, rows: opts.rows || 24 });
     } catch {
       // The 'error' handler above will clean up the session asynchronously.
     }

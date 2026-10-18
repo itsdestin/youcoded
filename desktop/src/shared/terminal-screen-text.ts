@@ -10,6 +10,8 @@ export interface ScreenBuffer {
   getLine(y: number): { readonly isWrapped: boolean; translateToString(trimRight?: boolean): string } | undefined;
 }
 
+const TUI_RULE = /^[─━▔]{10,}\s*$/;
+
 /**
  * The buffer as text, wrapped rows joined into one logical line.
  *
@@ -34,7 +36,11 @@ export function screenTextOf(buf: ScreenBuffer, tailRows?: number): string {
     const line = buf.getLine(i);
     if (!line) continue;
     const text = line.translateToString(true);
-    if (line.isWrapped) current += text; // continuation of the previous line: append without a newline
+    // WHY: Windows ConPTY marks rows beside a full-width TUI rule as wrapped.
+    // Joining them turns the message box into `────❯ draft` / `──── status`,
+    // so the keyboard gate sees a popup forever (including after Send anyway's
+    // Escape). Preserve these physical boundaries, but still join normal prose.
+    if (line.isWrapped && !TUI_RULE.test(current) && !TUI_RULE.test(text)) current += text;
     else {
       if (current) lines.push(current);
       current = text;

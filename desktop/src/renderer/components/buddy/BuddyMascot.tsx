@@ -454,7 +454,7 @@ export function BuddyMascot() {
           <div className={showAttention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
-                <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} />
+                <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} hitTestable />
               </div>
             ) : (
               <img

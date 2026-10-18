@@ -890,16 +890,15 @@ export default function SessionStrip({
   const handlePointerDown = useCallback((e: React.PointerEvent, sessionId: string, inStrip = false) => {
     // Only primary button
     if (e.button !== 0) return;
-    // WHY (2026-09-07, Destin: "i cant seem to grab the drag handle for
-    // same-window sessions"): the All Sessions menu's grip is a native
-    // draggable (see the menu list below). Two reasons this path must not
-    // engage from it. It cannot do the job — its target slot comes from
-    // clientX against the pill bar and ignores Y, so a vertical list drag
-    // lands nowhere. And on the live-window model it takes pointer capture,
-    // which can stop Chromium ever firing dragstart (same reason the
-    // html-drag branch below skips capture). Pressing anywhere ELSE on a menu
-    // row still takes this path, so the tear-off-from-the-menu it supports on
-    // Windows/macOS is untouched.
+    // WHY: a finger swipe in the vertical menu belongs to native scrolling,
+    // not the pill bar's drag/tear-off path. Use the actual pointer so this
+    // also works in remote browsers and on touchscreen laptops. Taps still
+    // select through the row's click handler; header pill drags are unchanged.
+    if (!inStrip && e.pointerType === 'touch') return;
+    // WHY (2026-09-07): the menu's native drag grip owns vertical reordering.
+    // The pill path ignores Y and its pointer capture can prevent dragstart.
+    // Mouse presses elsewhere on a menu row still use this path for tear-off
+    // on Windows/macOS; touch presses above are reserved for native scrolling.
     if ((e.target as HTMLElement).closest?.('[data-menu-drag-grip]')) return;
     lastPointerType.current = e.pointerType || 'mouse';
     // Another pill's peek closes NOW, before the drag geometry is frozen below:
@@ -2422,7 +2421,7 @@ export default function SessionStrip({
                     // (job D's hover/selected collision). Only the colour
                     // token changes here — every drag/motion class above and
                     // below this line is untouched.
-                    className={`relative flex items-center pr-1 group/row select-none touch-none ${
+                    className={`relative flex items-center pr-1 group/row select-none touch-pan-y ${
                       menuDragId === s.id ? 'opacity-40 ' : ''
                     }${
                       shiftNavIdx === idx
@@ -2647,7 +2646,7 @@ export default function SessionStrip({
                           // A drag abandoned outside any drop target still has
                           // to put the list's highlight back.
                           onDragEnd={endMenuDrag}
-                          className="relative flex items-center pr-1 group/row select-none touch-none text-fg-dim hover:bg-inset hover:text-fg"
+                          className="relative flex items-center pr-1 group/row select-none touch-pan-y text-fg-dim hover:bg-inset hover:text-fg"
                           style={{
                             animation: `row-fade-in 100ms ease both`,
                             animationDelay: `${idx * 20}ms`,
