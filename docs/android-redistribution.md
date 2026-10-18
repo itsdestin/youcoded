@@ -108,8 +108,12 @@ is `app/build/runtime/<variant>/sources/`, generated from that variant's evidenc
   member names in the manifest. Nested archives and arbitrary notice filenames
   are not recursively interpreted. This is preservation, not semantic completeness.
 - `crates/` below ripgrep: original crates.io archives selected by the source Cargo.lock,
-  checked against its SHA256 values, with original embedded dependency notices retained.
-  This is not a claim that Cargo has been configured for a fully offline rebuild.
+  checked against its SHA256 values, with original dependency notices retained.
+  This includes target-specific lockfile entries; it is not proof every crate was compiled
+  into Android, nor a claim of a fully offline Cargo build. If a crate omits its license
+  file, a clean recorded GitHub commit and an explicitly offered MIT alternative allow
+  retaining the original `LICENSE-MIT` from that exact commit. Its URL, commit and license
+  choice are recorded; dirty/unknown provenance or other hosts fail rather than inventing terms.
 - `coverage.json`: hashes of retained bytes, exact origin/commit set, original
   archive URL, recipe/file references, embedded crate archives, evidence and stamped
   local-input binding, objective residuals and review notes. No reviewer-authored files

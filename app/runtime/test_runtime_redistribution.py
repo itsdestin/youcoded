@@ -433,6 +433,35 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual((self.root / found[0]['path']).read_text(), content)
 
+    def test_crate_omitting_its_mit_file_uses_original_exact_commit_notice(self):
+        commit = 'b' * 40
+        crate = self.root / 'target-only.crate'
+        crate.write_bytes(self.apk({
+            'target-only/Cargo.toml': '[package]\nname="target-only"\nversion="1"\nlicense="Apache-2.0 OR MIT"\nrepository="https://github.com/example/project"\n',
+            'target-only/.cargo_vcs_info.json': json.dumps({'git': {'sha1': commit}}),
+        }))
+        self.assertTrue(hasattr(r.collector, 'upstream_crate_notice'), 'notice collection needs immutable upstream provenance for omitted crate files')
+        original = b'Permission is hereby granted, free of charge. Original upstream MIT text.'
+        with patch.object(r.collector.urllib.request, 'urlopen', return_value=io.BytesIO(original)) as request:
+            found = r.collector.upstream_crate_notice(self.root, self.root / 'crate-notices', crate)
+        request.assert_called_once_with(f'https://raw.githubusercontent.com/example/project/{commit}/LICENSE-MIT', timeout=60)
+        self.assertEqual((self.root / found[0]['path']).read_bytes(), original)
+        self.assertEqual(found[0]['license_choice'], 'MIT')
+        self.assertEqual(found[0]['upstream_commit'], commit)
+
+    def test_upstream_notice_recovery_rejects_untrusted_or_dirty_provenance(self):
+        for repository, dirty in [('http://127.0.0.1/private', False), ('https://github.com/example/project', True)]:
+            with self.subTest(repository=repository, dirty=dirty):
+                crate = self.root / 'unsafe.crate'
+                crate.write_bytes(self.apk({
+                    'unsafe/Cargo.toml': f'[package]\nlicense="MIT"\nrepository="{repository}"\n',
+                    'unsafe/.cargo_vcs_info.json': json.dumps({'git': {'sha1': 'b' * 40, 'dirty': dirty}}),
+                }))
+                with patch.object(r.collector.urllib.request, 'urlopen') as request:
+                    with self.assertRaisesRegex(ValueError, 'verified exact-commit'):
+                        r.collector.upstream_crate_notice(self.root, self.root / 'unsafe-notices', crate)
+                    request.assert_not_called()
+
     def test_recipe_local_symlinks_are_materialized_but_escaping_and_cycles_fail(self):
         for target, accepted in [('bash.post-install', True), ('../../outside', False), ('bash.post-upgrade', False)]:
             with self.subTest(target=target):

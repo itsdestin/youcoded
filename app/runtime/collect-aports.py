@@ -147,6 +147,34 @@ def validate_cargo_archives(root, inputs, entries):
             raise ValueError(f'Embedded Cargo.lock checksum mismatch: {name}')
 
 
+def upstream_crate_notice(root, output, archive):
+    """Recover an offered MIT notice from the exact upstream commit, never invent it."""
+    with tarfile.open(archive) as tree:
+        manifests = [m for m in tree if m.isfile() and len(Path(m.name).parts) == 2 and Path(m.name).name == 'Cargo.toml']
+        if len(manifests) != 1:
+            raise ValueError(f'No unique crate manifest for missing notice: {archive.name}')
+        member = manifests[0]
+        metadata = tomllib.loads(tree.extractfile(member).read().decode())['package']
+        vcs = json.load(tree.extractfile(str(Path(member.name).parent / '.cargo_vcs_info.json')))
+    commit = vcs.get('git', {}).get('sha1', '')
+    repository = re.fullmatch(r'https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?', metadata.get('repository', ''))
+    if (not repository or any(part in ('.', '..') for part in repository.groups()) or
+            not re.fullmatch(r'[0-9a-f]{40}', commit) or vcs.get('git', {}).get('dirty', False) or
+            'MIT' not in re.split(r'\s+OR\s+', metadata.get('license', ''))):
+        raise ValueError(f'Missing notice requires a verified exact-commit MIT source: {archive.name}')
+    url = f'https://raw.githubusercontent.com/{repository[1]}/{repository[2]}/{commit}/LICENSE-MIT'
+    with urllib.request.urlopen(url, timeout=60) as response:
+        content = response.read()
+    if b'Permission is hereby granted' not in content:
+        raise ValueError(f'Upstream file is not the offered MIT notice: {url}')
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / 'upstream-LICENSE-MIT'
+    destination.write_bytes(content)
+    return [dict(reference(root, destination), source=url, member='LICENSE-MIT',
+                 upstream_commit=commit, license_choice='MIT')]
+
+
 def cargo_notices(root, origin_dir, inputs):
     """Keep locked crate archives and their original notices; never run Cargo code."""
     archives = []
@@ -164,7 +192,10 @@ def cargo_notices(root, origin_dir, inputs):
     for index, archive in enumerate(archives):
         found = notices(root, origin_dir / 'embedded' / str(index), [archive])
         if not found:
-            raise ValueError(f'No embedded crate notices retained: {archive.name}')
+            # WASI-related packages in Cargo.lock can omit LICENSE files from
+            # their .crate. Preserve their real upstream notice at the crate's
+            # own recorded commit, with its explicitly offered MIT alternative.
+            found = upstream_crate_notice(root, origin_dir / 'embedded' / str(index), archive)
         embedded_notices.extend(found)
     return [reference(root, archive) for archive in archives], embedded_notices
 
