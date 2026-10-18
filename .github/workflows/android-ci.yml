@@ -21,6 +21,11 @@ on:
         type: boolean
         default: false
 
+# WHY: cancel stale PR checks only; independent master/manual runs must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     name: ${{ inputs.collect_sources && 'Android source preflight' || 'build' }}

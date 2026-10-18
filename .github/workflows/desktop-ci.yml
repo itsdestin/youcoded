@@ -9,33 +9,10 @@ on:
   # failing pushes) without anyone noticing. `pull_request` also lets
   # Dependabot's `dependabot/**` PRs run checks; they matched none of the old
   # push patterns. `push: [master]` keeps the post-merge run on master.
-  # docs/** is skipped: every step in this workflow runs inside `desktop/`
-  # (npm ci, npm test, knip, eslint, npm run build) and none of them reads
-  # docs/. A docs-only change was costing ~15 minutes of builds across three
-  # operating systems for a diff that cannot affect any of them.
-  #
-  # This is NOT the branch-name allowlist described above coming back. That one
-  # was a PROXY -- a guess at "is this a PR" that guessed wrong. This is a
-  # direct claim about which files the build reads, and `paths-ignore` skips a
-  # PR only when EVERY changed file matches, so anything touching docs/ AND
-  # src/ still runs the whole matrix.
-  #
-  # THE ONE TRAP, written down because it is invisible until it bites: a
-  # skipped workflow reports NO status, not a passing one. If master is ever
-  # given branch protection with `build` as a required check, docs-only PRs
-  # will sit unmergeable forever waiting for a run that never starts. Turning
-  # protection on means dropping this filter, or making the required check a
-  # tiny always-runs job. Master was unprotected until 2026-09-16 (see below
-  # and the `docs-only` job).
-  #
-  # 2026-09-16 (CI/test health review, Destin's deck answers Q-1 and Q-2): the
-  # `paths-ignore` filters are GONE, replaced by the `changes` job below, so a
-  # docs-only change still produces a COMPLETED check (skipped counts as passing
-  # for a required status check; a filtered-out workflow reports nothing and
-  # blocks forever). That is what lets master be protected. And every PR runs
-  # Linux only; Windows and macOS run on every push to master and once a night —
-  # they are the slow, machine-flaky legs, nobody on the project has either
-  # machine, and a Windows-only break is still caught the same day it lands.
+  # WHY: do not filter out docs-only runs at the trigger: that would omit the
+  # required status entirely. The policy proves docs-only and the always-running
+  # completion matrix still emits build (ubuntu-latest), including on failures.
+  # PRs retain Linux coverage; master, nightly and manual runs retain all OSes.
   push:
     branches: [master]
   pull_request:
@@ -50,10 +27,15 @@ on:
         options: [all, browser]
         default: all
 
+# WHY: supersede only older runs of the same PR, never independent manual,
+# nightly or master runs. Workflow namespace keeps Android cancellation separate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # Did anything outside docs/ change? Every step of `build` runs inside desktop/
-  # and none reads docs/, so a docs-only diff skips the matrix — but as a SKIPPED
-  # job with a completed check, never as a run that does not exist.
+  # Only a proven nonempty docs-only diff skips the expensive jobs. Failures,
+  # unknown events, empty diffs and mixed paths never mean docs-only success.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -62,47 +44,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - id: filter
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ github.event_name }}" in
-            pull_request) range="origin/${{ github.base_ref }}...HEAD" ;;
-            push)
-              before="${{ github.event.before }}"
-              # A brand-new branch has no `before`; run everything.
-              if [[ "$before" =~ ^0+$ ]]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-              range="$before..${{ github.sha }}" ;;
-            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
-          esac
-          if git diff --name-only "$range" | grep -qv '^docs/'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "changed files outside docs/: $(git diff --name-only "$range" | grep -vc '^docs/' || true)"
+        run: node scripts/ci-policy.mjs changes
 
-  # Stand-in for the required check on a docs-only change. WHY (2026-09-16,
-  # probe PR #492): master requires `build (ubuntu-latest)`, but a SKIPPED
-  # matrix job never expands its matrix — it reports as plain `build`, so the
-  # required context never appeared and a docs-only PR sat BLOCKED. This job
-  # carries the same display name and runs ONLY when `build` is skipped, so
-  # exactly one `build (ubuntu-latest)` result exists on every PR. If `changes`
-  # itself fails, both are skipped and the PR stays blocked — fail closed.
-  docs-only:
-    needs: changes
-    if: needs.changes.outputs.code == 'false'
-    name: build (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - run: echo "docs-only change — nothing under desktop/ to build or test"
-
-  build:
-    # WHY: a focused pass must never satisfy the protected full-suite status check.
-    name: ${{ inputs.test_scope == 'browser' && format('browser diagnostics ({0})', matrix.os) || format('build ({0})', matrix.os) }}
+  # WHY: cheap checks gate both expensive lanes, which use independent checkouts.
+  preflight:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     # Windows runs the TESTS only (not the packaging build) because a whole
@@ -135,7 +84,10 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      # WHY: release numbering lives outside desktop/, so Vitest never discovers it.
+      # WHY: these dependency-free policies live outside Vitest's discovery root.
+      - name: Test CI policy
+        run: node --test ../scripts/ci-policy.test.mjs
+
       - name: Test beta version numbering
         run: node --test ../scripts/beta-version.test.mjs
 
@@ -151,18 +103,6 @@ jobs:
       # the two compilers cannot ship unnoticed.
       - name: Type check (tsgo)
         run: npm run typecheck
-
-      - name: Run tests
-        if: inputs.test_scope != 'browser'
-        run: npm test
-
-      # WHY: capture protocol evidence in a focused run without changing the full
-      # suite's shell or defaults. This is diagnostics, not a full-suite green light.
-      - name: Browser diagnostics
-        if: inputs.test_scope == 'browser'
-        env:
-          DEBUG: 'pw:protocol,pw:browser*'
-        run: npx vitest run tests/assistant-browser.test.ts tests/assistant-browser-host.test.ts tests/assistant-browser-live.test.ts tests/assistant-browser-native.test.ts tests/aria-props.test.ts tests/desktop-ci.test.ts --maxWorkers=1
 
       # Dead-code check. Deliberately a SEPARATE step rather than chained onto
       # `npm test` — that script is bare `vitest` (watch-capable), so chaining
@@ -192,6 +132,55 @@ jobs:
       - name: Design lint (oxlint, ratchet)
         run: npm run lint:design
 
+  tests:
+    needs: [changes, preflight]
+    if: needs.changes.outputs.code == 'true' && needs.preflight.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        if: inputs.test_scope != 'browser'
+        run: npm test
+      # WHY: diagnostics retain the full suite's inherited shell, but can never
+      # produce the protected full-build status or trigger installer packaging.
+      - name: Browser diagnostics
+        if: github.event_name == 'workflow_dispatch' && inputs.test_scope == 'browser'
+        env:
+          DEBUG: 'pw:protocol,pw:browser*'
+        run: npx vitest run tests/assistant-browser.test.ts tests/assistant-browser-host.test.ts tests/assistant-browser-live.test.ts tests/assistant-browser-native.test.ts tests/aria-props.test.ts tests/desktop-ci.test.ts --maxWorkers=1
+
+  # WHY: package in parallel with tests, on its own pristine checkout and deps.
+  # Never consume files generated or mutated by a test matrix leg.
+  package:
+    needs: [changes, preflight]
+    if: needs.changes.outputs.code == 'true' && needs.preflight.result == 'success' && inputs.test_scope != 'browser'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install dependencies
+        run: npm ci
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers
       # run inside `npm run build` (see desktop/electron-builder.yml linux.target).
       # PR #98 added rpm + pacman targets without updating CI, so every Desktop
@@ -203,7 +192,6 @@ jobs:
       # regressed on before, and the Windows NSIS build is already covered by
       # desktop-test-build.yml / desktop-release.yml. Windows stops after tests.
       - name: Install Linux build deps
-        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
         # apt-get update prefix: the cached package index on ubuntu-latest
         # frequently points to .deb versions that have already rolled off
         # the mirror, so a bare `install` fails with HTTP 404 / exit 100.
@@ -212,5 +200,26 @@ jobs:
         working-directory: .
 
       - name: Build
-        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
         run: npm run build
+
+  # WHY: the required context must expand its matrix even after failed/skipped
+  # dependencies. Only the executable exact-result gate can mark it successful.
+  build:
+    name: ${{ inputs.test_scope == 'browser' && format('browser diagnostics ({0})', matrix.os) || format('build ({0})', matrix.os) }}
+    needs: [changes, preflight, tests, package]
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Verify completion
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+          CI_TEST_SCOPE: ${{ inputs.test_scope }}
+        run: node scripts/ci-policy.mjs gate
