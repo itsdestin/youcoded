@@ -1,0 +1,227 @@
+name: EXPERIMENT ONLY - Linux packaging and four test shards
+
+# WHY PR-only: a new dispatch workflow is not registered before landing on master.
+# This diagnostic must never impersonate the required build (ubuntu-latest) check.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-speed-experiment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prep:
+    name: Diagnostic - preflight and one prepared Linux app
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-build-bench' && github.base_ref != 'session/29-linux-build-bench' && github.head_ref != 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - name: Policy and benchmark regressions (production contracts unchanged)
+        run: node scripts/linux-build-bench.mjs stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs
+      - run: node scripts/linux-build-bench.mjs stage types npm run typecheck
+      - run: node scripts/linux-build-bench.mjs stage knip npm run knip
+      - run: node scripts/linux-build-bench.mjs stage lint npm run lint
+      - run: node scripts/linux-build-bench.mjs stage design-lint npm run lint:design
+      - name: Build once with production script and supported dir forwarding
+        run: node scripts/linux-build-bench.mjs stage preparation-total node ../scripts/linux-build-bench.mjs prepare
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - name: Transfer prepared app in mode and symlink preserving tar
+        uses: actions/upload-artifact@v7
+        with:
+          name: diagnostic-prepared-app
+          path: |
+            bench-evidence/prepared.tar
+            bench-evidence/prepared-manifest.json
+            bench-evidence/fingerprint.json
+            bench-evidence/archive-info.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
+      - run: node scripts/linux-build-bench.mjs stamp upload-end
+      - name: Retain preparation evidence even on failure (not installers)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-prep
+          path: |
+            bench-evidence/*
+            !bench-evidence/prepared.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # WHY: full case collection can take minutes; it must not hold up app prep
+  # or packaging. The final gate still requires the complete independent inventory.
+  inventory:
+    name: Diagnostic - complete independent case inventory
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-build-bench' && github.base_ref != 'session/29-linux-build-bench' && github.head_ref != 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - name: Discover the full unfiltered file and runnable case inventory
+        run: node scripts/linux-build-bench.mjs discover
+      - name: Retain exact inventory and collection timing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-inventory
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  packages:
+    name: Diagnostic - package ${{ matrix.variant }}
+    needs: prep
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-build-bench' && github.base_ref != 'session/29-linux-build-bench' && github.head_ref != 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 7
+      matrix:
+        variant: [AppImage-default, deb-default, deb-fast, rpm-default, rpm-fast, pacman-default, pacman-fast]
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      # Only a fixed internal enum crosses into the argv-validating harness.
+      BENCH_VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: node scripts/linux-build-bench.mjs stage apt-update sudo apt-get update
+      - run: node scripts/linux-build-bench.mjs stage apt-install sudo apt-get install -y rpm libarchive-tools
+      - run: node scripts/linux-build-bench.mjs stamp download-start
+      - uses: actions/download-artifact@v8
+        with:
+          name: diagnostic-prepared-app
+          path: prepared
+      - run: node scripts/linux-build-bench.mjs stamp download-end
+      - name: Restore independently and package with private writable app/temp/output
+        run: node scripts/linux-build-bench.mjs stage package-total node ../scripts/linux-build-bench.mjs package "$BENCH_VARIANT"
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - name: Retain only diagnostic metrics and extracted-content manifests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-${{ matrix.variant }}
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  shards:
+    name: Diagnostic - full suite shard ${{ matrix.shard }} of 4
+    # WHY no prep dependency: all tests run concurrently with preparation, using
+    # their ordinary config, assertion/timeouts and default worker settings.
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-build-bench' && github.base_ref != 'session/29-linux-build-bench' && github.head_ref != 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      BENCH_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - name: Full Vitest shard - no filters or overrides
+        run: node scripts/linux-build-bench.mjs stage shard-total node ../scripts/linux-build-bench.mjs shard "$BENCH_SHARD"
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - name: Retain structured test report even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidence-shard-${{ matrix.shard }}
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Diagnostic - validate all evidence (not a required build check)
+    needs: [prep, inventory, packages, shards]
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-build-bench' && github.base_ref != 'session/29-linux-build-bench' && github.head_ref != 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      BENCH_NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/linux-build-bench.mjs stamp download-start
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: evidence-*
+          path: results
+      - run: node scripts/linux-build-bench.mjs stamp download-end
+      - name: Record public GitHub job and step timestamps (no extra token privileges)
+        if: always()
+        run: node scripts/linux-build-bench.mjs timeline
+      - name: Fail closed on missing/failed jobs, shard omissions or package mismatches
+        if: always()
+        run: node scripts/linux-build-bench.mjs aggregate
+      - name: Retain diagnostic summary, never publish release assets
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diagnostic-linux-summary
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
