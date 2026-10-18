@@ -46,7 +46,7 @@ export function callbackPage(tone: CallbackTone, title: string, text: string): s
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
     + `<title>${escapeHtml(title)} · YouCoded</title><style>${STYLE}</style></head>`
     + '<body><div class="logo" role="img" aria-label="YouCoded"><span class="name"><span class="you">you</span>coded</span>'
-    + '<div class="tag"><span>agents for everyone</span></div></div>'
+    + '<div class="tag"><span>open source everything</span></div></div>'
     + `<main class="card ${tone}"><span class="mark" aria-hidden="true">${tone === 'done' ? CHECK : STOP}</span>`
     + `<div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p></div></main></body></html>`;
 }
