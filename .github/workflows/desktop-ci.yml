@@ -43,6 +43,12 @@ on:
     # 07:23 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
     - cron: '23 7 * * *'
   workflow_dispatch:
+    inputs:
+      test_scope:
+        description: 'Full checks, or focused cross-platform browser diagnostics'
+        type: choice
+        options: [all, browser]
+        default: all
 
 jobs:
   # Did anything outside docs/ change? Every step of `build` runs inside desktop/
@@ -95,6 +101,8 @@ jobs:
       - run: echo "docs-only change — nothing under desktop/ to build or test"
 
   build:
+    # WHY: a focused pass must never satisfy the protected full-suite status check.
+    name: ${{ inputs.test_scope == 'browser' && format('browser diagnostics ({0})', matrix.os) || format('build ({0})', matrix.os) }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
     # Windows runs the TESTS only (not the packaging build) because a whole
@@ -141,7 +149,16 @@ jobs:
         run: npm run typecheck
 
       - name: Run tests
+        if: inputs.test_scope != 'browser'
         run: npm test
+
+      # WHY: capture protocol evidence in a focused run without changing the full
+      # suite's shell or defaults. This is diagnostics, not a full-suite green light.
+      - name: Browser diagnostics
+        if: inputs.test_scope == 'browser'
+        env:
+          DEBUG: 'pw:protocol,pw:browser*'
+        run: npx vitest run tests/assistant-browser.test.ts tests/assistant-browser-host.test.ts tests/assistant-browser-live.test.ts tests/assistant-browser-native.test.ts tests/aria-props.test.ts tests/desktop-ci.test.ts --maxWorkers=1
 
       # Dead-code check. Deliberately a SEPARATE step rather than chained onto
       # `npm test` — that script is bare `vitest` (watch-capable), so chaining
@@ -182,7 +199,7 @@ jobs:
       # regressed on before, and the Windows NSIS build is already covered by
       # desktop-test-build.yml / desktop-release.yml. Windows stops after tests.
       - name: Install Linux build deps
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
         # apt-get update prefix: the cached package index on ubuntu-latest
         # frequently points to .deb versions that have already rolled off
         # the mirror, so a bare `install` fails with HTTP 404 / exit 100.
@@ -191,5 +208,5 @@ jobs:
         working-directory: .
 
       - name: Build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
         run: npm run build

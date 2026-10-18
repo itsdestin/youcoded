@@ -12,21 +12,23 @@ Desktop and Android render the **same React UI**. This is the most important arc
 
 - Source of truth: `youcoded/desktop/src/renderer/` (React app)
 - Desktop: Electron hosts the React app natively
-- Android: `WebViewHost.kt` loads the React build from bundled assets (`file:///android_asset/web/`). The React bundle is generated from the desktop source via `scripts/build-web-ui.sh`.
-- Platform detection: `remote-shim.ts` checks `location.protocol === 'file:'` (Android) and routes IPC via WebSocket (`ws://localhost:9901`). Desktop uses Electron IPC directly.
+- Android: `ui/AppWebView.kt` loads the React build from bundled assets (`file:///android_asset/web/index.html`). The React bundle is generated from the desktop source via `scripts/build-web-ui.sh`.
+- Android runs the desktop backend headlessly in a bundled Node process. Its page uses `remote-shim.ts` to connect to that backend over a loopback WebSocket with a per-run token and the port supplied by the shell. Desktop uses Electron IPC directly. See [Android runtime](android-runtime.md).
 - Both platforms communicate via the **same JSON protocol** — the WebSocket transport and Electron IPC carry identical message shapes.
 
 ## Practical implication
 
-Most features work on both platforms automatically because the UI is shared. Only features requiring native Android APIs (camera, file picker, package bootstrap, tier selection) need Kotlin code. When evaluating feature gaps between platforms, check whether the IPC handler exists in `SessionService.handleBridgeMessage()` — the UI itself is shared.
+Most features share both their UI and backend. Kotlin implements only phone-specific services such as the file picker, QR scanner, voice input and lifecycle. Check a feature's capabilities and channel policy rather than adding a second backend implementation in Kotlin. The Android page connected to its own backend is its local owner; an Android page paired to a computer is a remote visitor.
 
 ## Adding Cross-Platform Features (IPC Pattern)
 
-1. **React side** (`youcoded/desktop/src/renderer/remote-shim.ts`): Add method to `window.claude` using `invoke('type:name', payload)` (request-response) or `fire('type:name', payload)` (fire-and-forget)
-2. **Desktop side** (`youcoded/desktop/src/main/ipc-handlers.ts`): Add `ipcMain.handle(IPC.CHANNEL, handler)` for request-response, or `ipcMain.on()` for fire-and-forget
-3. **Android side** (`youcoded/app/.../runtime/SessionService.kt`): Add a `when` case in `handleBridgeMessage()` matching the same type string. Respond with `bridgeServer.respond(ws, msg.type, msg.id, payload)` if `msg.id` is present
+1. **Contract:** add the request/response types in `desktop/src/shared/backend-contract.ts` (`ChannelTypes`) and the channel name in `IPC`.
+2. **Shared handler:** add one `defineChannel` entry in `desktop/src/main/ipc/<family>.ts` and register its family in `channel-table.ts`. Both Electron and WebSocket requests use this entry; do not add separate feature handlers to `ipc-handlers.ts` or `remote-server.ts`.
+3. **Desktop bridge:** expose the method in `desktop/src/main/preload.ts` as needed and regenerate its channel list with `node scripts/generate-preload-channels.mjs` from `desktop/`.
+4. **Socket bridge:** expose the matching method in `desktop/src/renderer/remote-shim.ts`. Keep the shared `window.claude` interface consistent with preload.
+5. **Policy and verification:** declare remote restrictions on the channel entry (`desktopOnly`, `remoteAllowed`, guards and refusal/reply shaping). Check `ipc-channels.test.ts`, `channel-table-complete.test.ts` and `generate-preload-channels.test.ts`.
 
-Two more surfaces carry the same string on desktop: `youcoded/desktop/src/main/preload.ts` (the Electron `window.claude` + the `IPC` constant) and `youcoded/desktop/src/main/remote-server.ts` (the WebSocket host a remote browser talks to — its `default:` answers `{unsupported:true}`, so a channel skipped there is dead over remote). The message type string (e.g., `"skills:install"`) must be **identical across all five files**. `SessionService.handleBridgeMessage()` has a `when` branch per channel — hundreds; the workspace `ipc-bridge.md` rule carries the latest count.
+Phone-only calls are separate: `invokeAndroidHost` communicates with `HostJsBridge.kt`. Add those calls to both sides and run `android-host-channels.test.ts`. Ordinary shared features need no Kotlin handler. The local-owner policy in `serveRemoteChannel` bypasses visitor restrictions, so use the capability contract to determine which interface a device can actually offer.
 
 ## Critical parity requirement
 
@@ -46,7 +48,7 @@ These are NOT parity violations — they're by design:
 
 ## Response shape normalization
 
-Desktop handlers return raw values (e.g., `string[]`). Android wraps in JSONObject (e.g., `{paths: [...]}`). The shim should normalize differences so React sees a consistent shape.
+Both transports run the same channel handler. Where the socket transport needs a different wire shape, declare it on the entry with `remoteReply`/`remoteOnError` and normalize it in the shim so React sees the same shared API. The phone does not maintain a second set of Kotlin response serializers.
 
 ## Overlay Layer System
 

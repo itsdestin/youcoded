@@ -61,6 +61,12 @@ jobs:
       # assembled from pinned downloads, cached by their pins (Android clean rebuild, 2026-10-14).
       - name: Install runtime build tools
         run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Test runtime redistribution fixtures
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py' -v
+      - name: Configure APK version comparator
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
         uses: actions/cache@v4
         with:

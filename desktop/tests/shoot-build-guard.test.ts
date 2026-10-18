@@ -44,6 +44,15 @@ async function build(out: string, env: Record<string, string>) {
   return bundleText(out);
 }
 
+it('the landing demo build stays inside its own checkout', () => {
+  // WHY: --emptyOutDir must never wipe a shared workspace's docs when this checkout
+  // is nested differently. Resolve the configured output rather than matching a string.
+  const pkg = JSON.parse(readFileSync(join(DESKTOP, 'package.json'), 'utf8'));
+  const output = String(pkg.scripts['build:site']).match(/--outDir\s+(\S+)/)?.[1];
+  expect(output, 'the site build declares its output directory').toBeTruthy();
+  expect(resolve(DESKTOP, output!)).toBe(resolve(DESKTOP, '..', 'docs', 'site'));
+});
+
 // The screen driver, the mark attribute as JSX emits it, and the fake backend's installer.
 const DRIVER = '__youcodedScreens';
 const MARK = '"data-screen":';

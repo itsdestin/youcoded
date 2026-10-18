@@ -12,10 +12,11 @@ If you don't agree with these Terms, please don't use the Services. Continuing t
 
 ## 1. The software itself
 
-The YouCoded software is open source. Each repository carries its own LICENSE file, and **those licenses govern your rights to use, modify, and redistribute the source code itself.** In summary:
+YouCoded-authored software is open source. Each repository carries its own LICENSE file. **The applicable licenses govern your rights to use, modify, and redistribute both source code and bundled components.** In summary:
 
-- The YouCoded desktop app and shared React UI are under the **MIT License**.
-- The YouCoded Android app is also under the **MIT License**. It includes a vendored copy of Termux's terminal-emulator library, which is under the **Apache License 2.0** (see `terminal-emulator-vendored/LICENSE` and `NOTICE` in the youcoded repository).
+- YouCoded-authored desktop, Android and shared React UI code is under the **MIT License**, unless stated otherwise.
+- Bundled third-party programs, libraries, data and other components retain their own licenses. Android includes Alpine runtime components (including GPL/LGPL-licensed programs and libraries), modified musl and npm dependencies. Consult the matching release's component inventory, preserved notices and corresponding-source materials; YouCoded's MIT license does not relicense them.
+- Claude Code is third-party proprietary software governed by its applicable terms, not YouCoded's MIT license.
 - The marketplace and theme registries (`wecoded-marketplace`, `wecoded-themes`) are under the **Apache License 2.0**.
 - Bundled plugins each carry their own license; check the relevant repository.
 
@@ -101,11 +102,11 @@ Notices sent to the email address above reach the designated agent.
 
 ## 7. Third-party content and services
 
-The Services interoperate with third-party software and services — including Anthropic's Claude and Claude Code, OpenAI and ChatGPT, OpenRouter and its model providers, GitHub, Cloudflare, Termux, Google Drive, and user-configured providers, tools, and integrations. **We are not responsible** for those services. Their availability, behavior, data handling, retention, and terms are governed by them, not by us. Disruptions in third-party services may affect the Services, and your use of those services is governed by the corresponding third party's terms and privacy policy.
+The Services interoperate with third-party software and services — including Anthropic's Claude and Claude Code, OpenAI and ChatGPT, OpenRouter and its model providers, GitHub, Cloudflare, Google Drive, and user-configured providers, tools, and integrations. **We are not responsible** for those services. Their availability, behavior, data handling, retention, and terms are governed by them, not by us. Disruptions in third-party services may affect the Services, and your use of those services is governed by the corresponding third party's terms and privacy policy.
 
 When you choose a cloud model or connected service, you authorize YouCoded to send the content needed for that request to that service. The service may retain or otherwise handle that content under its own policies; YouCoded cannot control or delete records held by it. Local-model inference does not send an inference request to a cloud model provider. See [PRIVACY.md](./PRIVACY.md) for the data-flow details and the limits of that statement.
 
-References to third-party trademarks (Anthropic, Claude, Claude Code, OpenAI, ChatGPT, OpenRouter, GitHub, Termux, etc.) appear only to identify those products. Such references do not imply affiliation, endorsement, or sponsorship.
+References to third-party trademarks (Anthropic, Claude, Claude Code, OpenAI, ChatGPT, OpenRouter, GitHub, etc.) appear only to identify those products. Such references do not imply affiliation, endorsement, or sponsorship.
 
 ---
 

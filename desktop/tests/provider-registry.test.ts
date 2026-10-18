@@ -35,6 +35,21 @@ describe('ProviderRegistry', () => {
     expect((await reg.list())).toHaveLength(2);
   });
 
+  it('init propagates a missing atomic-write temp file instead of reporting success', async () => {
+    const rename = fs.promises.rename;
+    // WHY: reproduce the failing temp -> providers.json rename at the real I/O
+    // boundary. Only the ownership fixture may skip seeding; a real registry must
+    // still reject if another actor removes its in-flight file.
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementationOnce(async (from, to) => {
+      await fs.promises.unlink(from);
+      return rename(from, to);
+    });
+    try {
+      await expect(reg.init()).rejects.toMatchObject({ code: 'ENOENT', syscall: 'rename' });
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally { spy.mockRestore(); }
+  });
+
   it('local is not ready in Plan A; openrouter becomes ready once a key is set', async () => {
     let list = await reg.list();
     expect(list.find((p) => p.id === 'local')!.ready).toBe(false);

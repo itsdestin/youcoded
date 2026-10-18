@@ -15,9 +15,15 @@ on:
   pull_request:
     paths-ignore: ['docs/**']
   workflow_dispatch:
+    inputs:
+      collect_sources:
+        description: 'Exercise exact runtime source/notice collection on the R8 test build'
+        type: boolean
+        default: false
 
 jobs:
   build:
+    name: ${{ inputs.collect_sources && 'Android source preflight' || 'build' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -46,6 +52,12 @@ jobs:
       # assembled from pinned downloads, cached by their pins (Android clean rebuild, 2026-10-14).
       - name: Install runtime build tools
         run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Test runtime redistribution fixtures
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py' -v
+      - name: Configure APK version comparator
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
         uses: actions/cache@v4
         with:
@@ -77,7 +89,43 @@ jobs:
       # never ran the same code path the user would. Building releaseTest
       # on every push catches that whole bug class at PR time.
       - name: Build releaseTest APK (R8 minified, debug-signed)
+        env:
+          YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
         run: ./gradlew assembleReleaseTest
+
+      - name: Verify packaged runtime and source archive
+        if: inputs.collect_sources
+        run: |
+          python3 -I app/runtime/runtime-redistribution.py bind_backend \
+            app/build/runtime/releaseTest/sources app/build/backend-assets/backend.tgz
+          python3 -I app/runtime/runtime-redistribution.py release \
+            app/build/runtime/releaseTest app/build/runtime/releaseTest/sources \
+            app/build/outputs/android-source-preflight.tar.xz \
+            app/build/outputs/apk/releaseTest/*.apk
+
+      - name: Upload inspected source preflight archive
+        if: inputs.collect_sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-source-preflight-archive
+          path: |
+            app/build/outputs/android-source-preflight.tar.xz
+            app/build/outputs/android-source-preflight.tar.xz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      # WHY: retain raw evidence only on failure, not a duplicate of a successful
+      # source archive. Nothing here tags or publishes a GitHub Release.
+      - name: Retain source preflight evidence
+        if: always() && inputs.collect_sources && failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-source-preflight
+          path: |
+            app/build/runtime/releaseTest/evidence
+            app/build/runtime/releaseTest/sources
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7

@@ -21,6 +21,9 @@ import type { TranscriptEvent } from '../src/shared/types';
 import type { MainToWorker, WorkerToMain } from '../src/main/assistant-browser/browser-protocol';
 import { makeOpts, scriptModel } from './helpers/harness-fakes';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
+import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
+
+const diagnostics = browserDiagnostics('assistant-browser-native');
 
 const FOUND = await discoverBrowsers(defaultDiscoveryEnv(null));
 const live = FOUND.length ? it : it.skip;
@@ -34,6 +37,7 @@ const cards: string[] = [];
 
 beforeAll(async () => {
   if (!FOUND.length) return;
+  await diagnostics.start(FOUND);
   server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(req.url?.startsWith('/results')
@@ -52,7 +56,8 @@ beforeAll(async () => {
     kill: () => {},
   };
   host = createBrowserHost(port, root, { forceHeadless: true, discover: async () => FOUND, cliPath: '' });
-  client = new BrowserClient({ fork: () => handle });
+  client = new BrowserClient({ fork: () => handle, log: diagnostics.log });
+  diagnostics.client(client);
   // The person answers every Browser card "for this chat".
   client.on('state', (s: BrowserSessionState) => {
     if (s.prompt && !cards.includes(s.prompt.id)) {
@@ -63,9 +68,11 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  await host?.service.dispose();
-  await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
-  if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  try {
+    await host?.service.dispose();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  } finally { diagnostics.restore(); }
 });
 
 describe('a native session using the Browser', () => {
@@ -94,8 +101,8 @@ describe('a native session using the Browser', () => {
     await session.send('find the code');
 
     const results = events.filter((e) => e.type === 'tool-result') as any[];
-    expect(results.map((r) => r.data?.isError ?? false)).toEqual([false, false, false, false]);
     const texts = results.map((r) => String(r.data?.toolResult ?? r.data?.result ?? JSON.stringify(r.data)));
+    expect(results.map((r) => r.data?.isError ?? false), texts.join('\n')).toEqual([false, false, false, false]);
     expect(texts.join('\n')).toContain('Wombat-7');
     // The session's own permission prompt never fired for a Browser tool…
     expect(sessionAsks).toEqual([]);

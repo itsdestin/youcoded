@@ -246,6 +246,7 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
     val out = layout.buildDirectory.dir("backend").get().asFile
     val assetsOut = layout.buildDirectory.dir("backend-assets").get().asFile
     inputs.file(script)
+    inputs.file(file("runtime/preserve-npm-legal.py"))
     inputs.dir(File(repoRoot, "desktop/src/main"))
     inputs.dir(File(repoRoot, "desktop/src/shared"))
     inputs.dir(File(repoRoot, "desktop/hook-scripts"))
@@ -270,7 +271,17 @@ for ((variant, appId) in variantAppIds) {
         description = "Build the phone's programs for $appId (app/runtime/build-runtime.sh)"
         group = "build"
         val out = layout.buildDirectory.dir("runtime/${variant.replaceFirstChar { it.lowercase() }}").get().asFile
+        dependsOn(bundleWebUi) // node-pty source is an exact runtime build input too.
         inputs.dir(file("runtime"))
+        // WHY: native headers/sources and lock/config changes must invalidate runtime evidence too.
+        inputs.files(rootProject.file("desktop/package.json"), rootProject.file("desktop/package-lock.json"),
+            rootProject.file("gradle.properties"), rootProject.file("build.gradle.kts"), rootProject.file("settings.gradle.kts"))
+        inputs.dir(rootProject.file("desktop/node_modules/node-pty/src"))
+        inputs.dir(rootProject.file("desktop/node_modules/node-pty/third_party"))
+        inputs.dir(rootProject.file("desktop/node_modules/node-pty/node_modules/node-addon-api"))
+        inputs.property("collectSources", providers.environmentVariable("YOUCODED_COLLECT_SOURCES").orElse("0"))
+        inputs.dir(file("src/main/kotlin/com/youcoded/app/runtime"))
+        inputs.files(rootProject.file("LICENSE"), rootProject.file("TERMS.md"), file("build.gradle.kts"))
         outputs.dir(out)
         commandLine(bashCommand(file("runtime/build-runtime.sh"), appId, out.absolutePath))
     }

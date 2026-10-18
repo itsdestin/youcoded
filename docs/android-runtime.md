@@ -33,11 +33,15 @@ Android app (one APK)
 
 ## Bundled programs (`app/runtime/`)
 
-`build-runtime.sh <applicationId> <out>` (Gradle `buildRuntime<Variant>`) assembles them from pinned
-sources (`pins.env`): Alpine Linux **musl** packages (Node, bash, git, ripgrep), musl built from source with
+`build-runtime.sh <applicationId> <out>` (Gradle `buildRuntime<Variant>`) assembles them from the
+Alpine branch and upstream versions in `pins.env`: Alpine Linux **musl** packages (Node, bash, git, ripgrep), musl built from source with
 `patch-musl.py`, `ycshim.c`, `yc-open.c`, node-pty cross-built, and Claude Code's official
 `linux-arm64-musl` package. `build-backend.sh` (Gradle `buildBackend`) packs the desktop backend
 (`backend.tgz`, production dependencies, other platforms' native builds removed).
+Exact Alpine APK versions are not pinned by `pins.env`: the build records and locks its actual
+selection, retains per-APK metadata and original musl inputs, and preserves npm legal files.
+See [Android redistribution](android-redistribution.md) for the source/notices release gate and
+remaining collection/legal-review blockers; a successful development build is not release clearance.
 
 **What Android forbids, and the answer to each** (all seen on a Galaxy Z Flip7, Android 17):
 
@@ -71,6 +75,8 @@ backend's userData; `backend.log` is the backend's console) · `tmp/` (TMPDIR). 
 links whenever the app version or the native-lib folder changes.
 
 ## Developing
+
+The runtime build currently requires a **Linux x64 host**: `build-runtime.sh` downloads an x86_64 Linux `patchelf` and uses GNU tools such as `nproc`. Use a Linux x64 environment (for example WSL or a VM) rather than running the runtime build directly on Windows, macOS or Linux ARM. Install the Android SDK, JDK 21, Node.js/npm, Bash, Python 3, curl, tar, make, clang and lld first.
 
 - Build: `JAVA_HOME=<JDK 21> ANDROID_HOME=$HOME/.android-sdk ./gradlew :app:assembleDebug` (needs clang + lld,
   python3, curl; downloads are cached in `app/build/runtime-cache`). Debug installs as **YouCoded Dev**

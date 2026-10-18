@@ -81,8 +81,12 @@ describe('aria-* props on components', () => {
     const options = compilerOptions();
     const host = ts.createCompilerHost(options);
     const read = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, lang, ...rest) => (name === probe ? ts.createSourceFile(name, source, lang, true, ts.ScriptKind.TSX) : read(name, lang, ...rest));
-    host.fileExists = ((exists) => (name: string) => name === probe || exists(name))(host.fileExists.bind(host));
+    // WHY: TypeScript normalizes Windows paths to forward slashes before asking the host.
+    // Both spellings must reach the virtual fixture, or the guard's self-test sees no source.
+    const isProbe = (name: string) => name.replaceAll('\\', '/') === probe.replaceAll('\\', '/');
+    host.getSourceFile = (name, lang, ...rest) => (isProbe(name) ? ts.createSourceFile(name, source, lang, true, ts.ScriptKind.TSX) : read(name, lang, ...rest));
+    host.fileExists = ((exists) => (name: string) => isProbe(name) || exists(name))(host.fileExists.bind(host));
+    expect(host.getSourceFile(probe.replaceAll('/', '\\'), ts.ScriptTarget.Latest)?.text).toBe(source);
     const program = ts.createProgram([probe], options, host);
     expect(droppedAriaProps(program, [probe])).toEqual(['src/renderer/__aria-probe__.tsx:4 <Plain aria-label>']);
   }, CHECKER_BUDGET_MS);

@@ -15,7 +15,11 @@ import { discoverBrowsers, defaultDiscoveryEnv, type FoundBrowser } from '../src
 import { BrowserService, type BrowserPrompt, type PromptAnswer } from '../src/main/assistant-browser/browser-service';
 import { BrowserSettings } from '../src/main/assistant-browser/browser-settings';
 import { BrowserInstaller } from '../src/main/assistant-browser/browser-installer';
-import { BrowserPolicy, navigationVerdict, openForPerson, runBrowserTool, type RunnerEnv } from '../src/main/assistant-browser/browser-tool-runners';
+import { BrowserPolicy, navigationVerdict, openForPerson, runBrowserTool as executeBrowserTool, type RunnerEnv } from '../src/main/assistant-browser/browser-tool-runners';
+import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
+
+const diagnostics = browserDiagnostics('assistant-browser-live');
+const runBrowserTool: typeof executeBrowserTool = (...args) => diagnostics.tool(`${args[3].sessionId} ${args[1]}`, () => executeBrowserTool(...args));
 
 const PAGES: Record<string, string> = {
   '/': `<!doctype html><title>Home</title><h1>Fixture home</h1>
@@ -71,6 +75,7 @@ if (!FOUND.length) console.warn('assistant-browser-live: no Chromium-family brow
 beforeAll(async () => {
   browser = FOUND[0] ?? null;
   if (!browser) return;
+  await diagnostics.start(FOUND);
   server = http.createServer((req, res) => {
     const u = new URL(req.url ?? '/', 'http://x');
     if (u.pathname === '/file.txt') {
@@ -89,8 +94,10 @@ beforeAll(async () => {
   service = new BrowserService({
     rootDir: root,
     chromium,
+    log: diagnostics.log,
     forceHeadless: true,
-    sessionIdleMs: 1500,
+    // Ordinary layout/input assertions must not race the separate idle-expiry test.
+    sessionIdleMs: 60_000,
     browserIdleMs: 60_000,
     requestGuard: (sid, url) => navigationVerdict(env, sid, url),
     getLaunchConfig: async () => ({ showWindow: false, myChrome: false, browser }),
@@ -108,9 +115,11 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  await service?.dispose();
-  await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
-  if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  try {
+    await service?.dispose();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    if (root) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  } finally { diagnostics.restore(); }
 });
 
 beforeEach(() => {
@@ -295,11 +304,25 @@ describe('Browser, live', () => {
   }, 60_000);
 
   live()('a conversation\'s tabs close after it stops using the browser, and its next call says so', async () => {
-    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-idle'));
-    await vi.waitFor(() => expect(service.state('s-idle').tabs).toHaveLength(0), { timeout: 10_000 });
-    const r = await runBrowserTool(env, 'BrowserSnapshot', {}, ctx('s-idle'));
-    expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/No tab is open/);
+    // WHY: only this test needs rapid idle expiry. Sharing that 1.5s expiry with
+    // screenshot/layout tests closed their pages mid-assertion on slower CI hosts.
+    const idle = new BrowserService({
+      rootDir: path.join(root, 'idle-test'), chromium, forceHeadless: true,
+      sessionIdleMs: 1500, browserIdleMs: 60_000,
+      requestGuard: (sid, url) => navigationVerdict(env, sid, url),
+      getLaunchConfig: async () => ({ showWindow: false, myChrome: false, browser }),
+    });
+    idle.on('prompt', ({ sessionId, prompt }: { sessionId: string; prompt: BrowserPrompt }) => {
+      setImmediate(() => idle.answerPrompt(sessionId, prompt.id, 'allow_chat'));
+    });
+    const idleEnv = { ...env, service: idle };
+    try {
+      await runBrowserTool(idleEnv, 'BrowserNavigate', { url: `${base}/` }, ctx('s-idle'));
+      await vi.waitFor(() => expect(idle.state('s-idle').tabs).toHaveLength(0), { timeout: 10_000 });
+      const r = await runBrowserTool(idleEnv, 'BrowserSnapshot', {}, ctx('s-idle'));
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/No tab is open/);
+    } finally { await idle.dispose(); }
   }, 60_000);
 
   live()('invalid input is a clear error, never a crash', async () => {
@@ -393,10 +416,19 @@ describe('Browser, live', () => {
     service.personInput('s-person', { type: 'key', key: 'Backspace' });
     await vi.waitFor(async () => expect(await page.inputValue('#t')).toBe('hell'));
     // A drag across text highlights it, and Copy reads exactly the highlight.
-    service.personInput('s-person', { type: 'mouse', action: 'down', x: 22, y: 210, clickCount: 1 });
-    // (Ends on the text's last letter: past it, this loose fixture has no text at all.)
-    for (let x = 30; x <= 210; x += 20) service.personInput('s-person', { type: 'mouse', action: 'move', x, y: 210, clickCount: 1 });
-    service.personInput('s-person', { type: 'mouse', action: 'up', x: 210, y: 210, clickCount: 1 });
+    // WHY: the rendered font/line box differs across Windows and macOS. Drive the
+    // real input path using the actual text bounds, not Linux-only pixel guesses.
+    const textBox = await page.locator('#p').evaluate(element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const r = range.getBoundingClientRect();
+      return { left: r.left, right: r.right, y: r.top + r.height / 2 };
+    });
+    // Keep the endpoint inside the last glyph: outside this positioned paragraph,
+    // Chromium's selection hit-test can jump back to the button instead.
+    service.personInput('s-person', { type: 'mouse', action: 'down', x: textBox.left + 1, y: textBox.y, clickCount: 1 });
+    for (let i = 1; i <= 10; i++) service.personInput('s-person', { type: 'mouse', action: 'move', x: textBox.left + 1 + (textBox.right - textBox.left - 2) * i / 10, y: textBox.y, clickCount: 1 });
+    service.personInput('s-person', { type: 'mouse', action: 'up', x: textBox.right - 1, y: textBox.y, clickCount: 1 });
     expect(await service.personSelection('s-person')).toBe('alpha beta gamma');
     // A highlight inside a text box is read from the box itself.
     service.personInput('s-person', { type: 'mouse', action: 'down', x: 30, y: 110, clickCount: 1 });

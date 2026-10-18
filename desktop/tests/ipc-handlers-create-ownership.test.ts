@@ -78,6 +78,22 @@ vi.mock('electron', () => {
   };
 });
 
+// WHY: this fixture stubs the native host and tests event ownership, not provider
+// storage. createRuntime otherwise starts an unawaited init on EVERY registration,
+// allowing real providers.json writes in the shared HOME to outlive the test
+// (Linux CI reported an unhandled temp-rename ENOENT from this fixture). Keep that
+// unrelated startup I/O out of the fixture; provider-registry.test.ts tests the real
+// initializer, including write failures, without changing production error handling.
+vi.mock('../src/main/providers/provider-registry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/main/providers/provider-registry')>();
+  return {
+    ...actual,
+    ProviderRegistry: class extends actual.ProviderRegistry {
+      override async init(): Promise<void> { /* storage is outside this fixture */ }
+    },
+  };
+});
+
 // NativeSessionHost is constructed inside registerIpcHandlers. Stub it so the
 // native branch is deterministic — and crucially so `resume()` is a REAL async
 // suspension point (`async () => true`), which is what lets the nextTick queue
@@ -148,6 +164,7 @@ import { EventEmitter } from 'node:events';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { registerWithRuntime } from './helpers/register-ipc';
 import { IPC } from '../src/shared/types';
+import { NativeHome } from '../src/main/native-home';
 
 /**
  * Build the mock world and run one `session:create` call.
@@ -312,6 +329,14 @@ function assertAssignBeforeCreated(order: string[], sends: Array<{ window: strin
 }
 
 describe('session:create — assignSession must precede the SESSION_CREATED forward', () => {
+  it('the ownership fixture starts no background provider persistence', async () => {
+    const writes = vi.spyOn(NativeHome.prototype, 'mutateJson');
+    try {
+      await runSessionCreate({ provider: 'claude', cwd: '/tmp' });
+      expect(writes.mock.calls.filter(([file]) => file === 'providers.json')).toEqual([]);
+    } finally { writes.mockRestore(); }
+  });
+
   it('native create: assigns ownership before forwarding SESSION_CREATED', async () => {
     const { order, sends, assignSession } = await runSessionCreate({
       provider: 'native',
