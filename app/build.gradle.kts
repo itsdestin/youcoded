@@ -14,6 +14,11 @@ val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) load(FileInputStream(keystorePropertiesFile))
 }
 
+// WHY: benchmark only. Defaults retain the current production task graph; the
+// opt-in connects expensive generated payloads to packaging, not JVM tests.
+val ciPackagingDependencies = providers.gradleProperty("ciPackagingDependencies")
+    .map { it.toBooleanStrict() }.orElse(false).get()
+
 android {
     namespace = "com.youcoded.app"
     compileSdk = 35
@@ -227,8 +232,10 @@ val bundleWebUi = tasks.register<Exec>("bundleWebUi") {
 // standard AGP entry point that runs before any source generation or
 // packaging, so registering here covers assembleDebug, assembleRelease,
 // installDebug, bundleRelease — every flavor that produces an APK/AAB.
-tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn(bundleWebUi)
+if (!ciPackagingDependencies) {
+    tasks.matching { it.name == "preBuild" }.configureEach {
+        dependsOn(bundleWebUi)
+    }
 }
 
 // The phone's programs and the desktop backend (Android clean rebuild, 2026-10-14). Both are cached by
@@ -265,6 +272,14 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
     }
 }
 
+if (ciPackagingDependencies) {
+    // Assets include BOTH the shared web page and backend. Keeping this on the
+    // actual consumer prevents blank/stale APKs while leaving JVM tests light.
+    tasks.matching { it.name.matches(Regex("merge(Debug|Release|ReleaseTest)Assets")) }.configureEach {
+        dependsOn(bundleWebUi, buildBackend)
+    }
+}
+
 val variantAppIds = mapOf("Debug" to "com.youcoded.app.dev", "Release" to "com.youcoded.app", "ReleaseTest" to "com.youcoded.app.releasetest")
 for ((variant, appId) in variantAppIds) {
     val runtimeTask = tasks.register<Exec>("buildRuntime$variant") {
@@ -272,7 +287,10 @@ for ((variant, appId) in variantAppIds) {
         group = "build"
         val out = layout.buildDirectory.dir("runtime/${variant.replaceFirstChar { it.lowercase() }}").get().asFile
         dependsOn(bundleWebUi) // node-pty source is an exact runtime build input too.
-        inputs.dir(file("runtime"))
+        // WHY: Python tests generate bytecode inside this source directory.
+        // It is neither authored runtime input nor included in source evidence;
+        // treating it as input can rebuild every native variant spuriously.
+        inputs.files(fileTree("runtime") { exclude("**/__pycache__/**", "**/*.pyc") })
         // WHY: native headers/sources and lock/config changes must invalidate runtime evidence too.
         inputs.files(rootProject.file("desktop/package.json"), rootProject.file("desktop/package-lock.json"),
             rootProject.file("gradle.properties"), rootProject.file("build.gradle.kts"), rootProject.file("settings.gradle.kts"))
@@ -280,13 +298,23 @@ for ((variant, appId) in variantAppIds) {
         inputs.dir(rootProject.file("desktop/node_modules/node-pty/third_party"))
         inputs.dir(rootProject.file("desktop/node_modules/node-pty/node_modules/node-addon-api"))
         inputs.property("collectSources", providers.environmentVariable("YOUCODED_COLLECT_SOURCES").orElse("0"))
+        inputs.property("experimentalCommonNative", providers.environmentVariable("YOUCODED_COMMON_NATIVE_CACHE")
+            .map { it.isNotBlank() }.orElse(false))
         inputs.dir(file("src/main/kotlin/com/youcoded/app/runtime"))
         inputs.files(rootProject.file("LICENSE"), rootProject.file("TERMS.md"), file("build.gradle.kts"))
         outputs.dir(out)
         commandLine(bashCommand(file("runtime/build-runtime.sh"), appId, out.absolutePath))
     }
-    tasks.matching { it.name == "pre${variant}Build" }.configureEach {
-        dependsOn(runtimeTask, buildBackend)
+    if (ciPackagingDependencies) {
+        // JNI and runtime assets have separate consumers; BOTH require the
+        // variant-specific producer, including the production Release variant.
+        tasks.matching { it.name == "merge${variant}JniLibFolders" || it.name == "merge${variant}Assets" }.configureEach {
+            dependsOn(runtimeTask)
+        }
+    } else {
+        tasks.matching { it.name == "pre${variant}Build" }.configureEach {
+            dependsOn(runtimeTask, buildBackend)
+        }
     }
 }
 

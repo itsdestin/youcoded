@@ -1,0 +1,160 @@
+name: Android speed experiment
+run-name: Android speed experiment — ${{ github.head_ref }}
+
+# EXPERIMENT ONLY: no master, release or publishing trigger. The normal Android
+# and Desktop workflows remain unchanged and provide same-source controls.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-speed-experiment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.head_ref == 'session/29-android-build-bench'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install parsed-workflow test dependency
+        run: |
+          python3 -m venv "$RUNNER_TEMP/benchmark-yaml"
+          "$RUNNER_TEMP/benchmark-yaml/bin/pip" install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Test native cache and build-script safety
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py' -v
+      - name: Test benchmark graph, archive and report contracts
+        run: '"$RUNNER_TEMP/benchmark-yaml/bin/python" -m unittest discover -s scripts -p test_android_speed_benchmark.py -v'
+      - name: Check shell syntax
+        run: bash -n app/runtime/build-runtime.sh
+
+  benchmarks:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # Keep public-runner capacity available for simultaneous Linux experiments
+      # and normal controls. Queue/setup/upload require GitHub timestamps later;
+      # the harness reports no projected end-to-end CI total.
+      max-parallel: 2
+      matrix:
+        mode: [baseline, common-native, packaging-graph, combined, combined-4g]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install unchanged runtime toolchain
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Configure exact APK comparator
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
+      - name: Restore input cache; native outputs are rebuilt or verified run-locally
+        uses: actions/cache@v4
+        with:
+          path: app/build/runtime-cache
+          key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
+      - name: Run complete experiment
+        env:
+          MODE: ${{ matrix.mode }}
+        run: python3 scripts/android-speed-benchmark.py run "$MODE" "$RUNNER_TEMP/android-speed/$MODE"
+      - name: Retain measurements, exact test identities and payload manifests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-speed-${{ matrix.mode }}
+          path: ${{ runner.temp }}/android-speed/${{ matrix.mode }}/
+          retention-days: 1
+          if-no-files-found: error
+
+  # Each matrix child is an independent runner/workspace, not background Gradle
+  # processes sharing build dirs. combined-4g is a hypothesis, not a winner.
+  fanout:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        fragment: [unit, debug, releaseTest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install unchanged runtime toolchain for APK runners only
+        if: matrix.fragment != 'unit'
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Configure exact APK comparator for APK runners only
+        if: matrix.fragment != 'unit'
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
+      - name: Restore download inputs only for APK runners
+        if: matrix.fragment != 'unit'
+        uses: actions/cache@v4
+        with:
+          path: app/build/runtime-cache
+          key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
+      - name: Run independent fragment
+        env:
+          FRAGMENT: ${{ matrix.fragment }}
+        run: python3 scripts/android-speed-benchmark.py run-fragment "$FRAGMENT" "$RUNNER_TEMP/android-speed-fanout/$FRAGMENT"
+      - name: Retain fragment metrics and validation evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-speed-fanout-${{ matrix.fragment }}
+          path: ${{ runner.temp }}/android-speed-fanout/${{ matrix.fragment }}/
+          retention-days: 1
+          if-no-files-found: error
+
+  validation:
+    name: Android diagnostic equivalence — not a release check
+    if: always() && github.head_ref == 'session/29-android-build-bench'
+    needs: [checks, benchmarks, fanout]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-speed-*
+          path: reports
+      - name: Require all diagnostic producers to succeed
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          BENCHMARKS_RESULT: ${{ needs.benchmarks.result }}
+          FANOUT_RESULT: ${{ needs.fanout.result }}
+        run: test "$CHECKS_RESULT" = success && test "$BENCHMARKS_RESULT" = success && test "$FANOUT_RESULT" = success
+      - name: Require every mode and equivalent JVM/native/web/backend/legal outputs
+        run: python3 scripts/android-speed-benchmark.py compare reports
+      - name: Retain validated fanout summary without APKs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-fanout-equivalence-summary
+          path: reports/fanout-summary.json
+          retention-days: 1
+          if-no-files-found: warn
