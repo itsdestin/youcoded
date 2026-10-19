@@ -65,11 +65,21 @@ function repository() {
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   git('init', '-q'); git('config', 'user.email', 'test@example.com'); git('config', 'user.name', 'Test');
   git('config', 'core.autocrlf', 'false'); git('config', 'commit.gpgsign', 'false');
+  // WHY: commits can detach maintenance that outlives this disposable repository;
+  // deleting .git while it writes caused ENOTEMPTY even with cleanup retries.
+  git('config', 'maintenance.auto', 'false'); git('config', 'gc.auto', '0');
   const put = (name, body = name) => { mkdirSync(join(root, name, '..'), { recursive: true }); writeFileSync(join(root, name), body); };
   const commit = () => { git('add', '-A'); git('commit', '-qm', 'fixture'); return git('rev-parse', 'HEAD'); };
   put('src/core'); const base = commit();
   return { root, git, put, commit, base, close: () => rmSync(root, { recursive: true, force: true, maxRetries: 5 }) };
 }
+test('temporary policy repositories disable detached maintenance before creating objects', () => {
+  const r = repository();
+  try {
+    assert.equal(r.git('config', '--local', '--get', '--default', 'unset', 'maintenance.auto'), 'false');
+    assert.equal(r.git('config', '--local', '--get', '--default', 'unset', 'gc.auto'), '0');
+  } finally { r.close(); }
+});
 test('input identity accepts fresh ordinary source/test commits and rejects dirty or mismatched checkout inputs', async () => {
   const r = repository();
   try {
