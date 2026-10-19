@@ -91,7 +91,8 @@ function callTool(id, params) {
     fn();
   }
   sock.on('connect', function () {
-    sock.write(JSON.stringify({ token: TOKEN, session: SESSION, tool: name, args: (params && params.arguments) || {} }) + '\n');
+    // WHY: preserve invalid falsy payloads for shared worker validation; only omission means {}.
+    sock.write(JSON.stringify({ token: TOKEN, session: SESSION, tool: name, args: params.arguments === undefined ? {} : params.arguments }) + '\n');
   });
   sock.on('data', function (d) {
     buf += d.toString('utf8');

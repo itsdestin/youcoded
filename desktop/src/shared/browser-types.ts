@@ -123,7 +123,7 @@ export type BrowserSettingsPatch = Partial<Pick<BrowserPreferences, 'showWindow'
 
 /** The Browser tool behind a tool-card name: native ("BrowserAct") or a Claude
  *  Code MCP name ("mcp__youcoded-browser-1a2b3c4d__BrowserAct"). */
-export const BROWSER_TOOL_LABEL_NAMES = ['BrowserNavigate', 'BrowserSnapshot', 'BrowserAct', 'BrowserScreenshot', 'BrowserTabs', 'BrowserWait', 'BrowserAskUser'] as const;
+export const BROWSER_TOOL_LABEL_NAMES = ['BrowserNavigate', 'BrowserHistory', 'BrowserZoom', 'BrowserSnapshot', 'BrowserAct', 'BrowserScreenshot', 'BrowserTabs', 'BrowserWait', 'BrowserAskUser'] as const;
 
 export function browserToolOf(toolName: string): typeof BROWSER_TOOL_LABEL_NAMES[number] | null {
   const m = /^(?:mcp__youcoded-browser-[0-9a-f]+__)?(Browser\w+)$/.exec(toolName);

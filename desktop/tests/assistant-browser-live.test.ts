@@ -31,6 +31,8 @@ const PAGES: Record<string, string> = {
     <button onclick="alert('hello there')">Say hello</button>
     <button onclick="document.title = confirm('Delete everything?') ? 'yes' : 'no'">Ask a question</button>
     <a href="/file.txt" download>Get file</a>`,
+  '/duplicates': `<!doctype html><title>Duplicates</title><p hidden>Shared ready</p><p>Shared ready</p><p>Shared ready</p>`,
+  '/select': `<!doctype html><title>Choose</title><select aria-label="Language"><option value="en">English</option><option value="fr">French</option></select>`,
   '/results': `<!doctype html><title>Results</title><p id="r">Results page</p>`,
   '/checkout/confirm': `<!doctype html><title>Ordered</title><p>Order placed</p>`,
   '/popup': `<!doctype html><title>Popups</title><a href="/results" target="_blank">Open in new tab</a>`,
@@ -133,6 +135,111 @@ beforeEach(() => {
 const live = () => (FOUND.length ? it : it.skip);
 
 describe('Browser, live', () => {
+  live()('waits for any visible duplicate and for all visible duplicates to disappear', async () => {
+    const c = ctx('s-duplicates');
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/duplicates` }, c);
+    const present = await runBrowserTool(env, 'BrowserWait', { text: 'Shared ready' }, c);
+    expect(present.isError).toBeFalsy(); expect(present.text).toContain('has a visible match');
+    const stillVisible = await runBrowserTool(env, 'BrowserWait', { textGone: 'Shared ready' }, { ...c, deadline: Date.now() + 15_100 });
+    expect(stillVisible.isError).toBe(true); expect(stillVisible.text).toContain('visible matches remain');
+    const page = (await service.activePage(c.sessionId, false))!;
+    await page.locator('p').evaluateAll((elements) => elements.forEach((e) => { (e as HTMLElement).hidden = true; }));
+    const gone = await runBrowserTool(env, 'BrowserWait', { textGone: 'Shared ready' }, c);
+    expect(gone.isError).toBeFalsy(); expect(gone.text).toContain('has no visible matches');
+    const absent = await runBrowserTool(env, 'BrowserWait', { text: 'Shared ready' }, { ...c, deadline: Date.now() + 15_100 });
+    expect(absent.isError).toBe(true); expect(absent.text).toContain('no visible match appeared');
+  }, 60_000);
+
+  live()('continues historical cached text and invalidates on reload, tab switches and assistant mutation', async () => {
+    const c = ctx('s-continuation');
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, c);
+    const page = (await service.activePage(c.sessionId, false))!;
+    await page.evaluate(() => { document.body.innerHTML = Array.from({ length: 2000 }, (_, i) => `<button>Historical item ${i} ${'x'.repeat(80)}</button>`).join(''); });
+    const fresh = await runBrowserTool(env, 'BrowserSnapshot', {}, c);
+    expect(fresh.text).toContain('Source cut at 120000');
+    expect(fresh.text).toContain('from=24000');
+    await page.evaluate(() => { document.body.textContent = 'Human changed this'; });
+    const next = await runBrowserTool(env, 'BrowserSnapshot', { from: 24_000 }, c);
+    expect(next.text).toContain('Continuation of cached snapshot'); expect(next.text).toContain('Historical item');
+    expect(next.text).not.toContain('Human changed this');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    expect((await runBrowserTool(env, 'BrowserSnapshot', { from: 24_000 }, c)).text).toContain('No cached snapshot');
+    await runBrowserTool(env, 'BrowserSnapshot', {}, c);
+    const other = await service.newPage(c.sessionId);
+    service.selectTab(c.sessionId, 0);
+    expect((await runBrowserTool(env, 'BrowserSnapshot', { from: 1 }, c)).text).toContain('No cached snapshot');
+    await other.close();
+    await runBrowserTool(env, 'BrowserSnapshot', {}, c);
+    answers.unshift((p) => p.kind === 'site' ? 'allow_chat' : null);
+    await runBrowserTool(env, 'BrowserAct', { action: 'press_key', element: 'Current page', key: 'Escape' }, c);
+    // An action supplies its own NEW outline; its prior continuation cannot survive.
+    const after = await runBrowserTool(env, 'BrowserSnapshot', { from: 24_000 }, c);
+    expect(after.isError).toBe(true); expect(after.text).toContain('out of range');
+  }, 60_000);
+
+  live()('keeps observation and close escape paths available during a pending handoff', async () => {
+    const c = ctx('s-handoff-close');
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, c);
+    await runBrowserTool(env, 'BrowserAskUser', { message: 'Please do this step.' }, { ...c, deadline: Date.now() + 3100 });
+    expect(service.openPrompt(c.sessionId)?.kind).toBe('handoff');
+    expect((await runBrowserTool(env, 'BrowserScreenshot', {}, { ...c, vision: false })).isError).toBeFalsy();
+    expect((await runBrowserTool(env, 'BrowserWait', { seconds: 0 }, c)).isError).toBeFalsy();
+    for (const [name, args] of [
+      ['BrowserNavigate', { url: `${base}/form` }], ['BrowserHistory', { direction: 'back' }],
+      ['BrowserZoom', { zoom: 50 }], ['BrowserAct', { action: 'press_key', key: 'Escape', element: 'Current page' }],
+    ] as const) expect((await runBrowserTool(env, name, args, c)).text).toContain('user is doing a step');
+    expect((await runBrowserTool(env, 'BrowserTabs', { action: 'close', index: 0 }, c)).isError).toBeFalsy();
+    expect(service.openPrompt(c.sessionId)).toBeNull();
+    expect((await runBrowserTool(env, 'BrowserTabs', { action: 'close_all' }, c)).isError).toBeFalsy();
+  }, 60_000);
+
+  for (const answer of ['done', 'cant'] as const) live()(`consumes a late handoff ${answer} answer without recreating its card`, async () => {
+    const c = ctx(`s-late-${answer}`);
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, c);
+    const message = 'Please complete the human step.';
+    const waiting = await runBrowserTool(env, 'BrowserAskUser', { message }, { ...c, deadline: Date.now() + 3100 });
+    expect(waiting.text).toContain('Still waiting');
+    const prompt = service.openPrompt(c.sessionId)!;
+    const changed = await runBrowserTool(env, 'BrowserAskUser', { message: 'Different step' }, c);
+    expect(changed.isError).toBe(true); expect(changed.text).toContain('different BrowserAskUser');
+    expect(service.openPrompt(c.sessionId)?.id).toBe(prompt.id);
+    expect((await runBrowserTool(env, 'BrowserTabs', { action: 'select', index: 0 }, c)).isError).toBe(true);
+    expect((await runBrowserTool(env, 'BrowserSnapshot', {}, c)).isError).toBeFalsy();
+    expect((await runBrowserTool(env, 'BrowserTabs', { action: 'list' }, c)).isError).toBeFalsy();
+    const resumed = vi.spyOn(service, 'waitForOpenPrompt');
+    const same = runBrowserTool(env, 'BrowserAskUser', { message }, c);
+    // Wait on actual repeat-wait admission, not a fixed sleep.
+    await vi.waitFor(() => expect(resumed).toHaveBeenCalled());
+    service.answerPrompt(c.sessionId, prompt.id, answer);
+    resumed.mockRestore();
+    expect((await same).text).toContain(answer === 'done' ? 'user says they\'re done' : 'user says they can\'t');
+    expect(seenPrompts.filter((p) => p.kind === 'handoff')).toHaveLength(1);
+    const late = await runBrowserTool(env, 'BrowserAskUser', { message }, { ...c, deadline: Date.now() + 3100 });
+    expect(late.text).toContain('Still waiting');
+    service.answerPrompt(c.sessionId, service.openPrompt(c.sessionId)!.id, answer);
+    const consumed = await runBrowserTool(env, 'BrowserAskUser', { message }, c);
+    expect(consumed.text).toContain(answer === 'done' ? 'user says they\'re done' : 'user says they can\'t');
+    expect(seenPrompts.filter((p) => p.kind === 'handoff')).toHaveLength(2);
+  }, 60_000);
+
+  live()('selects dropdown options by value or label and preserves the empty wait default', async () => {
+    answers.unshift((p) => p.kind === 'site' ? 'allow_chat' : null);
+    const c = ctx('s-select');
+    await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/select` }, c);
+    const page = service.pages(c.sessionId)[0];
+    for (const [value, expected] of [['fr', 'fr'], ['English', 'en']]) {
+      const outline = await runBrowserTool(env, 'BrowserSnapshot', {}, c);
+      const ref = /combobox "Language".*?\[ref=(e\d+)\]/.exec(outline.text)?.[1];
+      expect(ref).toBeTruthy();
+      const result = await runBrowserTool(env, 'BrowserAct', { action: 'select', element: 'Language', ref, values: [value] }, c);
+      expect(result.isError).toBeFalsy();
+      expect(await page.locator('select').inputValue()).toBe(expected);
+    }
+    // WHY: checking the receipt pins the current default without wall-clock assertions.
+    expect((await runBrowserTool(env, 'BrowserWait', {}, c)).text).toContain('Waited 2 seconds.');
+    expect((await runBrowserTool(env, 'BrowserWait', { seconds: 0 }, c)).text).toContain('Waited 0 seconds.');
+  }, 60_000);
+
   live()('opens a page and returns an outline with refs, inside the untrusted frame', async () => {
     const r = await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx());
     expect(r.isError).toBeFalsy();
@@ -249,7 +356,7 @@ describe('Browser, live', () => {
   live()('wait, screenshot, and the stale-ref message', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/slow` }, ctx('s-misc'));
     const w = await runBrowserTool(env, 'BrowserWait', { text: 'READY NOW' }, ctx('s-misc'));
-    expect(w.text).toContain('"READY NOW" is on the page');
+    expect(w.text).toContain('Condition met: "READY NOW" has a visible match');
     const shot = await runBrowserTool(env, 'BrowserScreenshot', {}, ctx('s-misc'));
     expect(shot.imagePath).toBeTruthy();
     const bytes = fs.readFileSync(shot.imagePath!);
@@ -297,10 +404,10 @@ describe('Browser, live', () => {
 
   live()('a wait never runs past the call budget, even with only seconds left', async () => {
     await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/` }, ctx('s-budget'));
-    const t0 = Date.now();
     const r = await runBrowserTool(env, 'BrowserWait', { text: 'this text never appears' }, { ...ctx('s-budget'), deadline: Date.now() + 9000 });
-    expect(Date.now() - t0).toBeLessThan(9000);
-    expect(r.text).toMatch(/Still not there/);
+    // WHY: assert the capped outcome, not scheduler-dependent wall-clock timing.
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('Condition timeout within 0.001 seconds');
   }, 60_000);
 
   live()('a conversation\'s tabs close after it stops using the browser, and its next call says so', async () => {
@@ -354,14 +461,20 @@ describe('Browser, live', () => {
     service.setViewSize('s-zoom', 500, 800);
     const width = () => service.pages('s-zoom')[0].evaluate(() => window.innerWidth);
     await vi.waitFor(async () => expect(await width()).toBe(1024));
-    const r = await runBrowserTool(env, 'BrowserNavigate', { zoom: 25 }, ctx('s-zoom'));
+    const r = await runBrowserTool(env, 'BrowserZoom', { zoom: 25 }, ctx('s-zoom'));
     expect(r.isError).toBeFalsy();
     expect(r.text).toContain('Zoom is now 25%');
     await vi.waitFor(async () => expect(await width()).toBe(2000));
     expect(service.state('s-zoom').zoom).toEqual({ percent: 25, auto: false });
-    await runBrowserTool(env, 'BrowserNavigate', { zoom: 'auto' }, ctx('s-zoom'));
+    await runBrowserTool(env, 'BrowserZoom', { zoom: 'auto' }, ctx('s-zoom'));
     await vi.waitFor(async () => expect(await width()).toBe(1024));
     expect(service.state('s-zoom').zoom).toEqual({ percent: 49, auto: true });
+    // WHY: refreshed schemas advertise only canonical tools, but old runner callers still work.
+    expect((await runBrowserTool(env, 'BrowserNavigate', { zoom: 50 }, ctx('s-zoom'))).isError).toBeFalsy();
+    expect((await runBrowserTool(env, 'BrowserNavigate', { url: `${base}/form`, zoom: 25 }, ctx('s-zoom'))).isError).toBeFalsy();
+    expect(service.state('s-zoom').zoom).toEqual({ percent: 25, auto: false });
+    expect((await runBrowserTool(env, 'BrowserHistory', { direction: 'back' }, ctx('s-zoom'))).text).toContain('Fixture home');
+    expect((await runBrowserTool(env, 'BrowserNavigate', { go: 'forward' }, ctx('s-zoom'))).text).toContain('Place order');
   }, 60_000);
 
   // Destin, 2026-10-14: an expanded panel showed the page with empty bands either

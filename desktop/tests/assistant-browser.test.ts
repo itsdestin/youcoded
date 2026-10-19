@@ -12,11 +12,12 @@ import { browserDiagnostics } from './helpers/assistant-browser-diagnostics';
 import { candidatePaths, discoverBrowsers, pickBrowser } from '../src/main/assistant-browser/browser-discovery';
 import { BrowserSettings, sanitizeBrowserPreferences, validatePatch, DEFAULT_BROWSER_PREFERENCES } from '../src/main/assistant-browser/browser-settings';
 import { classifyUrl, hostPortKey, isNeverAddress, normaliseAddress, personAddress } from '../src/main/assistant-browser/browser-net';
-import { isFinalStep, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
+import { runBrowserTool, type RunnerEnv, isFinalStep, type ElementInfo, BrowserPolicy, CALL_DEADLINE_MS } from '../src/main/assistant-browser/browser-tool-runners';
 import { neutraliseUntrustedTags, wrapUntrusted } from '../src/main/harness/tools/untrusted';
 import { BrowserService, sanitizeFileName, clearStaleProfileLock, firstLine } from '../src/main/assistant-browser/browser-service';
 import { BrowserClient, type WorkerHandle } from '../src/main/assistant-browser/browser-client';
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS, browserToolsAsMcp } from '../src/main/assistant-browser/browser-tool-specs';
+import { validateBrowserRequest } from '../src/main/assistant-browser/browser-tool-validation';
 import { browserTools, syncBrowserTools } from '../src/main/harness/tools/browser';
 import { rulesForMode } from '../src/shared/permission-types';
 import { CONDITIONAL_TOOL_NAMES } from '../src/shared/harness-manifest';
@@ -26,6 +27,237 @@ import { browserToolOf } from '../src/shared/browser-types';
 import type { MainToWorker, WorkerToMain } from '../src/main/assistant-browser/browser-protocol';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'yc-browser-unit-'));
+
+describe('browser runner receipts and continuation', () => {
+  function fixture() {
+    const root = tmp();
+    const service = new BrowserService({ rootDir: root, chromium, getLaunchConfig: async () => { throw new Error('unused'); } });
+    const locator = {
+      count: vi.fn(async () => 1), evaluate: vi.fn(async () => ({ tag: 'input', name: 'Search', frameUrl: 'https://example.com', inForm: false })),
+      fill: vi.fn(async () => {}), press: vi.fn(async () => {}),
+    };
+    const page = {
+      goto: vi.fn(async () => null), url: () => 'https://example.com/current', title: async () => 'Current',
+      getByRef: () => locator, ariaSnapshot: vi.fn(async () => 'x'.repeat(50_000)),
+      waitForLoadState: vi.fn(async () => {}), on: vi.fn(), mainFrame: vi.fn(),
+    };
+    vi.spyOn(service, 'activePage').mockResolvedValue(page as never);
+    vi.spyOn(service, 'pages').mockReturnValue([page as never]);
+    vi.spyOn(service, 'markUsed').mockImplementation(() => {});
+    const policy = new BrowserPolicy(); policy.grantSite('s', 'example.com');
+    const env = { service, policy, settings: { read: vi.fn(async () => DEFAULT_BROWSER_PREFERENCES) }, installer: {} } as unknown as RunnerEnv;
+    const controller = new AbortController();
+    const ctx = { sessionId: 's', signal: controller.signal, vision: true };
+    const type = () => runBrowserTool(env, 'BrowserAct', { action: 'type', ref: 'e1', element: 'Search', text: 'cats', submit: true }, ctx);
+    const dispose = async () => { await service.dispose(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); };
+    return { service, locator, page, env, controller, ctx, type, dispose };
+  }
+
+  it('does not press Enter after cancellation during fill, retaining the barrier', async () => {
+    const f = fixture(); let finish!: () => void;
+    f.locator.fill.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    const result = f.type();
+    await vi.waitFor(() => expect(f.locator.fill).toHaveBeenCalled());
+    f.controller.abort();
+    const r = await result;
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/fill attempted.*uncertain/i);
+    const next = vi.fn(async () => {});
+    const queued = f.service.withSession('s', next);
+    expect(next).not.toHaveBeenCalled();
+    finish(); await queued;
+    expect(f.locator.press).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it('does not start a later mutation after the deadline, even when fill resolves late', async () => {
+    const f = fixture(); let finish!: () => void;
+    f.locator.fill.mockImplementation(() => new Promise<void>((r) => { finish = r; }));
+    vi.useFakeTimers();
+    try {
+      const result = runBrowserTool(f.env, 'BrowserAct', { action: 'type', ref: 'e1', element: 'Search', text: 'cats', submit: true }, { ...f.ctx, deadline: Date.now() + 100 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.locator.fill).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await result).text).toMatch(/deadline reached/);
+      const next = vi.fn(async () => {});
+      const queued = f.service.withSession('s', next);
+      expect(next).not.toHaveBeenCalled();
+      finish(); await queued;
+      expect(f.locator.press).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); await f.dispose(); }
+  });
+
+  it('checks cancellation after asynchronous settings before asking or mutating', async () => {
+    const f = fixture(); let finish!: (value: typeof DEFAULT_BROWSER_PREFERENCES) => void;
+    vi.spyOn(f.env.settings, 'read').mockImplementation(() => new Promise((r) => { finish = r; }));
+    const ask = vi.spyOn(f.service, 'ask');
+    const result = f.type();
+    await vi.waitFor(() => expect(f.env.settings.read).toHaveBeenCalled());
+    f.controller.abort();
+    expect((await result).text).toContain('not attempted');
+    finish(DEFAULT_BROWSER_PREFERENCES);
+    await f.service.withSession('s', async () => {});
+    expect(ask).not.toHaveBeenCalled(); expect(f.locator.fill).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it('reports filled text and uncertain Enter on a press failure without retry advice', async () => {
+    const f = fixture(); f.locator.press.mockRejectedValue(new Error('Target page has been closed'));
+    const r = await f.type();
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/text filled.*Enter attempted.*uncertain/i);
+    expect(r.text).toContain('https://example.com/current');
+    expect(r.text).not.toMatch(/try again/i);
+    await f.dispose();
+  });
+
+  it('reports failed navigation with the current actual address', async () => {
+    const f = fixture(); f.page.goto.mockRejectedValue(new Error('net::ERR_CONNECTION_REFUSED'));
+    const r = await runBrowserTool(f.env, 'BrowserNavigate', { url: 'https://example.com/other' }, f.ctx);
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('failed');
+    expect(r.text).toContain('https://example.com/current');
+    await f.dispose();
+  });
+
+  it.each([['net::ERR_BLOCKED_BY_CLIENT', 'blocked'], ['Timeout exceeded', 'loading']])('distinguishes navigation %s with the actual navigation budget and address', async (error, outcome) => {
+    const f = fixture();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      f.page.goto.mockRejectedValue(new Error(error));
+      const r = await runBrowserTool(f.env, 'BrowserNavigate', { url: 'https://example.com/other' }, { ...f.ctx, deadline: Date.now() + 16_000 });
+      expect(r.isError).toBe(true); expect(r.text).toContain(`Navigation ${outcome}`);
+      expect(r.text).toContain('https://example.com/current');
+      expect(f.page.goto).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ timeout: 1000 }));
+      if (outcome === 'loading') { expect(r.text).toContain('1-second navigation budget'); expect(r.text).not.toContain('after 30 seconds'); }
+    } finally { vi.useRealTimers(); await f.dispose(); }
+  });
+
+  it('distinguishes an HTTP failure from an opened page', async () => {
+    const f = fixture(); f.page.goto.mockResolvedValue({ status: () => 503 } as never);
+    const r = await runBrowserTool(f.env, 'BrowserNavigate', { url: 'https://example.com/other' }, f.ctx);
+    expect(r.isError).toBe(true); expect(r.text).toContain('Navigation http_error: HTTP 503');
+    await f.dispose();
+  });
+
+  it.each([['hover', 'hover over'], ['double_click', 'double-click']])('uses the accurate %s verb in an uncertain action receipt', async (action, verb) => {
+    const f = fixture();
+    Object.assign(f.locator, { hover: async () => { throw new Error('uncertain'); }, dblclick: async () => { throw new Error('uncertain'); } });
+    const r = await runBrowserTool(f.env, 'BrowserAct', { action, ref: 'e1', element: 'Search' }, f.ctx);
+    expect(r.isError).toBe(true); expect(r.text).toContain(`${verb} "Search"`);
+    expect(r.text).toContain('Action attempted');
+    await f.dispose();
+  });
+
+  it('holds the barrier through a cancelled in-flight Playwright condition wait', async () => {
+    const f = fixture(); let finish!: () => void;
+    const waitFor = vi.fn(() => new Promise<void>((r) => { finish = r; }));
+    Object.assign(f.page, { getByText: () => ({ filter: () => ({ first: () => ({ waitFor }) }) }) });
+    const result = runBrowserTool(f.env, 'BrowserWait', { text: 'Ready' }, f.ctx);
+    await vi.waitFor(() => expect(waitFor).toHaveBeenCalled());
+    f.controller.abort(); expect((await result).isError).toBe(true);
+    const next = vi.fn(async () => {}); const queued = f.service.withSession('s', next);
+    expect(next).not.toHaveBeenCalled(); finish(); await queued;
+    expect(f.page.ariaSnapshot).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it('does not create a tab after asynchronous browser startup is cancelled', async () => {
+    const f = fixture(); let started!: (context: never) => void;
+    vi.spyOn(f.service, 'activePage').mockResolvedValue(null);
+    vi.spyOn(f.service, 'ensureContext').mockImplementation(() => new Promise((r) => { started = r; }));
+    const newPage = vi.fn(async () => f.page);
+    const result = runBrowserTool(f.env, 'BrowserNavigate', { url: 'https://example.com' }, f.ctx);
+    await vi.waitFor(() => expect(f.service.ensureContext).toHaveBeenCalled());
+    f.controller.abort(); expect((await result).isError).toBe(true);
+    started({ newPage } as never);
+    await f.service.withSession('s', async () => {});
+    expect(newPage).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it('does not navigate or apply legacy zoom after asynchronous classification is cancelled', async () => {
+    const f = fixture(); let classified!: (addresses: { address: string }[]) => void;
+    const lookup = vi.fn(() => new Promise<{ address: string }[]>((r) => { classified = r; }));
+    f.env.policy = new BrowserPolicy(lookup);
+    const zoom = vi.spyOn(f.service, 'setZoom');
+    const result = runBrowserTool(f.env, 'BrowserNavigate', { url: 'https://classification.test', zoom: 50 }, f.ctx);
+    await vi.waitFor(() => expect(lookup).toHaveBeenCalled());
+    f.controller.abort(); await result;
+    classified([{ address: '93.184.216.34' }]);
+    await f.service.withSession('s', async () => {});
+    expect(f.page.goto).not.toHaveBeenCalled(); expect(zoom).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it('does not mutate after an asynchronous approval returns following cancellation', async () => {
+    const f = fixture(); f.env.policy = new BrowserPolicy();
+    let answer!: (value: 'allow_chat') => void;
+    vi.spyOn(f.service, 'ask').mockImplementation(() => new Promise((r) => { answer = r; }));
+    const result = f.type();
+    await vi.waitFor(() => expect(f.service.ask).toHaveBeenCalled());
+    f.controller.abort(); await result; answer('allow_chat');
+    await f.service.withSession('s', async () => {});
+    expect(f.locator.fill).not.toHaveBeenCalled();
+    await f.dispose();
+  });
+
+  it.each(['text', 'textGone'])('reports a condition-specific %s timeout as an error', async (condition) => {
+    const f = fixture();
+    const waitFor = vi.fn(async () => { throw new Error('Timeout 100ms exceeded'); });
+    const first = vi.fn(() => ({ waitFor }));
+    const filter = vi.fn(() => ({ first }));
+    Object.assign(f.page, { getByText: vi.fn(() => ({ filter })) });
+    const r = await runBrowserTool(f.env, 'BrowserWait', { [condition]: 'Ready' }, f.ctx);
+    expect(filter).toHaveBeenCalledWith({ visible: true });
+    expect(waitFor).toHaveBeenCalledWith(expect.objectContaining({ state: condition === 'text' ? 'visible' : 'hidden' }));
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain(condition === 'text' ? 'no visible match appeared' : 'visible matches remain');
+    await f.dispose();
+  });
+
+  it('cleans the sleep abort listener on normal completion and cancellation', async () => {
+    const f = fixture();
+    const any = vi.spyOn(AbortSignal, 'any').mockReturnValue(f.controller.signal);
+    const add = vi.spyOn(f.controller.signal, 'addEventListener');
+    const remove = vi.spyOn(f.controller.signal, 'removeEventListener');
+    try {
+      await runBrowserTool(f.env, 'BrowserWait', { seconds: 0 }, f.ctx);
+      const listeners = add.mock.calls.filter(([name]) => name === 'abort').map(([, fn]) => fn);
+      for (const listener of listeners) expect(remove).toHaveBeenCalledWith('abort', listener);
+      const pending = runBrowserTool(f.env, 'BrowserWait', {}, f.ctx);
+      await vi.waitFor(() => expect(add.mock.calls.length).toBeGreaterThan(listeners.length));
+      f.controller.abort(); await pending;
+      await f.service.withSession('s', async () => {});
+      for (const [, listener] of add.mock.calls) expect(remove).toHaveBeenCalledWith('abort', listener);
+    } finally { any.mockRestore(); await f.dispose(); }
+  });
+
+  it('reports outline read failure as an error and does not keep its old snapshot', async () => {
+    const f = fixture();
+    await runBrowserTool(f.env, 'BrowserSnapshot', {}, f.ctx);
+    f.page.ariaSnapshot.mockRejectedValue(new Error('Snapshot failed'));
+    expect((await runBrowserTool(f.env, 'BrowserSnapshot', {}, f.ctx)).isError).toBe(true);
+    expect((await runBrowserTool(f.env, 'BrowserSnapshot', { from: 24_000 }, f.ctx)).text).toContain('No cached snapshot');
+    await f.dispose();
+  });
+
+  it('continues the cached outline, rejects missing and out-of-range offsets, and regenerates at zero', async () => {
+    const f = fixture();
+    const snap = (from: number) => runBrowserTool(f.env, 'BrowserSnapshot', { from }, f.ctx);
+    expect((await snap(24_000)).isError).toBe(true);
+    await snap(0); f.page.ariaSnapshot.mockResolvedValue('changed');
+    const continuation = await snap(24_000);
+    expect(continuation.text).toContain('Continuation of cached snapshot');
+    expect(continuation.text).not.toContain('changed');
+    expect(f.page.ariaSnapshot).toHaveBeenCalledTimes(1);
+    expect((await snap(50_001)).isError).toBe(true);
+    expect((await snap(50_000)).text).toMatch(/end of.*snapshot/i);
+    expect((await snap(0)).text).toContain('changed');
+    await f.dispose();
+  });
+});
 
 describe('finding a browser', () => {
   it('looks in each OS\'s standard places, never a snap-confined Chromium', () => {
@@ -262,6 +494,19 @@ describe('the live picture\'s pace', () => {
     return { service, acks, frame };
   }
 
+  it('ignores a queued screencast frame after unwatch has detached the view', async () => {
+    vi.useFakeTimers();
+    const { service, frame } = setup();
+    try {
+      const delivered = vi.fn(); service.on('frame', delivered);
+      await vi.advanceTimersByTimeAsync(0);
+      frame(1); expect(delivered).toHaveBeenCalledTimes(1);
+      service.unwatch('s');
+      // CDP may already have queued this event before stopScreencast is acknowledged.
+      frame(2); expect(delivered).toHaveBeenCalledTimes(1);
+    } finally { service.unwatch('s'); vi.useRealTimers(); }
+  });
+
   it('waits between pictures while the person only watches, and not while they use the page', async () => {
     vi.useFakeTimers();
     try {
@@ -362,6 +607,410 @@ describe('the main process\'s handle on the Browser worker', () => {
   });
 });
 
+// Deferred signals prove admission/settlement without depending on scheduler timing.
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+const lifecycleService = () => new BrowserService({ rootDir: os.tmpdir(), chromium: {} as never, getLaunchConfig: async () => ({ showWindow: false, myChrome: false, browser: null }) });
+
+describe('browser call lifecycle', () => {
+  it('does not fork or dispatch an already cancelled call', async () => {
+    const fork = vi.fn(() => fakeWorker(() => {}));
+    const c = new BrowserClient({ fork });
+    const ac = new AbortController(); ac.abort();
+    const result = c.callTool('s', 'BrowserWait', {}, { vision: true, signal: ac.signal });
+    expect(fork).not.toHaveBeenCalled();
+    expect(await result).toMatchObject({ isError: true, text: expect.stringMatching(/cancel.*not started/i) });
+  });
+
+  it.each(['success', 'failure', 'crash'] as const)('removes the client abort listener on %s', async (outcome) => {
+    const ac = new AbortController();
+    const remove = vi.spyOn(ac.signal, 'removeEventListener');
+    let reply!: (m: WorkerToMain) => void;
+    const w = fakeWorker((_m, send) => { reply = send; });
+    const c = new BrowserClient({ fork: () => w });
+    const result = c.callTool('s', 'BrowserWait', {}, { vision: true, signal: ac.signal });
+    const call = w.sent.find((m) => m.t === 'call')!;
+    if (outcome === 'crash') w.die();
+    else reply(outcome === 'success' ? { t: 'reply', id: call.id, ok: true, value: { text: 'ok' } } : { t: 'reply', id: call.id, ok: false, error: 'failed' });
+    await result;
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    ac.abort();
+    expect(w.sent.filter((m) => m.t === 'cancel')).toHaveLength(0);
+  });
+
+  it.each(['cancelled', 'deadline'] as const)('skips queued %s work promptly without releasing an earlier barrier', async (reason) => {
+    vi.useFakeTimers();
+    const service = lifecycleService();
+    const gate = deferred(); const started = deferred();
+    const first = service.withSession('s', () => { started.resolve(); return gate.promise; });
+    await started.promise;
+    const ac = new AbortController();
+    const remove = vi.spyOn(ac.signal, 'removeEventListener');
+    const fn = vi.fn(async () => 'must not run');
+    const queued = service.withSession('s', fn, { signal: ac.signal, deadline: Date.now() + 100 }).catch((e) => e);
+    const next = vi.fn(async () => 'after first');
+    const third = service.withSession('s', next);
+    try {
+      if (reason === 'cancelled') ac.abort();
+      await vi.advanceTimersByTimeAsync(100);
+      let settled = false; void queued.then(() => { settled = true; });
+      await Promise.resolve(); // settle delivery, not the blocked operation
+      expect(settled).toBe(true);
+      expect(await queued).toMatchObject({ name: 'BrowserCallLifecycleError', reason, inFlight: false, message: expect.stringMatching(/not started/i) });
+      expect(fn).not.toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+      expect(service.state('s').busy).toBe(true);
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      gate.resolve(); await first; await third; await service.dispose(); vi.useRealTimers();
+    }
+    expect(fn).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['cancelled', 'deadline'] as const)('returns in-flight %s but holds the lock through late rejection; other sessions run', async (reason) => {
+    vi.useFakeTimers();
+    const service = lifecycleService();
+    const gate = deferred(); const started = deferred();
+    const ac = new AbortController();
+    const remove = vi.spyOn(ac.signal, 'removeEventListener');
+    const first = service.withSession('s', () => { started.resolve(); return gate.promise; }, { signal: ac.signal, deadline: Date.now() + 100 }).catch((e) => e);
+    await started.promise;
+    const next = vi.fn(async () => 'next');
+    const second = service.withSession('s', next);
+    try {
+      if (reason === 'cancelled') ac.abort();
+      await vi.advanceTimersByTimeAsync(100);
+      let settled = false; void first.then(() => { settled = true; });
+      await Promise.resolve(); // settle delivery while underlying operation remains blocked
+      expect(settled).toBe(true);
+      expect(await first).toMatchObject({ name: 'BrowserCallLifecycleError', reason, inFlight: true, message: expect.stringMatching(/may already have acted/i) });
+      expect(service.state('s').busy).toBe(true);
+      expect(next).not.toHaveBeenCalled();
+      expect(await service.withSession('other', async () => 'independent')).toBe('independent');
+      expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      gate.reject(new Error('late underlying failure'));
+      await second; await service.dispose(); vi.useRealTimers();
+    }
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(service.state('s').busy).toBe(false);
+  });
+
+  it.each(['cancelled', 'deadline'] as const)('never admits already %s work or marks it used', async (reason) => {
+    const service = lifecycleService(); const ac = new AbortController();
+    if (reason === 'cancelled') ac.abort();
+    const fn = vi.fn(async () => 'no');
+    const result = await service.withSession('s', fn, { signal: ac.signal, deadline: reason === 'deadline' ? Date.now() - 1 : undefined }).catch((e) => e);
+    expect(result).toMatchObject({ reason, inFlight: false });
+    expect(fn).not.toHaveBeenCalled();
+    expect(service.state('s')).toMatchObject({ busy: false, used: false });
+    await service.dispose();
+  });
+
+  it('cleans lifecycle resources on normal success and synchronous failure', async () => {
+    vi.useFakeTimers(); const service = lifecycleService();
+    try {
+      for (const fails of [false, true]) {
+        const ac = new AbortController(); const remove = vi.spyOn(ac.signal, 'removeEventListener');
+        const result = service.withSession('s', () => { if (fails) throw new Error('fn failed'); return Promise.resolve('ok'); }, { signal: ac.signal, deadline: Date.now() + 100 });
+        if (fails) await expect(result).rejects.toThrow('fn failed'); else expect(await result).toBe('ok');
+        expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+        expect(vi.getTimerCount()).toBe(0);
+        expect(service.state('s').busy).toBe(false);
+      }
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+});
+
+describe('completed browser handoffs', () => {
+  it.each(['done', 'cant'] as const)('consumes a late %s answer only once and only for its message', async (answer) => {
+    vi.useFakeTimers(); const service = lifecycleService();
+    try {
+      const waiting = service.ask('s', { kind: 'handoff', message: 'Sign in' }, { timeoutMs: 100 });
+      const id = service.openPrompt('s')!.id;
+      await vi.advanceTimersByTimeAsync(100); expect(await waiting).toBe('timeout');
+      expect(service.answerPrompt('s', id, answer)).toBe(true);
+      expect(service.consumeCompletedHandoff('s', 'Different')).toBeNull();
+      expect(service.consumeCompletedHandoff('other', 'Sign in')).toBeNull();
+      expect(service.consumeCompletedHandoff('s', 'Sign in')).toEqual({ message: 'Sign in', answer });
+      expect(service.consumeCompletedHandoff('s', 'Sign in')).toBeNull();
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['close', 'stop', 'dispose'] as const)('clears the receipt on %s without replaying an old answer', async (action) => {
+    vi.useFakeTimers(); const service = lifecycleService();
+    try {
+      const waiting = service.ask('s', { kind: 'handoff', message: 'Old' }, { timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100); await waiting;
+      service.answerPrompt('s', service.openPrompt('s')!.id, 'done');
+      if (action === 'close') await service.closeSession('s');
+      else if (action === 'stop') await service.stop();
+      else await service.dispose();
+      expect(service.consumeCompletedHandoff('s', 'Old')).toBeNull();
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it('keeps a different pending message separate and stores only the latest terminal receipt', async () => {
+    vi.useFakeTimers(); const service = lifecycleService();
+    try {
+      const old = service.ask('s', { kind: 'handoff', message: 'Old' }, { timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100); await old;
+      const oldId = service.openPrompt('s')!.id;
+      service.answerPrompt('s', oldId, 'done');
+      const changed = service.ask('s', { kind: 'handoff', message: 'New' }, { timeoutMs: 100 });
+      expect(service.consumeCompletedHandoff('s', 'New')).toBeNull();
+      expect(service.consumeCompletedHandoff('s', 'Old')).toEqual({ message: 'Old', answer: 'done' });
+      expect(service.openPrompt('s')?.message).toBe('New');
+      expect(service.answerPrompt('s', oldId, 'cant')).toBe(false);
+      await vi.advanceTimersByTimeAsync(100); await changed;
+      service.answerPrompt('s', service.openPrompt('s')!.id, 'cant');
+      const latest = service.ask('s', { kind: 'handoff', message: 'Latest' }, { timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100); await latest;
+      service.answerPrompt('s', service.openPrompt('s')!.id, 'done');
+      expect(service.consumeCompletedHandoff('s', 'New')).toBeNull();
+      expect(service.consumeCompletedHandoff('s', 'Latest')).toEqual({ message: 'Latest', answer: 'done' });
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    ['timed-out', 'close_all'], ['timed-out', 'close'], ['timed-out', 'session'],
+    ['active', 'close_all'], ['active', 'close'], ['active', 'session'],
+  ] as const)('restores a %s shown handoff after %s without reopening closed tabs', async (waiter, action) => {
+    vi.useFakeTimers();
+    const service = lifecycleService();
+    const closing = deferred(); const closeStarted = deferred();
+    const makePage = (url: string, gated = false) => {
+      const page = {
+        url: () => url, isClosed: () => false, on: vi.fn(),
+        close: vi.fn(async () => {
+          if (gated) { closeStarted.resolve(); await closing.promise; }
+          (service as any).onPageClosed('s', page);
+        }),
+      };
+      return page;
+    };
+    const first = makePage('https://example.com/sign-in', action === 'session');
+    const pages = action === 'close' ? [first] : [first, makePage('https://example.com/account')];
+    service.markUsed('s');
+    const entry = (service as any).sessions.get('s');
+    entry.pages = pages; entry.active = first;
+    (service as any).context = { close: async () => {} };
+    (service as any).windowShown = true;
+    const ensure = vi.spyOn(service as any, 'ensureContext').mockImplementation(async () => {
+      (service as any).windowShown = false;
+      (service as any).context = { close: async () => {} };
+      return (service as any).context;
+    });
+    // WHY: run the real restart/reopenAll; even a failed attempt to resurrect a tab is a bug.
+    const newPage = vi.spyOn(service, 'newPage').mockRejectedValue(new Error('Closed tabs must not reopen'));
+    const restart = vi.spyOn(service, 'restart');
+    const waiting = service.ask('s', { kind: 'handoff', message: 'Sign in' }, { timeoutMs: 100 });
+    try {
+      if (waiter === 'timed-out') {
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await waiting).toBe('timeout');
+      }
+      expect(service.openPrompt('s')?.kind).toBe('handoff');
+      // Also cover opening the sign-in window after the tool has timed out.
+      (service as any).windowOverride = true;
+      let restartsWhileClosing = 0;
+      if (action === 'session') {
+        const closed = service.closeSession('s');
+        await closeStarted.promise;
+        await vi.advanceTimersByTimeAsync(0); // settle restoration while a tab close is pending
+        restartsWhileClosing = restart.mock.calls.length;
+        closing.resolve(); await closed;
+      } else {
+        const env = { service, policy: new BrowserPolicy(), settings: { read: async () => DEFAULT_BROWSER_PREFERENCES }, installer: {} } as unknown as RunnerEnv;
+        const result = await runBrowserTool(env, 'BrowserTabs', { action, ...(action === 'close' ? { index: 0 } : {}) }, { sessionId: 's', signal: new AbortController().signal, vision: true });
+        expect(result.isError).not.toBe(true);
+      }
+      // A tool's busy flag clears on return; advance the restart's fake drain poll,
+      // then await the actual restart rather than guessing when restoration finishes.
+      await vi.advanceTimersByTimeAsync(100);
+      await restart.mock.results[0]?.value;
+      expect(service.openPrompt('s')).toBeNull();
+      expect(await waiting).toBe(waiter === 'timed-out' ? 'timeout' : 'cancelled');
+      expect(service.hasWindowOverride()).toBe(false);
+      expect(restartsWhileClosing).toBe(0);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(ensure).toHaveBeenCalledTimes(1);
+      expect(service.canZoom()).toBe(true);
+      expect(service.pages('s')).toEqual([]);
+      expect(service.lastUrls('s')).toEqual([]);
+      expect(newPage).not.toHaveBeenCalled();
+    } finally { closing.resolve(); await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    ['stop', 'active'], ['dispose', 'active'], ['stop', 'timed-out'], ['dispose', 'timed-out'],
+  ] as const)('does not restore the sign-in window by restarting during explicit %s with a %s handoff', async (action, waiter) => {
+    vi.useFakeTimers();
+    const service = lifecycleService();
+    const closing = deferred(); const closeStarted = deferred();
+    const close = vi.fn(() => { closeStarted.resolve(); return closing.promise; });
+    (service as any).context = { close };
+    (service as any).windowShown = true;
+    (service as any).windowOverride = true;
+    const ensure = vi.spyOn(service as any, 'ensureContext').mockResolvedValue({});
+    const reopen = vi.spyOn(service as any, 'reopenAll').mockResolvedValue(undefined);
+    const restart = vi.spyOn(service, 'restart');
+    const waiting = service.ask('s', { kind: 'handoff', message: 'Sign in' }, { timeoutMs: 1000 });
+    if (waiter === 'timed-out') {
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await waiting).toBe('timeout');
+    }
+    const stopped = action === 'stop' ? service.stop() : service.dispose();
+    await closeStarted.promise;
+    expect(await waiting).toBe(waiter === 'timed-out' ? 'timeout' : 'cancelled');
+    // Settle the config read that endWindowOverride would schedule while close is pending.
+    await Promise.resolve();
+    closing.resolve();
+    await stopped;
+    await Promise.resolve(); // settle any restoration continuation
+    try {
+      expect(restart).not.toHaveBeenCalled();
+      expect(ensure).not.toHaveBeenCalled();
+      expect(reopen).not.toHaveBeenCalled();
+      expect(service.hasWindowOverride()).toBe(false);
+      expect(service.openPrompt('s')).toBeNull();
+      expect(service.state('s').run).toBe('stopped');
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['done', 'cant'] as const)('still restores the window after a normal active handoff %s answer', async (answer) => {
+    const service = lifecycleService(); const restored = deferred();
+    (service as any).context = { close: async () => {} };
+    (service as any).windowShown = true;
+    (service as any).windowOverride = true;
+    const ensure = vi.spyOn(service as any, 'ensureContext').mockResolvedValue({});
+    vi.spyOn(service as any, 'reopenAll').mockImplementation(async () => { restored.resolve(); });
+    const waiting = service.ask('s', { kind: 'handoff', message: 'Sign in' }, { timeoutMs: 1000 });
+    try {
+      service.answerPrompt('s', service.openPrompt('s')!.id, answer);
+      expect(await waiting).toBe(answer);
+      await restored.promise;
+      expect(ensure).toHaveBeenCalledTimes(1);
+      expect(service.hasWindowOverride()).toBe(false);
+    } finally { await service.dispose(); }
+  });
+
+  it('preserves handoffs through a window-mode restart rather than treating it as a reset', async () => {
+    vi.useFakeTimers(); const service = lifecycleService();
+    try {
+      const waiting = service.ask('s', { kind: 'handoff', message: 'Sign in' }, { timeoutMs: 100 });
+      await vi.advanceTimersByTimeAsync(100); await waiting;
+      // No real browser: only the internal restart's lifecycle boundary matters.
+      (service as any).context = { close: async () => {} };
+      vi.spyOn(service as any, 'ensureContext').mockResolvedValue({});
+      vi.spyOn(service as any, 'reopenAll').mockResolvedValue(undefined);
+      await service.restart();
+      expect(service.openPrompt('s')?.message).toBe('Sign in');
+      service.answerPrompt('s', service.openPrompt('s')!.id, 'done');
+      (service as any).context = { close: async () => {} };
+      await service.restart();
+      expect(service.consumeCompletedHandoff('s', 'Sign in')).toEqual({ message: 'Sign in', answer: 'done' });
+    } finally { await service.dispose(); vi.useRealTimers(); }
+  });
+
+  it('delivers live answers outside the queue without duplicating a receipt', async () => {
+    const service = lifecycleService(); const started = deferred();
+    const running = service.withSession('s', () => { const p = service.ask('s', { kind: 'handoff', message: 'Now' }, { timeoutMs: 1000 }); started.resolve(); return p; });
+    await started.promise;
+    service.answerPrompt('s', service.openPrompt('s')!.id, 'cant');
+    expect(await running).toBe('cant');
+    expect(service.consumeCompletedHandoff('s', 'Now')).toBeNull();
+    await service.dispose();
+  });
+});
+
+describe('browser request preflight', () => {
+  // WHY: invalid requests must fail before even queue admission, not just before Playwright.
+  it.each([
+    ['BrowserNavigate', { url: 'https://example.com', go: 'back' }, /BrowserHistory.*direction/],
+    ['BrowserNavigate', { url: 'file:///tmp/no', zoom: 50 }, /http.*https/],
+    ['BrowserNavigate', {}, /url/],
+    ['BrowserNavigate', { go: 'back', newTab: true }, /newTab/],
+    ['BrowserNavigate', { go: 'back', zoom: 50 }, /BrowserHistory/],
+    ['BrowserWait', { text: 'ready', seconds: 0 }, /one|only/],
+    ['BrowserWait', { text: ' ' }, /blank|empty/],
+    ['BrowserWait', { textGone: 'a', text: 'b' }, /one|only/],
+    ['BrowserAct', { action: 'click', element: 'Button' }, /ref/],
+    ['BrowserAct', { action: 'click', element: 'Button', ref: 'e1', text: 'oops' }, /text/],
+    ['BrowserAct', { action: 'type', element: 'Field', ref: 'e1' }, /text/],
+    ['BrowserAct', { action: 'select', element: 'List', ref: 'e1', values: [] }, /values/],
+    ['BrowserAct', { action: 'press_key', element: 'Page', key: ' ' }, /key/],
+    ['BrowserTabs', { action: 'select' }, /index/],
+    ['BrowserTabs', { action: 'list', index: 0 }, /index/],
+    ['BrowserScreenshot', { fullPage: null }, /invalid/i],
+    ['BrowserWait', null, /invalid/i],
+  ])('rejects %s %j without touching the service', async (name, args, correction) => {
+    const touched = vi.fn(() => { throw new Error('service touched'); });
+    const service = new Proxy({}, { get: touched });
+    const result = await runBrowserTool({ service } as unknown as RunnerEnv, name, args, {
+      sessionId: 's', signal: new AbortController().signal, vision: true,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(correction);
+    expect(touched).not.toHaveBeenCalled();
+  });
+
+  it('preserves valid action-specific inputs, empty type, zero seconds and empty wait', () => {
+    const cases = [
+      ['BrowserNavigate', { url: 'example.com', newTab: false }],
+      ['BrowserHistory', { direction: 'back' }], ['BrowserHistory', { direction: 'forward' }],
+      ['BrowserZoom', { zoom: 25 }], ['BrowserZoom', { zoom: 100 }], ['BrowserZoom', { zoom: 'auto' }],
+      ['BrowserSnapshot', {}], ['BrowserSnapshot', { from: 0 }], ['BrowserScreenshot', { fullPage: false }],
+      ...['click', 'double_click', 'hover'].map((action) => ['BrowserAct', { action, ref: 'e1', element: 'Target' }] as const),
+      ['BrowserAct', { action: 'type', ref: 'e1', element: 'Field', text: '', submit: false }],
+      ['BrowserAct', { action: 'select', ref: 'e1', element: 'List', values: ['English'] }],
+      ['BrowserAct', { action: 'press_key', element: 'Page', key: 'Enter' }],
+      ['BrowserAct', { action: 'press_key', element: 'Field', ref: 'e1', key: 'Escape' }],
+      ['BrowserWait', {}], ['BrowserWait', { seconds: 0 }], ['BrowserWait', { text: 'Ready' }], ['BrowserWait', { textGone: 'Loading' }],
+      ['BrowserTabs', { action: 'list' }], ['BrowserTabs', { action: 'close_all' }],
+      ['BrowserTabs', { action: 'select', index: 0 }], ['BrowserTabs', { action: 'close', index: 0 }],
+      ['BrowserAskUser', { message: 'Please sign in.' }],
+    ] as const;
+    for (const [name, args] of cases) expect(validateBrowserRequest(name, args), JSON.stringify([name, args])).not.toHaveProperty('error');
+    expect(validateBrowserRequest('BrowserWait', {})).toEqual({ operation: { name: 'BrowserWait', args: {} } });
+    for (const name of BROWSER_TOOL_NAMES) {
+      const schema = browserToolsAsMcp().find((s) => s.name === name)!.inputSchema;
+      for (const field of Object.keys(schema.properties as object)) {
+        // WHY: start with a valid action using that field, so a missing required sibling cannot hide null acceptance.
+        const valid = cases.find(([tool, args]) => tool === name && field in args) ?? cases.find(([tool]) => tool === name)!;
+        expect(validateBrowserRequest(name, valid[1])).not.toHaveProperty('error');
+        expect(validateBrowserRequest(name, { ...valid[1], [field]: null }), `${name}.${field}`).toHaveProperty('error');
+      }
+      expect(validateBrowserRequest(name, { unknown: 1 }), name).toHaveProperty('error');
+      expect(browserToolOf(name)).toBe(name);
+      expect(browserToolOf(`mcp__youcoded-browser-0a1b__${name}`)).toBe(name);
+    }
+    for (const zoom of [24, 101, 50.5, null]) expect(validateBrowserRequest('BrowserZoom', { zoom })).toHaveProperty('error');
+  });
+
+  it('normalizes only unambiguous legacy navigation requests', () => {
+    expect(validateBrowserRequest('BrowserNavigate', { go: 'forward' })).toEqual({ operation: { name: 'BrowserHistory', args: { direction: 'forward' } } });
+    expect(validateBrowserRequest('BrowserNavigate', { zoom: 50 })).toEqual({ operation: { name: 'BrowserZoom', args: { zoom: 50 } } });
+    expect(validateBrowserRequest('BrowserNavigate', { url: 'example.com', zoom: 50 })).toEqual({ operation: { name: 'BrowserNavigate', args: { url: 'https://example.com/' } }, legacyZoom: 50 });
+  });
+
+  it('advertises separate required navigation, history and zoom inputs', () => {
+    const schemas = browserToolsAsMcp();
+    expect(schemas.find((s) => s.name === 'BrowserNavigate')?.inputSchema.required).toEqual(['url']);
+    expect(schemas.find((s) => s.name === 'BrowserHistory')?.inputSchema.required).toEqual(['direction']);
+    expect(schemas.find((s) => s.name === 'BrowserZoom')?.inputSchema.required).toEqual(['zoom']);
+    expect(BROWSER_TOOL_SPECS.BrowserNavigate.schema.safeParse({ zoom: 50 }).success).toBe(false);
+  });
+});
+
 describe('one set of tools for both session kinds', () => {
   it('Claude Code gets the same names, descriptions and strict schemas native sessions get', () => {
     const mcp = browserToolsAsMcp();
@@ -370,6 +1019,13 @@ describe('one set of tools for both session kinds', () => {
     for (const t of mcp) {
       const native = natives.find((n) => n.name === t.name)!;
       expect(t.description).toBe(native.description);
+      expect(native.shortDescription).toBe(BROWSER_TOOL_SPECS[t.name as typeof BROWSER_TOOL_NAMES[number]].shortDescription);
+      for (const field of Object.values(t.inputSchema.properties as Record<string, { description?: string }>)) {
+        expect(field.description?.length).toBeGreaterThan(20);
+      }
+      const json = z.toJSONSchema(native.inputSchema, { target: 'draft-7' });
+      delete json.$schema;
+      expect(t.inputSchema).toEqual(json);
       expect(t.inputSchema.additionalProperties).toBe(false);
       expect(t.description.length).toBeGreaterThan(40);
     }
