@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { gzipSync } from 'node:zlib';
-import { variants, packageArgs, normalizeMetadata, compare, aggregateShards, aggregatePackages, stage, manifest, fingerprint, validateWorkflow } from './linux-build-bench.mjs';
+import { createHash } from 'node:crypto';
+import { variants, packageArgs, normalizeMetadata, compare, aggregateShards, aggregatePackages, stage, manifest, fingerprint, validateWorkflow, runVitestShard, normalizeRpmRequirements } from './linux-build-bench.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(new URL('../desktop/package.json', import.meta.url));
 const YAML = require('yaml');
@@ -55,6 +56,35 @@ test('stage records real subprocess wall/CPU and records failure before throwing
   } finally { clean(dir); }
 });
 
+for (const exitCode of [0, 1]) {
+  test(`shard preserves the structured Vitest report separately from metrics on exit ${exitCode}`, async () => {
+    const dir = fixture();
+    try {
+      const expected = { ...report('fixture'), success: exitCode === 0, numFailedTests: exitCode, numFailedTestSuites: exitCode, numPassedTests: 1 - exitCode };
+      if (exitCode) {
+        expected.testResults[0].status = 'failed';
+        expected.testResults[0].assertionResults[0].status = 'failed';
+      }
+      const runner = path.join(dir, 'reporter.mjs');
+      // WHY a real child: the metric is written only AFTER the reporter process
+      // exits. Mocking stage would hide the overwrite that lost hosted results.
+      fs.writeFileSync(runner, `import fs from 'node:fs';
+const output = process.argv.find(arg => arg.startsWith('--outputFile.json=')).slice('--outputFile.json='.length);
+fs.writeFileSync(output, ${JSON.stringify(JSON.stringify(expected))});
+process.exit(${exitCode});\n`);
+      const run = runVitestShard(3, 'fixture-digest', { directory: dir, runner });
+      if (exitCode) await assert.rejects(run, /failed \(1\)/); else await run;
+      const read = name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      assert.deepEqual(read('vitest.json'), expected);
+      assert.deepEqual(read('shard.json'), { shard: 3, fingerprint: 'fixture-digest', report: expected });
+      const metric = read('vitest-metrics.json');
+      assert.equal(metric.exitCode, exitCode);
+      assert.ok(Number.isFinite(metric.wallSeconds));
+      assert.equal(metric.testResults, undefined);
+    } finally { clean(dir); }
+  });
+}
+
 test('manifest preserves links/modes/hashes and fails closed on any payload difference', () => {
   const dir = fixture();
   try {
@@ -88,6 +118,22 @@ test('tar transport round trips executable modes and symlinks without hardlink c
     fs.writeFileSync(path.join(restored,'app/executable'),'private mutation');
     compare(before,manifest(app));
   } finally { clean(dir); }
+});
+
+test('RPM compression accounts for only the exact generated XZ capability and preserves application requirements', () => {
+  const application = 'nss\n/bin/sh\n';
+  assert.equal(normalizeRpmRequirements('requires', application + 'rpmlib(PayloadIsXz) <= 5.2-1\n', 'xz'), application);
+  assert.equal(normalizeRpmRequirements('requires', application, 'gzip'), application);
+  const flags = 'nss\t0\t\n/bin/sh\t1280\t\n';
+  assert.equal(normalizeRpmRequirements('flags-REQUIRE', flags + 'rpmlib(PayloadIsXz)\t16777226\t5.2-1\n', 'xz'), flags);
+  assert.notEqual(normalizeRpmRequirements('requires', 'changed-app\n', 'gzip'), application);
+  for (const [kind, text, compressor] of [
+    ['requires', application, 'xz'],
+    ['requires', application + 'rpmlib(PayloadIsXz) <= 5.2-1\n', 'gzip'],
+    ['requires', application + 'rpmlib(PayloadIsXz) <= 6.0-1\n', 'xz'],
+    ['flags-REQUIRE', flags + 'rpmlib(PayloadIsXz)\t0\t5.2-1\n', 'xz'],
+    ['requires', application, 'unknown'],
+  ]) assert.throws(() => normalizeRpmRequirements(kind, text, compressor));
 });
 
 test('pacman compressed metadata normalization retains every non-timestamp payload field', () => {
@@ -132,9 +178,17 @@ test('shard inventory retains both production roots and test/spec file patterns'
 });
 
 test('all package controls must have matching source and real corresponding payload manifests', () => {
-  const records = variants.map(id => ({ info:{id,fingerprint:'same',bytes:100}, metric:{exitCode:0}, payload:{payload:[{path:'opt/legal',mode:420,sha256:'abc'}],metadata:[]} }));
+  const records = variants.map(id => {
+    const record = {info:{id,fingerprint:'same',bytes:100},metric:{exitCode:0},payload:{payload:[{path:'opt/legal',mode:420,sha256:'abc'}],metadata:[]}};
+    if (id.startsWith('rpm-')) {
+      const xz = id.endsWith('default');
+      record.capability = {compressor:xz ? 'xz' : 'gzip',original:{requires:'nss\n' + (xz ? 'rpmlib(PayloadIsXz) <= 5.2-1\n' : ''),'flags-REQUIRE':'nss\t0\t\n' + (xz ? 'rpmlib(PayloadIsXz)\t16777226\t5.2-1\n' : '')}};
+      record.payload.metadata = Object.entries(record.capability.original).map(([kind,text]) => ({path:kind,type:'file',mode:420,sha256:createHash('sha256').update(normalizeRpmRequirements(kind,text,record.capability.compressor)).digest('hex')}));
+    }
+    return record;
+  });
   assert.equal(aggregatePackages(records,'same').length,7);
-  for (const mutate of [r => r.pop(), r => {r[1]=r[0];}, r => {r[1].info.fingerprint='other';}, r => {r[1].metric.exitCode=1;}, r => {r[1].info.bytes=0;}, r => {r[2].payload.payload[0].sha256='different';}, r => {delete r[2].payload;}]) {
+  for (const mutate of [r => r.pop(), r => {r[1]=r[0];}, r => {r[1].info.fingerprint='other';}, r => {r[1].metric.exitCode=1;}, r => {r[1].info.bytes=0;}, r => {r[2].payload.payload[0].sha256='different';}, r => {delete r[2].payload;}, r => {delete r[3].capability;}, r => {r[3].capability.original.requires='different-app\nrpmlib(PayloadIsXz) <= 5.2-1\n';}, r => {r[4].capability.compressor='xz';}]) {
     const broken = structuredClone(records); mutate(broken);
     assert.throws(() => aggregatePackages(broken,'same'));
   }
@@ -155,7 +209,7 @@ test('runnable discovery uses Vitest suite separators rather than JSON reporter 
 
 test('fingerprints pin production inputs to the frozen baseline', () => {
   const f = fingerprint(root);
-  assert.equal(f.baseline, 'a85342b9a5fc6a6b63d9b6023d04ae907a06396f');
+  assert.equal(f.baseline, 'd6c22f14af6bf7e26bd124be238eb582fab27f76');
   assert.ok(f.inputs['desktop/src']); assert.ok(f.inputs['desktop/tests']); assert.ok(f.inputs['desktop/package-lock.json']);
   assert.ok(f.inputs.desktop, 'Freeze the entire tracked desktop tree, including Vite/PostCSS/linux/resources inputs');
   assert.ok(f.inputs.LICENSE && f.inputs['TERMS.md'], 'Retain root legal input identities');
