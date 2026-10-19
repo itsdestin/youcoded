@@ -870,7 +870,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   if (confirmingExternal || externalStop || budgetStop || fullAutoStop) return (
     <FullAutoStops
       kind={externalStop || confirmingExternal ? 'external' : budgetStop ? 'budget' : 'danger'}
-      confirmingExternal={confirmingExternal} toolName={toolName} command={command}
+      inset={bare} confirmingExternal={confirmingExternal} toolName={toolName} command={command}
       floorStop={floorStop} suppressAlwaysAllow={suppressAlwaysAllow}
       adminOutsideFullAuto={adminStop && permissionMode !== 'full-auto'}
       specialistName={specialistName} folderName={folderName} responding={responding}
