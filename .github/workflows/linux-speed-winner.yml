@@ -1,0 +1,213 @@
+name: EXPERIMENT ONLY - Linux frozen-source winner trial
+
+# WHY: diagnostic only, restricted same-repository PR head and frozen control base.
+# Ordinary Desktop/Android checks are unchanged and measured separately.
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: linux-speed-winner-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  prep:
+    name: Winner diagnostic - preflight and one prepared Linux app
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-ci-winner' && github.base_ref == 'session/29-linux-build-bench' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: node scripts/linux-build-bench.mjs stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs ../scripts/linux-speed-winner.test.mjs
+      - run: node scripts/linux-build-bench.mjs stage types npm run typecheck
+      - run: node scripts/linux-build-bench.mjs stage knip npm run knip
+      - run: node scripts/linux-build-bench.mjs stage lint npm run lint
+      - run: node scripts/linux-build-bench.mjs stage design-lint npm run lint:design
+      - run: node scripts/linux-build-bench.mjs stage preparation-total node ../scripts/linux-build-bench.mjs prepare
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winner-prepared-app
+          path: |
+            bench-evidence/prepared.tar
+            bench-evidence/prepared-manifest.json
+            bench-evidence/fingerprint.json
+            bench-evidence/archive-info.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
+      - run: node scripts/linux-build-bench.mjs stamp upload-end
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: winner-evidence-prep
+          path: |
+            bench-evidence/*
+            !bench-evidence/prepared.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # WHY: no case-import discovery on this frozen-source trial's critical path.
+  inventory:
+    name: Winner diagnostic - immutable inventory and default receipts
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-ci-winner' && github.base_ref == 'session/29-linux-build-bench' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: node scripts/linux-build-bench.mjs stage receipt-total node ../scripts/linux-speed-winner.mjs receipt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: winner-evidence-inventory
+          path: bench-evidence/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  packages:
+    name: Winner diagnostic - package ${{ matrix.variant }}
+    needs: prep
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-ci-winner' && github.base_ref == 'session/29-linux-build-bench' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        variant: [AppImage-default, deb-fast, rpm-fast, pacman-fast]
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      BENCH_VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: node scripts/linux-build-bench.mjs stage apt-update sudo apt-get update
+      - run: node scripts/linux-build-bench.mjs stage apt-install sudo apt-get install -y rpm libarchive-tools
+      - run: node scripts/linux-build-bench.mjs stamp download-start
+      - uses: actions/download-artifact@v8
+        with:
+          name: winner-prepared-app
+          path: prepared
+      - run: node scripts/linux-build-bench.mjs stamp download-end
+      - run: node scripts/linux-build-bench.mjs stage package-total node ../scripts/linux-build-bench.mjs package "$BENCH_VARIANT"
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: winner-evidence-${{ matrix.variant }}
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  shards:
+    name: Winner diagnostic - full suite shard ${{ matrix.shard }} of 4
+    if: github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-ci-winner' && github.base_ref == 'session/29-linux-build-bench' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      BENCH_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: node scripts/linux-build-bench.mjs stamp setup-complete
+      - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: node scripts/linux-build-bench.mjs stage shard-total node ../scripts/linux-build-bench.mjs shard "$BENCH_SHARD"
+      - run: node scripts/linux-build-bench.mjs stamp upload-start
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: winner-evidence-shard-${{ matrix.shard }}
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Winner diagnostic - validate all evidence (not a required build check)
+    needs: [prep, inventory, packages, shards]
+    if: always() && github.event_name == 'pull_request' && github.head_ref == 'session/29-linux-ci-winner' && github.base_ref == 'session/29-linux-build-bench' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BENCH_EVIDENCE: ${{ github.workspace }}/bench-evidence
+      BENCH_NEEDS: ${{ toJSON(needs) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/linux-build-bench.mjs stamp download-start
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: winner-evidence-*
+          path: results
+      - run: node scripts/linux-build-bench.mjs stamp download-end
+      - if: always()
+        run: node scripts/linux-build-bench.mjs timeline
+      - if: always()
+        run: node scripts/linux-speed-winner.mjs aggregate
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: winner-diagnostic-linux-summary
+          path: bench-evidence/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

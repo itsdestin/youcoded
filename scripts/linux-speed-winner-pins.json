@@ -1,0 +1,47 @@
+{
+  "evidence-inventory": {
+    "id": 12158817677,
+    "digest": "sha256:6e3e99340c5a3536a1efa7521c4574b946a2868c7fc33e279df5c02733241c91",
+    "files": {
+      "fingerprint.json": "04d2fce0b128c05c9d875795eeb3f080330469db9a913a7ceb4a68ab52a07e07",
+      "expected-files.json": "90820cece449be992c54a5df9748e6bdcb90f3a35fd77ad0fce6b7522629f55f",
+      "expected-cases.json": "f96e088405ab06c211f5dbb5ca0a159e491a5e94403c169497927cc45dd7c40a"
+    }
+  },
+  "diagnostic-linux-summary": {
+    "id": 12159086849,
+    "digest": "sha256:2d53b64e94931fe8c615466149be76c8c6193e80874233061d65612cea43c5ee",
+    "files": { "summary.json": "5602241173a3fb66bc25188518dad7acaeba7f887c5dfe9a25b3fe9e06ef982a" }
+  },
+  "evidence-deb-default": {
+    "id": 12158777004,
+    "digest": "sha256:9eea717143f9411a18c3870ad258af0afd5c8d823fbc09c26835ae6b0df4a40a",
+    "files": {
+      "fingerprint.json": "04d2fce0b128c05c9d875795eeb3f080330469db9a913a7ceb4a68ab52a07e07",
+      "package-info.json": "741b1c2e8f1ce08ae622e597e680c7dfcc13396299cb47055d762ad4b8d0d3fe",
+      "package.json": "9cbefeb54d045fd4873ce8f501c652feb3397fd8acc9f193a1af778c67995556",
+      "payload.json": "bfd406311d7d8f33b8fff53f6aabcb8e55815a71a5f7b41d7f01064b6131fb13"
+    }
+  },
+  "evidence-rpm-default": {
+    "id": 12159180737,
+    "digest": "sha256:f78dea8bde1444b55cba58326a700f38d8ce66bc50e16a7c26e3900cad159d0d",
+    "files": {
+      "fingerprint.json": "04d2fce0b128c05c9d875795eeb3f080330469db9a913a7ceb4a68ab52a07e07",
+      "package-info.json": "a82febd7ebecc999545d70de1f3f17d48fd2686de8366c5807180846e55948cf",
+      "package.json": "4be3fea3516a2875f3920173212b3e55fa37a5f765da29da5099e6b5276a1808",
+      "payload.json": "2ca52ec151621dc623e6b54c38d49d66a5883c96ca5d9e96d7dc5edb59e4c316",
+      "rpm-compression-capability.json": "128379b2dc409694cca7ba12b7c743fa28f3ae07b4b88eb15a7c65a712790c71"
+    }
+  },
+  "evidence-pacman-default": {
+    "id": 12158752111,
+    "digest": "sha256:4909ec93c53e21bbb845c6a293f1973c724cd1c35a452d8fdba081f49b9d29fa",
+    "files": {
+      "fingerprint.json": "04d2fce0b128c05c9d875795eeb3f080330469db9a913a7ceb4a68ab52a07e07",
+      "package-info.json": "935fda41812604a8142669b3041b9a10d909f8a3663a3cbd95a9222b702e1d67",
+      "package.json": "c0d0565ff6d130d295642a10cbac10a7578c1d52c93c5a634c24d967f280c0ba",
+      "payload.json": "9a79449d25b836cadf90a40b4e4520dc3595f0ce7b7be958a81580453eb35b0b"
+    }
+  }
+}
