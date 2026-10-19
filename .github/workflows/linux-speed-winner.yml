@@ -31,10 +31,8 @@ jobs:
       - run: node scripts/linux-build-bench.mjs stamp setup-complete
       - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
       - run: node scripts/linux-build-bench.mjs stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs ../scripts/linux-speed-winner.test.mjs
-      - run: node scripts/linux-build-bench.mjs stage types npm run typecheck
-      - run: node scripts/linux-build-bench.mjs stage knip npm run knip
-      - run: node scripts/linux-build-bench.mjs stage lint npm run lint
-      - run: node scripts/linux-build-bench.mjs stage design-lint npm run lint:design
+      - name: Run all retained readonly validation checks concurrently
+        run: node scripts/linux-build-bench.mjs stage cheap-preflight-total node ../scripts/linux-speed-winner.mjs preflight
       - run: node scripts/linux-build-bench.mjs stage preparation-total node ../scripts/linux-build-bench.mjs prepare
       - run: node scripts/linux-build-bench.mjs stamp upload-start
       - uses: actions/upload-artifact@v7

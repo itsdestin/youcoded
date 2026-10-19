@@ -31,7 +31,8 @@
       "package-info.json": "a82febd7ebecc999545d70de1f3f17d48fd2686de8366c5807180846e55948cf",
       "package.json": "4be3fea3516a2875f3920173212b3e55fa37a5f765da29da5099e6b5276a1808",
       "payload.json": "2ca52ec151621dc623e6b54c38d49d66a5883c96ca5d9e96d7dc5edb59e4c316",
-      "rpm-compression-capability.json": "128379b2dc409694cca7ba12b7c743fa28f3ae07b4b88eb15a7c65a712790c71"
+      "rpm-compression-capability.json": "128379b2dc409694cca7ba12b7c743fa28f3ae07b4b88eb15a7c65a712790c71",
+      "rpm-dump-raw.txt": "33a6d2808b3fb4225171cecb0bdc490625a63496270bd034c24bfed52540b89f"
     }
   },
   "evidence-pacman-default": {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { fingerprint, compare, aggregateShards, aggregatePackages, stage } from './linux-build-bench.mjs';
+import { fingerprint, compare, aggregateShards, aggregatePackages, stage, normalizeMetadata } from './linux-build-bench.mjs';
 import { workflow } from './linux-speed-winner-workflow.mjs';
 const root = fileURLToPath(new URL('../',import.meta.url));
 const evidence = path.resolve(process.env.BENCH_EVIDENCE || path.join(root,'bench-evidence'));
@@ -15,6 +15,16 @@ const hash = b => createHash('sha256').update(b).digest('hex');
 export const pins = read(new URL('./linux-speed-winner-pins.json',import.meta.url));
 export const winners = ['AppImage-default','deb-fast','rpm-fast','pacman-fast'];
 export const control = { repository:'itsdestin/youcoded', repositoryId:1183460513, run:39187420940, sha:'b9b5d064803cadcb57ce4f37f7b43f861989f856', branch:'session/29-linux-build-bench', path:'.github/workflows/linux-speed-benchmark.yml', workflow:388854109, digest:'3d60325827e6e335d0e0a7e089cb89979aa6dcafee062e798df4986fa7e49b89' };
+
+export async function runCheapChecks(run = stage) {
+  // WHY: measured serial readonly gates consumed about21s before preparation.
+  // They do not emit application files; overlap them, retain every result and
+  // wait for all evidence even if one fails. Packaging cannot start on failure.
+  const checks = [['types','typecheck'],['knip','knip'],['lint','lint'],['design-lint','lint:design']];
+  const results = await Promise.allSettled(checks.map(([name,command]) => run(name,'npm',['run',command])));
+  assert.ok(results.every(result => result.status === 'fulfilled'), 'Required cheap validation failed; evidence retained');
+  return results.map(result => result.value);
+}
 
 export function verifyRun(r) {
   for (const [key,value] of Object.entries({id:control.run,head_sha:control.sha,head_branch:control.branch,path:control.path,workflow_id:control.workflow,event:'pull_request',status:'completed',conclusion:'success',run_attempt:1})) assert.equal(r[key],value,`Uncertified control run: ${key}`);
@@ -29,7 +39,7 @@ export function verifyArtifact(name,a,now=Date.now()) {
 export function verifyContents(name,files) {
   compare(Object.keys(pins[name].files).sort(),Object.keys(files).sort());
   for (const [file,digest] of Object.entries(pins[name].files)) assert.equal(hash(files[file]),digest,`Certified content hash mismatch: ${name}/${file}`);
-  return Object.fromEntries(Object.entries(files).map(([file,bytes])=>[file,JSON.parse(bytes.toString())]));
+  return Object.fromEntries(Object.entries(files).map(([file,bytes])=>[file,file.endsWith('.json') ? JSON.parse(bytes.toString()) : bytes.toString('utf8')]));
 }
 export function verifyFiles(expected,raw) {
   const files=raw.map(x=> {
@@ -48,8 +58,37 @@ export function verifyCaseUnion(expected,actual) {
   const canonical = cases => cases.map(c=> { assert.ok(['passed','pending','skipped','todo'].includes(c.status)); return JSON.stringify([c.file,c.name,c.status]); }).sort();
   compare(canonical(expected),canonical(actual));
 }
+export function normalizeRpmDump(raw) {
+  assert.equal(typeof raw,'string','Missing raw RPM dump'); assert.ok(raw.length,'Empty RPM dump');
+  const lines=raw.split('\n'); if(lines.at(-1)==='') lines.pop();
+  return lines.map(line=> {
+    // WHY: RPM does not quote paths or link targets. Locate the full typed suffix,
+    // not the first whitespace token; refuse ambiguous input rather than guessing.
+    const candidates=[];
+    for(let i=line.indexOf(' ');i>=0;i=line.indexOf(' ',i+1)) {
+      const match=/^(\d+ )(-?\d+)( (?:[a-fA-F0-9]+|\(none\)) 0[0-7]+ \S+ \S+ [01] [01] \d+ .+)$/.exec(line.slice(i+1));
+      if(match && line.startsWith('/')) candidates.push({prefix:line.slice(0,i+1)+match[1],suffix:match[3]});
+    }
+    assert.equal(candidates.length,1,'Malformed/ambiguous RPM dump record');
+    return candidates[0].prefix+'<build timestamp>'+candidates[0].suffix;
+  }).join('\n')+(raw.endsWith('\n')?'\n':'');
+}
+export function deriveRpmDump(payload,raw) {
+  assert.equal(typeof raw,'string','Missing raw RPM dump');
+  const entries=payload.metadata.filter(e=>e.path==='dump'); assert.equal(entries.length,1,'Exactly one RPM dump receipt required');
+  const entry=entries[0]; assert.equal(entry.type,'file'); assert.equal(entry.mode,0o644);
+  // WHY: the certified payload hash must stay immutable. First prove this raw
+  // dump reproduces its ORIGINAL (space-buggy) manifest, for BOTH old and new
+  // packages. Only then replace the derived dump size/hash; every other field
+  // still passes through the unchanged complete seven-record comparator.
+  const legacy=normalizeMetadata('rpm-dump',raw);
+  assert.equal(entry.size,Buffer.byteLength(legacy),'Raw RPM dump size differs from original receipt');
+  assert.equal(entry.sha256,hash(legacy),'Raw RPM dump hash differs from original receipt');
+  const canonical=normalizeRpmDump(raw);
+  return {...payload,metadata:payload.metadata.map(e=>e===entry?{...e,size:Buffer.byteLength(canonical),sha256:hash(canonical)}:e)};
+}
 function record(files) {
-  return {info:files['package-info.json'],metric:files['package.json'],payload:files['payload.json'],...(files['rpm-compression-capability.json'] ? {capability:files['rpm-compression-capability.json']} : {})};
+  return {info:files['package-info.json'],metric:files['package.json'],payload:files['payload.json'],...(files['rpm-compression-capability.json'] ? {capability:files['rpm-compression-capability.json'],rawDump:files['rpm-dump-raw.txt']} : {})};
 }
 export function verifyPackages(records,receipts,digest) {
   compare(winners,[...records].sort((a,b)=>winners.indexOf(a.info.id)-winners.indexOf(b.info.id)).map(r=>r.info.id));
@@ -61,7 +100,7 @@ export function verifyPackages(records,receipts,digest) {
   });
   // Original comparator remains unchanged: all seven logical records, all
   // manifests and the exact version/flag RPM exception are still required.
-  aggregatePackages([...records,...defaults],digest);
+  aggregatePackages([...records,...defaults].map(r=>r.info.id.startsWith('rpm-')?{...r,payload:deriveRpmDump(r.payload,r.rawDump)}:r),digest);
   return records.map(r=>r.info);
 }
 export function validateWorkflow(w) { compare(workflow(),w); }
@@ -144,13 +183,13 @@ function aggregate() {
   const shards=[1,2,3,4].map(n=> {const dir=path.join(results,`winner-evidence-shard-${n}`); checkFingerprint(dir); return read(path.join(dir,'shard.json'));});
   const tests=aggregateShards(receipts['evidence-inventory']['expected-files.json'],shards,current.digest,receipts['evidence-inventory']['expected-cases.json']);
   verifyCaseUnion(original.tests.cases,tests.cases);
-  const records=winners.map(id=> { const dir=path.join(results,`winner-evidence-${id}`); checkFingerprint(dir); const r=record(Object.fromEntries(['package-info.json','package.json','payload.json',...(id.startsWith('rpm-')?['rpm-compression-capability.json']:[])].map(f=>[f,read(path.join(dir,f))]))); assert.equal(r.info.id,id); return r; });
+  const records=winners.map(id=> { const dir=path.join(results,`winner-evidence-${id}`); checkFingerprint(dir); const r=record(Object.fromEntries(['package-info.json','package.json','payload.json',...(id.startsWith('rpm-')?['rpm-compression-capability.json','rpm-dump-raw.txt']:[])].map(f=>[f,f.endsWith('.json')?read(path.join(dir,f)):fs.readFileSync(path.join(dir,f),'utf8')]))); assert.equal(r.info.id,id); return r; });
   const packages=verifyPackages(records,receipts,current.digest);
   const timeline=read(path.join(evidence,'github-jobs.json')); assert.equal(timeline.total_count,timeline.jobs.length); assert.ok(timeline.jobs.length);
   write(path.join(evidence,'summary.json'),{fingerprint:current,control,tests,packages,timeline,limits:original.limits,timing:'Winner workflow only. Parent must record COMPLETED run/job timestamps including queue/setup/transfer/gate teardown; ordinary production CI is separate. No five-minute claim before that measurement.'});
 }
 async function main() {
   const [command,...args]=process.argv.slice(2); assert.equal(args.length,0);
-  if(command==='receipt') await receipt(); else if(command==='aggregate') aggregate(); else throw new Error('Use receipt | aggregate');
+  if(command==='receipt') await receipt(); else if(command==='aggregate') aggregate(); else if(command==='preflight') await runCheapChecks(); else throw new Error('Use receipt | aggregate | preflight');
 }
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) main().catch(error=> {write(path.join(evidence,'winner-failure.json'),{message:error.message,stack:error.stack}); console.error(error); process.exitCode=1;});

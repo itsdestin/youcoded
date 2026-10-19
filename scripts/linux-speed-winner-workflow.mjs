@@ -14,7 +14,7 @@ export function workflow() {
   const prep=job('Winner diagnostic - preflight and one prepared Linux app',[
     ...setup,
     bench('stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs ../scripts/linux-speed-winner.test.mjs'),
-    ...['typecheck','knip','lint','lint:design'].map((cmd,i)=>bench(`stage ${['types','knip','lint','design-lint'][i]} npm run ${cmd}`)),
+    {name:'Run all retained readonly validation checks concurrently',...bench('stage cheap-preflight-total node ../scripts/linux-speed-winner.mjs preflight')},
     bench('stage preparation-total node ../scripts/linux-build-bench.mjs prepare'),bench('stamp upload-start'),
     {uses:'actions/upload-artifact@v7',with:{name:'winner-prepared-app',path:'bench-evidence/prepared.tar\nbench-evidence/prepared-manifest.json\nbench-evidence/fingerprint.json\nbench-evidence/archive-info.json\n','compression-level':0,'if-no-files-found':'error','retention-days':3}},
     bench('stamp upload-end'),upload('winner-evidence-prep','bench-evidence/*\n!bench-evidence/prepared.tar\n'),
