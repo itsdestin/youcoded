@@ -467,15 +467,22 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
     const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
     // A frozen chunk of a still-open fence sits in a plain wrapper span (CSS containment only);
     // it is looked through, since it adds no text and no visible structure.
-    const flat = (nodes: Node[]): Node[] => nodes.flatMap((n) => (n.nodeType === 1 && (n as Element).classList.contains('yc-fence-chunk') ? flat(Array.from(n.childNodes)) : [n]));
-    for (const n of flat(Array.from(root.childNodes))) {
-      if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
-      if (n.nodeType !== 1) continue;
-      flush();
-      const el = n as Element;
-      const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
-      parts.push(`<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`);
-    }
+    // WHY walk siblings directly: serializing both large pages at every checkpoint
+    // used to allocate/flatten child arrays (and singleton arrays) for every node.
+    // Keep one text accumulator across transparent wrappers, exactly as flattening did.
+    const visit = (parent: Node) => {
+      for (let n = parent.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
+        if (n.nodeType !== 1) continue;
+        const el = n as Element;
+        if (el.classList.contains('yc-fence-chunk')) { visit(el); continue; }
+        flush();
+        const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+        const tag = el.tagName.toLowerCase();
+        parts.push(`<${tag} ${attrs}>${canonical(el)}</${tag}>`);
+      }
+    };
+    visit(root);
     flush();
     return parts.join('');
   };
@@ -949,6 +956,10 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
         const pre = live.container.querySelector('pre')!;
         let md = mount(100);
         const costs: number[] = [];
+        // WHY reuse only the oracle's React root/container: RTL retains every render's
+        // container until cleanup. A new key still mounts a fresh, non-incremental
+        // Bubble at every checkpoint, so no reference-render state can leak forward.
+        const whole = render(<></>);
         more.forEach((d, i) => {
           md += d;
           splitterParsed.chars = 0;
@@ -956,7 +967,10 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
           live.rerender(<Bubble md={md} incremental />);
           costs.push(splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0));
           expect(live.container.querySelector('pre')).toBe(pre);
-          if (i % 25 === 0 || i === more.length - 1) expect(canonical(live.container), `after word ${i}`).toBe(wholeHtml(md));
+          if (i % 25 === 0 || i === more.length - 1) {
+            whole.rerender(<Bubble key={i} md={md} />);
+            expect(canonical(live.container), `after word ${i}`).toBe(canonical(whole.container));
+          }
         });
         // After the first update (which may split the message once), a word costs the prefix
         // plus a tail of under two chunks — not the fence, which by now is 220 lines.
@@ -967,7 +981,7 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
         // The reply ends: one piece again, same block.
         live.rerender(<Bubble md={md} incremental live={false} />);
         expect(live.container.querySelector('pre')).toBe(pre);
-        const whole = render(<MarkdownContent content={md} sessionId="s1" />);
+        whole.rerender(<MarkdownContent content={md} sessionId="s1" />);
         expect(canonical(live.container)).toBe(canonical(whole.container));
         whole.unmount();
         live.unmount();
