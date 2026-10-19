@@ -22,7 +22,7 @@ import org.json.JSONObject
 // Design: docs/active/specs/2026-09-05-voice-prompting-technical-design.md → "Android".
 // The event shapes are the contract in desktop/src/shared/voice-types.ts.
 
-/** The two halves of the words heard so far: solid text, and the grey tail. */
+/** The two halves of the words heard so far: committed solid text and the unsettled grey tail. */
 data class VoiceSplit(val committed: String, val tail: String)
 
 /**
