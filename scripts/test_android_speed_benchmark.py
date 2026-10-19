@@ -168,8 +168,9 @@ class AndroidSpeedBenchmarkTests(unittest.TestCase):
             'lib/arm64-v8a/libnode.so', 'lib/arm64-v8a/libbash.so', 'lib/arm64-v8a/libgit.so',
             'lib/arm64-v8a/libgit_remote_https.so', 'lib/arm64-v8a/librg.so', 'lib/arm64-v8a/libycopen.so',
             'assets/runtime/binmap.txt', 'assets/runtime/libmap.txt', 'assets/runtime/ca-certificates.crt',
-            'assets/runtime/claude-code-version.txt', 'assets/runtime/share.tgz::git-core/templates/description'}
+            'assets/runtime/claude-code-version.txt', 'assets/runtime/etc-terminfo.tgz::terminfo/x/xterm'}
         payload = {name: {'type': 'file', 'sha256': 'a' * 64, 'size': 1, 'mode': 0o644} for name in required}
+        payload['assets/runtime/share.tgz::git-core/templates'] = {'type': 'directory', 'mode': 0o755}
         inputs = {key: 'fixed' for key in ('commit', 'source', 'kotlin', 'lock', 'java', 'node', 'build', 'pins', 'gradle',
                                           'clang', 'linker', 'debug-runtime-inputs', 'releaseTest-runtime-inputs')}
         return {'mode': 'baseline', 'status': 'success', 'inputs': inputs,
@@ -374,7 +375,8 @@ class AndroidSpeedBenchmarkTests(unittest.TestCase):
         for name in ('lib/arm64-v8a/libnode.so', 'lib/arm64-v8a/libbash.so', 'lib/arm64-v8a/libgit.so',
                      'lib/arm64-v8a/libgit_remote_https.so', 'lib/arm64-v8a/librg.so', 'lib/arm64-v8a/libycopen.so',
                      'assets/runtime/binmap.txt', 'assets/runtime/libmap.txt', 'assets/runtime/ca-certificates.crt',
-                     'assets/runtime/claude-code-version.txt', 'assets/runtime/share.tgz::git-core/templates/description'):
+                     'assets/runtime/claude-code-version.txt', 'assets/runtime/share.tgz::git-core/templates',
+                     'assets/runtime/etc-terminfo.tgz::terminfo/x/xterm'):
             report = self.report()
             del report['payloads']['debug'][name]
             with self.subTest(name=name), self.assertRaises(ValueError):

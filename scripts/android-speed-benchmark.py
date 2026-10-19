@@ -332,7 +332,13 @@ def required_payload(manifest):
     if not required <= set(manifest) or any(manifest[n].get('type') != 'file' or manifest[n].get('size', 0) <= 0 for n in required):
         raise ValueError(f'APK lacks required nonempty runtime/legal payload: {sorted(required - set(manifest))}')
     # WHY: equality of two incomplete APKs is not proof of a usable runtime.
-    for prefix in ('assets/backend.tgz::legal/npm-notices/', 'assets/runtime/share.tgz::'):
+    # The pinned Alpine payload puts real terminfo files in /etc/terminfo;
+    # /usr/share/git-core/templates is intentionally an empty directory. This
+    # layout was verified in the unchanged control APK, not inferred from a name.
+    template = manifest.get('assets/runtime/share.tgz::git-core/templates')
+    if not template or template.get('type') != 'directory':
+        raise ValueError('Packaged git template directory is absent')
+    for prefix in ('assets/backend.tgz::legal/npm-notices/', 'assets/runtime/etc-terminfo.tgz::terminfo/'):
         if not any(name.startswith(prefix) and record.get('type') == 'file' and record.get('size', 0) > 0
                    for name, record in manifest.items()):
             raise ValueError(f'Required packaged notices/runtime data absent: {prefix}')
