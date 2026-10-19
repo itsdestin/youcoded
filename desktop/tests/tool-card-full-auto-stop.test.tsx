@@ -39,6 +39,35 @@ const stopTool = (over: Partial<ToolCallState> = {}): ToolCallState => ({
 const renderCard = (tool: ToolCallState) =>
   render(<ChatProvider><ToolCard tool={tool} sessionId="s1" /></ChatProvider>);
 
+describe('passwordless admin approval choices', () => {
+  it.each([
+    ['command', 'Only this exact command'], ['full-auto', 'Always allow in Full Auto'], ['session', 'Allow all for this session'],
+  ])('sends only the chosen %s scope after the final confirmation', async (scope, label) => {
+    renderCard(stopTool({ input: { command: 'sudo true' }, floorStop: 'admin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
+    expect(screen.getByRole('radio', { name: 'Only this exact command' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: label }));
+    expect(respondToPermission).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
+    await waitFor(() => expect(respondToPermission).toHaveBeenCalledWith('native-abc123', { decision: { behavior: 'allow' }, adminApprovalScope: scope }));
+  });
+  it.each([
+    ['ask', 'admin'], ['auto-edit', 'admin'], ['full-auto', 'admin'], ['full-auto', undefined],
+  ] as const)('offers the session and saved scopes in %s mode with floor %s without approving on open', (permissionMode, floorStop) => {
+    renderCard(stopTool({ input: { command: 'sudo systemctl restart example' }, floorStop, permissionMode }));
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }));
+    expect(respondToPermission).not.toHaveBeenCalled();
+    expect(screen.getByText('Only this exact command')).toBeTruthy();
+    expect(screen.getByText('Always allow in Full Auto')).toBeTruthy();
+    expect(screen.getByText('Allow all for this session')).toBeTruthy();
+    expect(screen.getByText(/Password entry is still required/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Confirm and run' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Nevermind, allow once' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Always allow' }).classList.contains('bg-red-400/60')).toBe(true);
+  });
+});
+
 describe('full-auto safety stop', () => {
   it('explains an outside-folder edit and asks before granting all outside folders for this session', async () => {
     renderCard(stopTool({ toolName: 'Edit', input: { file_path: '/tmp/other/code.ts' }, denyListed: false, external: true }));

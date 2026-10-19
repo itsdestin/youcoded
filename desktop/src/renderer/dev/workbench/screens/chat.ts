@@ -92,6 +92,11 @@ export const CHAT: readonly ScreenEntry[] = [
   // Conversations on the practice sessions. wb-2 is the native-runtime session that the
   // seeded conversations, OpenRouter error cards and the stalled replay play into.
   { ...chat('chat#native', 'view'), session: 'wb-2' },
+  // WHY: photograph the real admin confirmation and the unchanged push confirmation it reuses.
+  { ...chat('chat#push-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-push-approval', latency: '150' }, open: ['Always allow'] },
+  { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
+  { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
+  { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },
   // Dev-only fixture: real shared question card with duplicate wording, selected
   // and typed via explore rather than drawing a stand-in or changing the app.
   { ...chat('chat#questions-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-questions-native' } },

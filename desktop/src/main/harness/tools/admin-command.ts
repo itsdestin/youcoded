@@ -1,8 +1,8 @@
 // The admin floor: a check that sits BELOW every permission rule, the same way
 // rm-target.ts and bash-secret-paths.ts do (see admin-password technical design
-// §4). A Bash command that visibly runs `sudo` ALWAYS asks — even under a
-// remembered "Always allow" or Full auto — because it is about to open a
-// password prompt inside the app. `doas`, `su`, `pkexec` and `run0` are refused
+// §4). A Bash command that visibly runs `sudo` asks unless the user explicitly
+// granted admin consent. Broad Bash grants and Full Auto alone never skip
+// this check. `doas`, `su`, `pkexec` and `run0` are refused
 // outright: `pkexec`/`run0` would raise the desktop's OWN polkit dialog (a
 // system pop-up outside the app, with wording the app doesn't control), and
 // `doas`/`su` have no askpass mechanism this app can intercept the same way.

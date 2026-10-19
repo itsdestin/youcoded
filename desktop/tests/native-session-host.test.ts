@@ -1782,6 +1782,47 @@ describe('NativeSessionHost', () => {
     // if revoking reaches every live session, since no session's cwd slugs to a
     // key containing a space. These drive the REAL buildDecide, so the whole
     // union (disk bucket + this session's memory) is what answers.
+    describe('saved admin approvals', () => {
+      it('reads a Full Auto admin grant across projects and stops using it immediately on mode change or revocation', async () => {
+        const store = new PermissionStore(new NativeHome(root));
+        const p = revokeHost(store);
+        const cwdA = path.join(root, 'alpha'); const cwdB = path.join(root, 'beta');
+        fs.mkdirSync(cwdA); fs.mkdirSync(cwdB);
+        await p.create({ sessionId: 'a', cwd: cwdA, binding });
+        await p.create({ sessionId: 'b', cwd: cwdB, binding });
+        const rule: PermissionRule = { tool: 'AdminFullAuto', action: 'allow', match: 'exact' };
+        (p as any).rememberRule('a', cwdA, rule);
+        await vi.waitFor(async () => expect((await store.rulesFor(cwdB)).some(r => r.tool === 'AdminFullAuto')).toBe(true));
+        expect((await store.list()).find(project => project.rules.some(r => r.tool === 'AdminFullAuto'))?.slug).toBe(CROSS_PROJECT_SLUG);
+        const decideA = (p as any).buildDecide('a', cwdA, []);
+        const decideB = (p as any).buildDecide('b', cwdB, []);
+        for (const mode of ['ask', 'auto-edit', 'full-auto'] as const) {
+          p.setPermissionMode('b', mode);
+          const decision = await decideB('Bash', 'sudo true');
+          expect(decision.passwordlessAdminAllowed === true).toBe(mode === 'full-auto');
+          expect(decision.passwordlessAdminExact).toBeUndefined();
+        }
+        p.setPermissionMode('a', 'full-auto');
+        expect((await decideA('Bash', 'sudo true')).passwordlessAdminAllowed).toBe(true);
+        await p.revokeRule(CROSS_PROJECT_SLUG, rule);
+        expect((await decideA('Bash', 'sudo true')).passwordlessAdminAllowed).toBeUndefined();
+        expect((await decideB('Bash', 'sudo true')).passwordlessAdminAllowed).toBeUndefined();
+        await p.destroyAll();
+      });
+
+      it('keeps an exact admin grant literal and project-scoped, including after a fresh host is created', async () => {
+        const store = new PermissionStore(new NativeHome(root));
+        const p = revokeHost(store);
+        const rule: PermissionRule = { tool: 'Bash', pattern: 'sudo rm *.tmp', action: 'allow', match: 'exact' };
+        await store.remember(root, rule);
+        const decide = (p as any).buildDecide('a', root, []);
+        expect(await decide('Bash', 'sudo rm *.tmp')).toMatchObject({ passwordlessAdminAllowed: true, passwordlessAdminExact: true });
+        expect((await decide('Bash', 'sudo rm other.tmp')).passwordlessAdminAllowed).toBeUndefined();
+        expect((await (p as any).buildDecide('b', path.join(root, 'other'), [])('Bash', 'sudo rm *.tmp')).passwordlessAdminAllowed).toBeUndefined();
+        await p.destroyAll();
+      });
+    });
+
     describe('a grant that applies in every project', () => {
       // The exact subject shapes tools/task.ts builds. `fp` is the definition
       // file's content hash: edit the file and the subject changes, which is

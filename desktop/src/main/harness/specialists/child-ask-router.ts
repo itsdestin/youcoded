@@ -1,6 +1,7 @@
 import type { AskRequest, AskDecision, PermissionBroker } from '../permission-broker';
 import { rememberedRuleFor, type HarnessSessionOpts } from '../harness-session';
 import type { PermissionRule } from '../../../shared/permission-types';
+import { adminRuleFor } from '../../../shared/admin-approval';
 
 // Task 11: doom_loop is a synthetic budget ask that never supports "Always
 // allow", even for a root session: harness-session.ts only reads
@@ -110,7 +111,13 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
     // a specialist key; it's the same one a root session's ask reuses as-is.
     // `floorStop` (a floor below every rule): the card offered no grant, and
     // one stored anyway could never skip the floor — so nothing is remembered.
-    if (decision.behavior === 'allow' && decision.always && !req.floorStop && !BUDGET_ASK_TOOL_NAMES.has(req.toolName)) {
+    // WHY: children are not wire()'d; preserve their explicit admin choice here,
+    // under the same specialist scope as their ordinary remembered approvals.
+    if (decision.behavior === 'allow' && req.toolName === 'Bash' && (!req.floorStop || req.floorStop === 'admin') && decision.adminApprovalScope && req.subject !== undefined) {
+      const rule = adminRuleFor(decision.adminApprovalScope, req.subject);
+      if (rule) deps.remember?.({ ...rule, specialist: deps.agentType });
+    }
+    if (decision.behavior === 'allow' && decision.always && !decision.adminApprovalScope && !req.floorStop && !BUDGET_ASK_TOOL_NAMES.has(req.toolName)) {
       const rule = rememberedRuleFor(req.toolName, req.subject, decision.grantScope);
       if (rule) deps.remember?.({ ...rule, specialist: deps.agentType });
     }
