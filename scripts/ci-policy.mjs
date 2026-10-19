@@ -5,10 +5,12 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function run(command, args, cwd = process.cwd(), capture = true) {
+export function run(command, args, cwd = process.cwd(), capture = true, env) {
   // WHY: consume the complete stream, without exec's maxBuffer or early grep/SIGPIPE.
   return new Promise((accept, reject) => {
-    const child = spawn(command, args, { cwd, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
+    // WHY: package compressors need child-only options, with inherited PATH and
+    // credentials intact; old callers keep spawn's original inheritance behavior.
+    const child = spawn(command, args, { cwd, env: env === undefined ? undefined : { ...process.env, ...env }, stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
     const output = [], errors = [];
     child.stdout?.on('data', chunk => output.push(chunk)); child.stderr?.on('data', chunk => errors.push(chunk));
     child.on('error', reject);

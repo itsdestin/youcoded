@@ -4,18 +4,148 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { run } from './ci-policy.mjs';
 import { hash, identity, manifest, verifyCore, verifyInstalled, transport, unpack } from './ci-evidence.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)), desktop = path.join(root, 'desktop');
 const json = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const formats = ['AppImage', 'deb', 'rpm', 'pacman'];
-export function packageArgs(format, mode, app, output) {
+export function lockedParser(desktopDirectory) {
+  const packages = read(path.join(desktopDirectory, 'package-lock.json')).packages;
+  assert.equal(typeof packages?.['node_modules/app-builder-lib']?.dependencies?.['js-yaml'], 'string', 'Unsupported builder parser dependency');
+  // WHY: mirror Node's builder-local then hoisted dependency resolution from
+  // CURRENT lock metadata, without installed modules or a producer assertion.
+  const candidates = ['node_modules/app-builder-lib/node_modules/js-yaml', 'node_modules/js-yaml'];
+  assert.ok(!Object.keys(packages).some(key => key.startsWith('node_modules/app-builder-lib/') && key.endsWith('/js-yaml') && !candidates.includes(key)), 'Unsupported nested builder parser layout');
+  const location = candidates.find(key => Object.hasOwn(packages, key));
+  const dependency = packages[location];
+  // WHY: trust the consumer's current lock, never a producer-supplied digest or
+  // requested-profile map. Unsupported SRI must fail closed before loading code.
+  assert.match(dependency?.integrity ?? '', /^sha512-[A-Za-z0-9+/]{86}==$/, 'Unsupported parser integrity');
+  assert.equal(dependency.link, undefined, 'Unsupported linked parser');
+  return { ...dependency, location };
+}
+function installedBuilderParser(desktopDirectory) {
+  const require = createRequire(path.join(desktopDirectory, 'package.json'));
+  const builderRequire = createRequire(require.resolve('app-builder-lib/out/util/config/load.js'));
+  const dependency = lockedParser(desktopDirectory);
+  const expected = path.join(desktopDirectory, dependency.location, 'index.js');
+  assert.equal(builderRequire.resolve('js-yaml'), expected, 'Installed builder parser disagrees with current lock');
+  assert.equal(read(path.join(desktopDirectory, dependency.location, 'package.json')).version, dependency.version);
+  return builderRequire('js-yaml');
+}
+async function verifyParser(file, dependency) {
+  const digest = createHash('sha512');
+  for await (const chunk of fs.createReadStream(file)) digest.update(chunk);
+  assert.equal(`sha512-${digest.digest('base64')}`, dependency.integrity, 'Parser capsule integrity mismatch');
+}
+export async function packParserCapsule(desktopDirectory, evidence, temporaryBase = process.env.RUNNER_TEMP || tmpdir()) {
+  const dependency = lockedParser(desktopDirectory);
+  assert.match(dependency.resolved ?? '', /^https:\/\//, 'Unsupported parser URL');
+  const temporary = fs.mkdtempSync(path.join(temporaryBase, 'ci-parser-pack-'));
+  try {
+    // WHY: pack just the already-locked parser, never install the desktop tree
+    // or execute lifecycle hooks. Prefer the npm cache used by preparation.
+    // npm 12 gates URL specs: permit this one pack child, verified by SRI below.
+    const packed = JSON.parse((await run('npm', ['pack', dependency.resolved, '--prefer-offline', '--ignore-scripts', '--json', '--pack-destination', temporary], temporary, true, { npm_config_allow_remote: 'all' })).toString());
+    const entries = Object.values(packed); assert.equal(entries.length, 1);
+    const filename = entries[0].filename; assert.equal(typeof filename, 'string'); assert.equal(path.basename(filename), filename);
+    const archive = path.join(temporary, filename); await verifyParser(archive, dependency);
+    const capsule = path.join(evidence, 'yaml-parser.tgz'); fs.copyFileSync(archive, capsule); return capsule;
+  } finally { fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5 }); }
+}
+export async function readEncoderInputs(desktopDirectory, capsule, temporaryBase = process.env.RUNNER_TEMP || tmpdir()) {
+  const dependency = lockedParser(desktopDirectory);
+  const temporary = fs.mkdtempSync(path.join(temporaryBase, 'ci-parser-read-'));
+  try {
+    // WHY: verify a private snapshot before extraction/import, preventing an
+    // artifact swap after hashing. No installed dependencies exist in aggregation.
+    const archive = path.join(temporary, 'parser.tgz'); fs.copyFileSync(capsule, archive);
+    await verifyParser(archive, dependency);
+    await run('tar', ['-xzf', archive, '-C', temporary, '--no-same-owner', '--no-same-permissions']);
+    const { load } = createRequire(path.join(temporary, 'package/package.json'))('./index.js');
+    const config = load(fs.readFileSync(path.join(desktopDirectory, 'electron-builder.yml'), 'utf8'));
+    const pkg = read(path.join(desktopDirectory, 'package.json'));
+    assert.ok(config && typeof config === 'object' && !Array.isArray(config));
+    assert.ok(pkg && typeof pkg === 'object' && !Array.isArray(pkg));
+    return { config, pkg };
+  } finally { fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5 }); }
+}
+export function encoderProfile(format, mode, config, pkg) {
+  // WHY: builder merges FPM arrays opaquely. Never replace user flags or guess
+  // what an extends/package preset supplies; optimize only plain known config.
+  const empty = value => value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+  if (mode !== 'fast' || !['deb', 'rpm'].includes(format) || !config || !pkg
+    || Object.hasOwn(config, 'extends') || Object.hasOwn(pkg, 'build')
+    // WHY: installed builder tests key presence, even for empty/null specs;
+    // electron-webpack is an implicit preset only under devDependencies.
+    || 'react-scripts' in (pkg.dependencies ?? {}) || 'react-scripts' in (pkg.devDependencies ?? {})
+    || 'electron-webpack' in (pkg.devDependencies ?? {})
+    || !empty(config.linux?.fpm) || !empty(config[format]?.fpm)) return null;
+  return { compressor: 'gzip', level: 1 };
+}
+export function writeEncoderConfig(format, requested, original, directory) {
+  if (!requested) return undefined;
+  assert.deepEqual(requested, { compressor: 'gzip', level: 1 });
+  assert.ok(['deb', 'rpm'].includes(format)); assert.ok(path.isAbsolute(original) && path.isAbsolute(directory));
+  // WHY: JSON dot values are strings in the real CLI. A private config file
+  // retains a genuine array and absolute inheritance, including asset paths.
+  const file = path.join(directory, `encoder-${format}.json`);
+  fs.writeFileSync(file, JSON.stringify({ extends: original, [format]: { fpm: [`--${format}-compression-level=1`] } }), { mode: 0o600, flag: 'wx' });
+  return file;
+}
+export function packageEnvironment(env = process.env) {
+  // WHY: preserve memory/preset flags; XZ_DEFAULTS is honored even where FPM
+  // supplies XZ_OPT. This requests threading only, not a different preset.
+  return { ...env, XZ_DEFAULTS: [env.XZ_DEFAULTS, '--threads=0'].filter(Boolean).join(' ') };
+}
+export function gzipHeader(bytes) {
+  assert.ok(Buffer.isBuffer(bytes) && bytes.length >= 10, 'Truncated gzip header');
+  assert.equal(bytes.readUInt16BE(0), 0x1f8b, 'Not gzip'); assert.equal(bytes[2], 8, 'Not deflate');
+  assert.equal(bytes[3] & 0xe0, 0, 'Reserved gzip flags');
+  return { compressor: 'gzip', xfl: bytes[8] };
+}
+export function validateEncoder(format, requested, observed) {
+  // WHY: explicit null is a real profile, not permission to omit evidence or
+  // attach an unexpected observation. Undefined/false requests are malformed.
+  if (requested === null) { assert.equal(observed, null, 'Unexpected encoder observation'); return; }
+  assert.deepEqual(requested, { compressor: 'gzip', level: 1 });
+  assert.equal(observed?.compressor, 'gzip', 'Requested gzip encoder not observed');
+  if (format === 'deb') assert.equal(observed.xfl, 4, 'Requested fastest gzip not observed');
+  else { assert.equal(format, 'rpm'); assert.equal(observed.flags, '1', 'Requested RPM payload level not observed'); }
+}
+export async function observeEncoder(format, installer, requested, temporary) {
+  if (!requested) return null;
+  let observed;
+  if (format === 'rpm') {
+    const values = (await run('rpm', ['-qp', '--queryformat', '%{PAYLOADCOMPRESSOR}\\n%{PAYLOADFLAGS}\\n', installer])).toString().trim().split('\n');
+    assert.equal(values.length, 2, 'Invalid RPM encoder query');
+    observed = { compressor: values[0], flags: values[1] };
+  } else {
+    assert.equal(format, 'deb');
+    // WHY: compressed payload is huge, not evidence. Extract only the named ar
+    // member into the private build area, read ten bytes, always delete it.
+    const directory = fs.mkdtempSync(path.join(temporary, 'encoder-'));
+    try {
+      await run('ar', ['x', installer, 'data.tar.gz'], directory);
+      const descriptor = fs.openSync(path.join(directory, 'data.tar.gz'), 'r');
+      try {
+        const bytes = Buffer.alloc(10), count = fs.readSync(descriptor, bytes, 0, 10, 0);
+        observed = gzipHeader(bytes.subarray(0, count));
+      } finally { fs.closeSync(descriptor); }
+    } finally { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); }
+  }
+  validateEncoder(format, requested, observed); return observed;
+}
+export function packageArgs(format, mode, app, output, configFile) {
   assert.ok(formats.includes(format)); assert.ok(['default', 'fast'].includes(mode));
   assert.ok(path.isAbsolute(app) && path.isAbsolute(output) && app !== output);
   const codec = { deb: 'gz', rpm: 'gzip', pacman: 'gz' }[format];
   return ['--linux', format, '--x64', '--prepackaged', app, `-c.directories.output=${output}`,
-    ...(mode === 'fast' && codec ? [`-c.${format}.compression=${codec}`] : []), '--publish', 'never'];
+    ...(mode === 'fast' && codec ? [`-c.${format}.compression=${codec}`] : []),
+    ...(configFile ? ['--config', configFile] : []), '--publish', 'never'];
 }
 export function validateMetadata(format, value, expected) {
   assert.equal(value.name, expected.name); assert.equal(value.version, expected.version);
@@ -30,9 +160,10 @@ export function validateMetadata(format, value, expected) {
   assert.ok(value.desktop.includes(`Categories=${expected.category}`), 'Wrong current desktop category');
   assert.ok(value.icons.length > 0, 'No installed icons');
 }
-export async function expectedMetadata() {
-  const { parse } = await import('../desktop/node_modules/yaml/dist/index.js');
-  const config = parse(fs.readFileSync(path.join(desktop, 'electron-builder.yml'), 'utf8'));
+export async function expectedMetadata(configFile = path.join(desktop, 'electron-builder.yml')) {
+  // WHY: builder uses js-yaml.load's default schema (including YAML merges),
+  // not yaml.parse's core schema. Eligibility must see the same inherited flags.
+  const config = installedBuilderParser(desktop).load(fs.readFileSync(configFile, 'utf8'));
   const pkg = read(path.join(desktop, 'package.json'));
   // WHY: this installed builder exports the class as exports.default, not a
   // named ESM export. Resolve its real CJS API from the desktop dependency root.
@@ -156,6 +287,7 @@ async function main() {
     // inputs, native payloads, legal files and release defaults stay intact.
     await run('npm', ['run', 'build', '--', '--linux', '--x64', '--dir', '--publish', 'never'], desktop, false);
     const app = path.join(desktop, 'release/linux-unpacked'), prepared = { identity: input, mode, manifest: await manifest(app), transport: await transport(app, output) };
+    await packParserCapsule(desktop, evidence);
     assert.deepEqual(await identity(root, process.env.GITHUB_SHA), input);
     json(path.join(output, 'prepared.json'), prepared); json(path.join(evidence, 'prepared.json'), prepared);
   } else if (command === 'package') {
@@ -172,11 +304,13 @@ async function main() {
     // WHY: target-specific FPM metadata must never mutate a shared or hardlinked
     // prepared tree. Each runner restores its own mode/symlink-preserving TAR.
     const tmp = path.join(temporary, 'tmp'); fs.mkdirSync(tmp);
-    process.env.TMPDIR = tmp; process.env.TMP = tmp; process.env.TEMP = tmp;
+    const requested = encoderProfile(format, mode, expected.config, read(path.join(desktop, 'package.json')));
+    const configFile = writeEncoderConfig(format, requested, path.join(desktop, 'electron-builder.yml'), temporary);
+    const env = packageEnvironment({ ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp });
     const started = performance.now(), timingFile = path.join(directory, 'package-time.txt');
     // WHY: GNU time includes the builder's descendants (FPM/compressors), unlike
     // process.resourceUsage(), which would misleadingly measure only this shim.
-    await run('/usr/bin/time', ['-f', '%U %S %e', '-o', timingFile, process.execPath, path.join(desktop, 'node_modules/electron-builder/cli.js'), ...packageArgs(format, mode, app, output)], desktop, false);
+    await run('/usr/bin/time', ['-f', '%U %S %e', '-o', timingFile, process.execPath, path.join(desktop, 'node_modules/electron-builder/cli.js'), ...packageArgs(format, mode, app, output, configFile)], desktop, false, env);
     const elapsedSeconds = (performance.now() - started) / 1000;
     const [cpuUserSeconds, cpuSystemSeconds, builderWallSeconds] = fs.readFileSync(timingFile, 'utf8').trim().split(/\s+/).map(Number);
     assert.ok([cpuUserSeconds, cpuSystemSeconds, builderWallSeconds].every(value => Number.isFinite(value) && value >= 0));
@@ -184,12 +318,14 @@ async function main() {
     const suffix = { AppImage: '.AppImage', deb: '.deb', rpm: '.rpm', pacman: '.pacman' }[format];
     const installers = fs.readdirSync(output).filter(name => name.endsWith(suffix)); assert.equal(installers.length, 1);
     const installer = path.join(output, installers[0]);
+    const observed = await observeEncoder(format, installer, requested, temporary);
     let installed;
     if (format === 'AppImage') installed = (await appImagePayload(installer, payload, post, directory, expected)).installed;
     else installed = await manifest(await nativeMetadata(format, installer, payload, directory, expected));
     verifyInstalled(post, installed); assert.deepEqual(await identity(root, process.env.GITHUB_SHA), input);
     json(path.join(directory, 'package.json'), { identity: input, mode, format, prepared: prepared.manifest, post, installed, validated: true,
       bytes: fs.statSync(installer).size, sha256: await hash(installer), elapsedSeconds, cpuUserSeconds, cpuSystemSeconds, builderWallSeconds,
+      encoder: { requested, observed, xzThreadsRequested: 0 },
       compression: mode === 'fast' && format !== 'AppImage' ? { deb: 'gz', rpm: 'gzip', pacman: 'gz' }[format] : 'release defaults' });
     fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5 });
   } else throw new Error('Use prepare|package <format>');

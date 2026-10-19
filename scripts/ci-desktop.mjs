@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run, matrixFor } from './ci-policy.mjs';
+import { encoderProfile, readEncoderInputs, validateEncoder } from './ci-linux.mjs';
 import { identity, aggregate, validateReport, verifyCore, verifyInstalled, shardArgs } from './ci-evidence.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)), desktop = path.join(root, 'desktop');
 const vitest = path.join(desktop, 'node_modules/vitest/vitest.mjs');
@@ -46,15 +47,23 @@ async function main() {
     const tests = aggregate(records, selected, input);
     const prepared = read(path.join(directory, 'prepared-evidence', 'prepared.json')); assert.deepEqual(prepared.identity, input);
     assert.ok(['fast', 'default'].includes(process.env.CI_PACKAGE_MODE)); assert.equal(prepared.mode, process.env.CI_PACKAGE_MODE);
+    // WHY: producer records must not choose their own proof requirements. Parse
+    // current checked-out config using only the independently lock-verified capsule.
+    const { config, pkg } = await readEncoderInputs(desktop, path.join(directory, 'prepared-evidence/yaml-parser.tgz'));
     const selectedFormats = ['AppImage', 'deb', 'rpm', 'pacman'];
     assert.deepEqual(fs.readdirSync(directory).filter(name => name.startsWith('format-')).sort(), selectedFormats.map(format => `format-${format}`).sort(), 'Missing/unknown package artifact');
     const formats = selectedFormats.map(format => {
       const result = read(path.join(directory, `format-${format}`, 'package.json'));
       assert.equal(result.format, format); assert.deepEqual(result.identity, input); assert.deepEqual(result.prepared, prepared.manifest);
       assert.equal(result.mode, prepared.mode); verifyCore(prepared.manifest, result.post); verifyInstalled(result.post, result.installed);
+      assert.equal(result.encoder.xzThreadsRequested, 0);
+      const requested = encoderProfile(format, prepared.mode, config, pkg);
+      assert.deepEqual(result.encoder.requested, requested, 'Encoder request disagrees with current profile');
+      validateEncoder(format, requested, result.encoder.observed);
       assert.equal(result.validated, true); assert.ok(result.bytes > 0); return result;
     });
-    json(path.join(directory, 'summary.json'), { tests, formats: formats.map(({ format, mode, compression, bytes, sha256, elapsedSeconds, cpuUserSeconds, cpuSystemSeconds, builderWallSeconds }) => ({ format, mode, compression, bytes, sha256, elapsedSeconds, cpuUserSeconds, cpuSystemSeconds, builderWallSeconds })),
+    assert.deepEqual(await identity(root, process.env.GITHUB_SHA), input);
+    json(path.join(directory, 'summary.json'), { tests, formats: formats.map(({ format, mode, compression, encoder, bytes, sha256, elapsedSeconds, cpuUserSeconds, cpuSystemSeconds, builderWallSeconds }) => ({ format, mode, compression, encoder, bytes, sha256, elapsedSeconds, cpuUserSeconds, cpuSystemSeconds, builderWallSeconds })),
       limits: 'Static extraction and current payload/metadata checks; not package-manager installation or application execution. Whole workflow timing requires completed GitHub job timestamps.' });
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${input.sha}\npackageMode=${prepared.mode}\n`);
     console.log(`Current inputs verified: ${tests.files} OS/file identities, ${tests.cases} cases, four extracted Linux formats`);
