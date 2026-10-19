@@ -42,6 +42,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
@@ -141,6 +142,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const pageId = useArtifactSelector((s) => s.openPageId);
   const pagesViewOpen = useArtifactSelector((s) => s.pagesViewOpen);
   const pageFocus = useArtifactSelector((s) => s.pageFocus);
+  const narrow = useNarrowViewport();
+  // WHY: beside a 240px rail, phone pages were crushed into an unusable strip.
+  // Reuse pinned-page focus on selection; the band's Pages button restores the
+  // list without leaving the page, while Back to chat keeps its separate job.
+  const openFromRail = (id: string) => dispatch({ type: 'PAGE_OPENED', pageId: id, focus: narrow });
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
   const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
@@ -158,8 +164,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useEffect(() => {
     if (!isWorkbenchDocument()) return;
     const id = new URLSearchParams(location.search).get('openPage');
-    if (id) dispatch({ type: 'PAGE_OPENED', pageId: id });
-  }, [dispatch]);
+    // Keep direct demo links consistent with a phone selection from the list.
+    if (id) dispatch({ type: 'PAGE_OPENED', pageId: id, focus: narrow });
+  }, [dispatch, narrow]);
   // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
   const pageIds = pages.map((p) => p.id);
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
@@ -593,7 +600,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <RailGroup label="Built in">
                 {builtin.map((p) => (
                   <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
-                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                    onOpen={() => openFromRail(p.id)} />
                 ))}
               </RailGroup>
             )}
@@ -601,7 +608,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <RailGroup label="Personal">
                 {personal.map((p) => (
                   <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
-                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                    onOpen={() => openFromRail(p.id)} />
                 ))}
               </RailGroup>
             )}
@@ -609,7 +616,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <RailGroup key={name} label={name}>
                 {list.map((p) => (
                   <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
-                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                    onOpen={() => openFromRail(p.id)} />
                 ))}
               </RailGroup>
             ))}

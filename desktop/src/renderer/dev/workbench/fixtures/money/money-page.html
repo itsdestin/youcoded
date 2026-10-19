@@ -899,7 +899,8 @@
     var bad = al.filter(function(a){ return a.lvl === 'bad'; }).length;
 
     h += '<div class="top">';
-    h += '<span class="pill title"><span class="pill-ic">' + I.money + '</span>Money</span>';
+    // WHY: the public site's Finance copy uses this same page; installed Money pages keep their original title.
+    h += '<span class="pill title"><span class="pill-ic">' + I.money + '</span>' + esc(data.demoTitle || 'Money') + '</span>';
     if (al.length) h += '<button class="pill" data-jump="needs"><span class="pill-ic ' + (bad ? 'bad' : 'warn') + '">' + (bad ? I.stop : I.warn) + '</span>' + al.length + ' to look at</button>';
     else if (data.accounts.length) h += '<span class="pill"><span class="pill-ic ok">' + I.check + '</span>All clear</span>';
     if (data.accounts.length || data.bills.length) h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';

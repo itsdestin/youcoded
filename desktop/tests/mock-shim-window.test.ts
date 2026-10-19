@@ -8,6 +8,7 @@ import { createStore } from '../src/renderer/dev/workbench/mock-store';
 import { createMockShim, setLatency, HAND_WRITTEN, createVoiceMock } from '../src/renderer/dev/workbench/mock-shim';
 import { SCENARIO_IDS, type ScenarioId } from '../src/renderer/dev/workbench/scenarios';
 import { MOCK_ONLY } from '../src/renderer/dev/workbench/mock-only';
+import { fakeHomeAssistantReset } from '../src/renderer/dev/workbench/fixtures/fake-home-assistant';
 import type { VoiceEvent } from '../src/shared/voice-types';
 import { readSource } from './helpers/guard-scope';
 
@@ -24,6 +25,104 @@ setLatency(0);
 //
 // These assert the FAKE, deliberately. The real backend has its own guards; the
 // hazard here is the mock silently drifting away from it.
+describe('site pages', () => {
+  function pagesFor(scenario: 'site' | 'default' = 'site') {
+    window.history.replaceState({}, '', `/?scenario=${scenario}`);
+    return createMockShim(createStore(scenario)).pages as Required<NonNullable<Window['claude']['pages']>>;
+  }
+  afterEach(() => { fakeHomeAssistantReset(); vi.useRealTimers(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
+
+  it('uses everyday conversation shortcuts for public website visitors only', async () => {
+    window.history.replaceState({}, '', '/?scenario=site');
+    const site = createMockShim(createStore('site'));
+    expect((await site.skills.getChips()).map((c: any) => c.label)).toEqual(['Journal', 'Inbox', 'Briefing', 'Draft Text']);
+    window.history.replaceState({}, '', '/?scenario=default');
+    const normal = createMockShim(createStore('default'));
+    expect((await normal.skills.getChips()).map((c: any) => c.label)).toContain('Git Status');
+  });
+
+  it('lists only Office and the pinned Home and Finance using the existing pages', async () => {
+    const pages = pagesFor();
+    expect((await pages.list()).map(({ id, name, pinned }) => ({ id, name, pinned }))).toEqual([
+      { id: 'builtin:office', name: 'Office', pinned: false },
+      { id: 'page-home', name: 'Home', pinned: true },
+      { id: 'page-money', name: 'Finance', pinned: true },
+    ]);
+    const normal = pagesFor('default');
+    for (const id of ['page-home', 'page-money']) {
+      const publicPage = await pages.get(id), original = await normal.get(id);
+      expect(publicPage.ok && original.ok && publicPage.page.html === original.page.html).toBe(true);
+    }
+  });
+
+  it('starts connected to a fictional house and operates fake controls without network access', async () => {
+    vi.useFakeTimers();
+    const outbound = vi.fn(() => { throw new Error('Network must not be used'); });
+    vi.stubGlobal('fetch', outbound);
+    const pages = pagesFor();
+    const home = await pages.get('page-home');
+    expect(home.ok).toBe(true);
+    if (!home.ok) return;
+    expect(home.page.connections?.[0]).toMatchObject({ approved: true, savedKey: true, address: 'home.demo.invalid:8123' });
+    const read = async () => {
+      const answer = pages.fetch('page-home', { url: 'http://home.demo.invalid:8123/api/template', method: 'POST', body: JSON.stringify({ template: 'namespace(rooms=[])' }) });
+      await vi.advanceTimersByTimeAsync(150);
+      const result = await answer;
+      expect(result.ok).toBe(true);
+      return result.ok ? JSON.parse(result.body) : [];
+    };
+    const rooms = await read();
+    expect(rooms.find((r: any) => r.id === 'destins_room').name).toBe('Study');
+    expect(rooms.flatMap((r: any) => r.items).some((t: any) => t.id.startsWith('camera.'))).toBe(false);
+    expect(JSON.stringify(rooms.map((r: any) => [r.name, r.items.map((t: any) => t.name), r.scenes?.map((s: any) => s.name)]))).not.toMatch(/Destin|Grandma/i);
+    const toggle = pages.fetch('page-home', { url: 'http://home.demo.invalid:8123/api/services/light/turn_on', method: 'POST', body: JSON.stringify({ entity_id: 'light.kitchen_pendants' }) });
+    await vi.advanceTimersByTimeAsync(150);
+    expect((await toggle).ok).toBe(true);
+    expect((await read()).flatMap((r: any) => r.items).find((t: any) => t.id === 'light.kitchen_pendants').state).toBe('on');
+    for (const op of ['connect', 'reconnect', 'sync', 'status'] as const) expect((await pages.plaid('page-money', { op } as any)).ok).toBe(false);
+    expect((await pages.fetch('page-home', { url: 'https://example.com' })).ok).toBe(false);
+    expect((await pages.fetch('page-home', { url: 'http://home.demo.invalid:8123/api/camera_proxy/camera.garage_pi' })).ok).toBe(false);
+    expect((await pages.videoStart({ page: 'page-home', frame: 'f', connection: 'ha', target: 'camera.garage_pi', offer: 'v=0' })).ok).toBe(false);
+    const heard: any[] = [];
+    const off = pages.onSocketEvent((e) => heard.push(e));
+    const call = { page: 'page-home', frame: 'f' };
+    const opened = await pages.socketOpen({ ...call, url: 'http://home.demo.invalid:8123/api/websocket' });
+    expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      await pages.socketSend({ ...call, socket: opened.socket, text: JSON.stringify({ id: 1, type: 'config/area_registry/list' }) });
+      await pages.socketSend({ ...call, socket: opened.socket, text: JSON.stringify({ id: 2, type: 'subscribe_entities' }) });
+      await vi.advanceTimersByTimeAsync(40);
+      const messages = heard.flatMap((e) => e.texts ?? []).map((s: string) => JSON.parse(s));
+      expect(messages.find((m: any) => m.id === 1).result[0].name).toBe('Study');
+      expect(JSON.stringify(messages)).not.toMatch(/Destin|Grandma|camera\./);
+      await pages.socketClose({ ...call, socket: opened.socket });
+    }
+    off();
+    expect(outbound).not.toHaveBeenCalled();
+  });
+
+  it('keeps Finance edits in memory and resets without changing default fixtures', async () => {
+    const pages = pagesFor();
+    const finance = await pages.get('page-money');
+    expect(finance.ok).toBe(true);
+    if (!finance.ok) return;
+    const data = finance.page.data as any;
+    expect(data.accounts[0]).toMatchObject({ institution: 'Demo Community Bank', name: 'Everyday checking' });
+    expect(JSON.stringify(data)).not.toMatch(/Capital One|American Express|Robinhood|Synchrony|Wells Fargo|Earnest|MOHELA|Destin/);
+    await pages.setData('page-money', { ...data, settings: { ...data.settings, warnPct: 45 } });
+    const edited = await pages.get('page-money');
+    expect(edited.ok && (edited.page.data as any).settings.warnPct).toBe(45);
+    const fresh = await pagesFor().get('page-money');
+    expect(fresh.ok && (fresh.page.data as any).settings.warnPct).toBe(30);
+    const normal = pagesFor('default');
+    const money = await normal.get('page-money'), home = await normal.get('page-home');
+    expect(money.ok && money.page.name).toBe('Money');
+    expect(money.ok && (money.page.data as any).accounts[0].institution).toBe('Capital One');
+    expect(home.ok && home.page.connections?.[0].approved).toBe(false);
+    expect((await normal.list()).filter((p) => p.pinned).map((p) => p.id)).toEqual(['page-money', 'page-analytics', 'page-paint']);
+  });
+});
+
 describe('engine states', () => {
   /** The scenario is read off the URL when the shim is built, so the URL is set
    *  first — the same way the workbench itself is driven. */

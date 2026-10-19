@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";var t;e((()=>{t=`@layer proposal{.uppercase:is(.tracking-wider,.tracking-wide,[class*=tracking-]):not([class*=rounded],[class*=bg-],[class*=border]){border-bottom:1px solid var(--edge-dim)!important;padding-bottom:4px!important;display:block!important}}`}))();export{t as default};

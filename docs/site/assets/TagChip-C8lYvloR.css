@@ -1,0 +1,1 @@
+.tag-line{white-space:nowrap;text-box:trim-both ex alphabetic;display:inline-block}.tag-line--caps{text-box:trim-both cap alphabetic}.tag-ico{width:var(--tag-ico);height:var(--tag-ico);vertical-align:calc(.5ex - .5 * var(--tag-ico));flex-shrink:0;margin-right:.25rem;display:inline-block}.tag-line--caps .tag-ico{vertical-align:calc(.5cap - .5 * var(--tag-ico))}

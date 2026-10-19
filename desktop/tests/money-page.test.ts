@@ -49,6 +49,10 @@ const bankAnswer = {
 };
 
 describe('the Money page', () => {
+  it('uses the public demo title while keeping the installed page named Money', () => {
+    expect(open({ demoTitle: 'Finance' }).d.querySelector('.pill.title')?.textContent).toBe('Finance');
+    expect(open({}).d.querySelector('.pill.title')?.textContent).toBe('Money');
+  });
   it('reads live balances on open and folds them into its saved accounts, keeping hand-entered ones', async () => {
     const asked: unknown[] = [];
     const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'loan', institution: 'Earnest', name: 'Loan', balance: 20000, updatedAt: `${TODAY}T10:00:00Z` }] },
