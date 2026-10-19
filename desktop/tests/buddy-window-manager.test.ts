@@ -55,8 +55,9 @@ type FakeWin = ReturnType<typeof fakeWin>;
 /** A stand-in BrowserWindow that remembers where it was put, so the
  *  non-Wayland path (which really does ask the window where it is) can be
  *  exercised honestly. */
-function fakeWin(role: BuddyRole, x: number, y: number) {
+function fakeWin(role: BuddyRole, x: number, y: number, nativeSizeDrift = false) {
   const at = { x, y };
+  const size = { ...SIZE[role] };
   let visible = false;
   // Real handlers, so a test can fire the platform events the manager listens
   // for — 'move' in particular, which is how a window-manager-initiated move
@@ -65,9 +66,18 @@ function fakeWin(role: BuddyRole, x: number, y: number) {
   return {
     role,
     at,
-    setPosition: vi.fn((nx: number, ny: number) => { at.x = nx; at.y = ny; }),
+    setPosition: vi.fn((nx: number, ny: number) => {
+      at.x = nx; at.y = ny;
+      // WHY: Electron's position-only round-trip grew the real XWayland chat
+      // at 150% scaling. Model native drift, not a CSS/zoom change.
+      if (nativeSizeDrift) size.width += 1;
+    }),
+    setBounds: vi.fn((bounds: { x: number; y: number; width: number; height: number }) => {
+      at.x = bounds.x; at.y = bounds.y;
+      size.width = bounds.width; size.height = bounds.height;
+    }),
     setTitle: vi.fn(),
-    getBounds: vi.fn(() => ({ x: at.x, y: at.y, width: SIZE[role].width, height: SIZE[role].height })),
+    getBounds: vi.fn(() => ({ ...at, ...size })),
     getPosition: vi.fn(() => [at.x, at.y]),
     isDestroyed: () => false,
     isVisible: () => visible,
@@ -117,7 +127,7 @@ interface Harness {
   created: Array<{ variant: BuddyRole; x: number; y: number; title?: string }>;
   wins: Partial<Record<BuddyRole, FakeWin>>;
   saved: { mascot: { x: number; y: number } | null };
-  /** Every setPosition call made by any buddy window. */
+  /** Every native placement call made by any buddy window. */
   positionCalls: () => number;
   /** Every setTitle call made by any buddy window. */
   titleCalls: () => number;
@@ -130,6 +140,7 @@ function harness(opts: {
   dock?: 'left' | 'right' | 'top' | 'bottom' | null;
   savedPos?: { x: number; y: number } | null;
   tray?: TrayFake;
+  nativeSizeDrift?: boolean;
 } = {}): Harness {
   const created: Harness['created'] = [];
   const wins: Partial<Record<BuddyRole, FakeWin>> = {};
@@ -139,7 +150,7 @@ function harness(opts: {
   const deps: BuddyWindowManagerDeps = {
     createBuddyWindow: (variant, o) => {
       created.push({ variant, x: o.x, y: o.y, title: o.title });
-      const w = fakeWin(variant, o.x, o.y);
+      const w = fakeWin(variant, o.x, o.y, opts.nativeSizeDrift);
       wins[variant] = w;
       return w as unknown as Electron.BrowserWindow;
     },
@@ -161,7 +172,7 @@ function harness(opts: {
     created,
     wins,
     saved,
-    positionCalls: () => all().reduce((n, w) => n + w.setPosition.mock.calls.length, 0),
+    positionCalls: () => all().reduce((n, w) => n + w.setPosition.mock.calls.length + w.setBounds.mock.calls.length, 0),
     titleCalls: () => all().reduce((n, w) => n + w.setTitle.mock.calls.length, 0),
     captionsFor: (role) => (wins[role]?.setTitle.mock.calls ?? []).map((c) => c[0] as string),
   };
@@ -238,7 +249,66 @@ describe('the caption channel', () => {
     });
   });
 
-  describe('on Windows, macOS and Linux/X11 — nothing changes', () => {
+  describe('on Windows, macOS and Linux/X11 — native placement', () => {
+    it('keeps the chat and bar at their fixed sizes through repeated open-close cycles', () => {
+      vi.useFakeTimers();
+      const h = harness({ nativeSizeDrift: true });
+      try {
+        h.manager.show();
+        h.manager.toggleChat();
+        for (let cycle = 0; cycle < 20; cycle++) {
+          h.manager.toggleChat();
+          vi.advanceTimersByTime(200);
+          h.manager.toggleChat();
+          vi.advanceTimersByTime(400);
+          expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+          expect(h.wins.bar!.getBounds()).toMatchObject(BAR_SIZE);
+          expect(h.wins.mascot!.getBounds()).toMatchObject(MASCOT_SIZE);
+        }
+      } finally {
+        h.manager.hide();
+        vi.useRealTimers();
+      }
+    });
+
+    it('reopens during the close fade without a stale hide closing it later', () => {
+      vi.useFakeTimers();
+      const h = harness();
+      try {
+        h.manager.show();
+        h.manager.toggleChat();
+        h.manager.toggleChat();
+        vi.advanceTimersByTime(70);
+        h.manager.toggleChat();
+        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', { visible: true });
+        vi.advanceTimersByTime(200);
+        expect(h.wins.chat!.isVisible()).toBe(true);
+      } finally {
+        h.manager.hide();
+        vi.useRealTimers();
+      }
+    });
+
+    it('lets the newest close finish its own fade after a rapid reopen', () => {
+      vi.useFakeTimers();
+      const h = harness();
+      try {
+        h.manager.show();
+        h.manager.toggleChat();
+        h.manager.toggleChat();
+        vi.advanceTimersByTime(70);
+        h.manager.toggleChat();
+        h.manager.toggleChat();
+        vi.advanceTimersByTime(71);
+        expect(h.wins.chat!.isVisible()).toBe(true);
+        vi.advanceTimersByTime(69);
+        expect(h.wins.chat!.isVisible()).toBe(false);
+      } finally {
+        h.manager.hide();
+        vi.useRealTimers();
+      }
+    });
+
     it('moves windows the ordinary way and never renames one', () => {
       const h = harness({ dock: 'bottom' });
       exerciseEveryMove(h);
@@ -509,9 +579,9 @@ describe('dragging in window-local coordinates', () => {
   /**
    * A buddy window plus the piece of desktop that moves it.
    *
-   * `caption: true` models Wayland-with-the-helper — setPosition does NOTHING
+   * `caption: true` models Wayland-with-the-helper — native placement does NOTHING
    * (which is what really happens, silently) and renaming the window is what
-   * moves it. `caption: false` models Windows/macOS/X11, where setPosition works.
+   * moves it. `caption: false` models Windows/macOS/X11, where native placement works.
    * Either way `at` is the window's TRUE position, which is the thing the
    * renderer is not allowed to know.
    */
@@ -519,7 +589,7 @@ describe('dragging in window-local coordinates', () => {
     const at = { x, y };
     return {
       at,
-      setPosition: vi.fn((nx: number, ny: number) => { if (!caption) { at.x = nx; at.y = ny; } }),
+      setBounds: vi.fn((bounds: { x: number; y: number }) => { if (!caption) { at.x = bounds.x; at.y = bounds.y; } }),
       setTitle: vi.fn((t: string) => {
         if (!caption) return;
         const p = parseCaption(t);           // the helper, running inside KWin
