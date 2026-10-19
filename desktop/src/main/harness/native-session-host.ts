@@ -55,6 +55,7 @@ import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView,
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
 import { PermissionModeStore } from './permission-mode-store';
+import { hasAdminApproval } from '../../shared/admin-approval';
 import { computeReportBudget } from './specialists/report-budget';
 import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
@@ -2632,25 +2633,19 @@ export class NativeSessionHost extends EventEmitter {
     const inScope = (r: PermissionRule) => (
       scope === undefined ? r.specialist === undefined : (r.specialist === undefined || r.specialist === scope)
     );
-    return async (tool: string, subject: string | undefined) => decidePermission(tool, subject, {
-      presetRules,                           // preset manifests contribute here — lowest layer, mode/deny/remembered all override
-      modeRules: rulesForMode(this.modeFor.get(sessionId) ?? 'ask'),
-      denyList: DESTRUCTIVE_DENY_LIST,
-      // Union disk (cross-session record) with this session's in-memory rules
-      // (session-truth). Disk first, in-memory appended after — a later match
-      // wins in the engine, but the two are identical allow rules so the tie is
-      // harmless. In-memory is what guarantees an Always-allow sticks even if the
-      // async disk persist failed or hasn't landed yet (see rememberedFor above).
-      // Filtered by scope LAST, after the union, so a rule freshly written by
-      // EITHER source (disk or memory) is scoped identically.
-      rememberedRules: [
-        ...await this.permissionStore.rulesFor(cwd),
-        ...(this.rememberedFor.get(sessionId) ?? []),
-      ].filter(inScope),
-    // PowerShell (Windows without Git Bash) runs code inside arguments too, so its
-    // wildcard grants refuse more characters (subject-glob.ts POWERSHELL_OPERATORS).
-    // getShell() is memoized and lazy — see its note in tools/bash.ts.
-    }, { powershell: getShell().label === 'PowerShell' });
+    return async (tool: string, subject: string | undefined) => {
+      const mode = this.modeFor.get(sessionId) ?? 'ask';
+      // WHY: disk plus synchronous session memory keep new grants effective before
+      // persistence finishes; one scope filter also keeps specialist grants isolated.
+      const rememberedRules = [...await this.permissionStore.rulesFor(cwd), ...(this.rememberedFor.get(sessionId) ?? [])].filter(inScope);
+      const decision = decidePermission(tool, subject, {
+        presetRules, modeRules: rulesForMode(mode), denyList: DESTRUCTIVE_DENY_LIST, rememberedRules,
+      }, { powershell: getShell().label === 'PowerShell' });
+      // Only explicit admin rules supply this flag, never the Full Auto baseline.
+      return tool === 'Bash' && subject !== undefined && hasAdminApproval(rememberedRules, subject, mode)
+        ? { ...decision, passwordlessAdminAllowed: true,
+          ...(hasAdminApproval(rememberedRules, subject, 'ask') ? { passwordlessAdminExact: true } : {}) } : decision;
+    };
   }
 
   /** Resolve BOTH the clamped context window AND the capability profile for a

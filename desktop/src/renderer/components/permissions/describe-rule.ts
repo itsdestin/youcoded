@@ -24,6 +24,7 @@ export interface RuleDescription {
 // overwrite src/a.ts" is a sentence, "Write: src/a.ts" is a log line.
 const VERBS: Record<string, string> = {
   Bash: 'Run',
+  AdminFullAuto: 'Run passwordless admin commands in Full Auto',
   Edit: 'Edit',
   Write: 'Create or overwrite',
   Read: 'Read',
@@ -202,6 +203,7 @@ export const RULE_KIND_LABEL: Record<RuleKind, string> = {
 
 const KIND_BY_TOOL: Record<string, RuleKind> = {
   Bash: 'commands',
+  AdminFullAuto: 'commands',
   Edit: 'files',
   Write: 'files',
   NotebookEdit: 'files',
@@ -252,6 +254,7 @@ export function ruleKind(rule: PermissionRule): RuleKind {
 export function broadNote(tool: string): string {
   if (tool === '*') return 'Covers everything the assistant can do, not just the one thing it first asked about.';
   if (tool === 'Bash') return 'Covers every command, not just the one it first asked about.';
+  if (tool === 'AdminFullAuto') return 'Covers passwordless admin commands in every project, only in Full Auto. Password entry still prompts when needed.';
   if (KIND_BY_TOOL[tool] === 'files' || tool === 'Read') {
     return 'Covers every file, not just the one it first asked about.';
   }

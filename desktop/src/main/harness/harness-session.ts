@@ -32,6 +32,8 @@ import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf, TranscriptU
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
+import { adminRuleFor } from '../../shared/admin-approval';
+import { applyAdminApproval } from './admin-approval';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
@@ -855,6 +857,7 @@ export class HarnessSession extends EventEmitter {
   private shellEnv: Record<string, string> | null = null;
   /** Ephemeral, root-only approval across all outside folders; never serialized. */
   private externalEditsAllowed = false;
+  private adminCommandsAllowed = false; // memory-only consent, never serialized
   private retryDelays: number[];
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
   // attachment; re-assigned by setBinding on a mid-session model swap.
@@ -1044,6 +1047,7 @@ export class HarnessSession extends EventEmitter {
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
     this.externalEditsAllowed = false; // consent never survives a resume
+    this.adminCommandsAllowed = false;
   }
 
   /** Everything a durable accepted-history checkpoint needs, taken atomically
@@ -4058,22 +4062,10 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
-    // 3b. The removal-target floor (tools/rm-target.ts). A Bash command that
-    //     would remove the workspace, the home folder, the disk root or a system
-    //     folder is ALWAYS asked about — below every rule, so a remembered
-    //     "Always allow" cannot wave it through. It only ever turns an allow
-    //     into an ask: a deny rule still denies.
-    //     The secret-path floor (tools/bash-secret-paths.ts) works the same way
-    //     for a command that names a file the file tools refuse (~/.ssh, .env…):
-    //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
-    //     The admin floor (tools/admin-command.ts, admin-password design §4)
-    //     runs FIRST and takes precedence over both: it names the more serious
-    //     consequence (full control of the computer), so a command that both
-    //     removes a folder and runs sudo shows the admin band, not the removal
-    //     one. `doas`/`su`/`pkexec`/`run0` are refused outright — no ask at
-    //     all — because pkexec/run0 would raise the DESKTOP's own polkit dialog
-    //     (a system pop-up outside the app, wording we don't control), and
-    //     doas/su have no askpass hook this app can intercept.
+    // 3b. Admin commands ask unless explicitly approved; refused elevation tools
+    // stay refused. WHY: an admin grant waives only the sudo toll, so removing
+    // protected folders or naming secret files still triggers its own floor.
+    // These are friction, not a sandbox; the parsers read visible shell syntax.
     const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
     const isBash = call.toolName === 'Bash' && typeof subject === 'string';
     const adminVerdict = isBash ? adminCommandVerdict(subject) : null;
@@ -4086,17 +4078,17 @@ export class HarnessSession extends EventEmitter {
       return { text: refuseMessage(adminVerdict.word), isError: true };
     }
     const isAdmin = adminVerdict?.kind === 'admin';
-    const rmFloor = isBash && !isAdmin ? destructiveRmVerdict(subject, bashCtx) : null;
-    const secretFloor = isBash && !isAdmin && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
-    // The kind picks the card's wording, so it never claims more than the check knows.
-    const floorStop: FloorStop | undefined = isAdmin ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind);
-    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: isAdmin ? 'runs sudo' : (rmFloor?.reason ?? `names ${secretFloor?.path}`) });
-
-    // 4. Configured decision. An external-directory path forces 'ask' regardless
-    //    of rules; otherwise consult decide() (default: ask — never silent-allow).
-    const configured: PermissionDecision = externalAsk
+    // 4. Re-read configured rules (including mode-scoped admin consent) on every call.
+    const configuredBase: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
       : await permissionCallback(() => this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    let skipUpfrontAdminPassword = isAdmin && (this.adminCommandsAllowed || configuredBase.passwordlessAdminAllowed === true);
+    const configured = isAdmin ? applyAdminApproval(configuredBase, subject!, skipUpfrontAdminPassword) : configuredBase;
+    const checkOtherFloors = isBash && (!isAdmin || skipUpfrontAdminPassword);
+    const rmFloor = checkOtherFloors ? destructiveRmVerdict(subject!, bashCtx) : null;
+    const secretFloor = checkOtherFloors && !rmFloor ? secretPathVerdict(subject!, bashCtx) : null;
+    const floorStop: FloorStop | undefined = isAdmin && !skipUpfrontAdminPassword ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind);
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop });
     // denyListed: true so Full auto shows its stop band (worded per floorStop —
     // deny-list-copy.ts) like any deny-list stop, instead of silently running.
     const decision: PermissionDecision = floorStop && configured.action !== 'deny'
@@ -4135,15 +4127,17 @@ export class HarnessSession extends EventEmitter {
       // exception. Child sessions never inherit it, even when sharing a parent.
       if (externalAsk && !this.opts.isSpecialistChild && d.allowExternalEditsForSession === true
         && (call.toolName === 'Write' || call.toolName === 'Edit')) this.externalEditsAllowed = true;
-      // "Always allow" → emit a rule for the host to persist (PermissionStore).
-      // Plain EventEmitter event, NOT a transcript event — the frozen emit
-      // surface is untouched.
-      //
-      // Only remember when the decision came from decide(). An external-directory
-      // path forced this ask and SKIPS decide() on every future call, so a stored
-      // rule can never fire — recording one promises the user something the
-      // engine will not honor. See spec 2026-08-11, finding 3.
-      if (d.always && !forcedAsk) {
+      // WHY: a later destructive-command ask can carry a valid admin choice
+      // without the admin floor marker. Honor it, but never a protected-path floor.
+      if (isAdmin && (!floorStop || floorStop === 'admin') && d.adminApprovalScope) {
+        skipUpfrontAdminPassword = true; // real password needs still go through verified askpass
+        if (d.adminApprovalScope === 'session') this.adminCommandsAllowed = true;
+        const rule = adminRuleFor(d.adminApprovalScope, subject!);
+        if (rule) this.emit('remember-rule', rule);
+      }
+      // Ordinary Always allow persists only when no external/path floor forced the ask.
+      // Admin consent above reuses exact Bash rules; its Full Auto scope is a distinct subject.
+      if (d.always && !forcedAsk && !d.adminApprovalScope) {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
@@ -4152,15 +4146,11 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
-    // admin-password design §2.4/R20/§11 task 5: for a call whose admin
-    // verdict is 'admin' (visible sudo), the card above already returned
-    // allow — isAdmin also forces floorStop:'admin' (step 3b), so this ask
-    // is NEVER skipped by a remembered rule or Full Auto. Ask for the
-    // password now, BEFORE the command spawns (R20), naming the FIRST
-    // visible sudo line; Skip/Stop/session-close/quit cancels it the same
-    // way any other pending ask is canceled (it lives in the SAME broker
-    // pending map) — the call never spawns in that case.
-    if (isAdmin && isBash && this.opts.adminPasswordService) {
+    // WHY: approved passwordless commands must not ask for a password speculatively.
+    // The same adminPasswordService/env still reaches Bash below: sudo's REAL
+    // password request is verified and shown by askpass if one is actually needed.
+    // A one-time Run it keeps the existing up-front password flow.
+    if (isAdmin && isBash && !skipUpfrontAdminPassword && this.opts.adminPasswordService) {
       const expectedArgvLines = visibleSudoLines(subject);
       if (expectedArgvLines.length > 0) {
         const upFront = await this.opts.adminPasswordService.askUpFront({

@@ -1,0 +1,3 @@
+{"type":"user_message","text":"push the current changes to master"}
+{"type":"tool_use","id":"push-review","name":"Bash","input":{"command":"git push origin master","description":"Push changes to master"}}
+{"type":"permission_request","tool_use_id":"push-review","requestId":"native-push-review","denyListed":true,"permissionMode":"full-auto"}
