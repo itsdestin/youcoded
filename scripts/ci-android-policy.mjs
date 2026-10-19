@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isMain } from './ci-policy.mjs';
 
 export function acceptAndroidNeeds(needs, collectSources) {
   // WHY: the unselected path must be skipped, not failed/cancelled; accepting
@@ -15,7 +14,7 @@ export function acceptAndroidNeeds(needs, collectSources) {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const mode = process.env.CI_COLLECT_SOURCES;
   assert.ok(mode === 'true' || mode === 'false', 'CI_COLLECT_SOURCES must be exactly true or false');
   const needs = JSON.parse(process.env.CI_ANDROID_NEEDS);

@@ -90,7 +90,14 @@ test('Android CLI producers and aggregate enforce current identity and exact art
   // WHY: commits exist only in this disposable fixture; the real worktree is never staged or committed.
   git('-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
   const sha = git('rev-parse', 'HEAD');
-  const cli = action => spawnSync(process.execPath, [path.join(root, 'scripts/ci-inputs.mjs'), action], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_SHA: sha } });
+  // WHY: macOS /var is an alias of /private/var. Reproduce that entrypoint
+  // mismatch on POSIX even when this test host's tmpdir is already canonical.
+  let launchRoot = root;
+  if (process.platform !== 'win32') {
+    launchRoot = `${root}-alias`; fs.symlinkSync(root, launchRoot, 'dir');
+    t.after(() => fs.rmSync(launchRoot, { force: true }));
+  }
+  const cli = action => spawnSync(process.execPath, [path.join(launchRoot, 'scripts/ci-inputs.mjs'), action], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_SHA: sha } });
   const ok = action => { const result = cli(action); assert.equal(result.status, 0, result.stderr); };
   ok('start');
   for (const scope of scopes) {

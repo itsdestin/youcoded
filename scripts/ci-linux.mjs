@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { run, npmCli } from './ci-policy.mjs';
+import { run, npmCli, isMain } from './ci-policy.mjs';
 import { hash, identity, manifest, verifyCore, verifyInstalled, transport, unpack } from './ci-evidence.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)), desktop = path.join(root, 'desktop');
 const json = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
@@ -330,4 +330,4 @@ async function main() {
     fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5 });
   } else throw new Error('Use prepare|package <format>');
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });
+if (isMain(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });

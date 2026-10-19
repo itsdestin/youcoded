@@ -1,12 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { run, npmCli, classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
+import { pathToFileURL } from 'node:url';
+import { run, npmCli, isMain, classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
 import { identity } from './ci-evidence.mjs';
 
+test('CLI entrypoints compare physical files and tolerate missing import argv', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-main-'));
+  try {
+    const file = join(root, 'main.mjs'); writeFileSync(file, '// fixture');
+    assert.equal(isMain(pathToFileURL(file).href, file), true);
+    assert.equal(isMain(pathToFileURL(file).href, join(root, 'missing')), false);
+    assert.equal(isMain(pathToFileURL(file).href, null), false);
+    if (process.platform !== 'win32') {
+      const alias = join(root, 'alias.mjs'); symlinkSync(file, alias);
+      assert.equal(isMain(pathToFileURL(file).href, alias), true);
+    }
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 5 }); }
+});
 test('npm CLI resolves beside Node without executing a Windows shim or shell syntax', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ci-npm-'));
   try {
