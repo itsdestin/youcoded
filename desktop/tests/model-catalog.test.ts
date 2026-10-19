@@ -170,13 +170,13 @@ describe('ModelCatalog', () => {
     expect(planRow.contextLength).toBe(272000);
   });
 
-  it('uses lower cloud defaults with no preference getter and preserves local-model windows', async () => {
+  it('uses 500k cloud defaults with no preference getter and preserves local-model windows', async () => {
     const cloud = { id: 'openrouter', type: 'openrouter', label: 'Router', enabled: true, builtIn: true, hasKey: true, ready: true } as const;
     const local = { id: 'local', type: 'local-engine', label: 'Local', enabled: true, builtIn: true, hasKey: false, ready: true } as const;
     const catalog = new ModelCatalog(dir, async () => ({ ok: true, json: async () => ({ data: [{ id: 'large', context_length: 2000000 }] }) }), {
       localModels: async () => [{ id: 'local-model', label: 'Local model', providerId: 'local', contextLength: 2000000 }],
     });
-    expect(await catalog.contextLengthFor({ providerId: 'openrouter', modelId: 'large' }, [cloud])).toBe(272000);
+    expect(await catalog.contextLengthFor({ providerId: 'openrouter', modelId: 'large' }, [cloud])).toBe(500000);
     expect(await catalog.contextLengthFor({ providerId: 'local', modelId: 'local-model' }, [local])).toBe(2000000);
   });
 

@@ -7,8 +7,9 @@ function record(value: unknown): Record<string, unknown> {
 function normalize(value: unknown): ContextPreferences {
   const context = record(value);
   return {
-    openrouter: context.openrouter === 'long' ? 'long' : DEFAULT_CONTEXT_PREFERENCES.openrouter,
-    chatgpt: context.chatgpt === 'long' ? 'long' : DEFAULT_CONTEXT_PREFERENCES.chatgpt,
+    // WHY: keep explicit older choices; only absent/invalid values take the new default.
+    openrouter: context.openrouter === 'standard' || context.openrouter === 'medium' || context.openrouter === 'long' ? context.openrouter : DEFAULT_CONTEXT_PREFERENCES.openrouter,
+    chatgpt: context.chatgpt === 'standard' || context.chatgpt === 'medium' || context.chatgpt === 'long' ? context.chatgpt : DEFAULT_CONTEXT_PREFERENCES.chatgpt,
   };
 }
 
@@ -25,8 +26,8 @@ export class ContextSettingsStore {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new TypeError('Context preferences must be an object');
     const validated: Partial<ContextPreferences> = {};
     for (const [key, value] of Object.entries(patch)) {
-      if ((key !== 'openrouter' && key !== 'chatgpt') || (value !== 'standard' && value !== 'long')) {
-        throw new TypeError('Context preferences accept only openrouter and chatgpt with standard or long');
+      if ((key !== 'openrouter' && key !== 'chatgpt') || (value !== 'standard' && value !== 'medium' && value !== 'long')) {
+        throw new TypeError('Context preferences accept only openrouter and chatgpt with standard, medium or long');
       }
       validated[key] = value;
     }

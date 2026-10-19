@@ -1,11 +1,12 @@
 import type { CatalogModel, ProviderType } from '../../shared/provider-types';
 import type { ContextPreferences } from '../../shared/context-preferences';
 
-// WHY approximate tiers: 250k retains Codex's 272k operating default. The 1M
-// choice admits advertised windows up to 1.2M (the approved explanation), not
+// WHY approximate tiers: 250k retains Codex's 272k operating default; 500k
+// caps at 500,000. The 1M choice admits advertised windows up to 1.2M, not
 // unlimited growth into a multi-million-token model. Reply reserve and compaction
-// margins remain owned by contextBudget(), not subtracted again here.
+// margins remain owned by the harness budget planners, not subtracted again here.
 const STANDARD_CEILING = 272_000;
+const MEDIUM_CEILING = 500_000;
 const LONG_CEILING = 1_200_000;
 
 function windowSize(value: unknown): number | null {
@@ -19,12 +20,15 @@ export function cloudContextLength(type: ProviderType | undefined, model: Catalo
   const ordinary = windowSize(model?.contextLength);
   if (type !== 'chatgpt' && type !== 'openrouter') return ordinary;
 
-  const isLong = preferences[type] === 'long';
+  const mode = preferences[type];
+  // WHY: 500k must use ChatGPT's supported maximum too, not its 272k default.
+  const expanded = mode !== 'standard';
   const maximum = type === 'chatgpt' ? windowSize(model?.maxContextLength) : ordinary;
   // Standard mode also respects a maximum smaller than the advertised default.
   // Older cached ChatGPT rows lack the maximum; never guess that they support 1M.
-  const supported = isLong
+  const supported = expanded
     ? maximum ?? ordinary
     : ordinary === null ? maximum : maximum === null ? ordinary : Math.min(ordinary, maximum);
-  return supported === null ? null : Math.min(supported, isLong ? LONG_CEILING : STANDARD_CEILING);
+  const ceiling = mode === 'long' ? LONG_CEILING : mode === 'medium' ? MEDIUM_CEILING : STANDARD_CEILING;
+  return supported === null ? null : Math.min(supported, ceiling);
 }
