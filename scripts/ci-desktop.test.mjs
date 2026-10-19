@@ -4,9 +4,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { expectedMetadata } from './ci-linux.mjs';
 import { run } from './ci-policy.mjs';
 import { aggregate, shardArgs } from './ci-evidence.mjs';
 const vitest = fileURLToPath(new URL('../desktop/node_modules/vitest/vitest.mjs', import.meta.url));
+
+test('package metadata loads current installed builder defaults and current configuration', async () => {
+  // WHY: pure metadata fixtures cannot detect the installed builder's CJS export
+  // shape. This integration contract runs after npm ci, against the real module.
+  const actual = await expectedMetadata();
+  const require = createRequire(new URL('../desktop/package.json', import.meta.url));
+  const Builder = require('app-builder-lib/out/targets/FpmTarget.js').default;
+  const config = require('yaml').parse(fs.readFileSync(new URL('../desktop/electron-builder.yml', import.meta.url), 'utf8'));
+  const pkg = require('./package.json');
+  assert.equal(typeof Builder, 'function');
+  assert.deepEqual(actual.config, config);
+  assert.equal(actual.name, pkg.name); assert.equal(actual.version, pkg.version);
+  assert.equal(actual.productName, config.productName); assert.equal(actual.category, config.linux.category);
+  for (const format of ['deb', 'rpm', 'pacman']) {
+    const expected = config[format]?.depends ?? config.linux.depends ?? Builder.prototype.getDefaultDepends(format);
+    assert.ok(Array.isArray(expected) && expected.length > 0 && expected.every(item => typeof item === 'string' && item.length > 0));
+    assert.deepEqual(format === 'pacman' ? actual.pacmanDependencies : actual.nativeDependencies[format], expected);
+  }
+});
 
 test('actual Vitest discovery and unfiltered shards accept fresh source/new test files and cases', async () => {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-vitest-'));

@@ -30,11 +30,14 @@ export function validateMetadata(format, value, expected) {
   assert.ok(value.desktop.includes(`Categories=${expected.category}`), 'Wrong current desktop category');
   assert.ok(value.icons.length > 0, 'No installed icons');
 }
-async function expectedMetadata() {
+export async function expectedMetadata() {
   const { parse } = await import('../desktop/node_modules/yaml/dist/index.js');
   const config = parse(fs.readFileSync(path.join(desktop, 'electron-builder.yml'), 'utf8'));
   const pkg = read(path.join(desktop, 'package.json'));
-  const { FpmTarget } = await import('../desktop/node_modules/app-builder-lib/out/targets/FpmTarget.js');
+  // WHY: this installed builder exports the class as exports.default, not a
+  // named ESM export. Resolve its real CJS API from the desktop dependency root.
+  const require = createRequire(path.join(desktop, 'package.json'));
+  const FpmTarget = require('app-builder-lib/out/targets/FpmTarget.js').default;
   const dependencies = format => config[format]?.depends ?? config.linux.depends ?? FpmTarget.prototype.getDefaultDepends(format);
   return { name: pkg.name, version: pkg.version, productName: config.productName, category: config.linux.category,
     pacmanDependencies: dependencies('pacman'), nativeDependencies: { deb: dependencies('deb'), rpm: dependencies('rpm') }, config };
@@ -133,6 +136,9 @@ async function main() {
     json(path.join(output, 'prepared.json'), prepared); json(path.join(evidence, 'prepared.json'), prepared);
   } else if (command === 'package') {
     assert.ok(formats.includes(format));
+    // WHY: fail on builder/config API incompatibility before transport restore
+    // and expensive package construction, rather than after producing installers.
+    const expected = await expectedMetadata();
     const inputDir = path.join(root, 'ci-prepared'), prepared = read(path.join(inputDir, 'prepared.json'));
     assert.deepEqual(prepared.identity, input); assert.equal(prepared.mode, mode);
     const temporary = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || root, `ci-${format}-`));
@@ -153,7 +159,7 @@ async function main() {
     const post = await manifest(app); verifyCore(prepared.manifest, post);
     const suffix = { AppImage: '.AppImage', deb: '.deb', rpm: '.rpm', pacman: '.pacman' }[format];
     const installers = fs.readdirSync(output).filter(name => name.endsWith(suffix)); assert.equal(installers.length, 1);
-    const installer = path.join(output, installers[0]), expected = await expectedMetadata();
+    const installer = path.join(output, installers[0]);
     let installed;
     if (format === 'AppImage') installed = (await appImagePayload(installer, payload, post, directory, expected)).installed;
     else installed = await manifest(await nativeMetadata(format, installer, payload, directory, expected));
