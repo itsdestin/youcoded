@@ -62,7 +62,7 @@ describe('beta build workflow identities', () => {
     const resolve = action.runs.steps.find((step: any) => step.id === 'resolve');
     expect(resolve.env.BETA_BASE).toBe('${{ inputs.base }}');
     expect(resolve.with.script).toContain('resolveBetaVersion({ github, context, base: process.env.BETA_BASE })');
-    expect(stepNamed(workflow('desktop-ci').jobs.build, 'Test beta version numbering').run)
+    expect(stepNamed(workflow('desktop-ci').jobs.prepare, 'Test beta version numbering').run)
       .toBe('node --test ../scripts/beta-version.test.mjs');
   });
 });

@@ -1,19 +1,9 @@
 name: Android CI
 
 on:
-  # See desktop-ci.yml for the full rationale: `pull_request` checks every PR
-  # regardless of branch name, replacing the branch-name allowlist whose
-  # 'feat/**' vs 'feature/**' gap left pushes unchecked, and letting
-  # Dependabot's `dependabot/**` PRs run. `push: [master]` keeps the
-  # post-merge run on master.
-  # docs/** is skipped for the same reason, and carries the same branch-
-  # protection caveat, as desktop-ci.yml -- the note there is the full one.
-  # Nothing under docs/ reaches a Gradle build.
-  push:
-    branches: [master]
-    paths-ignore: ['docs/**']
-  pull_request:
-    paths-ignore: ['docs/**']
+  # WHY: Desktop CI owns PR/master routing and cancellation. A second push/PR
+  # trigger would run the old full Android control beside the integrated run.
+  workflow_call:
   workflow_dispatch:
     inputs:
       collect_sources:
@@ -25,9 +15,24 @@ jobs:
   build:
     name: ${{ inputs.collect_sources && 'Android source preflight' || 'build' }}
     runs-on: ubuntu-latest
+    env:
+      # WHY: Android builds the web/backend, never the Electron executable.
+      # Keep npm lifecycle scripts enabled; only omit Electron's binary download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      # WHY: only the integrated candidate opts into the packaging-only graph
+      # and run-local native reuse. Manual source collection keeps the default
+      # producer graph and never reuses compiled native output.
+      - name: Configure CI producer graph
+        if: '!inputs.collect_sources'
+        run: |
+          echo 'CI_GRADLE_FLAGS=-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g' >> "$GITHUB_ENV"
+          echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -45,6 +50,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+
+      - name: Record current Android input identity
+        run: node scripts/ci-inputs.mjs start
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -71,11 +79,15 @@ jobs:
       # whenever desktop packaging did (2026-05-20 to 06). Desktop CI still
       # builds every installer on its Linux leg.
 
+      - name: Verify all variant lint producer graphs
+        if: '!inputs.collect_sources'
+        run: ./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS
+
       - name: Run unit tests
-        run: ./gradlew test
+        run: ./gradlew test $CI_GRADLE_FLAGS
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug $CI_GRADLE_FLAGS
 
       # ReleaseTest: same R8 minification + shrinker + proguard rules as
       # the production release flavor, but signed with the debug keystore
@@ -91,7 +103,7 @@ jobs:
       - name: Build releaseTest APK (R8 minified, debug-signed)
         env:
           YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
-        run: ./gradlew assembleReleaseTest
+        run: ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS
 
       - name: Verify packaged runtime and source archive
         if: inputs.collect_sources
@@ -127,11 +139,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Verify current Android inputs and outputs
+        run: node scripts/ci-inputs.mjs android
+
+      - name: Upload Android input evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-current-inputs
+          path: ci-android-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
           name: youcoded-debug
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 14
 
       - name: Upload releaseTest APK
@@ -139,4 +164,6 @@ jobs:
         with:
           name: youcoded-releasetest
           path: app/build/outputs/apk/releaseTest/*.apk
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 14
