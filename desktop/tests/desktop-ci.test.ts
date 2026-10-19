@@ -41,6 +41,10 @@ describe('Desktop CI selected coverage', () => {
     expect(step(jobs.tests, 'Run tests').run).toBe('node ../scripts/ci-desktop.mjs shard "${{ matrix.os }}" "${{ matrix.shard }}" "${{ matrix.total }}"');
     expect(step(jobs.tests, 'Run tests').shell).toBeUndefined();
     expect(jobs.formats.strategy.matrix.format).toEqual(['AppImage', 'deb', 'rpm', 'pacman']);
+    const filesystemTools = step(jobs.prepare, 'Ensure transport and filesystem proof tools');
+    expect(filesystemTools.run).toContain('squashfs-tools');
+    expect(jobs.prepare.steps.indexOf(filesystemTools)).toBeLessThan(jobs.prepare.steps.indexOf(step(jobs.prepare, 'Test CI policy and evidence')));
+    expect(step(jobs.formats, 'Install Linux build deps').run).toContain('squashfs-tools');
     const formatUpload = jobs.formats.steps.find((item: any) => item.uses === 'actions/upload-artifact@v7');
     expect(formatUpload.with.path).toBe('ci-results/format-${{ matrix.format }}/');
     expect(formatUpload.with['include-hidden-files']).toBe(true); // Retain .PKGINFO/.MTREE/.INSTALL too.

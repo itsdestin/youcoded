@@ -5,9 +5,9 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { expectedMetadata } from './ci-linux.mjs';
+import { appImagePayload, expectedMetadata, packageArgs } from './ci-linux.mjs';
 import { run } from './ci-policy.mjs';
-import { aggregate, shardArgs } from './ci-evidence.mjs';
+import { aggregate, manifest, shardArgs } from './ci-evidence.mjs';
 const vitest = fileURLToPath(new URL('../desktop/node_modules/vitest/vitest.mjs', import.meta.url));
 
 test('package metadata loads current installed builder defaults and current configuration', async () => {
@@ -26,6 +26,34 @@ test('package metadata loads current installed builder defaults and current conf
     const expected = config[format]?.depends ?? config.linux.depends ?? Builder.prototype.getDefaultDepends(format);
     assert.ok(Array.isArray(expected) && expected.length > 0 && expected.every(item => typeof item === 'string' && item.length > 0));
     assert.deepEqual(format === 'pacman' ? actual.pacmanDependencies : actual.nativeDependencies[format], expected);
+  }
+});
+
+test('current builder AppImage proof preserves stored modes and verifies real generated integration', { skip: process.platform !== 'linux' }, async () => {
+  // WHY: synthetic metadata never exercises the real extraction runtime or its
+  // generated structural directories. Use a tiny disposable prepared payload;
+  // build and extract only, never execute AppRun or the application stub.
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-appimage-'));
+  try {
+    const expected = await expectedMetadata(), app = path.join(root, 'app'), output = path.join(root, 'output');
+    fs.mkdirSync(path.join(app, 'resources'), { recursive: true });
+    fs.writeFileSync(path.join(app, 'resources', 'fixture.txt'), 'current prepared payload\n');
+    fs.writeFileSync(path.join(app, expected.name), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    const desktop = fileURLToPath(new URL('../desktop/', import.meta.url));
+    const cli = path.join(desktop, 'node_modules/electron-builder/out/cli/cli.js');
+    await run(process.execPath, [cli, ...packageArgs('AppImage', 'default', app, output)], desktop);
+    const images = fs.readdirSync(output).filter(name => name.endsWith('.AppImage'));
+    assert.equal(images.length, 1);
+    const installer = path.join(output, images[0]), post = await manifest(app);
+    const payload = path.join(root, 'payload'), evidence = path.join(root, 'evidence');
+    fs.mkdirSync(payload); fs.mkdirSync(evidence);
+    await appImagePayload(installer, payload, post, evidence, expected);
+    const wrongMode = structuredClone(post);
+    wrongMode.find(entry => entry.path === 'resources').mode = 0o700;
+    const rejected = path.join(root, 'rejected'); fs.mkdirSync(rejected);
+    await assert.rejects(() => appImagePayload(installer, rejected, wrongMode, evidence, expected), /Installed app differs/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
