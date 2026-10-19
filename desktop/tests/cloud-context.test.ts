@@ -32,6 +32,14 @@ describe('cloud context operating budgets', () => {
     expect(cloudContextLength('openrouter', model(1048576, 128000), long)).toBe(1048576);
   });
 
+  it.each(['openrouter', 'chatgpt'] as const)('uses a supported 500k window for %s medium context', (type) => {
+    const medium = { openrouter: 'medium', chatgpt: 'medium' } as const;
+    expect(cloudContextLength(type, model(1048576, 872000), medium)).toBe(500000);
+    expect(cloudContextLength(type, model(272000, 872000), medium)).toBe(type === 'chatgpt' ? 500000 : 272000);
+    expect(cloudContextLength(type, model(128000), medium)).toBe(128000);
+    expect(cloudContextLength(type, model(undefined, undefined), medium)).toBeNull();
+  });
+
   it('keeps preferences independent', () => {
     const preferences = { openrouter: 'long', chatgpt: 'standard' } as const;
     expect(cloudContextLength('openrouter', model(1048576), preferences)).toBe(1048576);

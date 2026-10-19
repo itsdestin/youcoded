@@ -40,14 +40,16 @@ continuation metadata is only ever replayed under. Depth:
 ## Cloud context defaults
 
 Assistant settings → General → Context chooses an operating budget independently
-for OpenRouter and ChatGPT. The approximate **250k** tier caps at **272,000**;
-**1M** caps at **1,200,000**, the upper edge of the model-dependent range explained
-in the approved UI. Both are constrained by published model capability.
+for OpenRouter and ChatGPT: **250k**, **500k**, or **1M**. **500k** is the default
+when no valid preference is saved; existing saved choices are preserved. The
+approximate **250k** tier caps at **272,000**, **500k** at **500,000**, and **1M** at
+**1,200,000**, the upper edge of the model-dependent range explained in the UI.
+All three are constrained by published model capability.
 
 - ChatGPT's `/codex/models` fields `context_window` and `max_context_window` are
   separate catalog facts (`contextLength`, `maxContextLength`). Standard uses the
-  default, also respecting a smaller maximum; long uses the maximum, falling back
-  to the default when absent. Only positive safe-integer maximum values are
+  default, also respecting a smaller maximum; medium (500k) and long (1M) use
+  the maximum, falling back to the default when absent. Only positive safe-integer maximum values are
   accepted. Old cached rows without that field stay at their known default until
   the normal manifest refresh supplies it. No API-key model specification or
   hardcoded model-name table substitutes for the account's model manifest.
@@ -57,8 +59,9 @@ in the approved UI. Both are constrained by published model capability.
 - `ModelCatalog.get()` remains capability metadata; `contextLengthFor()` applies
   the current preferences without changing or invalidating the catalog cache.
   Missing/invalid context metadata remains unknown, leaving the harness's existing
-  conservative fallback intact. `contextBudget()` still owns reply reserve,
-  trimming and compaction margins; this layer does not subtract them twice.
+  conservative fallback intact. The harness's `planContextBudget()` derives
+  automatic compaction thresholds, summary allowance, reply reserve and margins
+  from this resolved window; this layer does not subtract them twice.
 - Native sessions resolve this on create, resume/reopen and model switch;
   specialists resolve it when created/resumed. Saving defaults does not mutate an
   active session's context or history mid-turn. The resulting single operating
