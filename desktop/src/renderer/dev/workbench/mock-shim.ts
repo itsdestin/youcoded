@@ -525,6 +525,7 @@ const NAMESPACES = [
 import { createNamingPreview } from './naming-preview';
 import { createBrowserMock } from './browser-mock';
 import { seedPages } from './fixtures/pages';
+import { seedSitePages, siteHomeAnswer, siteHomeValue } from './fixtures/site-pages';
 import { kitPiecesPage } from './fixtures/kit-pieces-page';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
@@ -3599,9 +3600,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     { skillId: 'encyclopedia-librarian', label: 'Briefing', prompt: 'brief me on ' },
     { label: 'Draft Text', prompt: 'help me draft a text to ' },
   ];
-  // Student mode: the same row without the developer chips (Git Status /
-  // Review PR / Fix Tests sat under every student scene of the promo).
-  if (studentSwitch) chipList = chipList.filter((c) => !/Git Status|Review PR|Fix Tests/.test(c.label));
+  // WHY: the public demo and student scenes introduce everyday uses, not code
+  // jargon. Keep the internal practice scenario's full developer shortcuts.
+  if (studentSwitch || activeScenario === 'site') chipList = chipList.filter((c) => !/Git Status|Review PR|Fix Tests/.test(c.label));
   const skills = {
     getChips: async () => chipList.map((c) => ({ ...c })),
     setChips: async (next: { skillId?: string; label: string; prompt: string }[]) => {
@@ -3921,7 +3922,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
-    pages: createPagesMock(activeScenario === 'empty'),
+    pages: createPagesMock(activeScenario),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
     browser: createBrowserMock(() => store.getState().sessions.map((x: any) => x.id)),
@@ -4093,11 +4094,13 @@ function createDocCommentsMock(empty: boolean) {
   };
 }
 
-/** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no
- *  pages so the landing screen's first-run card is reviewable; every other scenario
- *  gets the three fixture pages. Pin toggles publish through onChanged the way
- *  the real host will, so the header and the library never disagree. */
-function createPagesMock(empty: boolean): PagesBridge {
+/** Scenario-specific in-memory pages. Pins publish like the real host. */
+function createPagesMock(scenario: string): PagesBridge {
+  const empty = scenario === 'empty';
+  const site = scenario === 'site';
+  // WHY: public output is anonymized at both fake response doors, without
+  // renaming the shared pretend house used by the internal screenshot variants.
+  const publicTexts = (texts: string[]) => site ? texts.map((text) => siteHomeValue(text) as string) : texts;
   // Live sockets (page-live-socket.ts's twin): who holds which, and who listens.
   const liveSockets = new Map<string, { page: string; frame: string; live: ReturnType<typeof fakeHomeAssistantLive> }>();
   // WHY (review F12): a session is dropped by socketClose only; a page that goes away without closing (the tab navigates or
@@ -4106,17 +4109,17 @@ function createPagesMock(empty: boolean): PagesBridge {
   const socketSubs = new Set<(e: PageSocketEvent) => void>();
   let liveSeq = 0;
   const liveVideos = new Set<string>();
-  const emitSocket = (e: PageSocketEvent) => { for (const cb of [...socketSubs]) cb(e); };
+  const emitSocket = (e: PageSocketEvent) => { for (const cb of [...socketSubs]) cb(e.kind === 'messages' ? { ...e, texts: publicTexts(e.texts) } : e); };
   // Office is built in, so it is listed in every scenario — even the empty one.
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
-  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : site ? seedSitePages() : seedPages())];
   // `?pagesKit=1`: the Pages kit's showcase page is listed too (fixtures/kit-pieces-page.ts), so every
   // kit piece can be photographed; any other value opens that section first at phone width
   // (`?pagesKit=controls`). WHY only on request: the Pages list on every other screen keeps its cards.
   const pagesKit = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesKit') : null;
-  if (pagesKit) pages = [...pages, kitPiecesPage(pagesKit === '1' ? null : pagesKit)];
+  if (pagesKit && !site) pages = [...pages, kitPiecesPage(pagesKit === '1' ? null : pagesKit)];
   // `?pagesMenu=kind` (with `?pagesKit=1`): the Kit pieces page opens with its Meal dropdown open, so
   // the page kit's own dropdown list (page-kit.ts PAGE_KIT_JS) can be photographed open. WHY the kit
   // page: the Week planner sample that used to show it was removed (2026-10-16).
@@ -4168,19 +4171,19 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant || thermo) {
+  if (site || onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant || thermo) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
       // 2 and up. The shoot tool sets window.__shootInflight in this window (and nothing else does), so only then is the page's own
       // __feelOff switch (home-assistant-page-feel.ts) turned on. Destin's live panes and his real app never set it: motion is unchanged.
       ...(() => {
-        const shooting = typeof (window as unknown as { __shootInflight?: number }).__shootInflight === 'number';
+        const shooting = typeof window !== 'undefined' && typeof (window as unknown as { __shootInflight?: number }).__shootInflight === 'number';
         const wide = (h: string) => (homeView === 'remote-wide' ? h.replace('</head>', '<style>.yc-page { max-width: none !important; }</style></head>') : h); // remote-wide: the page's own width cap lifted, so a 1900 px window gives a ~1700 px card
         const still = (h: string) => wide(shooting ? h.replace('<body>', '<body><script>window.__feelOff = true;</script>') : h);
         return variant ? { html: withHomeVariant(p.html, variant) } /* WHY not still(): redesign options carry their own motion switches, and a motion-only option must keep looking different from its 'before' */ : shooting || homeView === 'remote-wide' ? { html: still(p.html) } : {};
       })(),
-      connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
+      connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: site ? 'home.demo.invalid:8123' : '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
       data: variant?.data ? variant.data : thermo && !thermo[2] ? { hidden: fakeHomeAssistantIds().filter((id) => id !== 'climate.thermostat'), startOpen: ['upstairs'] } : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
@@ -4191,7 +4194,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   }
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
-  const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
+  const savedServices = new Map<string, string>(empty || site ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
   // Set while a Home page screen waits for its first answer from the pretend house (see get).
   let homeFirstAnswer: (() => void) | null = null;
@@ -4250,6 +4253,8 @@ function createPagesMock(empty: boolean): PagesBridge {
     runProgram: async (_id, file, input) => ({ ok: true as const, output: JSON.stringify({ practice: true, file, inputBytes: input.length }), exitCode: 0 }),
     stopPrograms: async () => ({ ok: true as const }),
     fetch: async (id, req) => {
+      // WHY: the public household offers no camera media, even the workbench's fake clips.
+      if (site && /camera|nest\/event_media|media_source/.test(req.url + JSON.stringify(req.socket ?? {}))) return { ok: false as const, reason: 'network' as const, message: 'Camera media is not available in this demo.' };
       const page = pages.find((p) => p.id === id);
       const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);
       if (device && device.kind === 'device' && req.url.startsWith(`http://${device.address}/`)) {
@@ -4265,7 +4270,7 @@ function createPagesMock(empty: boolean): PagesBridge {
         try {
           await delay(120);
           const answer = req.socket ? fakeHomeAssistantSocket(req) : fakeHomeAssistantFetch(req);
-          if (answer) return answer;
+          if (answer) return site ? siteHomeAnswer(answer) : answer;
         } finally {
           if (counted) w.__shootInflight = (w.__shootInflight ?? 1) - 1;
           if (id === 'page-home' && homeFirstAnswer) homeFirstAnswer();
@@ -4294,6 +4299,7 @@ function createPagesMock(empty: boolean): PagesBridge {
       return { ok: true as const, socket };
     },
     socketSend: async (req) => {
+      if (site && /camera|media_source/.test(req.text)) return { ok: false as const, message: 'Camera media is not available in this demo.' };
       const s = liveSockets.get(req.socket);
       if (!s || s.page !== req.page || s.frame !== req.frame) return { ok: false as const, message: 'That live connection is not open any more.' };
       const texts = s.live.message(req.text);
@@ -4305,6 +4311,7 @@ function createPagesMock(empty: boolean): PagesBridge {
     // host code through `videoPlayback`; the mock's own part is only main's: answer, then stay quiet.
     videoPlayback: fakeCameraDeps(),
     videoStart: async (req) => {
+      if (site) return { ok: false as const, message: 'Camera media is not available in this demo.' };
       const device = pages.find((p) => p.id === req.page)?.connections?.find((c) => c.kind === 'device' && c.id === req.connection && c.approved);
       if (!device || device.kind !== 'device' || !device.videoProfile || !req.target.startsWith(device.videoProfile.targetPrefix)) {
         return { ok: false as const, message: 'The workbench has no camera for that.' };

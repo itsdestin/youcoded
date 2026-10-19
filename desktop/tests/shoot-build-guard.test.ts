@@ -45,12 +45,15 @@ async function build(out: string, env: Record<string, string>) {
 }
 
 it('the landing demo build stays inside its own checkout', () => {
-  // WHY: --emptyOutDir must never wipe a shared workspace's docs when this checkout
-  // is nested differently. Resolve the configured output rather than matching a string.
+  // WHY: Vite resolves --outDir from its configured root, not the shell cwd.
+  // Resolving from DESKTOP let the old command pass while leaving the served embed stale.
   const pkg = JSON.parse(readFileSync(join(DESKTOP, 'package.json'), 'utf8'));
+  const config = readFileSync(join(DESKTOP, 'vite.config.ts'), 'utf8');
+  const root = config.match(/root:\s*['"]([^'"]+)['"]/)?.[1];
   const output = String(pkg.scripts['build:site']).match(/--outDir\s+(\S+)/)?.[1];
+  expect(root, 'the Vite config declares its root').toBeTruthy();
   expect(output, 'the site build declares its output directory').toBeTruthy();
-  expect(resolve(DESKTOP, output!)).toBe(resolve(DESKTOP, '..', 'docs', 'site'));
+  expect(resolve(DESKTOP, root!, output!)).toBe(resolve(DESKTOP, '..', 'docs', 'site'));
 });
 
 // The screen driver, the mark attribute as JSX emits it, and the fake backend's installer.

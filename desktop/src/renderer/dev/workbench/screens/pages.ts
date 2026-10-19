@@ -32,6 +32,12 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/focus/page-kit-pieces#phone-layout', 'view', 'kit', 'narrow'), params: { pagesKit: 'layout' }, viewport: PHONE },
   // Finance dashboard mockup (design stage, 2026-10-05).
   pg('pages/page/page-money', 'view', 'money'),
+  // WHY: public-demo screenshots must use the site's fictional data and pinned-page
+  // focused host, not the internal practice library's personal-shaped fixtures.
+  { ...pg('pages/focus/page-home#site', 'view', 'site'), scenario: 'site' },
+  { ...pg('pages/focus/page-money#site', 'view', 'site'), scenario: 'site' },
+  { ...pg('pages/focus/page-home#site-phone', 'view', 'site', 'narrow'), scenario: 'site', viewport: PHONE },
+  { ...pg('pages/focus/page-money#site-phone', 'view', 'site', 'narrow'), scenario: 'site', viewport: PHONE },
   // The theme's wallpaper through a page in the newer 'float' chrome style (shoot with a wallpaper theme: --themes halftone-dimension).
   { ...pg('pages/page/page-kit-pieces#float', 'view', 'kit'), params: { chrome: 'float', pagesKit: '1' } },
   // Approval states, one fixture page each.

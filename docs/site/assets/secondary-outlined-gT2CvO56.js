@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";var t;e((()=>{t=`@layer proposal{[role=dialog] button.text-fg-dim.text-sm:not([class*=border]){border:1px solid var(--edge-dim)!important;color:var(--fg-2)!important}}`}))();export{t as default};

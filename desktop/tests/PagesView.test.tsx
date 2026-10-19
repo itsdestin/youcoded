@@ -2,9 +2,10 @@
 // WHY: The first-run explanation belongs on the Pages landing screen, not behind Manage pages.
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
-import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { ArtifactProvider, createArtifactStore } from '../src/renderer/state/ArtifactContext';
+import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 import { PageHost } from '../src/renderer/components/pages/PageHost';
 import { PagesView } from '../src/renderer/components/pages/PagesView';
@@ -26,6 +27,65 @@ function mount(pagesViewOpen = false) {
     </ArtifactProvider>,
   );
 }
+
+function viewport(narrow: boolean) {
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: query === NARROW_VIEWPORT_QUERY && narrow, media: query,
+    addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })));
+}
+beforeEach(() => viewport(false));
+afterEach(() => vi.unstubAllGlobals());
+
+describe('PageHost navigation', () => {
+  function navigation(narrow: boolean) {
+    viewport(narrow);
+    const pages = ['Home', 'Finance'].map((name) => ({ id: `personal:${name}`, name, description: '', icon: 'page', home: { kind: 'personal' }, pinned: false, updatedAt: '', htmlStamp: 1, connections: [], html: '<p>Demo page</p>', data: null }));
+    snapshot.current = { pages, loaded: true, failed: false };
+    vi.stubGlobal('claude', { pages: { get: vi.fn(async (id) => ({ ok: true, page: pages.find((p) => p.id === id) })) } });
+    const store = createArtifactStore(state);
+    render(<ArtifactProvider store={store}><PageHost settingsOpen={false} onToggleSettings={() => {}} onCreatePage={onCreatePage} /></ArtifactProvider>);
+    const pick = (name: string) => fireEvent.click(document.querySelector(`[data-rail-page="personal:${name}"]`)!);
+    return { store, pick };
+  }
+
+  it('focuses a phone selection, returns to the list through Pages, switches pages and preserves Back to chat', async () => {
+    const { store, pick } = navigation(true);
+    pick('Home');
+    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: true, openPageId: 'personal:Home' });
+    expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('iframe')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Open pages' }));
+    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: false, openPageId: 'personal:Home' });
+    expect(document.querySelector('.screen-pane--panel')).toBeInTheDocument();
+    pick('Finance');
+    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: true, openPageId: 'personal:Finance' });
+    expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('iframe')?.title).toBe('Finance'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }));
+    expect(store.getState()).toMatchObject({ pageViewOpen: false, pageFocus: false, openPageId: null });
+  });
+
+  it('opens a requested public-demo page at full phone width', async () => {
+    window.history.replaceState({}, '', '/?mode=workbench&openPage=personal%3AHome');
+    try {
+      const { store } = navigation(true);
+      await waitFor(() => expect(store.getState()).toMatchObject({ pageFocus: true, openPageId: 'personal:Home' }));
+      expect(document.querySelector('.screen-pane--panel')).not.toBeInTheDocument();
+    } finally { window.history.replaceState({}, '', '/'); }
+  });
+
+  it('keeps the desktop sidebar beside a selected page', async () => {
+    const { store, pick } = navigation(false);
+    pick('Home');
+    expect(store.getState()).toMatchObject({ pageViewOpen: true, pageFocus: false, openPageId: 'personal:Home' });
+    await waitFor(() => expect(document.querySelector('iframe')).toBeInTheDocument());
+    expect(document.querySelector('.screen-pane--panel')).toBeInTheDocument();
+    pick('Finance');
+    expect(store.getState()).toMatchObject({ pageFocus: false, openPageId: 'personal:Finance' });
+    expect(document.querySelector('.screen-pane--panel')).toBeInTheDocument();
+  });
+});
 
 describe('Pages first-run placement', () => {
   it('explains pages on the landing screen and creates from its card', async () => {

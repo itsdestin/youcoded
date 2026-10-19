@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";var t;e((()=>{t=`@layer proposal{:root{--text-3xs:11px!important}}`}))();export{t as default};
