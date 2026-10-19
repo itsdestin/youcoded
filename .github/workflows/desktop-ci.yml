@@ -68,7 +68,7 @@ jobs:
       - name: OS semantic checks
         if: matrix.shard == 1 && runner.os != 'Linux'
         run: |
-          node --test ../scripts/beta-version.test.mjs ../scripts/ci-policy.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs ../scripts/ci-desktop.test.mjs
+          node --test ../scripts/beta-version.test.mjs ../scripts/ci-policy.test.mjs ../scripts/ci-android-policy.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs ../scripts/ci-desktop.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run typecheck
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -111,7 +111,7 @@ jobs:
         # stored filesystem with a mode-preserving extractor and a real fixture.
         run: (command -v zstd && command -v unsquashfs && command -v mksquashfs) || (sudo apt-get update && sudo apt-get install -y zstd squashfs-tools)
       - name: Test CI policy and evidence
-        run: node --test ../scripts/ci-policy.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs
+        run: node --test ../scripts/ci-policy.test.mjs ../scripts/ci-android-policy.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs
       - run: npm ci
       - name: Test actual current Vitest discovery and shards
         run: node --test ../scripts/ci-desktop.test.mjs

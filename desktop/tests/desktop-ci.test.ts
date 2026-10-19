@@ -75,11 +75,82 @@ describe('Desktop CI selected coverage', () => {
     expect(step(jobs.tests, 'OS semantic checks').if).toBe("matrix.shard == 1 && runner.os != 'Linux'");
     for (const command of ['node --test ../scripts/beta-version.test.mjs', 'npm run typecheck', 'npm run knip', 'npm run lint', 'npm run lint:design']) expect(step(jobs.tests, 'OS semantic checks').run).toContain(command);
   });
+  it('requires independent scoped Android producers and an always-running exact completion gate', () => {
+    const config = workflow('android-ci');
+    const { jvm, apk, completion } = config.jobs;
+    const ordered = (job: any, names: string[]) => {
+      const indices = names.map(name => job.steps.indexOf(step(job, name)));
+      expect(indices).toEqual([...indices].sort((a, b) => a - b));
+    };
+    expect(Object.keys(config.jobs).sort()).toEqual(['apk', 'completion', 'jvm', 'source-preflight']);
+    expect(config.concurrency).toBeUndefined();
+    for (const job of Object.values(config.jobs) as any[]) {
+      expect(job.concurrency).toBeUndefined();
+      expect(job['runs-on']).toBe('ubuntu-latest');
+      expect(job.steps.filter((item: any) => item.uses === 'actions/checkout@v7').map((item: any) => item.with.ref)).toEqual(['${{ github.sha }}']);
+      expect(job.steps.find((item: any) => item.uses === 'actions/setup-node@v7').with['node-version']).toBe(22);
+    }
+    for (const job of [jvm, apk]) {
+      expect(job.if).toBe('!inputs.collect_sources');
+      expect(job.needs).toBeUndefined();
+      expect(step(job, 'Set up JDK 17').with).toEqual({ 'java-version': '17', distribution: 'temurin' });
+      expect(step(job, 'Setup Gradle').uses).toBe('gradle/actions/setup-gradle@v6');
+      expect(job.env.CI_GRADLE_FLAGS).toBe('-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g');
+      expect(step(job, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
+      expect(JSON.stringify(job)).not.toMatch(/--build-cache|--ignore-scripts|keystore|secrets\./);
+    }
+    expect(jvm.steps.find((item: any) => item.uses === 'actions/setup-node@v7').with).toEqual({ 'node-version': 22 });
+    expect(JSON.stringify(jvm)).not.toMatch(/npm|docker|clang|lld|YOUCODED_COMMON_NATIVE_CACHE|actions\/cache/);
+    expect(step(jvm, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
+    expect(step(jvm, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS');
+    expect(step(jvm, 'Run unit tests').run).toBe('./gradlew test $CI_GRADLE_FLAGS');
+    expect(step(jvm, 'Verify current JVM inputs and outputs').run).toBe('node scripts/ci-inputs.mjs jvm');
+    ordered(jvm, ['Record current Android input identity', 'Test runtime redistribution fixtures', 'Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs', 'Upload JVM input evidence']);
+    for (const name of ['Verify all variant lint producer graphs', 'Run unit tests', 'Verify current JVM inputs and outputs']) expect(step(jvm, name).if).toBeUndefined();
+    expect(jvm.steps.indexOf(step(jvm, 'Run unit tests'))).toBeLessThan(jvm.steps.indexOf(step(jvm, 'Verify current JVM inputs and outputs')));
+    expect(step(jvm, 'Upload JVM input evidence').with).toEqual({ name: 'android-scope-jvm', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
+    expect(apk.strategy).toEqual({ 'fail-fast': false, matrix: { scope: ['debug', 'releaseTest'] } });
+    expect(apk.env.ELECTRON_SKIP_BINARY_DOWNLOAD).toBe('1');
+    expect(apk.env.CI_ANDROID_SCOPE).toBe('${{ matrix.scope }}');
+    expect(step(apk, 'Configure run-local native cache').run).toBe('echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${CI_ANDROID_SCOPE}" >> "$GITHUB_ENV"');
+    expect(step(apk, 'Install runtime build tools').run).toBe('sudo apt-get update -q && sudo apt-get install -y -q clang lld');
+    expect(step(apk, 'Configure APK version comparator').run).toContain('docker pull alpine:3.24');
+    expect(step(apk, 'Cache runtime downloads').with).toEqual({ path: 'app/build/runtime-cache', key: "android-runtime-${{ hashFiles('app/runtime/pins.env') }}" });
+    ordered(apk, ['Record current Android input identity', 'Configure run-local native cache', 'Build scoped APK', 'Verify current scoped Android inputs and outputs', 'Upload scoped Android input evidence']);
+    for (const name of ['Build scoped APK', 'Verify current scoped Android inputs and outputs']) expect(step(apk, name).if).toBeUndefined();
+    const assemble = step(apk, 'Build scoped APK');
+    expect(assemble.run).toBe('case "$CI_ANDROID_SCOPE" in\n  debug) ./gradlew assembleDebug $CI_GRADLE_FLAGS ;;\n  releaseTest) ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS ;;\n  *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;\nesac\n');
+    expect(step(apk, 'Verify current scoped Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs "$CI_ANDROID_SCOPE"');
+    expect(apk.steps.indexOf(assemble)).toBeLessThan(apk.steps.indexOf(step(apk, 'Verify current scoped Android inputs and outputs')));
+    expect(step(apk, 'Upload scoped Android input evidence').with).toEqual({ name: 'android-scope-${{ matrix.scope }}', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
+    for (const [name, artifact, scope] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) {
+      expect(step(apk, name).if).toBe(`matrix.scope == '${scope}'`);
+      expect(step(apk, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${scope}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
+    }
+    expect(completion.if).toBe('always()');
+    expect(completion.needs).toEqual(['jvm', 'apk', 'source-preflight']);
+    expect(step(completion, 'Test Android completion policy').run).toBe('node --test scripts/ci-android-policy.test.mjs');
+    expect(step(completion, 'Require selected Android producers').env).toEqual({ CI_ANDROID_NEEDS: '${{ toJSON(needs) }}', CI_COLLECT_SOURCES: '${{ inputs.collect_sources == true }}' });
+    expect(step(completion, 'Require selected Android producers').run).toBe('node scripts/ci-android-policy.mjs');
+    expect(step(completion, 'Require selected Android producers').if).toBeUndefined();
+    ordered(completion, ['Test Android completion policy', 'Require selected Android producers', 'Aggregate current Android inputs and outputs', 'Upload Android input evidence']);
+    const download = completion.steps.find((item: any) => item.uses === 'actions/download-artifact@v8');
+    expect(download.if).toBe('!inputs.collect_sources');
+    expect(download.with).toEqual({ pattern: 'android-scope-*', path: 'ci-android-results' });
+    expect(completion.steps.indexOf(download)).toBeGreaterThan(completion.steps.indexOf(step(completion, 'Require selected Android producers')));
+    expect(step(completion, 'Aggregate current Android inputs and outputs').if).toBe('!inputs.collect_sources');
+    expect(step(completion, 'Aggregate current Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs aggregate');
+    expect(step(completion, 'Upload Android input evidence').if).toBe('!inputs.collect_sources');
+    expect(step(completion, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
+    expect(step(workflow().jobs.prepare, 'Test CI policy and evidence').run).toContain('../scripts/ci-android-policy.test.mjs');
+    expect(step(workflow().jobs.tests, 'OS semantic checks').run).toContain('../scripts/ci-android-policy.test.mjs');
+  });
   it('reuses Android full coverage at this candidate with distinct manual source collection', () => {
     const config = workflow('android-ci');
     expect(Object.keys(config.on).sort()).toEqual(['workflow_call', 'workflow_dispatch']);
     expect(config.on.workflow_dispatch.inputs.collect_sources.default).toBe(false);
-    const { build } = config.jobs;
+    expect(Object.keys(config.jobs).sort()).toEqual(['apk', 'completion', 'jvm', 'source-preflight']);
+    const build = config.jobs['source-preflight'];
     // WHY: a reusable child's github.workflow is its caller. Sharing that
     // concurrency namespace can cancel the very parent waiting for Android.
     expect(config.concurrency).toBeUndefined(); expect(build.concurrency).toBeUndefined();
@@ -91,7 +162,8 @@ describe('Desktop CI selected coverage', () => {
     expect(step(build, 'Test runtime redistribution fixtures').run).toBe("python3 -m unittest discover -s app/runtime -p 'test_*.py' -v");
     expect(step(build, 'Configure APK version comparator').run).toContain('docker pull alpine:3.24');
     expect(step(build, 'Cache runtime downloads').with.path).toBe('app/build/runtime-cache');
-    expect(step(build, 'Configure CI producer graph').run).toContain('-Dorg.gradle.jvmargs=-Xmx2g');
+    expect(build.if).toBe('inputs.collect_sources');
+    expect(JSON.stringify(build)).not.toMatch(/CI_GRADLE_FLAGS|ciPackagingDependencies|ci-android-producers|YOUCODED_COMMON_NATIVE_CACHE/);
     expect(step(build, 'Verify packaged runtime and source archive').if).toBe('inputs.collect_sources');
     expect(step(build, 'Upload inspected source preflight archive').if).toBe('inputs.collect_sources');
     expect(step(build, 'Retain source preflight evidence').if).toBe('always() && inputs.collect_sources && failure()');
@@ -101,18 +173,20 @@ describe('Desktop CI selected coverage', () => {
       expect(step(build, name).with['compression-level']).toBe(0);
       expect(step(build, name).with['if-no-files-found']).toBe('error');
     }
-    expect(step(build, 'Configure CI producer graph').if).toBe('!inputs.collect_sources');
-    expect(step(build, 'Verify all variant lint producer graphs').if).toBe('!inputs.collect_sources');
-    expect(step(build, 'Verify all variant lint producer graphs').run).toBe('./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS');
+    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('python3 -I app/runtime/runtime-redistribution.py bind_backend');
+    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('app/build/backend-assets/backend.tgz');
+    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('python3 -I app/runtime/runtime-redistribution.py release');
+    expect(step(build, 'Verify packaged runtime and source archive').run).toContain('app/build/outputs/apk/releaseTest/*.apk');
+    expect(step(build, 'Upload inspected source preflight archive').with).toEqual({ name: 'android-source-preflight-archive', path: 'app/build/outputs/android-source-preflight.tar.xz\napp/build/outputs/android-source-preflight.tar.xz.sha256\n', 'if-no-files-found': 'error', 'retention-days': 7 });
+    expect(step(build, 'Retain source preflight evidence').with).toEqual({ name: 'android-source-preflight', path: 'app/build/runtime/releaseTest/evidence\napp/build/runtime/releaseTest/sources\n', 'if-no-files-found': 'warn', 'retention-days': 7 });
     expect(step(build, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
     expect(step(build, 'Verify current Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs android');
-    expect(step(build, 'Run unit tests').run).toBe('./gradlew test $CI_GRADLE_FLAGS');
-    expect(step(build, 'Build debug APK').run).toBe('./gradlew assembleDebug $CI_GRADLE_FLAGS');
-    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').run).toBe('./gradlew assembleReleaseTest $CI_GRADLE_FLAGS');
+    expect(step(build, 'Run unit tests').run).toBe('./gradlew test');
+    expect(step(build, 'Build debug APK').run).toBe('./gradlew assembleDebug');
+    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').run).toBe('./gradlew assembleReleaseTest');
     expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').env.YOUCODED_COLLECT_SOURCES).toContain('inputs.collect_sources');
-    expect(step(build, 'Configure CI producer graph').run).toContain('--init-script scripts/ci-android-producers.gradle');
-    expect(step(build, 'Configure CI producer graph').run).toContain('-PciPackagingDependencies=true');
-    expect(step(build, 'Configure CI producer graph').run).toContain('RUNNER_TEMP');
+    expect(step(build, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
+    for (const [name, artifact, variant] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) expect(step(build, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${variant}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
     for (const name of ['Verify packaged runtime and source archive', 'Upload inspected source preflight archive', 'Retain source preflight evidence', 'Upload debug APK', 'Upload releaseTest APK']) expect(step(build, name)).toBeTruthy();
   });
 });

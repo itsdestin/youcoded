@@ -12,8 +12,132 @@ on:
         default: false
 
 jobs:
-  build:
-    name: ${{ inputs.collect_sources && 'Android source preflight' || 'build' }}
+  # WHY: JVM validation has no packaging/native prerequisites; neither APK
+  # waits for it or for another variant's runner/cache to become available.
+  jvm:
+    if: '!inputs.collect_sources'
+    runs-on: ubuntu-latest
+    env:
+      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Record current Android input identity
+        run: node scripts/ci-inputs.mjs start
+      - name: Test runtime redistribution fixtures
+        run: python3 -m unittest discover -s app/runtime -p 'test_*.py' -v
+      - name: Verify all variant lint producer graphs
+        run: ./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS
+      - name: Run unit tests
+        run: ./gradlew test $CI_GRADLE_FLAGS
+      - name: Verify current JVM inputs and outputs
+        run: node scripts/ci-inputs.mjs jvm
+      - name: Upload JVM input evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-scope-jvm
+          path: ci-android-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  apk:
+    if: '!inputs.collect_sources'
+    name: Android APK (${{ matrix.scope }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [debug, releaseTest]
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g
+      CI_ANDROID_SCOPE: ${{ matrix.scope }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Record current Android input identity
+        run: node scripts/ci-inputs.mjs start
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Install runtime build tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Configure APK version comparator
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
+      - name: Cache runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: app/build/runtime-cache
+          key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
+      # WHY: only download caches cross runs; compiled native work is fresh and
+      # confined to this run, attempt and variant. Do not enable build-cache yet.
+      - name: Configure run-local native cache
+        run: echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${CI_ANDROID_SCOPE}" >> "$GITHUB_ENV"
+      # WHY: fixed mapping, not eval or an interpolated arbitrary task. R8 runs
+      # on releaseTest with the existing debug signing configuration unchanged.
+      - name: Build scoped APK
+        run: |
+          case "$CI_ANDROID_SCOPE" in
+            debug) ./gradlew assembleDebug $CI_GRADLE_FLAGS ;;
+            releaseTest) ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS ;;
+            *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;
+          esac
+      - name: Verify current scoped Android inputs and outputs
+        run: node scripts/ci-inputs.mjs "$CI_ANDROID_SCOPE"
+      - name: Upload scoped Android input evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-scope-${{ matrix.scope }}
+          path: ci-android-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload debug APK
+        if: matrix.scope == 'debug'
+        uses: actions/upload-artifact@v7
+        with:
+          name: youcoded-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload releaseTest APK
+        if: matrix.scope == 'releaseTest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: youcoded-releasetest
+          path: app/build/outputs/apk/releaseTest/*.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  source-preflight:
+    if: inputs.collect_sources
+    name: Android source preflight
     runs-on: ubuntu-latest
     env:
       # WHY: Android builds the web/backend, never the Electron executable.
@@ -25,15 +149,8 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      # WHY: only the integrated candidate opts into the packaging-only graph
-      # and run-local native reuse. Manual source collection keeps the default
-      # producer graph and never reuses compiled native output.
-      - name: Configure CI producer graph
-        if: '!inputs.collect_sources'
-        run: |
-          echo 'CI_GRADLE_FLAGS=-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g' >> "$GITHUB_ENV"
-          echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-
+      # WHY: source preflight deliberately retains the serial default producer
+      # graph, with neither CI packaging opt-in nor compiled native cache.
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
@@ -79,15 +196,11 @@ jobs:
       # whenever desktop packaging did (2026-05-20 to 06). Desktop CI still
       # builds every installer on its Linux leg.
 
-      - name: Verify all variant lint producer graphs
-        if: '!inputs.collect_sources'
-        run: ./gradlew lintDebug lintReleaseTest lintRelease --dry-run $CI_GRADLE_FLAGS
-
       - name: Run unit tests
-        run: ./gradlew test $CI_GRADLE_FLAGS
+        run: ./gradlew test
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug $CI_GRADLE_FLAGS
+        run: ./gradlew assembleDebug
 
       # ReleaseTest: same R8 minification + shrinker + proguard rules as
       # the production release flavor, but signed with the debug keystore
@@ -103,7 +216,7 @@ jobs:
       - name: Build releaseTest APK (R8 minified, debug-signed)
         env:
           YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
-        run: ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS
+        run: ./gradlew assembleReleaseTest
 
       - name: Verify packaged runtime and source archive
         if: inputs.collect_sources
@@ -167,3 +280,40 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  # WHY: always inspect the complete needs tuple, including skipped/cancelled
+  # producers, before accepting evidence. The parent still gates this workflow.
+  completion:
+    if: always()
+    needs: [jvm, apk, source-preflight]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Test Android completion policy
+        run: node --test scripts/ci-android-policy.test.mjs
+      - name: Require selected Android producers
+        env:
+          CI_ANDROID_NEEDS: ${{ toJSON(needs) }}
+          CI_COLLECT_SOURCES: ${{ inputs.collect_sources == true }}
+        run: node scripts/ci-android-policy.mjs
+      - uses: actions/download-artifact@v8
+        if: '!inputs.collect_sources'
+        with:
+          pattern: android-scope-*
+          path: ci-android-results
+      - name: Aggregate current Android inputs and outputs
+        if: '!inputs.collect_sources'
+        run: node scripts/ci-inputs.mjs aggregate
+      - name: Upload Android input evidence
+        if: '!inputs.collect_sources'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-current-inputs
+          path: ci-android-evidence.json
+          if-no-files-found: error
+          retention-days: 7
