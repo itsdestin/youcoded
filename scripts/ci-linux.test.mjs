@@ -5,7 +5,73 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from './ci-policy.mjs';
 import { manifest, verifyInstalled } from './ci-evidence.mjs';
-import { extractSquashfs, packageArgs, validateMetadata } from './ci-linux.mjs';
+import { extractSquashfs, packageArgs, validateMetadata, encoderProfile, packageEnvironment, gzipHeader, validateEncoder, observeEncoder } from './ci-linux.mjs';
+import { gzipSync } from 'node:zlib';
+
+test('level one is fast-only and refuses opaque/custom configuration without changing sentinels', () => {
+  for (const format of ['deb', 'rpm']) {
+    assert.deepEqual(encoderProfile(format, 'fast', {}, {}), { compressor: 'gzip', level: 1 });
+    assert.equal(encoderProfile(format, 'default', {}, {}), null);
+    for (const config of [{ linux: { fpm: ['--sentinel=keep'] } }, { [format]: { fpm: ['--sentinel=keep'] } }, { extends: 'parent.yml' }, { extends: null }, { linux: { fpm: 'opaque' } }]) {
+      const original = structuredClone(config);
+      assert.equal(encoderProfile(format, 'fast', config, {}), null);
+      assert.deepEqual(config, original);
+    }
+    assert.equal(encoderProfile(format, 'fast', {}, { build: {} }), null);
+  }
+  for (const format of ['AppImage', 'pacman']) assert.equal(encoderProfile(format, 'fast', {}, {}), null);
+});
+test('implicit presets follow installed builder key presence, including falsy dependency specs and null maps', () => {
+  for (const format of ['deb', 'rpm']) {
+    for (const [map, name] of [['dependencies', 'react-scripts'], ['devDependencies', 'react-scripts'], ['devDependencies', 'electron-webpack']]) {
+      for (const value of ['', null, false, '*']) {
+        const pkg = { [map]: { [name]: value } }, before = structuredClone(pkg);
+        assert.equal(encoderProfile(format, 'fast', {}, pkg), null, `${map}.${name}=${JSON.stringify(value)}`);
+        assert.deepEqual(pkg, before);
+      }
+    }
+    for (const pkg of [{}, { dependencies: null }, { devDependencies: null }, { dependencies: null, devDependencies: null }, { dependencies: {}, devDependencies: {} }, { dependencies: { 'electron-webpack': '' } }]) {
+      assert.deepEqual(encoderProfile(format, 'fast', {}, pkg), { compressor: 'gzip', level: 1 });
+    }
+  }
+});
+test('null encoder proof is explicit and cannot hide an observation or a missing/false request', () => {
+  assert.doesNotThrow(() => validateEncoder('deb', null, null));
+  for (const request of [undefined, false, '', 0]) assert.throws(() => validateEncoder('deb', request, null));
+  for (const observed of [undefined, false, { compressor: 'gzip', xfl: 4 }]) assert.throws(() => validateEncoder('deb', null, observed));
+});
+test('package-only environment appends threads without losing memory/preset or mutating caller', () => {
+  const env = { XZ_DEFAULTS: '--memlimit=256MiB -6 --threads=1', PATH: '/sentinel', XZ_OPT: '-3' };
+  const original = { ...env }, child = packageEnvironment(env);
+  assert.equal(child.XZ_DEFAULTS, `${env.XZ_DEFAULTS} --threads=0`);
+  assert.equal(child.XZ_OPT, '-3'); assert.equal(child.PATH, '/sentinel'); assert.deepEqual(env, original);
+  assert.equal(packageEnvironment({}).XZ_DEFAULTS, '--threads=0');
+});
+test('encoder proof rejects bad gzip bounds/magic/method and requested-vs-observed mismatches', () => {
+  const fast = gzipSync('payload', { level: 1 }), slow = gzipSync('payload', { level: 9 });
+  assert.deepEqual(gzipHeader(fast), { compressor: 'gzip', xfl: 4 });
+  for (const bytes of [Buffer.alloc(0), fast.subarray(0, 9), Buffer.alloc(10), Buffer.from([31, 139, 0, 0, 0, 0, 0, 0, 4, 3])]) assert.throws(() => gzipHeader(bytes));
+  const requested = { compressor: 'gzip', level: 1 };
+  assert.doesNotThrow(() => validateEncoder('deb', requested, gzipHeader(fast)));
+  assert.throws(() => validateEncoder('deb', requested, gzipHeader(slow)));
+  assert.doesNotThrow(() => validateEncoder('rpm', requested, { compressor: 'gzip', flags: '1' }));
+  for (const observed of [{ compressor: 'xz', flags: '1' }, { compressor: 'gzip', flags: '9' }, { compressor: 'gzip', flags: '1x' }]) assert.throws(() => validateEncoder('rpm', requested, observed));
+  assert.throws(() => validateEncoder('deb', null, gzipHeader(slow)));
+});
+test('actual deb ar member observation reads gzip header privately and cleans up, including rejection', { skip: process.platform !== 'linux' }, async () => {
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-encoder-'));
+  try {
+    for (const level of [1, 9]) {
+      fs.writeFileSync(path.join(root, 'data.tar.gz'), gzipSync('tiny tar fixture', { level }));
+      const installer = path.join(root, `fixture-${level}.deb`);
+      await run('ar', ['rc', installer, 'data.tar.gz'], root);
+      const proof = () => observeEncoder('deb', installer, { compressor: 'gzip', level: 1 }, root);
+      if (level === 1) assert.deepEqual(await proof(), { compressor: 'gzip', xfl: 4 });
+      else await assert.rejects(proof());
+      assert.deepEqual(fs.readdirSync(root).filter(name => name.startsWith('encoder-')), []);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 test('SquashFS extraction preserves stored directory, file and symlink modes at a validated image offset', { skip: process.platform !== 'linux' }, async () => {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-squashfs-'));
   try {

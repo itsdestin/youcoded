@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
+import { run, classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
 import { identity } from './ci-evidence.mjs';
 
 test('fast compression is limited to proven ordinary PR TypeScript source/tests', () => {
@@ -14,6 +14,16 @@ test('fast compression is limited to proven ordinary PR TypeScript source/tests'
   }
   assert.equal(packagingMode('pull_request', []), 'default');
   for (const event of ['push', 'schedule', 'workflow_dispatch', 'unknown']) assert.equal(packagingMode(event, ['desktop/src/main/new.ts']), 'default');
+});
+
+test('run optional child env inherits defaults and isolates overrides from parent', async () => {
+  const script = 'process.stdout.write(JSON.stringify({path:process.env.PATH, marker:process.env.CI_ENCODER_TEST_MARKER}))';
+  const before = process.env.CI_ENCODER_TEST_MARKER;
+  const normal = JSON.parse((await run(process.execPath, ['-e', script])).toString());
+  assert.equal(normal.path, process.env.PATH); assert.equal(normal.marker, before);
+  const child = JSON.parse((await run(process.execPath, ['-e', script], process.cwd(), true, { CI_ENCODER_TEST_MARKER: 'private-child' })).toString());
+  assert.equal(child.path, process.env.PATH); assert.equal(child.marker, 'private-child');
+  assert.equal(process.env.CI_ENCODER_TEST_MARKER, before);
 });
 
 function repository() {
