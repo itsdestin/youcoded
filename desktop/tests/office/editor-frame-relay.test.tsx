@@ -580,8 +580,9 @@ describe('EditorFrame and Print', () => {
     fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'print_document' ? {} : 'ok')) as never });
     const { fromEditor, posted } = await mountFrame();
     fromEditor({ yc: 'rpc', id: 4, cmd: 'print_document', args: {} });
-    await settle();
-    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
+    // WHY: a fixed microtask flush raced the reply in the full suite under
+    // load. The RPC result itself is the completion signal for this assertion.
+    await vi.waitFor(() => expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN));
     expect(saveStateFor(FILE.path).note).toBeFalsy();
     expect(saveStateFor(FILE.path).phase).toBe('saved');
   });

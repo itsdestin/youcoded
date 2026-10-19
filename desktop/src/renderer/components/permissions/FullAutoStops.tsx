@@ -11,7 +11,7 @@ export const BROAD_ALLOW_COLORS = 'bg-blue-600/60 hover:bg-blue-600/80 text-blue
  * one-time-first button order. The outside-folder grant alone has a second,
  * explicit confirmation because it widens consent for the rest of this session. */
 export function FullAutoStops({ kind, confirmingExternal, toolName, command, floorStop, suppressAlwaysAllow, adminOutsideFullAuto, specialistName, folderName,
-  responding, focusIdx, buttonsRef, pad, ring, unconfirmedNote, onAllow, onDeny, onAlways,
+  inset = false, responding, focusIdx, buttonsRef, pad, ring, unconfirmedNote, onAllow, onDeny, onAlways,
   onOpenExternal, onBackExternal, onGrantExternal,
 }: {
   kind: 'external' | 'budget' | 'danger';
@@ -25,6 +25,8 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
   adminOutsideFullAuto?: boolean;
   specialistName?: string;
   folderName?: string;
+  /** Popup asks sit inside another card instead of joining a tool card's edge. */
+  inset?: boolean;
   responding: boolean;
   focusIdx: number;
   buttonsRef: RefObject<(HTMLButtonElement | null)[]>;
@@ -38,9 +40,12 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
   onBackExternal: () => void;
   onGrantExternal: () => void;
 }) {
+  // WHY: a popup safety stop is a nested card, using the same theme-driven
+  // rounded-lg radius as its outer Callout; transcript footers keep their joined edge.
+  const frame = inset ? 'rounded-lg border' : 'border-t';
   // The first broad-grant choice is blue; its final confirmation stays green.
   if (confirmingExternal) return (
-    <div className="px-3 py-2 space-y-2 border-t border-edge bg-inset/30">
+    <div className={`px-3 py-2 space-y-2 ${frame} border-edge bg-inset/30`}>
       <p className="text-xs font-medium text-fg-2">Allow outside edits for this session?</p>
       <p className="text-2xs text-fg-2 leading-relaxed">
         This approves this {toolName === 'Write' ? 'write' : 'edit'} and lets the main assistant edit files in all outside folders, not just this one.
@@ -73,7 +78,7 @@ export function FullAutoStops({ kind, confirmingExternal, toolName, command, flo
   const alwaysAllowClass = `px-3 ${pad} text-xs font-medium rounded-lg ${BROAD_ALLOW_COLORS} transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`;
 
   return (
-    <div className="px-3 py-2 space-y-2 border-t" style={{ background: fa.bg, borderColor: fa.border }}>
+    <div className={`px-3 py-2 space-y-2 ${frame}`} style={{ background: fa.bg, borderColor: fa.border }}>
       <div className="space-y-0.5">
         <p className="text-xs font-medium" style={{ color: fa.color }}>{header}</p>
         <p className="text-2xs text-fg-dim leading-relaxed">{subline}</p>
