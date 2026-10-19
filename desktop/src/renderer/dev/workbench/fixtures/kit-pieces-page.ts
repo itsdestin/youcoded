@@ -159,7 +159,11 @@ const KIT_PIECES_HTML = `<!doctype html>
   // clicks. Its section opens first so the list also shows at phone width.
   if (saved && saved.demoMenu) {
     document.getElementById('s-controls').open = true;
-    setTimeout(function () { document.getElementById(saved.demoMenu).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })); }, 300);
+    // WHY load, not a timer: the frame must be able to take focus (Escape belongs to its menu),
+    // and the requested state must exist when loading finishes, not 300 ms after it.
+    window.addEventListener('load', function () {
+      document.getElementById(saved.demoMenu).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    }, { once: true });
   }
   // The filter chips are the page's own: one meal at a time, as an author would write them.
   document.querySelectorAll('.yc-filter').forEach(function (b) {
