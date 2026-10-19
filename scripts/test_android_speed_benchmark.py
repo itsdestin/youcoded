@@ -44,6 +44,14 @@ class AndroidSpeedBenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.bench.options('--init-script malicious.gradle')
 
+    def test_optimized_invocations_prove_release_lint_producer_edges(self):
+        args = self.bench.gradle_args('combined')
+        self.assertIn('--init-script', args)
+        script = Path(args[args.index('--init-script') + 1])
+        self.assertEqual(script.name, 'android-speed-lint-producers.gradle')
+        self.assertTrue(script.is_file())
+        self.assertNotIn('--init-script', self.bench.gradle_args('baseline'))
+
     def unit_graph(self, native):
         names = ['testDebugUnitTest', 'testReleaseUnitTest', 'testReleaseTestUnitTest']
         if native:

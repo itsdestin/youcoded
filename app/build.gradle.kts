@@ -275,7 +275,7 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
 if (ciPackagingDependencies) {
     // Assets include BOTH the shared web page and backend. Keeping this on the
     // actual consumer prevents blank/stale APKs while leaving JVM tests light.
-    tasks.matching { it.name.matches(Regex("merge(Debug|Release|ReleaseTest)Assets")) }.configureEach {
+    tasks.matching { it.name.matches(Regex("merge(Debug|Release|ReleaseTest)Assets|generate(Debug|Release|ReleaseTest)LintVital(Report)?Model")) }.configureEach {
         dependsOn(bundleWebUi, buildBackend)
     }
 }
@@ -308,7 +308,10 @@ for ((variant, appId) in variantAppIds) {
     if (ciPackagingDependencies) {
         // JNI and runtime assets have separate consumers; BOTH require the
         // variant-specific producer, including the production Release variant.
-        tasks.matching { it.name == "merge${variant}JniLibFolders" || it.name == "merge${variant}Assets" }.configureEach {
+        // Release lint models read the generated asset directories too; fresh
+        // ReleaseTest-only assembly exposed their otherwise implicit dependency.
+        tasks.matching { it.name == "merge${variant}JniLibFolders" || it.name == "merge${variant}Assets" ||
+            it.name == "generate${variant}LintVitalReportModel" || it.name == "generate${variant}LintVitalModel" }.configureEach {
             dependsOn(runtimeTask)
         }
     } else {

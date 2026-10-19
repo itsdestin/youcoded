@@ -365,7 +365,7 @@ def gradle_args(mode):
     config = options(mode)
     args = ['./gradlew', '--console=plain', '--profile']
     if config['graph']:
-        args.append('-PciPackagingDependencies=true')
+        args.extend(['-PciPackagingDependencies=true', '--init-script', str(Path(__file__).with_name('android-speed-lint-producers.gradle'))])
     if config['heapMb'] == 4096:
         args.append('-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8')
     return args
