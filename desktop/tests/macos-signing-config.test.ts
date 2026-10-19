@@ -40,9 +40,14 @@ describe('Mac signing configuration', () => {
       const trustedRefs = name === 'desktop-release.yml'
         ? "(startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master')"
         : "github.ref == 'refs/heads/master'";
-      expect(job.env.SIGN_MACOS).toBe(githubExpression(`matrix.name == 'macos' && ${trustedRefs}`));
+      // Temporary, owner-approved candidate run; remove this exact-ref exception
+      // and its GitHub environment rule after the signing trial completes.
+      const macRefs = name === 'desktop-test-build.yml'
+        ? "(github.ref == 'refs/heads/master' || github.ref == 'refs/heads/session/28-apple-signing')"
+        : trustedRefs;
+      expect(job.env.SIGN_MACOS).toBe(githubExpression(`matrix.name == 'macos' && ${macRefs}`));
       expect(job.environment).toBe(githubExpression(
-        `(matrix.name == 'windows' && ${trustedRefs}) && 'windows-signing' || (matrix.name == 'macos' && ${trustedRefs}) && 'macos-signing' || ''`,
+        `(matrix.name == 'windows' && ${trustedRefs}) && 'windows-signing' || (matrix.name == 'macos' && ${macRefs}) && 'macos-signing' || ''`,
       ));
       const steps: Array<Record<string, any>> = job.steps;
       const signed = steps.findIndex((step) => step.name === 'Build signed Mac installers');
