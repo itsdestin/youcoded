@@ -1848,8 +1848,10 @@ Contract: mascots/README.md (from the repo root) -->
 </g></g>
 </svg><span class="m-name">Meadow Mist</span></button>
 </div>
-      <h1>An Assistant That's <span class="word-cycler" aria-label="Useful., Fun., Yours.">
-        <span class="cycler-sizer" aria-hidden="true">Useful.</span>
+      <h1>Make Your Technology <span class="word-cycler" aria-label="Useful., Fun., Yours.">
+        <!-- WHY: a zero-width space preserves the text baseline without invisible
+             sizing text widening the phone page; measure() sizes the visible words. -->
+        <span class="cycler-sizer" aria-hidden="true">&#8203;</span>
         <span class="cycler-stage" aria-hidden="true">
           <span class="cycler-word cycler-word-1">Useful.</span>
           <span class="cycler-word cycler-word-2">Fun.</span>
@@ -2022,7 +2024,7 @@ Contract: mascots/README.md (from the repo root)
 </svg><span class="m-name">Golden Sunbreak</span></button>
 </div>
     </div>
-    <p class="hero-sub">An AI agent you own and shape. Use any AI model from any provider to work and build your way.</p>
+    <p class="hero-sub">A fully customizable AI assistant and open-source everything app.</p>
     <div class="dlrow">
         <a data-dl="dl-windows" class="dlbtn primary" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3,12V6.75L9,5.43V11.91L3,12M20,3V11.75L10,11.9V5.21L20,3M3,13L9,13.09V19.9L3,18.75V13M20,13.25V22L10,20.09V13.1L20,13.25Z"/></svg><span>Windows</span></a>
         <a data-dl="dl-macos" class="dlbtn" href="https://github.com/itsdestin/youcoded/releases"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>macOS</span></a>
