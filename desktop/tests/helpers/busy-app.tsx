@@ -23,9 +23,11 @@ import type { MockStore } from '../../src/renderer/dev/workbench/mock-store';
 import { resetSubtreeRenders, subtreeRenders, namedRenders, lastVisible, terminalWrites } from './busy-app-probes';
 
 /** The timers the harness drives. Not React's scheduler (setImmediate /
- *  MessageChannel): faking those would stop React itself. */
+ *  MessageChannel): faking those would stop React itself.
+ *  WHY performance too: animation intervals gate on performance.now(); leaving
+ *  it real made hidden animation work depend on host load instead of fake time. */
 export const FAKE_TIMERS = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-  'requestAnimationFrame', 'cancelAnimationFrame', 'Date'] as const;
+  'requestAnimationFrame', 'cancelAnimationFrame', 'Date', 'performance'] as const;
 
 /** One animation frame. */
 export const FRAME_MS = 16;

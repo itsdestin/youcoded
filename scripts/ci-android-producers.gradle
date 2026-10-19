@@ -1,0 +1,52 @@
+// WHY: discover every selected lint task independently of build wiring's
+// per-variant filter. Unknown consumers fail closed instead of disappearing
+// from both the wiring and its proof when AGP changes a task's name.
+gradle.taskGraph.whenReady { graph ->
+    if (rootProject.findProperty('ciPackagingDependencies') != 'true') return
+    def ancestors = { task ->
+        def visited = [] as Set
+        def queue = new ArrayDeque(graph.getDependencies(task))
+        while (!queue.isEmpty()) {
+            def next = queue.removeFirst()
+            if (visited.add(next)) queue.addAll(graph.getDependencies(next))
+        }
+        visited
+    }
+    def variants = ['ReleaseTest', 'Release', 'Debug']
+    def selectedLint = graph.allTasks.findAll {
+        it.project.path == ':app' && it.name.toLowerCase().contains('lint')
+    }
+    def namedVariant = { task ->
+        // Longest first: ReleaseTest must never also require Release's payload.
+        variants.find { task.name.toLowerCase().contains(it.toLowerCase()) }
+    }
+    for (def task : selectedLint) {
+        // KotlinTooling contains the substring "lint" across a word boundary.
+        // This metadata task is not a lint reader; fail if it gains file inputs
+        // rather than exempting any real asset consumer by name alone.
+        if (task.name == 'buildKotlinToolingMetadata') {
+            assert task.inputs.files.files.isEmpty() : task.path + ' gained file inputs; review metadata exemption'
+            continue
+        }
+        def dependencies = ancestors(task)
+        def names = dependencies*.name as Set
+        def ownVariant = namedVariant(task)
+        // Lifecycle aggregators such as lint derive variants from their lint
+        // descendants. No blanket exemption for an unrecognized lint reader.
+        def expected = ownVariant ? [ownVariant] : dependencies.findAll {
+            it.project.path == ':app' && it.name.toLowerCase().contains('lint')
+        }.collect { namedVariant(it) }.findAll { it != null }.unique()
+        assert !expected.isEmpty() : task.path + ' is an unrecognized lint consumer; classify it explicitly'
+        for (def variant : expected) {
+            for (def producer : ['bundleWebUi', 'buildBackend', "buildRuntime${variant}".toString(), "materialize${variant}SpeedPayload".toString()]) {
+                assert names.contains(producer) : task.path + ' lacks producer ' + producer + ': ' + names
+            }
+        }
+    }
+    for (def variant : variants) {
+        if (graph.allTasks.any { it.project.path == ':app' && it.name == "assemble${variant}" } && variant != 'Debug') {
+            assert selectedLint.any { namedVariant(it) == variant } : variant + ' assembly has no recognized lint consumers; update producer proof'
+        }
+    }
+    println "Verified every selected app lint consumer (${selectedLint.size()}) has generated payload producers."
+}

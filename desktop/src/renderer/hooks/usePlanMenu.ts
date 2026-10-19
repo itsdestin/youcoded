@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { parsePlanMenu, type PlanMenuRead } from '../parser/plan-menu-parser';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
+import { useOnScreen } from '../state/on-screen-context';
 
 /** How often to re-read even without terminal output — the card's
  *  "can't read the options" fallback is time-based, and a static screen
@@ -23,11 +24,18 @@ function keyOf(r: PlanMenuRead): string {
  * would draw changes — not on every buffer flush.
  */
 export function usePlanMenu(sessionId: string): PlanMenuRead {
+  const onScreen = useOnScreen();
   const [read, setRead] = useState<PlanMenuRead>(() => parsePlanMenu(getVisibleScreenText(sessionId)));
   const keyRef = useRef(keyOf(read));
 
   useEffect(() => {
+    // WHY: hidden cards keep their last reading without polling/subscribing;
+    // showing the card again performs the same immediate fresh check.
+    if (!onScreen) return;
+    let active = true;
     const check = () => {
+      // Registry catch-up callbacks may already be queued when unsubscribed.
+      if (!active) return;
       const next = parsePlanMenu(getVisibleScreenText(sessionId));
       const k = keyOf(next);
       if (k !== keyRef.current) {
@@ -38,8 +46,8 @@ export function usePlanMenu(sessionId: string): PlanMenuRead {
     check();
     const unsub = onBufferReady((sid) => { if (sid === sessionId) check(); });
     const timer = setInterval(check, REREAD_MS);
-    return () => { unsub(); clearInterval(timer); };
-  }, [sessionId]);
+    return () => { active = false; unsub(); clearInterval(timer); };
+  }, [sessionId, onScreen]);
 
   return read;
 }
