@@ -18,7 +18,7 @@ jobs:
     if: '!inputs.collect_sources'
     runs-on: ubuntu-latest
     env:
-      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g
+      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g --no-build-cache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,7 +62,9 @@ jobs:
         scope: [debug, releaseTest]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g
+      # WHY: only modeled APK compiler outputs may be restored; JVM tests and
+      # the serial source preflight explicitly execute without task caching.
+      CI_GRADLE_FLAGS: -PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g --build-cache
       CI_ANDROID_SCOPE: ${{ matrix.scope }}
     steps:
       - uses: actions/checkout@v7
@@ -83,6 +85,10 @@ jobs:
         run: node scripts/ci-inputs.mjs start
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          # WHY: owned PRs can populate their PR-scoped compiler cache; fork
+          # PRs only read. JVM/source keep setup-gradle's default write policy.
+          cache-read-only: ${{ github.event.pull_request.head.repo.fork == true }}
       - name: Install runtime build tools
         run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
       - name: Configure APK version comparator
@@ -94,19 +100,36 @@ jobs:
         with:
           path: app/build/runtime-cache
           key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
-      # WHY: only download caches cross runs; compiled native work is fresh and
-      # confined to this run, attempt and variant. Do not enable build-cache yet.
+      # WHY: compiled native work remains fresh and confined to this run,
+      # attempt and variant; custom Exec producers are not task-cacheable.
       - name: Configure run-local native cache
         run: echo "YOUCODED_COMMON_NATIVE_CACHE=$RUNNER_TEMP/ci-native-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${CI_ANDROID_SCOPE}" >> "$GITHUB_ENV"
-      # WHY: fixed mapping, not eval or an interpolated arbitrary task. R8 runs
-      # on releaseTest with the existing debug signing configuration unchanged.
+      # WHY: fixed mapping, not arbitrary task input. ReleaseTest still requests
+      # R8 with debug signing; FROM-CACHE is restoration, not fresh execution.
       - name: Build scoped APK
+        shell: bash
         run: |
+          set -euo pipefail
+          umask 077
           case "$CI_ANDROID_SCOPE" in
-            debug) ./gradlew assembleDebug $CI_GRADLE_FLAGS ;;
-            releaseTest) ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS ;;
+            debug) task=assembleDebug ;;
+            releaseTest) task=assembleReleaseTest ;;
             *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;
           esac
+          ./gradlew "$task" $CI_GRADLE_FLAGS --console=plain 2>&1 | tee "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"
+      # WHY: keep small task facts even when Gradle fails. Neither this helper
+      # nor tee can turn a failed assembly into a successful job.
+      - name: Record Gradle task outcomes
+        if: always()
+        run: node scripts/ci-gradle-outcomes.mjs "$CI_ANDROID_SCOPE" "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"
+      - name: Upload Gradle task outcomes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-gradle-outcomes-${{ matrix.scope }}
+          path: ${{ runner.temp }}/android-gradle-outcomes-${{ matrix.scope }}.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify current scoped Android inputs and outputs
         run: node scripts/ci-inputs.mjs "$CI_ANDROID_SCOPE"
       - name: Upload scoped Android input evidence
@@ -197,10 +220,10 @@ jobs:
       # builds every installer on its Linux leg.
 
       - name: Run unit tests
-        run: ./gradlew test
+        run: ./gradlew test --no-build-cache
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-build-cache
 
       # ReleaseTest: same R8 minification + shrinker + proguard rules as
       # the production release flavor, but signed with the debug keystore
@@ -216,7 +239,7 @@ jobs:
       - name: Build releaseTest APK (R8 minified, debug-signed)
         env:
           YOUCODED_COLLECT_SOURCES: ${{ inputs.collect_sources && '1' || '0' }}
-        run: ./gradlew assembleReleaseTest
+        run: ./gradlew assembleReleaseTest --no-build-cache
 
       - name: Verify packaged runtime and source archive
         if: inputs.collect_sources

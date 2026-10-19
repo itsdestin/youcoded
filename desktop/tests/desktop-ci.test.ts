@@ -1,6 +1,9 @@
 /* eslint-disable no-template-curly-in-string -- WHY: contracts assert literal GitHub expressions, not JavaScript templates. */
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { parse } from 'yaml';
 import { readSource } from './helpers/guard-scope';
 
@@ -95,9 +98,9 @@ describe('Desktop CI selected coverage', () => {
       expect(job.needs).toBeUndefined();
       expect(step(job, 'Set up JDK 17').with).toEqual({ 'java-version': '17', distribution: 'temurin' });
       expect(step(job, 'Setup Gradle').uses).toBe('gradle/actions/setup-gradle@v6');
-      expect(job.env.CI_GRADLE_FLAGS).toBe('-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g');
+      expect(job.env.CI_GRADLE_FLAGS).toBe(`-PciPackagingDependencies=true --init-script scripts/ci-android-producers.gradle -Dorg.gradle.jvmargs=-Xmx2g ${job === apk ? '--build-cache' : '--no-build-cache'}`);
       expect(step(job, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
-      expect(JSON.stringify(job)).not.toMatch(/--build-cache|--ignore-scripts|keystore|secrets\./);
+      expect(JSON.stringify(job)).not.toMatch(/--configuration-cache|--ignore-scripts|keystore|secrets\./);
     }
     expect(jvm.steps.find((item: any) => item.uses === 'actions/setup-node@v7').with).toEqual({ 'node-version': 22 });
     expect(JSON.stringify(jvm)).not.toMatch(/npm|docker|clang|lld|YOUCODED_COMMON_NATIVE_CACHE|actions\/cache/);
@@ -119,7 +122,18 @@ describe('Desktop CI selected coverage', () => {
     ordered(apk, ['Record current Android input identity', 'Configure run-local native cache', 'Build scoped APK', 'Verify current scoped Android inputs and outputs', 'Upload scoped Android input evidence']);
     for (const name of ['Build scoped APK', 'Verify current scoped Android inputs and outputs']) expect(step(apk, name).if).toBeUndefined();
     const assemble = step(apk, 'Build scoped APK');
-    expect(assemble.run).toBe('case "$CI_ANDROID_SCOPE" in\n  debug) ./gradlew assembleDebug $CI_GRADLE_FLAGS ;;\n  releaseTest) ./gradlew assembleReleaseTest $CI_GRADLE_FLAGS ;;\n  *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;\nesac\n');
+    expect(assemble.run).toBe('set -euo pipefail\numask 077\ncase "$CI_ANDROID_SCOPE" in\n  debug) task=assembleDebug ;;\n  releaseTest) task=assembleReleaseTest ;;\n  *) echo "Unknown Android scope: $CI_ANDROID_SCOPE" >&2; exit 1 ;;\nesac\n./gradlew "$task" $CI_GRADLE_FLAGS --console=plain 2>&1 | tee "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"\n');
+    expect(assemble.shell).toBe('bash');
+    expect(assemble['continue-on-error']).toBeUndefined();
+    expect(step(apk, 'Setup Gradle').with).toEqual({ 'cache-read-only': "${{ github.event.pull_request.head.repo.fork == true }}" });
+    expect(step(jvm, 'Setup Gradle').with).toBeUndefined();
+    const outcomes = step(apk, 'Record Gradle task outcomes');
+    expect(outcomes.if).toBe('always()');
+    expect(outcomes.run).toBe('node scripts/ci-gradle-outcomes.mjs "$CI_ANDROID_SCOPE" "$RUNNER_TEMP/android-gradle-${CI_ANDROID_SCOPE}.log"');
+    expect(step(apk, 'Upload Gradle task outcomes').if).toBe('always()');
+    expect(step(apk, 'Upload Gradle task outcomes').with).toEqual({ name: 'android-gradle-outcomes-${{ matrix.scope }}', path: '${{ runner.temp }}/android-gradle-outcomes-${{ matrix.scope }}.json', 'if-no-files-found': 'warn', 'retention-days': 7 });
+    ordered(apk, ['Build scoped APK', 'Record Gradle task outcomes', 'Upload Gradle task outcomes', 'Verify current scoped Android inputs and outputs']);
+    for (const job of [workflow().jobs.prepare, workflow().jobs.tests]) expect(JSON.stringify(job)).toContain('../scripts/ci-gradle-outcomes.test.mjs');
     expect(step(apk, 'Verify current scoped Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs "$CI_ANDROID_SCOPE"');
     expect(apk.steps.indexOf(assemble)).toBeLessThan(apk.steps.indexOf(step(apk, 'Verify current scoped Android inputs and outputs')));
     expect(step(apk, 'Upload scoped Android input evidence').with).toEqual({ name: 'android-scope-${{ matrix.scope }}', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
@@ -144,6 +158,36 @@ describe('Desktop CI selected coverage', () => {
     expect(step(completion, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
     expect(step(workflow().jobs.prepare, 'Test CI policy and evidence').run).toContain('../scripts/ci-android-policy.test.mjs');
     expect(step(workflow().jobs.tests, 'OS semantic checks').run).toContain('../scripts/ci-android-policy.test.mjs');
+  });
+  it.skipIf(process.platform === 'win32')('preserves real APK pipeline failure and fixed task arguments while retaining private logs', () => {
+    const apk = workflow('android-ci').jobs.apk;
+    const dir = mkdtempSync(join(tmpdir(), 'android-gradle-pipe-'));
+    try {
+      // WHY: execute the actual YAML shell, replacing only Gradle with a fixture;
+      // a textual pipefail assertion alone cannot prove failure propagation.
+      writeFileSync(join(dir, 'gradlew'), '#!/bin/bash\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/argv"\necho "BUILD FAILED in 1s"\nexit 23\n', { mode: 0o700 });
+      for (const [scope, task] of [['debug', 'assembleDebug'], ['releaseTest', 'assembleReleaseTest']]) {
+        const result = spawnSync('bash', ['-c', step(apk, 'Build scoped APK').run], { cwd: dir, env: { ...process.env, RUNNER_TEMP: dir, CI_ANDROID_SCOPE: scope, CI_GRADLE_FLAGS: apk.env.CI_GRADLE_FLAGS }, encoding: 'utf8' });
+        expect(result.status).toBe(23);
+        expect(readFileSync(join(dir, 'argv'), 'utf8').replace(/\r/g, '').trim().split('\n')).toEqual([task, '-PciPackagingDependencies=true', '--init-script', 'scripts/ci-android-producers.gradle', '-Dorg.gradle.jvmargs=-Xmx2g', '--build-cache', '--console=plain']);
+        expect(readFileSync(join(dir, `android-gradle-${scope}.log`), 'utf8')).toContain('BUILD FAILED');
+        expect(statSync(join(dir, `android-gradle-${scope}.log`)).mode & 0o077).toBe(0);
+      }
+      const unknown = spawnSync('bash', ['-c', step(apk, 'Build scoped APK').run], { cwd: dir, env: { ...process.env, RUNNER_TEMP: dir, CI_ANDROID_SCOPE: 'debug; exit 0', CI_GRADLE_FLAGS: apk.env.CI_GRADLE_FLAGS } });
+      expect(unknown.status).toBe(1);
+    } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+  it('keeps public custom APK producers non-cacheable without changing commands', () => {
+    // WHY: Gradle producer types and YAML cache flags cross language boundaries.
+    const gradle = readSource(join(__dirname, '../../app/build.gradle.kts'));
+    expect(gradle).not.toMatch(/CacheableTask|cacheIf/);
+    expect(gradle).toContain('abstract class SpeedPayloadTask : org.gradle.api.DefaultTask()');
+    expect(gradle).toContain('tasks.register<Exec>("bundleWebUi")');
+    expect(gradle).toContain('tasks.register<Exec>("buildBackend")');
+    expect(gradle).toContain('tasks.register<Exec>("buildRuntime$variant")');
+    expect(gradle).toContain('commandLine = listOf("bash", script.absolutePath)');
+    expect(gradle).toContain('commandLine(bashCommand(script, out.absolutePath))');
+    expect(gradle).toContain('commandLine(bashCommand(file("runtime/build-runtime.sh"), appId, out.absolutePath))');
   });
   it('reuses Android full coverage at this candidate with distinct manual source collection', () => {
     const config = workflow('android-ci');
@@ -181,9 +225,11 @@ describe('Desktop CI selected coverage', () => {
     expect(step(build, 'Retain source preflight evidence').with).toEqual({ name: 'android-source-preflight', path: 'app/build/runtime/releaseTest/evidence\napp/build/runtime/releaseTest/sources\n', 'if-no-files-found': 'warn', 'retention-days': 7 });
     expect(step(build, 'Record current Android input identity').run).toBe('node scripts/ci-inputs.mjs start');
     expect(step(build, 'Verify current Android inputs and outputs').run).toBe('node scripts/ci-inputs.mjs android');
-    expect(step(build, 'Run unit tests').run).toBe('./gradlew test');
-    expect(step(build, 'Build debug APK').run).toBe('./gradlew assembleDebug');
-    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').run).toBe('./gradlew assembleReleaseTest');
+    expect(step(build, 'Setup Gradle').with).toBeUndefined();
+    expect(JSON.stringify(build)).not.toMatch(/--build-cache|--configuration-cache/);
+    expect(step(build, 'Run unit tests').run).toBe('./gradlew test --no-build-cache');
+    expect(step(build, 'Build debug APK').run).toBe('./gradlew assembleDebug --no-build-cache');
+    expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').run).toBe('./gradlew assembleReleaseTest --no-build-cache');
     expect(step(build, 'Build releaseTest APK (R8 minified, debug-signed)').env.YOUCODED_COLLECT_SOURCES).toContain('inputs.collect_sources');
     expect(step(build, 'Upload Android input evidence').with).toEqual({ name: 'android-current-inputs', path: 'ci-android-evidence.json', 'if-no-files-found': 'error', 'retention-days': 7 });
     for (const [name, artifact, variant] of [['Upload debug APK', 'youcoded-debug', 'debug'], ['Upload releaseTest APK', 'youcoded-releasetest', 'releaseTest']]) expect(step(build, name).with).toEqual({ name: artifact, path: `app/build/outputs/apk/${variant}/*.apk`, 'if-no-files-found': 'error', 'compression-level': 0, 'retention-days': 14 });
