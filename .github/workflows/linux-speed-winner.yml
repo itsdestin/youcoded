@@ -30,10 +30,11 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: node scripts/linux-build-bench.mjs stamp setup-complete
       - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: zstd --version && tar --version
       - run: node scripts/linux-build-bench.mjs stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs ../scripts/linux-speed-winner.test.mjs
       - name: Run all retained readonly validation checks concurrently
         run: node scripts/linux-build-bench.mjs stage cheap-preflight-total node ../scripts/linux-speed-winner.mjs preflight
-      - run: node scripts/linux-build-bench.mjs stage preparation-total node ../scripts/linux-build-bench.mjs prepare
+      - run: node scripts/linux-build-bench.mjs stage preparation-total node ../scripts/linux-speed-winner-transport.mjs prepare
       - run: node scripts/linux-build-bench.mjs stamp upload-start
       - uses: actions/upload-artifact@v7
         with:
@@ -54,6 +55,7 @@ jobs:
           path: |
             bench-evidence/*
             !bench-evidence/prepared.tar
+            !bench-evidence/prepared.raw.tar
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
@@ -119,6 +121,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: node scripts/linux-build-bench.mjs stamp setup-complete
       - run: node scripts/linux-build-bench.mjs stage npm-ci npm ci
+      - run: zstd --version && tar --version
       - run: node scripts/linux-build-bench.mjs stage apt-update sudo apt-get update
       - run: node scripts/linux-build-bench.mjs stage apt-install sudo apt-get install -y rpm libarchive-tools
       - run: node scripts/linux-build-bench.mjs stamp download-start

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './linux-speed-winner-transport.test.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -161,6 +162,10 @@ test('entire real workflow matches executable fixed specification; mutations can
     x => {x.jobs.packages.steps.find(s=>s.run?.includes('package-total')).run+=' --publish always';},
     x => {x.jobs.gate.needs.pop();}, x => {x.jobs.shards.steps.find(s=>s.run?.includes('shard-total')).run+=' --testNamePattern=fast';},
     x => {x.jobs.prep.steps[0].with['persist-credentials']=true;},
+    x => {x.jobs.prep.steps.find(s=>s.run?.includes('preparation-total')).run='node scripts/linux-build-bench.mjs prepare';},
+    x => {x.jobs.prep.steps.find(s=>s.run?.includes('zstd --version')).run='true';},
+    x => {x.jobs.packages.steps.find(s=>s.run?.includes('zstd --version')).run='true';},
+    x => {x.jobs.prep.steps.find(s=>s.with?.name==='winner-evidence-prep').with.path='bench-evidence/*';},
   ];
   for (const mutate of mutations) { const changed=structuredClone(w); mutate(changed); assert.throws(()=>validateWorkflow(changed)); }
 });

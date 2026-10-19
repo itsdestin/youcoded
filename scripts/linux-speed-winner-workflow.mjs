@@ -13,11 +13,12 @@ export function workflow() {
   const setup=[checkout,node,bench('stamp setup-complete'),bench('stage npm-ci npm ci')];
   const prep=job('Winner diagnostic - preflight and one prepared Linux app',[
     ...setup,
+    run('zstd --version && tar --version'),
     bench('stage policies node --test ../scripts/ci-policy.test.mjs ../scripts/beta-version.test.mjs ../scripts/linux-build-bench.test.mjs ../scripts/linux-speed-winner.test.mjs'),
     {name:'Run all retained readonly validation checks concurrently',...bench('stage cheap-preflight-total node ../scripts/linux-speed-winner.mjs preflight')},
-    bench('stage preparation-total node ../scripts/linux-build-bench.mjs prepare'),bench('stamp upload-start'),
+    bench('stage preparation-total node ../scripts/linux-speed-winner-transport.mjs prepare'),bench('stamp upload-start'),
     {uses:'actions/upload-artifact@v7',with:{name:'winner-prepared-app',path:'bench-evidence/prepared.tar\nbench-evidence/prepared-manifest.json\nbench-evidence/fingerprint.json\nbench-evidence/archive-info.json\n','compression-level':0,'if-no-files-found':'error','retention-days':3}},
-    bench('stamp upload-end'),upload('winner-evidence-prep','bench-evidence/*\n!bench-evidence/prepared.tar\n'),
+    bench('stamp upload-end'),upload('winner-evidence-prep','bench-evidence/*\n!bench-evidence/prepared.tar\n!bench-evidence/prepared.raw.tar\n'),
   ],{env:{...env,CSC_IDENTITY_AUTO_DISCOVERY:'false'}});
   const inventory=job('Winner diagnostic - immutable inventory and default receipts',[
     ...setup,
@@ -25,7 +26,7 @@ export function workflow() {
     upload('winner-evidence-inventory','bench-evidence/'),
   ],{permissions:{contents:'read',actions:'read'}});
   const packages=job('Winner diagnostic - package ${{ matrix.variant }}',[
-    ...setup,bench('stage apt-update sudo apt-get update'),bench('stage apt-install sudo apt-get install -y rpm libarchive-tools'),bench('stamp download-start'),
+    ...setup,run('zstd --version && tar --version'),bench('stage apt-update sudo apt-get update'),bench('stage apt-install sudo apt-get install -y rpm libarchive-tools'),bench('stamp download-start'),
     download('winner-prepared-app','prepared'),bench('stamp download-end'),
     bench('stage package-total node ../scripts/linux-build-bench.mjs package "$BENCH_VARIANT"'),bench('stamp upload-start'),
     upload('winner-evidence-${{ matrix.variant }}','bench-evidence/*'),
