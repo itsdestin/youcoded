@@ -96,7 +96,12 @@ test('Android reflects the shipped rebuild without telling users to bypass secur
     assert.doesNotMatch(r.body.textContent, /major revision|behind the desktop|rebuilt version|400|600|package tier|Install anyway|Claude Code runtime/i);
     assert.match(r.body.textContent, /Android 9\+.*ARM64/);
     assert.match(r.body.textContent, /main phone profile.*work profile.*Secure Folder/);
-    assert.match(r.body.textContent, /Allow from this source/);
+    assert.match(r.body.textContent, /Files.*Downloads/);
+    assert.match(r.body.textContent, /warning.*Settings/);
+    assert.match(r.body.textContent, /Allow from this source.*Chrome.*Files.*not.*YouCoded/i);
+    assert.match(r.body.textContent, /Back.*APK.*Install/);
+    assert.match(r.body.textContent, /search.*Install unknown apps/i);
+    assert.match(r.body.textContent, /turn.*permission.*off.*after/i);
     assert.match(r.body.textContent, /Play Protect.*scan/i);
     assert.match(r.button.href, /\.apk$/);
   } finally { r.dom.window.close(); }

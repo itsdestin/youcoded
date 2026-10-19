@@ -3668,11 +3668,13 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
           platformLabel: 'Android',
           intro: 'Android 9+ &middot; ARM64 phones. Install the APK directly; YouCoded isn\'t on Google Play yet.',
           steps: [
-            'Open the downloaded <code>.apk</code>.',
-            'If prompted, open <strong>Settings</strong>, enable <strong>Allow from this source</strong> for your browser or file manager, then go back.',
-            'Tap <strong>Install</strong>, then <strong>Open</strong>.'
+            'When the download finishes, tap its notification. Or open <strong>Files → Downloads</strong> and tap the YouCoded <code>.apk</code>.',
+            'If Android shows a warning about installing unknown apps, tap <strong>Settings</strong> in the warning.',
+            'Turn on <strong>Allow from this source</strong> for the app that opened the APK &mdash; usually <strong>Chrome</strong> or <strong>Files</strong>, not YouCoded.',
+            'Tap <strong>Back</strong> to return to the APK. Tap <strong>Install</strong>, then <strong>Open</strong>.',
+            'Can\'t find the switch? Open your phone\'s <strong>Settings</strong>, search for <strong>Install unknown apps</strong>, choose your browser or Files app, and allow it. Then reopen the APK from Downloads.'
           ],
-          note: 'Use your main phone profile, not a work profile or Secure Folder. If Play Protect requests a scan, let it finish; stop if it reports harmful software.'
+          note: 'You can turn that install permission off afterward. Use your main phone profile, not a work profile or Secure Folder. If Play Protect requests a scan, let it finish; stop if it reports harmful software.'
         }
       };
 
