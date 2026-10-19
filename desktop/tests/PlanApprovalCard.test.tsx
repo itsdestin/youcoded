@@ -22,6 +22,10 @@ import { act } from '@testing-library/react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
 import { useSessionToolCalls, type ChatStore } from '../src/renderer/state/chat-context';
 
+import * as terminalRegistry from '../src/renderer/hooks/terminal-registry';
+import { usePlanMenu } from '../src/renderer/hooks/usePlanMenu';
+import { OnScreenContext } from '../src/renderer/state/on-screen-context';
+
 const terms: Array<{ dispose(): void }> = [];
 let sendInput: ReturnType<typeof vi.fn>;
 let respondToPermission: ReturnType<typeof vi.fn>;
@@ -70,6 +74,56 @@ async function sessionFrom(file: string, onKey: Record<string, string> = {}) {
 function mount(sessionId: string, tool = planTool()) {
   return render(<ChatProvider><ToolCard tool={tool} sessionId={sessionId} /></ChatProvider>);
 }
+
+describe('approval readers in hidden chats', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it('stops kept-card polling while hidden and refreshes immediately when shown', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const read = vi.spyOn(terminalRegistry, 'getVisibleScreenText').mockReturnValue('');
+    const pane = (visible: boolean) => <OnScreenContext.Provider value={visible}>
+      <ExpiredApprovalActions sessionId="hidden-kept" toolName="Bash" input={{ command: 'pwd' }} onDismiss={() => {}} />
+    </OnScreenContext.Provider>;
+    const r = render(pane(false));
+    expect(read).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+    r.rerender(pane(true)); expect(read).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(1);
+    act(() => { vi.advanceTimersByTime(2_000); }); expect(read).toHaveBeenCalledTimes(2);
+    r.rerender(pane(false)); const before = read.mock.calls.length;
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(read).toHaveBeenCalledTimes(before); expect(vi.getTimerCount()).toBe(0);
+    r.rerender(pane(true)); expect(read).toHaveBeenCalledTimes(before + 1);
+    r.unmount(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('releases plan-menu subscriptions while hidden and ignores queued old callbacks', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const read = vi.spyOn(terminalRegistry, 'getVisibleScreenText').mockReturnValue('');
+    const callbacks: Array<(id: string) => void> = [];
+    const unsubscribe = vi.fn();
+    vi.spyOn(terminalRegistry, 'onBufferReady').mockImplementation((callback) => { callbacks.push(callback); return unsubscribe; });
+    function Inner() { usePlanMenu('hidden-plan'); return null; }
+    // Keep the same real hook mounted while its provider changes visibility.
+    function Reader({ visible }: { visible: boolean }) {
+      return <OnScreenContext.Provider value={visible}><Inner /></OnScreenContext.Provider>;
+    }
+    const r = render(<Reader visible={false} />);
+    const initial = read.mock.calls.length;
+    expect(callbacks).toHaveLength(0); expect(vi.getTimerCount()).toBe(0);
+    r.rerender(<Reader visible />); expect(callbacks).toHaveLength(1);
+    expect(read.mock.calls.length).toBeGreaterThan(initial);
+    const current = read.mock.calls.length;
+    act(() => { callbacks[0]('other'); }); expect(read).toHaveBeenCalledTimes(current);
+    act(() => { callbacks[0]('hidden-plan'); }); expect(read).toHaveBeenCalledTimes(current + 1);
+    r.rerender(<Reader visible={false} />);
+    const hidden = read.mock.calls.length;
+    expect(unsubscribe).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+    act(() => { callbacks[0]('hidden-plan'); vi.advanceTimersByTime(10_000); });
+    expect(read).toHaveBeenCalledTimes(hidden);
+    r.rerender(<Reader visible />); expect(callbacks).toHaveLength(2);
+    expect(read.mock.calls.length).toBeGreaterThan(hidden);
+    r.unmount(); expect(unsubscribe).toHaveBeenCalledTimes(2); expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe('PlanApprovalCard', () => {
   it("shows exactly Claude Code's rows, in its own words", async () => {

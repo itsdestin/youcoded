@@ -211,10 +211,9 @@ describe('eight tabs open: background events', () => {
     const hidden = [app.sessionIds[1], app.sessionIds[2]];
     for (const id of hidden) await app.beginReply(id);
     await app.wait(3000); // past the "just started" window
-    // WHY a settling window before the measured one (macOS CI 2026-10-14, the third time): a render
-    // React queued during setup can still land after resetCounts() on a loaded machine (two drains
-    // in the harness narrowed it, neither closed it). This test asks about a REPEATING redraw, which
-    // shows in every window; a one-off tail of setup cannot reach the second.
+    // Keep setup's settling window separate from the measured one. Animation timers
+    // and performance.now() now advance together, so a live hidden subscription is
+    // exposed deterministically rather than mistaken for a one-off setup render.
     await app.resetCounts();
     await app.wait(10_000);
     await app.resetCounts();
