@@ -5,8 +5,7 @@ import { isNewerVersion } from '../src/shared/version-compare';
 // single-digit version examples cannot distinguish from numeric ordering.
 describe('numeric version component ordering', () => {
   it.each([
-    // Temporary CI failure probe: restored after hosted fail-closed validation.
-    ['1.9.0', '1.10.0', false],
+    ['1.9.0', '1.10.0', true],
     ['1.10.0', '1.9.0', false],
     ['9.99.99', '10.0.0', true],
     ['10.0.0', '9.99.99', false],
