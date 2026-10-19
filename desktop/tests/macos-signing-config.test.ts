@@ -70,9 +70,22 @@ describe('Mac signing configuration', () => {
       expect(cleanup?.run).toContain('rm -f');
       expect(signed).toBeLessThan(verify);
       expect(verify).toBeLessThan(upload);
-      // No other step gets private Apple material (tests/npm install included).
+      const preflight = steps.findIndex((step) => step.name === 'Check Mac signing keychain');
+      const tests = steps.findIndex((step) => step.name === 'Run tests');
+      expect(preflight).toBeGreaterThan(-1);
+      expect(preflight).toBeLessThan(tests);
+      expect(steps[preflight].if).toBe("env.SIGN_MACOS == 'true'");
+      expect(steps[preflight].env).toEqual({
+        CSC_LINK: githubExpression('secrets.MAC_CSC_LINK'),
+        CSC_KEY_PASSWORD: githubExpression('secrets.MAC_CSC_KEY_PASSWORD'),
+      });
+      expect(steps[preflight].run).toContain('node scripts/patch-mac-signing-keychain.mjs');
+      expect(steps[preflight].run).toContain('node scripts/check-mac-signing-keychain.mjs');
+      // Only the signing build and native preflight receive certificate material;
+      // the full test suite/npm install never receive it. API key is build-only.
       for (const [index, step] of steps.entries()) {
-        if (index !== signed) expect(JSON.stringify(step.env ?? {})).not.toMatch(/secrets\.(MAC_CSC|APPLE_API_KEY)/);
+        if (index !== signed && index !== preflight) expect(JSON.stringify(step.env ?? {})).not.toMatch(/secrets\.(MAC_CSC|APPLE_API_KEY)/);
+        if (index !== signed) expect(JSON.stringify(step.env ?? {})).not.toContain('secrets.APPLE_API_KEY');
       }
     });
   }
