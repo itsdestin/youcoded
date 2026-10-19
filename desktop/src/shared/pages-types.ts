@@ -5,6 +5,9 @@
 // Phase 1 (the shell) pages reach nothing outside their own frame. Phase 2 adds
 // connections, below — decided on two questions decks on 2026-09-19.
 
+import type { PageCustomIcon } from './page-custom-icon';
+export type { PageCustomIcon } from './page-custom-icon';
+
 /** Where a page lives. Personal pages belong to the person; project pages
  *  belong to one project folder and say so on their card. Explicit, never
  *  inferred from the current session (scope §1: "explicit source bindings"). */
@@ -418,6 +421,8 @@ export interface PageSummary {
   /** One line, shown on the card under the name. */
   description: string;
   icon: PageIcon;
+  /** Optional page-authored outline; the named icon remains the fallback. */
+  customIcon?: PageCustomIcon;
   home: PageHome;
   /** Pinned pages get their own icon beside Projects. Per device. */
   pinned: boolean;

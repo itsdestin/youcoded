@@ -43,6 +43,8 @@ export const HOME_ASSISTANT_PAGE_JSON = {
   name: 'Home',
   description: 'Lights, temperature, TVs and cameras, room by room, from Home Assistant.',
   icon: 'page',
+  // WHY: Home gets its own outline; old apps still recognize the named fallback.
+  customIcon: { version: 1 as const, paths: ['M3 10 L12 3 L21 10', 'M5 9 L5 21 L10 21 L10 15 L14 15 L14 21 L19 21 L19 9'] },
   connections: [
     {
       id: 'ha', kind: 'device', service: 'Home Assistant', address: 'homeassistant.local:8123',

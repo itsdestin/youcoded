@@ -15,10 +15,10 @@ let personal: string;
 let project: string;
 let store: PagesStore;
 
-async function writePage(home: string, slug: string, opts: { name?: string; icon?: string; html?: string } = {}) {
+async function writePage(home: string, slug: string, opts: { name?: string; icon?: string; html?: string; customIcon?: unknown } = {}) {
   const dir = path.join(home, 'Pages', slug);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'page.json'), JSON.stringify({ name: opts.name ?? slug, description: 'd', icon: opts.icon ?? 'page' }));
+  await fs.writeFile(path.join(dir, 'page.json'), JSON.stringify({ name: opts.name ?? slug, description: 'd', icon: opts.icon ?? 'page', ...(opts.customIcon === undefined ? {} : { customIcon: opts.customIcon }) }));
   await fs.writeFile(path.join(dir, 'page.html'), opts.html ?? '<!doctype html><html><body>hi</body></html>');
   return dir;
 }
@@ -37,6 +37,30 @@ beforeEach(() => {
 afterEach(() => { rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
 
 describe('listing', () => {
+  it('carries only validated custom icon geometry through summaries and documents', async () => {
+    const customIcon = { version: 1, paths: ['M2 2 L10 10 Z'], color: 'red', title: 'authored' };
+    await writePage(personal, 'custom', { icon: 'timer', customIcon });
+    const summary = (await store.list()).find((p) => p.id === 'personal:custom')!;
+    expect(summary.customIcon).toEqual({ version: 1, paths: ['M2 2 L10 10 Z'] });
+    expect(summary.icon).toBe('timer');
+    expect(summary).not.toHaveProperty('customIcon.color');
+    const loaded = await store.get('personal:custom');
+    expect(loaded.ok && loaded.page.customIcon).toEqual({ version: 1, paths: ['M2 2 L10 10 Z'] });
+  });
+
+  it('omits malformed or unsupported custom icons while keeping named-icon pages readable', async () => {
+    await writePage(personal, 'bad-geometry', { icon: 'notes', customIcon: { version: 1, paths: ['M nope'] } });
+    await writePage(personal, 'future-icon', { icon: 'chart', customIcon: { version: 2, paths: ['M1 1'] } });
+    for (const slug of ['bad-geometry', 'future-icon']) {
+      const summary = (await store.list()).find((p) => p.id === `personal:${slug}`)!;
+      expect(summary.icon).toBe(slug === 'bad-geometry' ? 'notes' : 'chart');
+      expect(summary).not.toHaveProperty('customIcon');
+      const loaded = await store.get(`personal:${slug}`);
+      expect(loaded.ok).toBe(true);
+      if (loaded.ok) expect(loaded.page).not.toHaveProperty('customIcon');
+    }
+  });
+
   it('lists personal and project pages with device-stable ids and stamps from the files', async () => {
     await writePage(personal, 'focus-timer', { name: 'Focus timer', icon: 'timer' });
     await writePage(project, 'paint', { name: 'Paint', icon: 'paint' });

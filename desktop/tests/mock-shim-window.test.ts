@@ -55,6 +55,18 @@ describe('site pages', () => {
     }
   });
 
+  it('carries the same custom house through default and site page metadata', async () => {
+    const expected = { version: 1, paths: ['M3 10 L12 3 L21 10', 'M5 9 L5 21 L10 21 L10 15 L14 15 L14 21 L19 21 L19 9'] };
+    for (const scenario of ['default', 'site'] as const) {
+      const pages = pagesFor(scenario);
+      const summary = (await pages.list()).find(page => page.id === 'page-home');
+      expect(summary?.icon).toBe('page');
+      expect(summary?.customIcon).toEqual(expected);
+      const document = await pages.get('page-home');
+      expect(document.ok && document.page.customIcon).toEqual(expected);
+    }
+  });
+
   it('starts connected to a fictional house and operates fake controls without network access', async () => {
     vi.useFakeTimers();
     const outbound = vi.fn(() => { throw new Error('Network must not be used'); });

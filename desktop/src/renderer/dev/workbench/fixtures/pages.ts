@@ -267,6 +267,7 @@ function connectedPages(): PageDocument[] {
       // pretend Home Assistant (mock-shim's fake-home-assistant) answers it.
       ...base, id: 'page-home', name: HOME_ASSISTANT_PAGE_JSON.name, icon: 'page',
       description: HOME_ASSISTANT_PAGE_JSON.description,
+      customIcon: HOME_ASSISTANT_PAGE_JSON.customIcon,
       updatedAt: '2026-10-01T08:00:00.000Z', htmlStamp: 1790841600000,
       html: HOME_ASSISTANT_PAGE_HTML,
       connections: [{ ...(HOME_ASSISTANT_PAGE_JSON.connections[0] as { id: string; service: string; address: string; keyPage: string; keyHelp: { steps: string[] } }), kind: 'device', access: 'full', needsKey: true, approved: false, savedKey: false }],

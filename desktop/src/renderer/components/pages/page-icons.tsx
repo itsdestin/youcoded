@@ -2,7 +2,8 @@
 // Stroke icons in the same style as the Projects folder in HeaderBar.tsx, so a
 // pinned page's button sits beside it without looking imported from elsewhere.
 import React from 'react';
-import type { PageIcon } from '../../../shared/pages-types';
+import type { PageCustomIcon, PageIcon } from '../../../shared/pages-types';
+import { parsePageCustomIcon } from '../../../shared/page-custom-icon';
 
 const PATHS: Record<PageIcon, React.ReactNode> = {
   page: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zM13 3v5h5M8 13h8M8 17h5" />,
@@ -21,10 +22,15 @@ const PATHS: Record<PageIcon, React.ReactNode> = {
   game: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 8h12a4 4 0 014 4v2a4 4 0 01-4 4h-1l-2-2H9l-2 2H6a4 4 0 01-4-4v-2a4 4 0 014-4zM8 11v4M6 13h4M15 12h.01M18 14h.01" />,
 };
 
-export function PageGlyph({ icon, className = 'w-4 h-4' }: { icon: PageIcon; className?: string }) {
+export function PageGlyph({ icon, customIcon, className = 'w-4 h-4' }: { icon: PageIcon; customIcon?: PageCustomIcon; className?: string }) {
+  // WHY: metadata can arrive from older or untrusted pages. Validate at the
+  // rendering boundary and construct only paths, never interpret SVG markup.
+  const custom = parsePageCustomIcon(customIcon);
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-      {PATHS[icon] ?? PATHS.page}
+      {custom ? custom.paths.map((d, index) => (
+        <path key={index} d={d} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      )) : (PATHS[icon] ?? PATHS.page)}
     </svg>
   );
 }

@@ -574,7 +574,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         // WHY icon for Pages home too (decisions "Full-screen titles", H-1: every full
         // screen's title carries its icon): an open page shows its own glyph; the
         // page list showed none.
-        icon={summary ? <PageGlyph icon={summary.icon} className="w-4 h-4" /> : <PagesIcon className="w-4 h-4" />}
+        icon={summary ? <PageGlyph icon={summary.icon} customIcon={summary.customIcon} className="w-4 h-4" /> : <PagesIcon className="w-4 h-4" />}
         title={<>
           <span className="truncate">{title || 'Pages'}</span>
           {/* Freshness belongs to the app, not the page (deck Q-last-updated):
@@ -726,7 +726,7 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
       className={`group flex items-center gap-2.5 h-8 pl-2 pr-1 rounded-md text-sm text-left cursor-pointer transition-colors ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
     >
-      <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />
+      <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-4 h-4 shrink-0" />
       <span className="flex-1 min-w-0 truncate">{page.name}</span>
       <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
         <Button

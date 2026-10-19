@@ -442,7 +442,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const heading = (eyebrow: string, title: string) => (
     <div className="flex items-center gap-3">
       <span aria-hidden="true" className="shrink-0 inline-flex w-10 h-10 rounded-md bg-inset border border-edge-dim items-center justify-center text-fg-2">
-        <PageGlyph icon={page.icon} className="w-5 h-5" />
+        <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-5 h-5" />
       </span>
       <div className="min-w-0">
         {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
