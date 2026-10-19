@@ -65,7 +65,7 @@ export const CONDITIONAL_TOOL_NAMES = [
   // The Browser (2026-10-13): attached only when the desktop host injects the
   // browser service, for root sessions, on profiles that aren't a small
   // model's simplified presentation (harness-session.ts syncBrowserTools).
-  'BrowserNavigate', 'BrowserSnapshot', 'BrowserAct', 'BrowserScreenshot', 'BrowserTabs', 'BrowserWait', 'BrowserAskUser',
+  'BrowserNavigate', 'BrowserHistory', 'BrowserZoom', 'BrowserSnapshot', 'BrowserAct', 'BrowserScreenshot', 'BrowserTabs', 'BrowserWait', 'BrowserAskUser',
 ] as const;
 
 // Fix: with `limits.maxTokens` left undefined, streamText omits `max_tokens`

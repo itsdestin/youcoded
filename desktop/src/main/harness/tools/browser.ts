@@ -43,7 +43,7 @@ function makeTool(name: BrowserToolName): NativeTool {
  *  three gates (harness-session.ts buildAiTools): the host injected
  *  `services.browser` (desktop only), the session isn't a specialist child
  *  (children share the parent's tabs and have a fixed tool list), and the
- *  profile isn't a small model's simplified presentation (seven more schemas
+ *  profile isn't a small model's simplified presentation (the extra Browser schemas
  *  crowd out a weak model's attention). Run per buildAiTools like Skill: a model
  *  swap can flip the profile either way; has()/delete() keep both directions idempotent. */
 export function syncBrowserTools(toolByName: Map<string, NativeTool>, wanted: boolean): void {

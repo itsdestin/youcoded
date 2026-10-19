@@ -92,16 +92,25 @@ export class BrowserClient extends EventEmitter {
   }
 
   private request<T>(build: (id: number) => MainToWorker, signal?: AbortSignal): Promise<T> {
+    // WHY: a cancel sent before its call is lost by the worker, and must not
+    // start a worker merely to cancel work that was never dispatched.
+    if (signal?.aborted) return Promise.reject(new Error('Browser call cancelled; not started.'));
     let w: WorkerHandle;
     try { w = this.ensure(); } catch (e) { return Promise.reject(e); }
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      if (signal) {
-        if (signal.aborted) { w.postMessage({ t: 'cancel', id }); }
-        else signal.addEventListener('abort', () => this.worker?.postMessage({ t: 'cancel', id }), { once: true });
-      }
-      w.postMessage(build(id));
+      const onAbort = () => w.postMessage({ t: 'cancel', id });
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+        this.pending.delete(id);
+      };
+      this.pending.set(id, {
+        resolve: (value) => { cleanup(); resolve(value as T); },
+        reject: (error) => { cleanup(); reject(error); },
+      });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      try { w.postMessage(build(id)); }
+      catch (error) { cleanup(); reject(error); }
     });
   }
 

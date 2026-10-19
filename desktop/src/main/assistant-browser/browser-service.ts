@@ -120,6 +120,22 @@ const ANSWERS_BY_KIND: Record<BrowserPrompt['kind'], readonly PromptAnswer[]> = 
   'no-browser': ['download', 'no'],
 };
 
+export interface BrowserCallLifecycleOptions {
+  signal?: AbortSignal;
+  /** Absolute timestamp in milliseconds, not a duration. */
+  deadline?: number;
+}
+
+/** Browser-local delivery failure; cancellation cannot undo dispatched events. */
+export class BrowserCallLifecycleError extends Error {
+  constructor(readonly reason: 'cancelled' | 'deadline', readonly inFlight: boolean) {
+    super(`Browser call ${reason === 'cancelled' ? 'cancelled' : 'deadline reached'}; ${inFlight
+      ? 'the browser may already have acted. Check the current page before deciding what to do next; do not blindly repeat the action.'
+      : 'not started.'}`);
+    this.name = 'BrowserCallLifecycleError';
+  }
+}
+
 interface SessionEntry {
   pages: Page[];
   active: Page | null;
@@ -127,6 +143,7 @@ interface SessionEntry {
   busy: number;
   prompt: BrowserPrompt | null;
   promptResolve: ((answer: PromptAnswer | 'cancelled' | 'timeout') => void) | null;
+  completedHandoff?: { message: string; answer: 'done' | 'cant' };
   /** Short notes for the NEXT tool result: downloads, dialogs, new tabs, restarts. */
   notes: string[];
   /** Addresses to report/reopen after the browser closed under the conversation. */
@@ -245,25 +262,57 @@ export class BrowserService extends EventEmitter {
   /** Run `fn` after every earlier call of this conversation settles, so two tool
    *  calls never drive the same tab at once. Marks the conversation busy and
    *  re-arms its idle close. */
-  async withSession<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  withSession<T>(sessionId: string, fn: () => Promise<T>, opts: BrowserCallLifecycleOptions = {}): Promise<T> {
+    const expired = () => opts.deadline !== undefined && Date.now() >= opts.deadline;
+    if (opts.signal?.aborted) return Promise.reject(new BrowserCallLifecycleError('cancelled', false));
+    if (expired()) return Promise.reject(new BrowserCallLifecycleError('deadline', false));
     const e = this.entry(sessionId);
     const prev = e.queue;
-    let release!: () => void;
-    e.queue = new Promise<void>((r) => { release = r; });
-    try {
-      await prev.catch(() => undefined);
-      e.busy++;
-      e.used = true;
-      this.lastActor = { sessionId, at: Date.now() };
-      this.clearSessionIdle(e);
-      if (e.busy === 1) this.emitState(sessionId);
-      return await fn();
-    } finally {
-      e.busy--;
-      this.armSessionIdle(sessionId, e);
-      release();
-      this.emitState(sessionId);
-    }
+    return new Promise<T>((resolve, reject) => {
+      let delivered = false;
+      let admitted = false;
+      let timer: NodeJS.Timeout | undefined;
+      const cleanup = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+      };
+      const interrupt = (reason: 'cancelled' | 'deadline') => {
+        if (delivered) return;
+        delivered = true;
+        cleanup();
+        reject(new BrowserCallLifecycleError(reason, admitted));
+      };
+      const onAbort = () => interrupt('cancelled');
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      if (opts.deadline !== undefined) {
+        timer = setTimeout(() => interrupt('deadline'), Math.max(0, opts.deadline - Date.now()));
+        timer.unref?.();
+      }
+      // WHY: delivery may end before fn does, but the queue must still wait
+      // for fn's real settlement. A raced delivery promise is NOT a lock.
+      e.queue = prev.catch(() => undefined).then(async () => {
+        if (delivered) return;
+        if (opts.signal?.aborted) { interrupt('cancelled'); return; }
+        if (expired()) { interrupt('deadline'); return; }
+        admitted = true;
+        e.busy++;
+        e.used = true;
+        this.lastActor = { sessionId, at: Date.now() };
+        this.clearSessionIdle(e);
+        try {
+          if (e.busy === 1) this.emitState(sessionId);
+          const value = await fn();
+          if (!delivered) { delivered = true; cleanup(); resolve(value); }
+        } catch (error) {
+          // Always observe late failures, even after the caller has left.
+          if (!delivered) { delivered = true; cleanup(); reject(error); }
+        } finally {
+          e.busy--;
+          this.armSessionIdle(sessionId, e);
+          this.emitState(sessionId);
+        }
+      });
+    });
   }
 
   private armSessionIdle(sessionId: string, e: SessionEntry): void {
@@ -520,7 +569,19 @@ export class BrowserService extends EventEmitter {
 
   /** Close the browser for everyone. Each conversation's addresses are kept so a
    *  restart can reopen them and a later call can say what was open. */
-  async stop(): Promise<void> {
+  async stop(preserveHandoffs = false): Promise<void> {
+    // WHY: an explicit reset ends handoffs even without a running browser;
+    // a window-mode restart is not a reset and must keep the sign-in card/receipt.
+    if (!preserveHandoffs) {
+      // WHY: cancelling an active handoff calls endWindowOverride synchronously.
+      // Reset the override first: there is no window to restore during Stop/quit,
+      // and scheduling its normal restoration here could restart the closing browser.
+      this.windowOverride = null;
+      for (const [id, e] of this.sessions) {
+        e.completedHandoff = undefined;
+        this.settlePrompt(id, 'cancelled');
+      }
+    }
     if (this.starting) await this.starting.catch(() => undefined);
     const ctx = this.context;
     if (!ctx) {
@@ -553,7 +614,7 @@ export class BrowserService extends EventEmitter {
     if (!this.context && !this.starting) return;
     const deadline = Date.now() + RESTART_DRAIN_MS;
     while (this.anyBusyExceptPrompting() && Date.now() < deadline) await delay(100);
-    await this.stop();
+    await this.stop(true);
     await this.ensureContext();
     await this.reopenAll('The browser restarted (the window was shown or hidden). Pages were reopened at the same addresses; take a new outline before acting — earlier element refs no longer work.');
   }
@@ -597,11 +658,14 @@ export class BrowserService extends EventEmitter {
   // ── tabs ─────────────────────────────────────────────────────────────────
 
   /** Open a new tab owned by `sessionId` and make it active. */
-  async newPage(sessionId: string): Promise<Page> {
+  async newPage(sessionId: string, beforeCreate?: () => void): Promise<Page> {
     const ctx = await this.ensureContext();
+    // WHY: browser startup can outlive a tool's deadline; do not then create a tab.
+    beforeCreate?.();
     const page = await ctx.newPage();
     this.adopt(sessionId, page);
     if (this.connected && this.opts.guardPage) await this.opts.guardPage(sessionId, page);
+    beforeCreate?.();
     for (const b of this.blankToClose) { this.blankToClose.delete(b); void b.close().catch(() => undefined); }
     return page;
   }
@@ -683,7 +747,7 @@ export class BrowserService extends EventEmitter {
   canZoom(): boolean { return !this.windowShown && !this.myChrome; }
 
   /** Set the conversation's page zoom — from the panel's − / + or the assistant
-   *  (BrowserNavigate `zoom`). null returns to the default. WHY one setting for
+   *  (BrowserZoom `zoom`). null returns to the default. WHY one setting for
    *  both (Destin, 2026-10-15): they look at the same page, so a zoom the
    *  assistant picks must show in the panel's % and the reverse. */
   setZoom(sessionId: string, zoom: number | null): number {
@@ -883,11 +947,14 @@ export class BrowserService extends EventEmitter {
   async closeSession(sessionId: string, forget = false, keepNotes = false): Promise<void> {
     const e = this.sessions.get(sessionId);
     if (e) {
-      this.settlePrompt(sessionId, 'cancelled');
+      e.completedHandoff = undefined;
       this.clearSessionIdle(e);
       for (const p of [...e.pages]) { this.closingPages.add(p); await p.close().catch(() => undefined); }
       e.lastUrls = [];
       if (!keepNotes) e.notes = [];
+      // WHY: withdrawing a handoff can restart the browser to hide its window.
+      // Close tabs and forget their addresses first, or restoration can reopen them.
+      this.settlePrompt(sessionId, 'cancelled');
     }
     this.stopWatcher(sessionId);
     if (forget) this.sessions.delete(sessionId);
@@ -992,6 +1059,15 @@ export class BrowserService extends EventEmitter {
 
   openPrompt(sessionId: string): BrowserPrompt | null { return this.sessions.get(sessionId)?.prompt ?? null; }
 
+  /** One memory-only terminal receipt; a different request must not consume it. */
+  consumeCompletedHandoff(sessionId: string, message: string): { message: string; answer: 'done' | 'cant' } | null {
+    const e = this.sessions.get(sessionId);
+    if (!e?.completedHandoff || e.completedHandoff.message !== message) return null;
+    const receipt = e.completedHandoff;
+    e.completedHandoff = undefined;
+    return receipt;
+  }
+
   private waitOnPrompt(sessionId: string, prompt: BrowserPrompt, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<PromptAnswer | 'cancelled' | 'timeout'> {
     const e = this.entry(sessionId);
     return new Promise((resolve) => {
@@ -1035,6 +1111,9 @@ export class BrowserService extends EventEmitter {
       e.promptResolve(answer);
     } else {
       if (e.prompt.kind === 'handoff') {
+        // WHY: the waiter can time out before the person answers. Preserve the
+        // terminal answer so repeating this message does not recreate its card.
+        if (answer === 'done' || answer === 'cant') e.completedHandoff = { message: e.prompt.message, answer };
         e.notes.push(answer === 'done' ? 'The person said they are done.' : 'The person said they can\'t do this step.');
         this.endWindowOverride();
       }
@@ -1048,7 +1127,13 @@ export class BrowserService extends EventEmitter {
     const e = this.sessions.get(sessionId);
     if (!e) return;
     if (e.promptResolve) e.promptResolve(answer);
-    else if (e.prompt) { e.prompt = null; this.emitState(sessionId); }
+    else if (e.prompt) {
+      // WHY: a timed-out handoff keeps its card but no resolver; withdrawing it
+      // must restore the person's window preference just like an active waiter.
+      if (e.prompt.kind === 'handoff') this.endWindowOverride();
+      e.prompt = null;
+      this.emitState(sessionId);
+    }
   }
 
   // ── live picture ─────────────────────────────────────────────────────────
@@ -1125,6 +1210,8 @@ class LiveView {
       this.cdp = cdp;
       this.page = page;
       cdp.on('Page.screencastFrame', (f: { data: string; sessionId: number; metadata: { deviceWidth: number; deviceHeight: number; scrollOffsetX?: number; scrollOffsetY?: number } }) => {
+        // WHY: CDP can deliver a queued event after unwatch/retarget detached this view.
+        if (gen !== this.generation || this.cdp !== cdp) return;
         this.pendingAck = f.sessionId;
         const l = { data: f.data, w: f.metadata.deviceWidth, h: f.metadata.deviceHeight, sx: f.metadata.scrollOffsetX ?? 0, sy: f.metadata.scrollOffsetY ?? 0 };
         if (this.screenReady) this.flush(l);

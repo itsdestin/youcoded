@@ -17,11 +17,12 @@
 // sandbox — the result text and tool descriptions say the same.
 import * as fs from 'fs';
 import type { Locator, Page } from 'playwright-core';
-import { BROWSER_TOOL_SPECS, type BrowserToolName, type BrowserToolArgs } from './browser-tool-specs';
-import { BrowserService, BrowserUnavailableError, firstLine, hostOf, refreshTitles, type PromptAnswer } from './browser-service';
+import { type BrowserToolArgs } from './browser-tool-specs';
+import { validateBrowserRequest } from './browser-tool-validation';
+import { BrowserService, BrowserUnavailableError, BrowserCallLifecycleError, firstLine, hostOf, refreshTitles, type PromptAnswer } from './browser-service';
 import type { BrowserSettings } from './browser-settings';
 import type { BrowserInstaller } from './browser-installer';
-import { classifyUrl, hostPortKey, normaliseAddress, personAddress, type LookupFn } from './browser-net';
+import { classifyUrl, hostPortKey, personAddress, type LookupFn } from './browser-net';
 import { wrapUntrusted } from '../harness/tools/untrusted';
 
 /** One call's whole budget, queue wait included — under Claude Code's 120 s
@@ -49,6 +50,8 @@ export interface RunCtx {
   vision: boolean;
   /** Absolute ms timestamp; defaults to now + CALL_DEADLINE_MS. */
   deadline?: number;
+  /** Shared receipt survives prompt delivery ending before underlying work settles. */
+  receipt?: { stage: string; page?: Page };
 }
 
 export interface RunResult { text: string; isError?: boolean; imagePath?: string }
@@ -162,6 +165,59 @@ function remaining(ctx: RunCtx): number { return (ctx.deadline ?? Date.now() + C
 
 function err(text: string): RunResult { return { text, isError: true }; }
 
+function checkpoint(ctx: RunCtx): void {
+  if (remaining(ctx) <= 0) throw new BrowserCallLifecycleError('deadline', true);
+  if (ctx.signal.aborted) throw new BrowserCallLifecycleError('cancelled', true);
+}
+
+function receipt(ctx: RunCtx, stage: string, page?: Page): void {
+  if (ctx.receipt) { ctx.receipt.stage = stage; if (page) ctx.receipt.page = page; }
+}
+
+function receiptText(env: RunnerEnv, ctx: RunCtx): string {
+  const r = ctx.receipt;
+  let where = '';
+  try {
+    const tab = env.service.state(ctx.sessionId).tabs.find((t) => t.active);
+    if (tab) where = ` Current tab ${tab.index} · ${tab.url}`;
+    else if (r?.page) where = ` Last observed page · ${r.page.url()}`;
+  } catch { /* tab or browser no longer available */ }
+  return `${r?.stage ?? 'Operation not attempted.'}${where}`;
+}
+
+const OUTLINE_CACHE_CHARS = 120_000;
+interface OutlineCache { outline?: string; cut?: boolean; generation: number; active?: boolean }
+// WHY: weak page ownership cannot retain closed sessions. A main-frame navigation
+// invalidates even same-URL reloads; human DOM edits deliberately preserve historical parts.
+const outlines = new WeakMap<Page, OutlineCache>();
+function outlineCache(page: Page): OutlineCache {
+  let cache = outlines.get(page);
+  if (!cache) {
+    cache = { generation: 0 }; outlines.set(page, cache);
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) invalidate(page);
+    });
+  }
+  return cache;
+}
+function invalidate(page: Page): void {
+  const cache = outlineCache(page); cache.outline = undefined; cache.cut = false; cache.generation++;
+}
+const observedServices = new WeakSet<BrowserService>();
+function observeTabChanges(service: BrowserService): void {
+  if (observedServices.has(service)) return;
+  observedServices.add(service);
+  // WHY: panel tab changes must invalidate continuation too, without retaining session IDs.
+  service.on('state', (state: ReturnType<BrowserService['state']>) => {
+    service.pages(state.sessionId).forEach((page, index) => {
+      const cache = outlines.get(page); if (!cache) return;
+      const active = state.tabs[index]?.active ?? false;
+      if (cache.active !== undefined && cache.active !== active) invalidate(page);
+      cache.active = active;
+    });
+  });
+}
+
 const CHALLENGE = /(captcha|verify (?:that )?you(?:'| a)re (?:a )?human|are you a robot|unusual traffic|just a moment\.\.\.|press (?:and|&) hold|checking your browser|security check)/i;
 const SIGN_IN = /textbox "[^"]*password[^"]*"/i;
 
@@ -173,13 +229,28 @@ async function pageReport(env: RunnerEnv, ctx: RunCtx, page: Page, opts: { lead?
   await refreshTitles(pages);
   let title = '';
   try { title = await page.title(); } catch { /* closed */ }
-  let outline = '';
-  try {
-    outline = await page.ariaSnapshot({ mode: 'ai', timeout: Math.min(15_000, Math.max(2000, remaining(ctx) - 1000)) });
-  } catch (e) {
-    outline = `(The page outline couldn't be read: ${firstLine(e)})`;
+  const cache = outlineCache(page);
+  if (cache.active === undefined) cache.active = env.service.state(sid).tabs[pages.indexOf(page)]?.active ?? false;
+  const from = opts.from ?? 0;
+  if (from > 0 && cache.outline === undefined) return err(wrapUntrusted('browser', 'No cached snapshot for this page/document. Take BrowserSnapshot with from=0.'));
+  if (from === 0) {
+    checkpoint(ctx);
+    // Drop the previous snapshot before reading: a failed refresh must not revive old refs.
+    cache.outline = undefined;
+    const generation = cache.generation;
+    try {
+      const source = await page.ariaSnapshot({ mode: 'ai', timeout: Math.max(1, Math.min(15_000, remaining(ctx))) });
+      checkpoint(ctx);
+      if (generation !== cache.generation) return err('The page/document changed while reading its outline. Take a fresh BrowserSnapshot.');
+      cache.outline = source.slice(0, OUTLINE_CACHE_CHARS);
+      cache.cut = source.length > OUTLINE_CACHE_CHARS;
+    } catch (e) {
+      if (e instanceof BrowserCallLifecycleError) throw e;
+      return err(wrapUntrusted('browser', `${opts.lead ?? ''}\nTab ${pages.indexOf(page)} · ${page.url()}\nThe page outline couldn't be read: ${firstLine(e)}`));
+    }
   }
-  const from = Math.min(opts.from ?? 0, outline.length);
+  const outline = cache.outline!;
+  if (from > outline.length) return err(`Offset ${from} is out of range for the cached snapshot (${outline.length} characters). Use from=0 for a fresh snapshot.`);
   const slice = outline.slice(from, from + OUTLINE_CHARS);
   const end = from + slice.length;
   const lines: string[] = [];
@@ -193,7 +264,8 @@ async function pageReport(env: RunnerEnv, ctx: RunCtx, page: Page, opts: { lead?
   } else if (SIGN_IN.test(slice)) {
     lines.push('- This page asks for a sign-in. Don\'t type a password the user didn\'t give you for this — ask them to sign in with BrowserAskUser.');
   }
-  lines.push(from > 0 ? `Page outline (from character ${from}):` : 'Page outline:', slice || '(empty page)');
+  lines.push(from > 0 ? `Continuation of cached snapshot (from character ${from}; historical text, not a fresh reading of the current page):` : 'Page outline:', slice || (from > 0 ? '(End of cached snapshot.)' : '(empty page)'));
+  if (cache.cut) lines.push(`[Source cut at ${OUTLINE_CACHE_CHARS} cached characters; the rest is unavailable in this snapshot.]`);
   if (end < outline.length) {
     lines.push(`[The outline continues: showed characters ${from}–${end} of ${outline.length}. Call BrowserSnapshot with from=${end} for the next part.]`);
   }
@@ -203,7 +275,10 @@ async function pageReport(env: RunnerEnv, ctx: RunCtx, page: Page, opts: { lead?
 /** The conversation's page, starting the browser (or offering a download) as needed. */
 async function getPage(env: RunnerEnv, ctx: RunCtx, create: boolean): Promise<Page | RunResult> {
   try {
+    checkpoint(ctx);
     const p = await env.service.activePage(ctx.sessionId, create);
+    checkpoint(ctx);
+    if (p && ctx.receipt) ctx.receipt.page = p;
     if (!p) {
       const last = env.service.lastUrls(ctx.sessionId);
       return err(last.length
@@ -212,6 +287,7 @@ async function getPage(env: RunnerEnv, ctx: RunCtx, create: boolean): Promise<Pa
     }
     return p;
   } catch (e) {
+    if (e instanceof BrowserCallLifecycleError) throw e;
     if (e instanceof BrowserUnavailableError && e.code === 'no-browser') return offerDownload(env, ctx);
     return err(e instanceof BrowserUnavailableError ? e.message : `The browser couldn't start: ${firstLine(e)}`);
   }
@@ -226,6 +302,7 @@ async function offerDownload(env: RunnerEnv, ctx: RunCtx): Promise<RunResult> {
     kind: 'no-browser',
     message: 'YouCoded can download a browser for the assistant (about 150 MB, kept inside YouCoded).',
   }, { timeoutMs: wait, signal: ctx.signal });
+  checkpoint(ctx);
   if (answer === 'download') {
     env.installer.start();
     return err('The browser is downloading now (about 150 MB). The user can see the progress. Try again in a minute or two.');
@@ -238,7 +315,7 @@ async function offerDownload(env: RunnerEnv, ctx: RunCtx): Promise<RunResult> {
 function blockedByUser(env: RunnerEnv, ctx: RunCtx): RunResult | null {
   const p = env.service.openPrompt(ctx.sessionId);
   if (p?.kind === 'handoff') {
-    return err('The user is doing a step in the browser right now (your BrowserAskUser request is still showing). Call BrowserAskUser again with the same message to wait for them.');
+    return err('The user is doing a step in the browser right now (your BrowserAskUser request is still showing). Call BrowserAskUser again with the same message to wait for them. Snapshot, Screenshot, Wait and tab list remain available; BrowserTabs close/close_all or Stop can end the handoff.');
   }
   return null;
 }
@@ -271,32 +348,48 @@ function askOutcome(answer: PromptAnswer | 'cancelled' | 'timeout', what: string
 
 // ── the tools ────────────────────────────────────────────────────────────────
 
-async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserNavigate'>): Promise<RunResult> {
+function applyZoom(env: RunnerEnv, sid: string, value: BrowserToolArgs<'BrowserZoom'>['zoom']): number | RunResult {
+  if (!env.service.canZoom()) return err('Zoom only works in the assistant\'s hidden browser — a shown window or the user\'s own Chrome keeps its own size.');
+  return Math.round(env.service.setZoom(sid, value === 'auto' ? null : value / 100) * 100);
+}
+
+async function zoom(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserZoom'>): Promise<RunResult> {
+  const blocked = blockedByUser(env, ctx); if (blocked) return blocked;
+  const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
+  checkpoint(ctx); invalidate(page);
+  receipt(ctx, 'Zoom attempted; outcome uncertain.', page);
+  const pct = applyZoom(env, ctx.sessionId, a.zoom); if (typeof pct !== 'number') return pct;
+  receipt(ctx, `Zoom set to ${pct}%.`, page);
+  await page.waitForTimeout(300).catch(() => undefined);
+  return pageReport(env, ctx, page, { lead: `Zoom is now ${pct}%${a.zoom === 'auto' ? ' (the default)' : ''}.` });
+}
+
+async function history(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserHistory'>): Promise<RunResult> {
+  const blocked = blockedByUser(env, ctx); if (blocked) return blocked;
+  const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
+  checkpoint(ctx); invalidate(page);
+  receipt(ctx, `History ${a.direction} attempted; outcome uncertain.`, page);
+  const budget = Math.max(1, Math.min(NAV_TIMEOUT_MS, remaining(ctx)));
+  try {
+    const r = a.direction === 'back' ? await page.goBack({ timeout: budget, waitUntil: 'domcontentloaded' }) : await page.goForward({ timeout: budget, waitUntil: 'domcontentloaded' });
+    const failed = !!r && r.status() >= 400;
+    const result = await pageReport(env, ctx, page, { lead: failed ? `Navigation http_error: HTTP ${r!.status()}.` : r ? 'Navigation opened.' : `There was no page to go ${a.direction} to.` });
+    return { ...result, isError: result.isError || failed };
+  } catch (e) {
+    if (e instanceof BrowserCallLifecycleError) throw e;
+    const result = await pageReport(env, ctx, page, { lead: `Navigation ${/Timeout/i.test(firstLine(e)) ? 'loading' : /ERR_BLOCKED_BY_CLIENT/.test(firstLine(e)) ? 'blocked' : 'failed'} after waiting up to ${budget / 1000} seconds: ${firstLine(e)}` });
+    return { ...result, isError: true };
+  }
+}
+
+async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserNavigate'>, legacyZoom?: BrowserToolArgs<'BrowserZoom'>['zoom']): Promise<RunResult> {
   const sid = ctx.sessionId;
   const blocked = blockedByUser(env, ctx); if (blocked) return blocked;
-  if (!a.url && !a.go && a.zoom === undefined) return err('Give BrowserNavigate a url, go: "back"/"forward", or a zoom.');
-  if (a.zoom !== undefined) {
-    // The zoom applies before any address opens, so the page loads at it once.
-    if (!env.service.canZoom()) return err('Zoom only works in the assistant\'s hidden browser — a shown window or the user\'s own Chrome keeps its own size.');
-    const pct = Math.round(env.service.setZoom(sid, a.zoom === 'auto' ? null : a.zoom / 100) * 100);
-    if (!a.url && !a.go) {
-      const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
-      // The new layout takes a moment to settle; the outline should show it.
-      await page.waitForTimeout(300).catch(() => undefined);
-      return pageReport(env, ctx, page, { lead: `Zoom is now ${pct}%${a.zoom === 'auto' ? ' (the default)' : ''}.` });
-    }
-  }
-  if (a.go) {
-    const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
-    try {
-      const r = a.go === 'back' ? await page.goBack({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' }) : await page.goForward({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
-      return pageReport(env, ctx, page, { lead: r ? undefined : `There was no page to go ${a.go} to.` });
-    } catch (e) { return err(wrapUntrusted('browser', mapActionError(e, undefined))); }
-  }
-  let url: string;
-  try { url = normaliseAddress(a.url!); } catch (e) { return err((e as Error).message); }
+  // WHY: preflight has validated the URL and every legacy field before zoom can mutate state.
+  const url = a.url;
   const host = hostOf(url).toLowerCase();
   const cls = await classifyUrl(url, env.policy.lookup);
+  checkpoint(ctx);
   if (cls === 'never') return err(`${host} is a special network address (cloud-metadata or link-local) that the browser never opens.`);
   if (cls === 'private') {
     const key = hostPortKey(url);
@@ -307,12 +400,14 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
         kind: 'local', host: key,
         message: `The assistant wants to open a page on this computer or your home network (${key}).`,
       }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
+      checkpoint(ctx);
       const out = askOutcome(answer, `open ${key}`);
       if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
       env.policy.grantLocal(sid, key);
     }
   }
   const prefs = await env.settings.read();
+  checkpoint(ctx);
   if (prefs.useMyChrome && cls === 'public' && !env.policy.navGranted(sid, host)) {
     // My Chrome carries the person's real sign-ins: every new site asks (spec §1).
     const refKey = `${sid}|nav|${host}`;
@@ -321,6 +416,7 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
       kind: 'site', host, allowAlways: false,
       message: `The assistant wants to open ${host} in your Chrome, where you're signed in.`,
     }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
+    checkpoint(ctx);
     const out = askOutcome(answer, `open ${host} in their Chrome`);
     if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
     env.policy.grantNav(sid, host);
@@ -329,23 +425,40 @@ async function navigate(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'Browser
   let page: Page;
   try {
     const existing = a.newTab ? null : await env.service.activePage(sid, false);
-    page = existing ?? await env.service.newPage(sid);
+    checkpoint(ctx);
+    if (!existing) receipt(ctx, 'Tab creation attempted; navigation not attempted.');
+    page = existing ?? await env.service.newPage(sid, () => checkpoint(ctx));
+    if (ctx.receipt) ctx.receipt.page = page;
+    checkpoint(ctx);
   } catch (e) {
+    if (e instanceof BrowserCallLifecycleError) throw e;
     if (e instanceof BrowserUnavailableError && e.code === 'no-browser') return offerDownload(env, ctx);
     return err(e instanceof BrowserUnavailableError ? e.message : `The browser couldn't start: ${firstLine(e)}`);
   }
-  let lead: string | undefined;
+  checkpoint(ctx); invalidate(page);
+  if (legacyZoom !== undefined) {
+    receipt(ctx, 'Zoom attempted; navigation not attempted.', page);
+    const pct = applyZoom(env, sid, legacyZoom); if (typeof pct !== 'number') return pct;
+    checkpoint(ctx);
+  }
+  let lead = 'Navigation opened.';
+  let failed = false;
+  const budget = Math.max(1, Math.min(NAV_TIMEOUT_MS, remaining(ctx) - 15_000));
+  receipt(ctx, 'Navigation attempted; outcome uncertain.', page);
   try {
-    const resp = await page.goto(url, { timeout: Math.max(1000, Math.min(NAV_TIMEOUT_MS, remaining(ctx) - 15_000)), waitUntil: 'domcontentloaded' });
-    if (resp && resp.status() >= 400) lead = `The site answered with an error (HTTP ${resp.status()}).`;
+    const resp = await page.goto(url, { timeout: budget, waitUntil: 'domcontentloaded' });
+    if (resp && resp.status() >= 400) { lead = `Navigation http_error: HTTP ${resp.status()}.`; failed = true; }
   } catch (e) {
     const m = firstLine(e);
-    if (/ERR_BLOCKED_BY_CLIENT/.test(m)) lead = 'The browser stopped this page from opening (see Notes).';
-    else if (/Timeout/i.test(m)) lead = 'The page is still loading after 30 seconds; this is what has arrived so far.';
-    else return err(`Couldn't open ${url}: ${m}`);
+    failed = true;
+    if (/ERR_BLOCKED_BY_CLIENT/.test(m)) lead = 'Navigation blocked: the browser stopped this page from opening (see Notes).';
+    else if (/Timeout/i.test(m)) lead = `Navigation loading: did not finish within this call's ${budget / 1000}-second navigation budget; this is what has arrived so far.`;
+    else lead = `Navigation failed opening ${url}: ${m}`;
   }
-  await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
-  return pageReport(env, ctx, page, { lead });
+  receipt(ctx, lead, page);
+  checkpoint(ctx);
+  const result = await pageReport(env, ctx, page, { lead });
+  return { ...result, isError: result.isError || failed };
 }
 
 async function snapshot(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserSnapshot'>): Promise<RunResult> {
@@ -357,10 +470,6 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
   const sid = ctx.sessionId;
   const blocked = blockedByUser(env, ctx); if (blocked) return blocked;
   const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
-  if (a.action !== 'press_key' && !a.ref) return err(`BrowserAct ${a.action} needs a ref from the latest outline.`);
-  if (a.action === 'type' && typeof a.text !== 'string') return err('BrowserAct type needs `text`.');
-  if (a.action === 'select' && !a.values?.length) return err('BrowserAct select needs `values`.');
-  if (a.action === 'press_key' && !a.key) return err('BrowserAct press_key needs `key`.');
 
   const locator = a.ref ? page.getByRef(a.ref) : null;
   let info: ElementInfo | null = null;
@@ -376,7 +485,7 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
   const frameHost = info?.frameUrl ? hostOf(info.frameUrl).toLowerCase() : host;
   const where = frameHost && frameHost !== host ? `${host} (in a part of the page from ${frameHost})` : host;
   const label = info?.name ? `"${info.name.slice(0, 80)}"` : (a.element ? `"${a.element.slice(0, 80)}"` : 'an element');
-  const verb = a.action === 'type' ? `type into ${label}` : a.action === 'select' ? `choose in ${label}` : a.action === 'press_key' ? `press ${a.key}` : `click ${label}`;
+  const verb = a.action === 'type' ? `type into ${label}` : a.action === 'select' ? `choose in ${label}` : a.action === 'press_key' ? `press ${a.key}` : a.action === 'hover' ? `hover over ${label}` : a.action === 'double_click' ? `double-click ${label}` : `click ${label}`;
 
   let askedFinal = false;
   if (a.action !== 'hover') {
@@ -386,11 +495,13 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
     const refKey = `${sid}|act|${host}|${a.action}|${info?.name ?? a.ref}`;
     if (env.policy.isRefused(refKey)) return err(`The user already declined or didn't answer this exact step a moment ago. Don't retry — ask them in chat.`);
     const prefs = await env.settings.read();
+    checkpoint(ctx);
     if (final) {
       const answer = await env.service.ask(sid, {
         kind: 'final', host,
         message: `The assistant wants to ${verb} on ${where}.`,
       }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
+      checkpoint(ctx);
       const out = askOutcome(answer, `${verb} on ${host}`);
       if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
       env.policy.grantSite(sid, host); // allowing a final step implies the site
@@ -401,6 +512,7 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
           ? `Let the assistant click and type on ${where} in your Chrome, where you're signed in?`
           : `Let the assistant click and type on ${where}?`,
       }, { timeoutMs: Math.min(ASK_WAIT_MS, remaining(ctx) - 3000), signal: ctx.signal });
+      checkpoint(ctx);
       const out = askOutcome(answer, `click and type on ${host}`);
       if (out) { if (answer !== 'cancelled') env.policy.refuse(refKey); return out; }
       env.policy.grantSite(sid, host);
@@ -423,7 +535,11 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
       }
     } catch (e) { return err(wrapUntrusted('browser', mapActionError(e, a.ref))); }
   }
-  const t = Math.min(ACTION_TIMEOUT_MS, Math.max(1000, remaining(ctx) - 5000));
+  checkpoint(ctx);
+  const handoff = blockedByUser(env, ctx); if (handoff) return handoff;
+  const t = Math.max(1, Math.min(ACTION_TIMEOUT_MS, remaining(ctx)));
+  invalidate(page);
+  receipt(ctx, a.action === 'type' ? 'Text fill attempted; outcome uncertain; Enter not attempted.' : `Action attempted (${verb}); outcome uncertain.`, page);
   try {
     switch (a.action) {
       case 'click': await locator!.click({ timeout: t }); break;
@@ -431,7 +547,14 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
       case 'hover': await locator!.hover({ timeout: t }); break;
       case 'type':
         await locator!.fill(a.text!, { timeout: t });
-        if (a.submit) await locator!.press('Enter', { timeout: t });
+        receipt(ctx, 'Text filled; Enter not attempted.', page);
+        // WHY: fill may settle after cancellation/deadline; Enter is a separate mutation.
+        checkpoint(ctx);
+        if (a.submit) {
+          const blocked = blockedByUser(env, ctx); if (blocked) return err(wrapUntrusted('browser', `${receiptText(env, ctx)}\n${blocked.text}`));
+          receipt(ctx, 'Text filled; Enter attempted; submission outcome uncertain.', page);
+          await locator!.press('Enter', { timeout: Math.max(1, Math.min(t, remaining(ctx))) });
+        }
         break;
       case 'select': await locator!.selectOption(a.values!, { timeout: t }); break;
       case 'press_key':
@@ -440,12 +563,15 @@ async function act(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAct'>
         break;
     }
   } catch (e) {
-    return err(wrapUntrusted('browser', mapActionError(e, a.ref)));
+    if (e instanceof BrowserCallLifecycleError) throw e;
+    return err(wrapUntrusted('browser', `${receiptText(env, ctx)}\n${firstLine(e)}\nCheck the current page before deciding what to do next; do not blindly repeat this action. Cancellation does not reverse dispatched events.`));
   }
+  receipt(ctx, a.action === 'type' ? `Text filled; Enter ${a.submit ? 'dispatched (submission not verified)' : 'not attempted'}.` : `Action dispatched (${verb}); resulting effect not verified.`, page);
+  checkpoint(ctx);
   await settle(page);
   const now = await env.service.activePage(sid, false) ?? page;
   const typed = a.action === 'type' ? (info?.isPassword ? ' (hidden text)' : '') : '';
-  return pageReport(env, ctx, now, { lead: `Done: ${verb}${typed}.` });
+  return pageReport(env, ctx, now, { lead: `Dispatched: ${verb}${typed}. ${ctx.receipt?.stage ?? ''}` });
 }
 
 async function screenshot(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserScreenshot'>): Promise<RunResult> {
@@ -488,6 +614,12 @@ async function tabs(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserTabs
     return { text: wrapUntrusted('browser', [lead, ...lines].filter(Boolean).join('\n')) };
   };
   try {
+    if (a.action !== 'list') {
+      if (a.action === 'select') { const blocked = blockedByUser(env, ctx); if (blocked) return blocked; }
+      checkpoint(ctx);
+      for (const p of env.service.pages(sid)) invalidate(p);
+      receipt(ctx, `Tab ${a.action} attempted; outcome uncertain.`);
+    }
     switch (a.action) {
       case 'list': return list();
       case 'select': {
@@ -498,50 +630,76 @@ async function tabs(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserTabs
       case 'close': {
         if (a.index === undefined) return err('BrowserTabs close needs `index`.');
         await env.service.closeTab(sid, a.index);
+        // WHY: closing the last tab is also an escape from a pending human step.
+        if (!env.service.pages(sid).length) { checkpoint(ctx); await env.service.closeSession(sid); }
         return list(`Closed tab ${a.index}.`);
       }
       case 'close_all':
+        // Each close is a separate mutation; cancellation cannot undo prior closes.
+        for (const page of [...env.service.pages(sid)].reverse()) {
+          checkpoint(ctx);
+          const index = env.service.pages(sid).indexOf(page);
+          if (index >= 0) await env.service.closeTab(sid, index);
+        }
+        checkpoint(ctx);
+        if (env.service.pages(sid).length) return err('Some tabs remain open; closing them could not be confirmed. List tabs to inspect the current state.');
         await env.service.closeSession(sid);
         return { text: 'Closed all of this conversation\'s browser tabs.' };
     }
   } catch (e) {
+    if (e instanceof BrowserCallLifecycleError) throw e;
     return err(e instanceof BrowserUnavailableError ? e.message : firstLine(e));
   }
 }
 
 async function waitFor(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserWait'>): Promise<RunResult> {
   const page = await getPage(env, ctx, false); if (!('goto' in page)) return page;
-  // WHY at least 1000: Playwright reads a timeout of 0 as "wait forever", which
-  // would break the one-call budget (code review F3).
-  const cap = Math.max(1000, Math.min(30_000, remaining(ctx) - 15_000));
+  checkpoint(ctx);
+  // WHY: zero means infinite in Playwright. Visibility filtering precedes first(),
+  // so hidden duplicates cannot satisfy disappearance or mask an appearance.
+  const cap = Math.max(1, Math.min(30_000, remaining(ctx) - 15_000));
   let lead = '';
+  let failed = false;
   try {
-    if (a.text) {
-      await page.getByText(a.text).first().waitFor({ state: 'visible', timeout: cap });
-      lead = `"${a.text.slice(0, 80)}" is on the page.`;
-    } else if (a.textGone) {
-      await page.getByText(a.textGone).first().waitFor({ state: 'hidden', timeout: cap });
-      lead = `"${a.textGone.slice(0, 80)}" is gone.`;
+    if (a.text !== undefined || a.textGone !== undefined) {
+      const text = a.text ?? a.textGone!;
+      const visible = page.getByText(text).filter({ visible: true }).first();
+      await visible.waitFor({ state: a.text !== undefined ? 'visible' : 'hidden', timeout: cap });
+      lead = a.text !== undefined ? `Condition met: "${text.slice(0, 80)}" has a visible match.` : `Condition met: "${text.slice(0, 80)}" has no visible matches.`;
     } else {
       const ms = Math.min(cap, (a.seconds ?? 2) * 1000);
-      await new Promise<void>((r) => { const t = setTimeout(r, ms); ctx.signal.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
-      lead = `Waited ${Math.round(ms / 1000)} seconds.`;
+      await new Promise<void>((resolve) => {
+        const done = () => { clearTimeout(timer); ctx.signal.removeEventListener('abort', done); resolve(); };
+        const timer = setTimeout(done, ms);
+        ctx.signal.addEventListener('abort', done, { once: true });
+        if (ctx.signal.aborted) done();
+      });
+      lead = `Waited ${ms / 1000} seconds.`;
     }
+    checkpoint(ctx);
   } catch (e) {
-    lead = /Timeout/i.test(firstLine(e)) ? `Still not there after ${Math.round(cap / 1000)} seconds.` : `Waiting stopped: ${firstLine(e)}`;
+    if (e instanceof BrowserCallLifecycleError) throw e;
+    failed = true;
+    lead = /Timeout/i.test(firstLine(e))
+      ? `Condition timeout within ${cap / 1000} seconds: ${a.text !== undefined ? 'no visible match appeared for' : 'visible matches remain for'} "${(a.text ?? a.textGone ?? '').slice(0, 80)}". This does not prove an earlier action failed; do not blindly repeat it.`
+      : `Waiting failed: ${firstLine(e)}`;
   }
-  return pageReport(env, ctx, page, { lead });
+  const result = await pageReport(env, ctx, page, { lead });
+  return { ...result, isError: result.isError || failed };
 }
 
 async function askUser(env: RunnerEnv, ctx: RunCtx, a: BrowserToolArgs<'BrowserAskUser'>): Promise<RunResult> {
   const sid = ctx.sessionId;
   const wait = Math.min(ASK_WAIT_MS, remaining(ctx) - 3000);
+  checkpoint(ctx);
   const open = env.service.openPrompt(sid);
-  const pending = open?.kind === 'handoff'
+  if (open?.kind === 'handoff' && open.message !== a.message) return err('A different BrowserAskUser message is still pending. Repeat exactly the pending message to wait; use BrowserTabs close/close_all or Stop to withdraw it before making a different request.');
+  const completed = env.service.consumeCompletedHandoff(sid, a.message);
+  const answer = completed?.answer ?? await (open?.kind === 'handoff'
     ? env.service.waitForOpenPrompt(sid, { timeoutMs: wait, signal: ctx.signal })!
-    : env.service.ask(sid, { kind: 'handoff', message: a.message.slice(0, 300) }, { timeoutMs: wait, signal: ctx.signal });
+    : env.service.ask(sid, { kind: 'handoff', message: a.message }, { timeoutMs: wait, signal: ctx.signal }));
+  checkpoint(ctx);
   env.service.markUsed(sid);
-  const answer = await pending;
   // (A window shown just for this hand-off is hidden again by the service
   // whenever the hand-off ends — browser-service.ts endWindowOverride.)
   if (answer === 'done') {
@@ -618,29 +776,37 @@ export async function openForPerson(env: RunnerEnv, sessionId: string, typed: st
 
 /** Validate and run one Browser tool for one conversation. Never throws. */
 export async function runBrowserTool(env: RunnerEnv, name: string, rawArgs: unknown, ctx: RunCtx): Promise<RunResult> {
-  if (!(name in BROWSER_TOOL_SPECS)) return err(`Unknown browser tool: ${name}`);
-  const spec = BROWSER_TOOL_SPECS[name as BrowserToolName];
-  const parsed = spec.schema.safeParse(rawArgs ?? {});
-  if (!parsed.success) {
-    return err(`${name}: invalid input — ${parsed.error.issues.map((i) => `${i.path.join('.') || 'input'}: ${i.message}`).join('; ')}`);
-  }
-  const c: RunCtx = { ...ctx, deadline: ctx.deadline ?? Date.now() + CALL_DEADLINE_MS };
+  const validated = validateBrowserRequest(name, rawArgs);
+  if ('error' in validated) return err(validated.error);
+  const op = validated.operation;
+  observeTabChanges(env.service);
+  const deadline = ctx.deadline ?? Date.now() + CALL_DEADLINE_MS;
+  const expiry = new AbortController();
+  const timer = setTimeout(() => expiry.abort(), Math.max(0, deadline - Date.now()));
+  const c: RunCtx = { ...ctx, deadline, signal: AbortSignal.any([ctx.signal, expiry.signal]), receipt: { stage: 'Operation not attempted.' } };
   try {
     return await env.service.withSession(ctx.sessionId, async () => {
-      if (remaining(c) < 5000) return err('The browser was busy with an earlier step for this conversation. Try again.');
-      if (ctx.signal.aborted) return err('Canceled.');
+      checkpoint(c);
       env.service.markUsed(ctx.sessionId);
-      switch (name as BrowserToolName) {
-        case 'BrowserNavigate': return navigate(env, c, parsed.data as BrowserToolArgs<'BrowserNavigate'>);
-        case 'BrowserSnapshot': return snapshot(env, c, parsed.data as BrowserToolArgs<'BrowserSnapshot'>);
-        case 'BrowserAct': return act(env, c, parsed.data as BrowserToolArgs<'BrowserAct'>);
-        case 'BrowserScreenshot': return screenshot(env, c, parsed.data as BrowserToolArgs<'BrowserScreenshot'>);
-        case 'BrowserTabs': return tabs(env, c, parsed.data as BrowserToolArgs<'BrowserTabs'>);
-        case 'BrowserWait': return waitFor(env, c, parsed.data as BrowserToolArgs<'BrowserWait'>);
-        case 'BrowserAskUser': return askUser(env, c, parsed.data as BrowserToolArgs<'BrowserAskUser'>);
-      }
-    });
+      const dispatch = async (): Promise<RunResult> => {
+        switch (op.name) {
+          case 'BrowserNavigate': return navigate(env, c, op.args, validated.legacyZoom);
+          case 'BrowserHistory': return history(env, c, op.args);
+          case 'BrowserZoom': return zoom(env, c, op.args);
+          case 'BrowserSnapshot': return snapshot(env, c, op.args);
+          case 'BrowserAct': return act(env, c, op.args);
+          case 'BrowserScreenshot': return screenshot(env, c, op.args);
+          case 'BrowserTabs': return tabs(env, c, op.args);
+          case 'BrowserWait': return waitFor(env, c, op.args);
+          case 'BrowserAskUser': return askUser(env, c, op.args);
+        }
+      };
+      const result = await dispatch();
+      if (result.isError && !result.text.includes(c.receipt!.stage)) return { ...result, text: `${result.text}\n${wrapUntrusted('browser', receiptText(env, c))}` };
+      return result;
+    }, { signal: ctx.signal, deadline: c.deadline });
   } catch (e) {
-    return err(`The browser tool failed: ${firstLine(e)}`);
-  }
+    if (e instanceof BrowserCallLifecycleError) return err(wrapUntrusted('browser', `${e.message}\n${receiptText(env, c)}\nCancellation does not reverse already-dispatched events.`));
+    return err(wrapUntrusted('browser', `The browser tool failed: ${firstLine(e)}\n${receiptText(env, c)}`));
+  } finally { clearTimeout(timer); }
 }

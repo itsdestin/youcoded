@@ -16,7 +16,11 @@ export function browserToolDisplay(name: string, input: Record<string, unknown>,
   const el = str(input.element);
   const quoted = el ? `"${truncate(el, 50)}"` : '';
   switch (name) {
+    case 'BrowserHistory': return { label: active ? `Going ${str(input.direction)}` : `Went ${str(input.direction)}`, detail: '' };
+    case 'BrowserZoom': return { label: active ? 'Setting page zoom' : 'Set page zoom', detail: `· ${input.zoom === 'auto' ? 'Automatic' : String(input.zoom) + '%'}` };
     case 'BrowserNavigate': {
+      // WHY: old transcripts/queued callers still use Navigate for zoom; never label it "Opened ".
+      if (!input.url && !input.go && input.zoom !== undefined) return browserToolDisplay('BrowserZoom', input, active);
       const go = str(input.go);
       if (go) return { label: active ? `Going ${go}` : `Went ${go}`, detail: '' };
       const host = hostOfUrl(str(input.url));
