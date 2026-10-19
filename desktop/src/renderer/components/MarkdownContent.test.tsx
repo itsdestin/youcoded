@@ -467,25 +467,81 @@ describe('MarkdownContent while a reply streams in', { timeout: CPU_BOUND_WALL_L
     const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
     // A frozen chunk of a still-open fence sits in a plain wrapper span (CSS containment only);
     // it is looked through, since it adds no text and no visible structure.
-    // WHY walk siblings directly: serializing both large pages at every checkpoint
-    // used to allocate/flatten child arrays (and singleton arrays) for every node.
-    // Keep one text accumulator across transparent wrappers, exactly as flattening did.
+    // WHY one append buffer: the CPU profile showed serializer/GC work in this
+    // test. Avoid per-element recursive strings and lazy DOMTokenList/NamedNodeMap
+    // objects, while still visiting every node/attribute at every checkpoint.
+    // DOM class tokens split on ASCII whitespace only, not all Unicode whitespace.
+    const chunkClass = /(?:^|[ \t\n\f\r])yc-fence-chunk(?:[ \t\n\f\r]|$)/;
+    const attribute = (el: Element, name: string) => `${name}=${JSON.stringify(el.getAttribute(name))}`;
     const visit = (parent: Node) => {
       for (let n = parent.firstChild; n; n = n.nextSibling) {
         if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
         if (n.nodeType !== 1) continue;
         const el = n as Element;
-        if (el.classList.contains('yc-fence-chunk')) { visit(el); continue; }
+        if (chunkClass.test(el.getAttribute('class') ?? '')) { visit(el); continue; }
         flush();
-        const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+        const names = el.getAttributeNames();
+        const attrs = names.length === 1 ? attribute(el, names[0]) : names.map((name) => attribute(el, name)).sort().join(' ');
         const tag = el.tagName.toLowerCase();
-        parts.push(`<${tag} ${attrs}>${canonical(el)}</${tag}>`);
+        parts.push(`<${tag} ${attrs}>`);
+        visit(el); flush();
+        parts.push(`</${tag}>`);
       }
     };
     visit(root);
     flush();
     return parts.join('');
   };
+  it('canonical markup preserves transparent text, every attribute and ordinary element boundaries', () => {
+    // WHY retain the allocation-heavy reference here: optimizing this test's serializer
+    // must not hide any difference between incremental and fresh real-renderer pages.
+    const reference = (root: Element): string => {
+      const parts: string[] = [];
+      let text = '';
+      const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
+      const visit = (parent: Node) => {
+        for (let n = parent.firstChild; n; n = n.nextSibling) {
+          if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
+          if (n.nodeType !== 1) continue;
+          const el = n as Element;
+          if (el.classList.contains('yc-fence-chunk')) { visit(el); continue; }
+          flush();
+          const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+          const tag = el.tagName.toLowerCase();
+          parts.push(`<${tag} ${attrs}>${reference(el)}</${tag}>`);
+        }
+      };
+      visit(root); flush(); return parts.join('');
+    };
+    const fixtures = [
+      'a<!-- ignored without a text boundary -->b',
+      'a<span class="yc-fence-chunk">b<span class="yc-fence-chunk">c</span>d</span>e',
+      'a<span class="yc-fence-chunk">b<em z="2" a="1">c</em>d</span>e',
+      '<span class="x\tyc-fence-chunk\nf">inside</span>tail',
+      '<span class="x\u00a0yc-fence-chunk">not transparent</span>',
+      '<span class="yc-fence-chunk\u2028">Unicode separator is not a class delimiter</span>',
+      '<span class="yc-fence-chunk\u000b">vertical tab is not a class delimiter</span>',
+      '<span class="yc-fence-chunk-suffix">ordinary</span>',
+      '<i a="short" a-b="long" a0="digit" data-note="&quot;&amp;&lt;">text</i>',
+      '<svg viewBox="0 0 1 1"><use xlink:href="#x"></use></svg>',
+    ];
+    let seed = 0x7139;
+    const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed; };
+    for (let sample = 0; sample < 128; sample++) {
+      let html = 'prefix';
+      for (let depth = 0; depth < 5; depth++) {
+        const cls = (next() >>> 16) & 1 ? 'yc-fence-chunk' : 'ordinary';
+        html = `<span data-z="${next()}" class="${cls}" a-b="${next()}" a="${next()}">${html}<!-- comment -->tail</span>suffix`;
+      }
+      fixtures.push(html);
+    }
+    for (const html of fixtures) {
+      const root = document.createElement('div'); root.innerHTML = html;
+      const original = root.innerHTML;
+      expect(canonical(root)).toBe(reference(root));
+      expect(root.innerHTML).toBe(original);
+    }
+  });
   const wholeHtml = (md: string) => {
     const r = render(<Bubble md={md} />);
     const html = canonical(r.container);
