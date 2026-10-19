@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { run } from './ci-policy.mjs';
+import { run, npmCli } from './ci-policy.mjs';
 import { hash, identity, manifest, verifyCore, verifyInstalled, transport, unpack } from './ci-evidence.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)), desktop = path.join(root, 'desktop');
 const json = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
@@ -49,7 +49,7 @@ export async function packParserCapsule(desktopDirectory, evidence, temporaryBas
     // WHY: pack just the already-locked parser, never install the desktop tree
     // or execute lifecycle hooks. Prefer the npm cache used by preparation.
     // npm 12 gates URL specs: permit this one pack child, verified by SRI below.
-    const packed = JSON.parse((await run('npm', ['pack', dependency.resolved, '--prefer-offline', '--ignore-scripts', '--json', '--pack-destination', temporary], temporary, true, { npm_config_allow_remote: 'all' })).toString());
+    const packed = JSON.parse((await run(process.execPath, [npmCli(), 'pack', dependency.resolved, '--prefer-offline', '--ignore-scripts', '--json', '--pack-destination', temporary], temporary, true, { npm_config_allow_remote: 'all' })).toString());
     const entries = Object.values(packed); assert.equal(entries.length, 1);
     const filename = entries[0].filename; assert.equal(typeof filename, 'string'); assert.equal(path.basename(filename), filename);
     const archive = path.join(temporary, filename); await verifyParser(archive, dependency);
@@ -285,7 +285,7 @@ async function main() {
     fs.mkdirSync(output, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
     // WHY: forward only --dir to the unchanged production build. All build
     // inputs, native payloads, legal files and release defaults stay intact.
-    await run('npm', ['run', 'build', '--', '--linux', '--x64', '--dir', '--publish', 'never'], desktop, false);
+    await run(process.execPath, [npmCli(), 'run', 'build', '--', '--linux', '--x64', '--dir', '--publish', 'never'], desktop, false);
     const app = path.join(desktop, 'release/linux-unpacked'), prepared = { identity: input, mode, manifest: await manifest(app), transport: await transport(app, output) };
     await packParserCapsule(desktop, evidence);
     assert.deepEqual(await identity(root, process.env.GITHUB_SHA), input);

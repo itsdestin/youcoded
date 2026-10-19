@@ -17,6 +17,23 @@ const mergeConfigs = [
   ['anchored target merge', 'linux: {}\ndeb: &target\n  <<: &flags { fpm: ["--custom-sentinel=keep"] }\nrpm:\n  <<: *target\n'],
   ['anchored linux merge', 'deb: &flags { fpm: ["--custom-sentinel=keep"] }\nlinux:\n  <<: *flags\nrpm:\n  <<: *flags\n'],
 ];
+test('capsule producer bypasses unsupported npm command shims on PATH', async () => {
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-npm-capsule-'));
+  try {
+    const bin = path.join(root, 'shim tools'), evidence = path.join(root, 'evidence'), marker = path.join(root, 'shim-executed');
+    fs.mkdirSync(bin); fs.mkdirSync(evidence);
+    fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nprintf called > "$CI_NPM_SHIM_MARKER"\nexit 86\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'npm.cmd'), '@echo called>"%CI_NPM_SHIM_MARKER%"\r\n@exit /b 86\r\n');
+    const env = { ...process.env, CI_NPM_SHIM_MARKER: marker };
+    for (const key of Object.keys(env)) if (key.toUpperCase() === 'PATH') delete env[key];
+    env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+    const source = `import {packParserCapsule} from ${JSON.stringify(new URL('./ci-linux.mjs', import.meta.url).href)}; await packParserCapsule(${JSON.stringify(fileURLToPath(new URL('../desktop/', import.meta.url)))},${JSON.stringify(evidence)},${JSON.stringify(root)});`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(fs.statSync(path.join(evidence, 'yaml-parser.tgz')).size > 0);
+    assert.ok(!fs.existsSync(marker), 'The command shim must never execute');
+  } finally { fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); }
+});
 test('producer and private capsule agree with actual installed builder YAML merge semantics', async t => {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-merge-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -60,8 +77,9 @@ test('actual aggregate CLI derives encoder proof from current config with no nod
   // WHY: only disposable fixture inputs are committed. The real staged branch
   // stays untouched, while the actual CLI performs its normal input identity check.
   const capsuleDir = path.join(root, 'ci-results/prepared-evidence'); fs.mkdirSync(capsuleDir, { recursive: true });
-  const packed = JSON.parse((await run('npm', ['pack', linux.lockedParser(fileURLToPath(new URL('../desktop/', import.meta.url))).resolved, '--prefer-offline', '--ignore-scripts', '--json', '--pack-destination', capsuleDir], root, true, { npm_config_allow_remote: 'all' })).toString());
-  fs.renameSync(path.join(capsuleDir, Object.values(packed)[0].filename), path.join(capsuleDir, 'yaml-parser.tgz'));
+  // WHY: exercise the real portable producer instead of duplicating npm shim
+  // invocation logic inside the consumer fixture.
+  await linux.packParserCapsule(fileURLToPath(new URL('../desktop/', import.meta.url)), capsuleDir, root);
   const formats = ['AppImage', 'deb', 'rpm', 'pacman'], core = [{ path: 'resources', type: 'directory', mode: 0o755 }];
   const setup = async (mode, config = 'linux:\n  category: Development\n', pkg = {}, optimized = true) => {
     put('desktop/electron-builder.yml', config); put('desktop/package.json', pkg);

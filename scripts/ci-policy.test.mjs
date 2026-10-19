@@ -1,12 +1,32 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, renameSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { run, classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
+import { run, npmCli, classify, matrixFor, completionAllowed, packagingMode } from './ci-policy.mjs';
 import { identity } from './ci-evidence.mjs';
 
+test('npm CLI resolves beside Node without executing a Windows shim or shell syntax', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-npm-'));
+  try {
+    const install = join(root, 'node tools & spaces');
+    const cli = join(install, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    mkdirSync(join(cli, '..'), { recursive: true });
+    writeFileSync(cli, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+    writeFileSync(join(install, 'npm.cmd'), '@echo should-never-execute');
+    const resolved = npmCli({ PATH: '' }, join(install, 'node.exe'));
+    assert.equal(resolved, realpathSync(cli));
+    const args = ['pack', 'literal; echo not-a-command', 'value & spaces', '--json'];
+    assert.deepEqual(JSON.parse((await run(process.execPath, [resolved, ...args], root)).toString()), args);
+    assert.equal(npmCli({ PATH: '', npm_execpath: cli }, join(root, 'other', 'node')), realpathSync(cli));
+    assert.equal(npmCli({ Path: install }, join(root, 'other', 'node')), realpathSync(cli));
+    assert.throws(() => npmCli({ PATH: '', npm_execpath: join(install, 'npm.cmd') }, join(root, 'missing', 'node')), /npm CLI/);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 5 }); }
+});
+test('the actual npm CLI runs under the selected Node executable without a shell', async () => {
+  assert.match((await run(process.execPath, [npmCli(), '--version'])).toString().trim(), /^\d+\.\d+\.\d+$/);
+});
 test('fast compression is limited to proven ordinary PR TypeScript source/tests', () => {
   assert.equal(packagingMode('pull_request', ['desktop/src/main/new.ts', 'desktop/tests/new.test.tsx']), 'fast');
   for (const name of ['desktop/package-lock.json', 'desktop/electron-builder.yml', 'desktop/resources/new', 'desktop/assets/new', 'desktop/src/native/new.cpp', 'scripts/ci-linux.mjs', '.github/workflows/desktop-ci.yml', 'desktop/office-pin.json', 'app/runtime/pins.env']) {

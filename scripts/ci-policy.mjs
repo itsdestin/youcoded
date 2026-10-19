@@ -1,10 +1,32 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { appendFileSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { appendFileSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { resolve, dirname, join, delimiter, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+export function npmCli(env = process.env, executable = process.execPath) {
+  // WHY: Windows npm is a command shim, not a directly spawnable executable.
+  // Run npm's actual JavaScript CLI under the selected Node, without a shell;
+  // this also preserves literal paths/arguments containing spaces or metacharacters.
+  const nodeDirectory = dirname(executable);
+  const candidates = [
+    join(nodeDirectory, 'node_modules/npm/bin/npm-cli.js'),
+    join(nodeDirectory, '../lib/node_modules/npm/bin/npm-cli.js'),
+    env.npm_execpath,
+  ];
+  for (const directory of (env.PATH ?? env.Path ?? env.path ?? '').split(delimiter).filter(Boolean)) {
+    candidates.push(join(directory, 'node_modules/npm/bin/npm-cli.js'), join(directory, '../lib/node_modules/npm/bin/npm-cli.js'), join(directory, 'npm'));
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    try {
+      const actual = realpathSync(candidate);
+      if (basename(actual) === 'npm-cli.js' && statSync(actual).isFile()) return actual;
+    } catch { /* Missing installation layout: try the next known CLI location. */ }
+  }
+  throw new Error('Cannot locate npm CLI beside Node or on PATH');
+}
 export function run(command, args, cwd = process.cwd(), capture = true, env) {
   // WHY: consume the complete stream, without exec's maxBuffer or early grep/SIGPIPE.
   return new Promise((accept, reject) => {
