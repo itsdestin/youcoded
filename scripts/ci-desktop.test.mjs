@@ -236,7 +236,11 @@ test('locked parser capsule verifies current SRI before importing, parses curren
     fs.writeFileSync(path.join(desktop, 'electron-builder.yml'), 'linux:\n  fpm: [--current-sentinel]\n');
     assert.deepEqual(await manifest(desktop), sourceBeforeErrors);
     // WHY: the retained npm tarball includes its own license; no install needed.
-    const entries = (await run('tar', ['-tzf', capsule])).toString().split('\n'); assert.ok(entries.includes('package/LICENSE'));
+    const listing = (await run('tar', ['-tzf', capsule])).toString();
+    for (const ending of ['\n', '\r\n']) {
+      const platformListing = listing.replace(/\r?\n/g, ending);
+      const entries = platformListing.split(/\r?\n/); assert.ok(entries.includes('package/LICENSE'));
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); }
 });
 

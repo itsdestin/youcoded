@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { identity, hash } from './ci-evidence.mjs';
+import { isMain } from './ci-policy.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const scopes = ['jvm', 'debug', 'releaseTest'];
 const jvmPrefixes = ['Debug', 'Release', 'ReleaseTest'].map(variant => `app/build/test-results/test${variant}UnitTest/`);
@@ -80,4 +81,4 @@ async function main() {
     console.log('Android current scope evidence aggregated');
   } else throw new Error('Use start|android|jvm|debug|releaseTest|aggregate');
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });
+if (isMain(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });

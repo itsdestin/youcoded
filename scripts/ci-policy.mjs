@@ -2,9 +2,19 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { resolve, dirname, join, delimiter, basename } from 'node:path';
+import { dirname, join, delimiter, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+export function isMain(metaUrl, filename = process.argv[1]) {
+  if (typeof filename !== 'string') return false;
+  // WHY: Node canonicalizes module URLs, but macOS argv can retain /var while
+  // the same file lives at /private/var. An alias must not suppress a CLI gate.
+  try { return realpathSync(filename) === realpathSync(fileURLToPath(metaUrl)); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+    throw error;
+  }
+}
 export function npmCli(env = process.env, executable = process.execPath) {
   // WHY: Windows npm is a command shim, not a directly spawnable executable.
   // Run npm's actual JavaScript CLI under the selected Node, without a shell;
@@ -102,4 +112,4 @@ async function main() {
     console.log('CI completion verified');
   } else throw new Error('Use changes|gate');
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });
+if (isMain(import.meta.url)) main().catch(error => { console.error(error); process.exitCode = 1; });
