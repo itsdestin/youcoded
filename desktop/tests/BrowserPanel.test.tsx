@@ -403,6 +403,9 @@ describe('tool cards say what the browser did', () => {
     expect(browserToolDisplay('BrowserNavigate', { url: 'https://github.com' }, true).label).toBe('Opening github.com');
     expect(browserToolDisplay('BrowserAct', { action: 'click', element: 'Sign in' }, false).label).toBe('Clicked "Sign in"');
     expect(browserToolDisplay('BrowserSnapshot', {}, false).label).toBe('Looked at the page');
+    expect(browserToolDisplay('BrowserHistory', { direction: 'back' }, false).label).toBe('Went back');
+    expect(browserToolDisplay('BrowserZoom', { zoom: 50 }, true).label).toBe('Setting page zoom');
+    expect(browserToolDisplay('BrowserNavigate', { zoom: 50 }, false).label).toBe('Set page zoom');
   });
 
   it('a group of Browser steps reads "used the browser", never the internal server id', () => {

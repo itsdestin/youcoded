@@ -16,6 +16,31 @@ import type { ChatGptAuth } from '../src/main/providers/chatgpt-auth';
 import { limitError } from '../src/main/providers/chatgpt-oauth';
 import { openAIContinuationBinding } from '../src/main/harness/openai-continuation';
 import { streamText, generateText } from 'ai';
+import { HarnessSession } from '../src/main/harness/harness-session';
+import { makeOpts, scriptModel } from './helpers/harness-fakes';
+import { browserToolsAsMcp } from '../src/main/assistant-browser/browser-tool-specs';
+
+function browserToolsForRequest() {
+  const session = new HarnessSession(makeOpts({
+    toolServices: { browser: { callTool: async () => ({ text: 'unused' }) } } as any,
+  }), async () => scriptModel([{ text: 'unused' }]) as any);
+  return (session as any).buildAiTools();
+}
+
+function expectBrowserWireSchemas(wireTools: any[]) {
+  for (const expected of browserToolsAsMcp()) {
+    const wire = wireTools.find((t: any) => t.name === expected.name);
+    expect(wire, expected.name).toBeDefined();
+    expect(wire.description).toBe(expected.description);
+    const { $schema: _dialect, ...parameters } = wire.parameters;
+    expect(parameters).toEqual(expected.inputSchema);
+  }
+  const navigate = wireTools.find((t: any) => t.name === 'BrowserNavigate');
+  expect(navigate.parameters.required).toEqual(['url']);
+  expect(Object.keys(navigate.parameters.properties).sort()).toEqual(['newTab', 'url']);
+  expect(wireTools.find((t: any) => t.name === 'BrowserHistory').parameters.required).toEqual(['direction']);
+  expect(wireTools.find((t: any) => t.name === 'BrowserZoom').parameters.required).toEqual(['zoom']);
+}
 
 describe('ProviderRegistry', () => {
   let root: string; let reg: ProviderRegistry; let secrets: SecretsStore;
@@ -543,6 +568,40 @@ describe('ProviderRegistry', () => {
       expect(req.headers['chatgpt-account-id']).toBeUndefined();
       expect(req.headers['openai-beta']).toBeUndefined();
       expect(Object.entries(req.headers).filter(([k]) => k === 'authorization')).toEqual([['authorization', 'Bearer tok-1']]);
+    });
+
+    it.each(['codex', 'official'] as const)('sends unambiguous browser schemas through the %s request route', async (route) => {
+      // WHY: schema parity before transport does not prove what an agent receives.
+      // Capture the real harness -> SDK -> middleware request, without paid calls.
+      const tools = browserToolsForRequest();
+      const { auth, requests } = fakeChatGpt({ route });
+      const model = await make(auth).languageModel({ providerId: 'chatgpt', modelId: 'gpt-5.5' });
+      const result = streamText({ model: model as any, prompt: 'Open example.com', tools });
+      for await (const _ of result.textStream) { /* drain the mocked response */ }
+      expect(requests).toHaveLength(1);
+      expectBrowserWireSchemas(requests[0].body.tools);
+    });
+
+    it.each(['openai', 'openai-compatible'] as const)('preserves browser contracts on the %s wire', async (type) => {
+      const bodies: any[] = [];
+      // WHY: exercise both Responses and Chat Completions schema encoders; the
+      // mock rejects unexpected destinations, so this test cannot spend a key.
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        expect(url).toBe(type === 'openai' ? 'https://api.openai.com/v1/responses' : 'https://browser-tools.invalid/v1/chat/completions');
+        bodies.push(JSON.parse(String(init?.body)));
+        if (type === 'openai') return sse(responsesStream({ text: 'ok' }));
+        return sse('data: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] }) + '\n\ndata: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n');
+      });
+      try {
+        const id = await reg.upsert({ type, label: 'Browser contract fixture', enabled: true, ...(type === 'openai-compatible' ? { baseUrl: 'https://browser-tools.invalid/v1' } : {}) });
+        if (type === 'openai') await reg.setKey(id, 'not-a-real-key');
+        const model = await reg.languageModel({ providerId: id, modelId: 'gpt-5.5' });
+        const result = streamText({ model: model as any, prompt: 'Open example.com', tools: browserToolsForRequest(), maxRetries: 0 });
+        await expect(result.text).resolves.toBe('ok');
+        expect(bodies).toHaveLength(1);
+        expectBrowserWireSchemas(bodies[0].tools.map((t: any) => t.function ?? t));
+      } finally { vi.unstubAllGlobals(); }
     });
 
     // The `include` assertion on gpt-5.5 above cannot fail: the SDK recognises

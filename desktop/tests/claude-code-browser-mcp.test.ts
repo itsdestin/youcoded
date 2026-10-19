@@ -12,6 +12,7 @@ import {
 } from '../src/main/assistant-browser/claude-code-browser-mcp';
 import { BROWSER_TOOL_NAMES } from '../src/main/assistant-browser/browser-tool-specs';
 import { browserToolOf } from '../src/shared/browser-types';
+import { validateBrowserRequest } from '../src/main/assistant-browser/browser-tool-validation';
 
 const isWin = process.platform === 'win32';
 let root = '';
@@ -79,7 +80,7 @@ describe('Browser relay for Claude Code', () => {
     expect(BROWSER_RELAY_JS).not.toContain('${');
   });
 
-  it('advertises all seven tools with the shared descriptions, and pre-approves them by name', async () => {
+  it('advertises all browser tools with the shared descriptions, and pre-approves them by name', async () => {
     const r = startRelay({ CLAUDE_DESKTOP_SESSION_ID: 'cc-1' });
     r.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {} } });
     const init = await r.next(1);
@@ -101,10 +102,37 @@ describe('Browser relay for Claude Code', () => {
     const nav = await r.next(3);
     expect(nav.result.content[0].text).toBe('ran BrowserNavigate');
     expect(calls.at(-1)).toMatchObject({ sessionId: 'cc-1', tool: 'BrowserNavigate', args: { url: 'https://example.com' } });
+    // WHY: the relay transports both new operations unchanged; semantics stay in the worker.
+    for (const [id, name, args] of [[30, 'BrowserHistory', { direction: 'back' }], [31, 'BrowserZoom', { zoom: 50 }]] as const) {
+      r.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+      expect((await r.next(id)).result.content[0].text).toBe(`ran ${name}`);
+      expect(calls.at(-1)).toMatchObject({ sessionId: 'cc-1', tool: name, args });
+    }
     r.send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'BrowserScreenshot', arguments: {} } });
     const shot = await r.next(4);
     expect(shot.result.content[1]).toEqual({ type: 'image', data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64'), mimeType: 'image/jpeg' });
     r.child.kill();
+  });
+
+  // WHY: coercing falsy payloads to {} bypasses the worker's shared semantic preflight.
+  it.each([null, false, 0, ''])('preserves explicit invalid arguments %j for shared validation', async (args) => {
+    const r = startRelay({ CLAUDE_DESKTOP_SESSION_ID: 'cc-1' });
+    try {
+      r.send({ jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'BrowserSnapshot', arguments: args } });
+      await r.next(40);
+      expect(calls.at(-1)?.args).toBe(args);
+      expect(validateBrowserRequest('BrowserSnapshot', calls.at(-1)?.args)).toHaveProperty('error');
+    } finally { r.child.kill(); }
+  });
+
+  it('defaults only omitted arguments to an empty object', async () => {
+    const r = startRelay({ CLAUDE_DESKTOP_SESSION_ID: 'cc-1' });
+    try {
+      r.send({ jsonrpc: '2.0', id: 41, method: 'tools/call', params: { name: 'BrowserSnapshot' } });
+      expect((await r.next(41)).result.content[0].text).toBe('ran BrowserSnapshot');
+      expect(calls.at(-1)?.args).toEqual({});
+      expect(validateBrowserRequest('BrowserSnapshot', calls.at(-1)?.args)).not.toHaveProperty('error');
+    } finally { r.child.kill(); }
   });
 
   it('refuses a session that is not one of this app\'s Claude Code conversations', async () => {

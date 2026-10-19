@@ -194,6 +194,8 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     // here too would double-ask and make the two session kinds behave differently
     // (design review 1 #1; spec docs/active/specs/2026-10-13-assistant-browser-design.md).
     { tool: 'BrowserNavigate', action: 'allow' },
+    { tool: 'BrowserHistory', action: 'allow' },
+    { tool: 'BrowserZoom', action: 'allow' },
     { tool: 'BrowserSnapshot', action: 'allow' },
     { tool: 'BrowserAct', action: 'allow' },
     { tool: 'BrowserScreenshot', action: 'allow' },
