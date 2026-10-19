@@ -1,46 +1,11 @@
 name: Desktop CI
 
 on:
-  # Every PR is checked via `pull_request`, regardless of branch name. This
-  # replaces the branch-name allowlist that caused the incident below: that
-  # list was a proxy for "is this a PR", and the proxy failed when 'feat/**'
-  # was listed but 'feature/**' matched nothing — so those branches and their
-  # PRs got NO checks and master stayed red from 2026-07-14 to 07-16 (18
-  # failing pushes) without anyone noticing. `pull_request` also lets
-  # Dependabot's `dependabot/**` PRs run checks; they matched none of the old
-  # push patterns. `push: [master]` keeps the post-merge run on master.
-  # docs/** is skipped: every step in this workflow runs inside `desktop/`
-  # (npm ci, npm test, knip, eslint, npm run build) and none of them reads
-  # docs/. A docs-only change was costing ~15 minutes of builds across three
-  # operating systems for a diff that cannot affect any of them.
-  #
-  # This is NOT the branch-name allowlist described above coming back. That one
-  # was a PROXY -- a guess at "is this a PR" that guessed wrong. This is a
-  # direct claim about which files the build reads, and `paths-ignore` skips a
-  # PR only when EVERY changed file matches, so anything touching docs/ AND
-  # src/ still runs the whole matrix.
-  #
-  # THE ONE TRAP, written down because it is invisible until it bites: a
-  # skipped workflow reports NO status, not a passing one. If master is ever
-  # given branch protection with `build` as a required check, docs-only PRs
-  # will sit unmergeable forever waiting for a run that never starts. Turning
-  # protection on means dropping this filter, or making the required check a
-  # tiny always-runs job. Master was unprotected until 2026-09-16 (see below
-  # and the `docs-only` job).
-  #
-  # 2026-09-16 (CI/test health review, Destin's deck answers Q-1 and Q-2): the
-  # `paths-ignore` filters are GONE, replaced by the `changes` job below, so a
-  # docs-only change still produces a COMPLETED check (skipped counts as passing
-  # for a required status check; a filtered-out workflow reports nothing and
-  # blocks forever). That is what lets master be protected. And every PR runs
-  # Linux only; Windows and macOS run on every push to master and once a night —
-  # they are the slow, machine-flaky legs, nobody on the project has either
-  # machine, and a Windows-only break is still caught the same day it lands.
+  # WHY: every PR gets a result, including docs-only and arbitrary branch names.
   push:
     branches: [master]
   pull_request:
   schedule:
-    # 07:23 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
     - cron: '23 7 * * *'
   workflow_dispatch:
     inputs:
@@ -50,167 +15,284 @@ on:
         options: [all, browser]
         default: all
 
+permissions:
+  contents: read
+# WHY: only a newer run of this PR supersedes it. The reusable Android child
+# deliberately has NO concurrency group: github.workflow there is this caller.
+concurrency:
+  group: full-app-ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  # Did anything outside docs/ change? Every step of `build` runs inside desktop/
-  # and none reads docs/, so a docs-only diff skips the matrix — but as a SKIPPED
-  # job with a completed check, never as a run that does not exist.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      route: ${{ steps.filter.outputs.route }}
+      sha: ${{ steps.filter.outputs.sha }}
+      matrix: ${{ steps.filter.outputs.matrix }}
+      packageMode: ${{ steps.filter.outputs.packageMode }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - id: filter
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ github.event_name }}" in
-            pull_request) range="origin/${{ github.base_ref }}...HEAD" ;;
-            push)
-              before="${{ github.event.before }}"
-              # A brand-new branch has no `before`; run everything.
-              if [[ "$before" =~ ^0+$ ]]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-              range="$before..${{ github.sha }}" ;;
-            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
-          esac
-          if git diff --name-only "$range" | grep -qv '^docs/'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "changed files outside docs/: $(git diff --name-only "$range" | grep -vc '^docs/' || true)"
+        run: node scripts/ci-policy.mjs changes
 
-  # Stand-in for the required check on a docs-only change. WHY (2026-09-16,
-  # probe PR #492): master requires `build (ubuntu-latest)`, but a SKIPPED
-  # matrix job never expands its matrix — it reports as plain `build`, so the
-  # required context never appeared and a docs-only PR sat BLOCKED. This job
-  # carries the same display name and runs ONLY when `build` is skipped, so
-  # exactly one `build (ubuntu-latest)` result exists on every PR. If `changes`
-  # itself fails, both are skipped and the PR stays blocked — fail closed.
-  docs-only:
+  tests:
     needs: changes
-    if: needs.changes.outputs.code == 'false'
-    name: build (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - run: echo "docs-only change — nothing under desktop/ to build or test"
-
-  build:
-    # WHY: a focused pass must never satisfy the protected full-suite status check.
-    name: ${{ inputs.test_scope == 'browser' && format('browser diagnostics ({0})', matrix.os) || format('build ({0})', matrix.os) }}
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    # Windows runs the TESTS only (not the packaging build) because a whole
-    # class of bug is invisible on Linux: Git Bash path semantics, MSYS mounts,
-    # drive-relative resolution, CRLF. This job was ubuntu-only, so PR #174's
-    # scoped-cwd-persistence tests never ran on Windows and merged green while
-    # broken there — first seen 2026-07-19, at BETA-BUILD time, because
-    # desktop-test-build.yml was the only workflow with a Windows runner.
+    if: needs.changes.outputs.route == 'full'
+    name: tests (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.total }})
     strategy:
       fail-fast: false
-      matrix:
-        # macOS added 2026-07-19 for the same reason Windows was: its only
-        # coverage was desktop-test-build.yml, so a macOS-only failure could
-        # not surface until a beta dispatch — which is exactly how the
-        # sync-spaces-engine 5s-ceiling timeouts were found (run 29701441150).
-        # PRs: Linux only. Master pushes, the nightly and a manual dispatch: all three.
-        # See the trigger comment above (2026-09-16).
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desktop
-
     steps:
       - uses: actions/checkout@v7
-
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      # WHY: retain OS-specific semantic checks, once per selected OS, without
+      # forcing every shard to wait for a global semantic-check matrix.
+      - name: OS semantic checks
+        if: matrix.shard == 1 && runner.os != 'Linux'
+        run: |
+          node --test ../scripts/beta-version.test.mjs ../scripts/ci-policy.test.mjs ../scripts/ci-android-policy.test.mjs ../scripts/ci-gradle-outcomes.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs ../scripts/ci-desktop.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run knip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint:design
+        shell: pwsh
+      - name: Run tests
+        run: node ../scripts/ci-desktop.mjs shard "${{ matrix.os }}" "${{ matrix.shard }}" "${{ matrix.total }}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.shard }}
+          path: ci-results/tests-${{ matrix.os }}-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 7
 
-      # WHY: release numbering lives outside desktop/, so Vitest never discovers it.
+  prepare:
+    needs: changes
+    if: needs.changes.outputs.route == 'full'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - name: Test beta version numbering
         run: node --test ../scripts/beta-version.test.mjs
-
-      - name: Install dependencies
-        run: npm ci
-
-      # Type check BOTH trees (src + tests) with tsgo, TypeScript 7's native
-      # compiler: ~3s together, where tsc took ~27s. Until now CI type-checked
-      # src only as a side effect of `npm run build`, Linux-only and after the
-      # tests — and never checked tests/ at all. Runs first so a type error
-      # fails in seconds instead of after the suite. The build below still
-      # compiles with TypeScript 6 (`tsc`), so an emit-only difference between
-      # the two compilers cannot ship unnoticed.
+      - name: Ensure transport and filesystem proof tools
+        # WHY: AppImage's extraction runtime discards directory modes; prove the
+        # stored filesystem with a mode-preserving extractor and a real fixture.
+        run: (command -v zstd && command -v unsquashfs && command -v mksquashfs) || (sudo apt-get update && sudo apt-get install -y zstd squashfs-tools)
+      - name: Test CI policy and evidence
+        run: node --test ../scripts/ci-policy.test.mjs ../scripts/ci-android-policy.test.mjs ../scripts/ci-gradle-outcomes.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs
+      - run: npm ci
+      - name: Test actual current Vitest discovery and shards
+        run: node --test ../scripts/ci-desktop.test.mjs
       - name: Type check (tsgo)
         run: npm run typecheck
+      - name: Dead-code check (knip)
+        run: npm run knip
+      - name: Lint (oxlint)
+        run: npm run lint
+      - name: Design lint (oxlint, ratchet)
+        run: npm run lint:design
+      - name: Prepare current production app
+        env:
+          CI_PACKAGE_MODE: ${{ needs.changes.outputs.packageMode }}
+        run: node ../scripts/ci-linux.mjs prepare
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prepared-app
+          path: ci-prepared/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: prepared-evidence
+          path: ci-results/prepared-evidence/
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Run tests
-        if: inputs.test_scope != 'browser'
-        run: npm test
+  formats:
+    needs: [changes, prepare]
+    if: needs.changes.outputs.route == 'full'
+    name: Linux package (${{ matrix.format }})
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [AppImage, deb, rpm, pacman]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - name: Install Linux build deps
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools zstd time squashfs-tools
+      - uses: actions/download-artifact@v8
+        with:
+          name: prepared-app
+          path: ci-prepared
+      - name: Package and validate current payload
+        env:
+          CI_PACKAGE_MODE: ${{ needs.changes.outputs.packageMode }}
+        run: node scripts/ci-linux.mjs package "${{ matrix.format }}"
+      # WHY: installers are validated here but not uploaded by default. Keep
+      # current manifests, package metadata and sizes, not four duplicate blobs.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: format-${{ matrix.format }}
+          path: ci-results/format-${{ matrix.format }}/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
-      # WHY: capture protocol evidence in a focused run without changing the full
-      # suite's shell or defaults. This is diagnostics, not a full-suite green light.
+  android:
+    needs: changes
+    if: needs.changes.outputs.route == 'full'
+    uses: ./.github/workflows/android-ci.yml
+
+  evidence:
+    needs: [changes, tests, prepare, formats]
+    if: needs.changes.outputs.route == 'full'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.verify.outputs.sha }}
+      packageMode: ${{ steps.verify.outputs.packageMode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tests-*
+          path: ci-results
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: format-*
+          path: ci-results
+      - uses: actions/download-artifact@v8
+        with:
+          name: prepared-evidence
+          path: ci-results/prepared-evidence
+      - name: Verify fresh selected file union and package evidence
+        id: verify
+        env:
+          CI_PACKAGE_MODE: ${{ needs.changes.outputs.packageMode }}
+        run: node scripts/ci-desktop.mjs aggregate
+      - uses: actions/upload-artifact@v7
+        with:
+          name: full-ci-summary
+          path: ci-results/summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+  browser:
+    needs: changes
+    if: needs.changes.outputs.route == 'browser'
+    name: browser diagnostics (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Test beta version numbering
+        run: node --test ../scripts/beta-version.test.mjs
+      - run: npm ci
+      - name: Type check (tsgo)
+        run: npm run typecheck
       - name: Browser diagnostics
-        if: inputs.test_scope == 'browser'
         env:
           DEBUG: 'pw:protocol,pw:browser*'
         run: npx vitest run tests/assistant-browser.test.ts tests/assistant-browser-host.test.ts tests/assistant-browser-live.test.ts tests/assistant-browser-native.test.ts tests/aria-props.test.ts tests/desktop-ci.test.ts --maxWorkers=1
-
-      # Dead-code check. Deliberately a SEPARATE step rather than chained onto
-      # `npm test` — that script is bare `vitest` (watch-capable), so chaining
-      # would re-run knip on every file save in the local dev loop.
-      # Gates only on the categories that are clean today (see desktop/knip.jsonc
-      # → "rules"); the noisy-but-real ones report as warnings and exit 0, so
-      # this ratchets without demanding a big-bang cleanup first.
       - name: Dead-code check (knip)
         run: npm run knip
-
-      # Bug gate, not a style gate. tsc + vitest + knip were all green while a
-      # conditional React hook, a floating promise in main, and a runtime import
-      # of an undeclared package shipped — none of those tools can see those
-      # classes. Every enabled rule is at zero on the tree, so this fails only on
-      # a NEW defect. Rule set and the measured cost of each deferred rule:
-      # desktop/.oxlintrc.json (oxlint replaced ESLint 2026-09-14, same rules).
       - name: Lint (oxlint)
         run: npm run lint
-
-      # Design-system lint as a RATCHET, not a gate at zero (2026-09-16). The
-      # script carries `--max-warnings <count measured that day>` (see
-      # desktop/package.json), so this fails only when a change ADDS a raw
-      # colour, an arbitrary value or a restyled components/ui primitive. Lower
-      # the number in package.json whenever a cleanup brings the count down;
-      # never raise it. Before this step the check had zero callers and the
-      # count grew unseen.
       - name: Design lint (oxlint, ratchet)
         run: npm run lint:design
 
-      # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers
-      # run inside `npm run build` (see desktop/electron-builder.yml linux.target).
-      # PR #98 added rpm + pacman targets without updating CI, so every Desktop
-      # CI run since 2026-05-20 (commit 4679cc89) has been red on the same
-      # bsdtar-missing failure. Mirror desktop-release.yml's setup step:
-      #   libarchive-tools -> provides bsdtar, required by the pacman target
-      #   rpm              -> required by the rpm target
-      # Packaging is Linux-only here: the deb/rpm/pacman targets are what CI
-      # regressed on before, and the Windows NSIS build is already covered by
-      # desktop-test-build.yml / desktop-release.yml. Windows stops after tests.
-      - name: Install Linux build deps
-        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
-        # apt-get update prefix: the cached package index on ubuntu-latest
-        # frequently points to .deb versions that have already rolled off
-        # the mirror, so a bare `install` fails with HTTP 404 / exit 100.
-        # Refresh the index first.
-        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
-        working-directory: .
+  completion:
+    # WHY: the stable required context includes Android and all current package
+    # and file-union proofs. Browser diagnostics never receive this context.
+    name: ${{ needs.changes.outputs.route == 'browser' && 'Full build not selected (browser diagnostics)' || 'build (ubuntu-latest)' }}
+    needs: [changes, tests, prepare, formats, android, evidence, browser]
+    if: always() && needs.changes.outputs.route != 'browser'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Require every selected result
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-policy.mjs gate
 
-      - name: Build
-        if: runner.os == 'Linux' && inputs.test_scope != 'browser'
-        run: npm run build
+  browser-completion:
+    name: Browser diagnostic completion
+    needs: [changes, tests, prepare, formats, android, evidence, browser]
+    if: always() && needs.changes.outputs.route == 'browser'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-policy.mjs gate

@@ -10,6 +10,7 @@
 // kernel actually blocks the program and that the final bytes survive.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { loadWorker } from './helpers/pty-worker-harness';
 
@@ -326,22 +327,69 @@ const expected = (lines: number) => {
 };
 
 function startReal(lines: number, env: Record<string, string>, producer = PRODUCER) {
-  const child: ChildProcess = fork(WORKER, [], { env: { ...process.env, ...env }, silent: true, execArgv: [] });
-  const state = { out: '', sent: 0, acked: 0, maxOwed: 0, messages: 0, exited: false, exitAfterLastData: false, auto: true };
-  child.on('message', (m: any) => {
+  return attachReal(fork(WORKER, [], { env: { ...process.env, ...env }, silent: true, execArgv: [] }), lines, producer);
+}
+function attachReal(child: ChildProcess, lines: number, producer = PRODUCER) {
+  const state = { out: '', sent: 0, acked: 0, maxOwed: 0, messages: 0, exited: false, exitAfterLastData: false, auto: true, error: null as Error | null };
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let stopped = false, channelClosed = false;
+  const sends = new Set<Promise<void>>();
+  const send = (message: any, onError = (error: Error) => { state.error = error; }) => {
+    let settle!: () => void;
+    const pending = new Promise<void>(resolve => { settle = resolve; });
+    sends.add(pending);
+    try {
+      child.send(message, error => {
+        if (error) onError(error);
+        settle();
+      });
+    } catch (error) {
+      onError(error as Error);
+      settle();
+    }
+    void pending.then(() => sends.delete(pending));
+  };
+  const clearAcks = () => { for (const timer of timers) clearTimeout(timer); timers.clear(); };
+  const closed = () => { channelClosed = true; clearAcks(); };
+  const ackError = (error: Error | null) => {
+    if (!error) return;
+    // WHY: connected can still be true when the kernel pipe has just closed.
+    // A send callback owns that race; complete-byte/exit assertions still catch
+    // an unexpectedly lost worker, while other IPC errors fail the test.
+    if (['EPIPE', 'ERR_IPC_CHANNEL_CLOSED'].includes((error as NodeJS.ErrnoException).code ?? '')) closed();
+    else state.error = error;
+  };
+  const ack = (n: number) => {
+    if (stopped || channelClosed || state.exited || !child.connected) return;
+    state.acked += n;
+    send({ type: 'ack', n }, ackError);
+  };
+  const onMessage = (m: any) => {
+    if (stopped) return;
     if (m.type === 'data') {
       state.out += m.data; state.sent += m.data.length; state.messages++;
       state.maxOwed = Math.max(state.maxOwed, state.sent - state.acked);
-      if (state.auto) setTimeout(() => { state.acked += m.data.length; child.connected && child.send({ type: 'ack', n: m.data.length }); }, 2);
-    } else if (m.type === 'exit') { state.exited = true; }
-  });
-  child.send({ type: 'spawn', command: process.execPath, args: ['-e', producer, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
-  const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve) => {
+      if (state.auto && !state.exited && !channelClosed) {
+        const timer = setTimeout(() => { timers.delete(timer); ack(m.data.length); }, 2);
+        timers.add(timer);
+      }
+    } else if (m.type === 'exit') { state.exited = true; clearAcks(); }
+  };
+  child.on('message', onMessage); child.on('disconnect', closed); child.on('exit', closed);
+  send({ type: 'spawn', command: process.execPath, args: ['-e', producer, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
+  const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve, reject) => {
     const t0 = Date.now();
-    const check = () => { if (pred()) return resolve(true); if (Date.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
+    const check = () => { if (state.error) return reject(state.error); if (pred()) return resolve(true); if (stopped || Date.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
     check();
   });
-  return { child, state, until, ack: (n: number) => { state.acked += n; child.send({ type: 'ack', n }); } };
+  return {
+    child, state, until, ack,
+    stop: async () => {
+      stopped = true; clearAcks(); child.off('message', onMessage);
+      // WHY: clearing timers cannot cancel a send already handed to Node; drain its callback before checking errors.
+      while (sends.size) await Promise.all([...sends]);
+    },
+  };
 }
 
 // What the program printed, as the terminal delivered it. WHY the macOS step: under a flood, macOS's
@@ -350,14 +398,73 @@ function startReal(lines: number, env: Record<string, string>, producer = PRODUC
 // passed through untouched; a lost or duplicated LINE still fails every comparison below.
 const received = (r: { state: { out: string } }) => (process.platform === 'darwin' ? r.state.out.replace(/\r+\n/g, '\r\n') : r.state.out);
 
+describe('real PTY harness acknowledgement lifecycle', () => {
+  afterEach(() => vi.useRealTimers());
+  const fakeChild = (ackError?: NodeJS.ErrnoException, deferAck?: (callback: (error: Error | null) => void) => void) => {
+    const child = new EventEmitter() as ChildProcess;
+    Object.defineProperty(child, 'connected', { value: true });
+    child.send = vi.fn((message: { type: string }, callback?: (error: Error | null) => void) => {
+      if (message.type === 'ack' && deferAck && callback) deferAck(callback);
+      else if (message.type === 'ack' && ackError) {
+        if (callback) callback(ackError);
+        else setTimeout(() => child.emit('error', ackError), 0);
+      } else callback?.(null);
+      return true;
+    }) as unknown as ChildProcess['send'];
+    return child;
+  };
+  it('handles the closed IPC race without an uncaught acknowledgement error', () => {
+    vi.useFakeTimers();
+    const child = fakeChild(Object.assign(new Error('closed pipe'), { code: 'EPIPE' }));
+    const r = attachReal(child, 0);
+    child.emit('message', { type: 'data', data: 'tail' });
+    expect(() => vi.runAllTimers()).not.toThrow();
+    expect(r.state.error).toBeNull(); void r.stop();
+  });
+  it('cancels delayed acknowledgements before teardown and retains unexpected send errors', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild(), r = attachReal(child, 0);
+    child.emit('message', { type: 'data', data: 'tail' });
+    const stopped = r.stop(); vi.advanceTimersByTime(2); await stopped;
+    expect(vi.mocked(child.send).mock.calls.filter(([message]) => (message as { type: string }).type === 'ack')).toHaveLength(0);
+    const broken = attachReal(fakeChild(Object.assign(new Error('unexpected send failure'), { code: 'EINVAL' })), 0);
+    (broken.child as EventEmitter).emit('message', { type: 'data', data: 'tail' });
+    vi.advanceTimersByTime(2);
+    await expect(broken.until(() => false, 10)).rejects.toThrow('unexpected send failure');
+    await broken.stop();
+  });
+  it('drains an already-issued ACK callback before teardown checks send errors', async () => {
+    vi.useFakeTimers();
+    let complete!: (error: Error | null) => void;
+    const child = fakeChild(undefined, callback => { complete = callback; });
+    const r = attachReal(child, 0);
+    child.emit('message', { type: 'data', data: 'tail' });
+    vi.advanceTimersByTime(2);
+    const stopping = r.stop();
+    let drained = false;
+    void stopping.then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    complete(Object.assign(new Error('late ACK send failure'), { code: 'EINVAL' }));
+    await stopping;
+    expect(r.state.error?.message).toBe('late ACK send failure');
+  });
+});
+
 describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
-  const kids: ChildProcess[] = [];
-  afterEach(() => { for (const k of kids.splice(0)) { try { k.kill('SIGKILL'); } catch { /* gone */ } } });
+  const kids: ReturnType<typeof startReal>[] = [];
+  afterEach(async () => {
+    const finished = kids.splice(0);
+    // WHY: cancel queued ACKs, terminate the child, and drain issued send callbacks before asserting errors.
+    for (const r of finished) { r.stop(); try { r.child.kill('SIGKILL'); } catch { /* gone */ } }
+    for (const r of finished) await r.stop();
+    for (const r of finished) expect(r.state.error).toBeNull();
+  });
 
   it('delivers a large flood byte for byte, including the final line, with bounded memory in flight', async () => {
     const lines = 250_000;                                         // ~11 MB
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000' });
-    kids.push(r.child);
+    kids.push(r);
     expect(await r.until(() => r.state.exited, 60000)).toBe(true);
     expect(received(r).length).toBe(expected(lines).length);
     expect(received(r)).toBe(expected(lines));
@@ -368,7 +475,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   it('with no acknowledgements the program is actually blocked: output stops at the high mark', async () => {
     const lines = 250_000;
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
-    kids.push(r.child);
+    kids.push(r);
     r.state.auto = false;
     // WHY a signal first (final review F55): "more than 100 000 sent" was a fixed 2.5 s guess,
     // which a busy machine can outrun. Wait for it, then settle so the reads already in flight
@@ -391,7 +498,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   it.skipIf(EXIT_DROPS_FINAL_WRITE)('a program that exits while the brake is on still delivers its last lines (no acknowledgements at all)', async () => {
     const lines = EXIT_LINES;
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' }, PRODUCER_IN_PIECES);
-    kids.push(r.child);
+    kids.push(r);
     r.state.auto = false;
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     expect(received(r)).toBe(expected(lines));
@@ -402,7 +509,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   it.skipIf(EXIT_DROPS_FINAL_WRITE)('the last lines survive the worker being held up as the program exits', async () => {
     const lines = EXIT_LINES;
     const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000', YOUCODED_PTY_TEST_EXIT_FREEZE_MS: '300' }, PRODUCER_IN_PIECES);
-    kids.push(r.child);
+    kids.push(r);
     r.state.auto = false;
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     expect(received(r)).toBe(expected(lines));

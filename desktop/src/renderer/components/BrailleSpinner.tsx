@@ -1,19 +1,21 @@
 import { useSyncExternalStore } from 'react';
+import { useOnScreen } from '../state/on-screen-context';
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+// WHY one palette descriptor: the cycle must not address a removed fifth colour.
+// fg-faint is decorative-only (2:1); the spinner's signal stops at fg-muted (P-11).
+const THEME_COLORS = [
+  ['--fg-dim', '#B0B0B0'], ['--fg-2', '#D0D0D0'],
+  ['--accent', '#85C1E9'], ['--fg-muted', '#A8D8A8'],
+] as const;
+
 function getThemeColors(): string[] {
   const style = getComputedStyle(document.documentElement);
-  const accent = style.getPropertyValue('--accent').trim() || '#85C1E9';
-  const fg2 = style.getPropertyValue('--fg-2').trim() || '#D0D0D0';
-  const fgDim = style.getPropertyValue('--fg-dim').trim() || '#B0B0B0';
-  const fgMuted = style.getPropertyValue('--fg-muted').trim() || '#A8D8A8';
-  // fg-faint is decorative-only (2:1 — dividers, disabled glyphs); a spinner is
-  // a signal the user is meant to see, so the cycle stops at fg-muted (P-11).
-  return [fgDim, fg2, accent, fgMuted];
+  return THEME_COLORS.map(([name, fallback]) => style.getPropertyValue(name).trim() || fallback);
 }
 
-// Shared animation driver — ONE timer for all mounted spinners.
+// Shared animation driver — ONE timer for all on-screen spinners.
 // History: per-instance setIntervals (2 timers × N spinners) → a single rAF
 // loop → this. The rAF version woke the renderer at the display's refresh rate
 // (180 wakeups/sec on a 180Hz panel) to do work that only changes every 80ms —
@@ -39,7 +41,7 @@ function tick() {
     changed = true;
   }
   if (now - lastColorTick >= 600) {
-    colorIndex = (colorIndex + 1) % 5;
+    colorIndex = (colorIndex + 1) % THEME_COLORS.length;
     lastColorTick = now;
     changed = true;
   }
@@ -67,6 +69,8 @@ function subscribe(cb: () => void): () => void {
 }
 
 const getVersion = () => version;
+const subscribeIdle = () => () => {};
+const getIdleVersion = () => 0;
 
 interface Props {
   /** Size class — maps to text-xs, text-sm, text-base, text-lg */
@@ -94,7 +98,10 @@ const sizeClass: Record<string, string> = {
 };
 
 export default function BrailleSpinner({ size = 'sm', colorCycle = true, className }: Props) {
-  useSyncExternalStore(subscribe, getVersion);
+  const onScreen = useOnScreen();
+  // WHY: hidden chats stay mounted, but must not subscribe to the shared animation
+  // clock. A stable idle snapshot also avoids consistency retries while others tick.
+  useSyncExternalStore(onScreen ? subscribe : subscribeIdle, onScreen ? getVersion : getIdleVersion);
 
   return (
     <span

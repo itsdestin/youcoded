@@ -10,6 +10,7 @@
   },
   "steps": [
     { "do": "expect", "control": { "role": "button", "label": "Comments 3" } },
+    { "do": "wait-scroll-idle", "area": "chat" },
     {
       "do": "right-click",
       "target": {

@@ -70,15 +70,39 @@ MUSL_SO="$CACHE/musl-$MUSL_VERSION/lib/libc.so"
 MUSL_TGZ="$CACHE/musl-$MUSL_VERSION.tar.gz"
 # Retain the original input, including for caches created before provenance was recorded.
 [ -s "$MUSL_TGZ" ] || curl -fsSL -o "$MUSL_TGZ" "https://musl.libc.org/releases/musl-$MUSL_VERSION.tar.gz"
-# WHY: never pair a cached libc with a new compiler/sysroot/patch without rebuilding it.
+# WHY: sources/COPYRIGHT are required by finalize even on an experimental hit.
+# Never trust a prior directory or a compiled file included in a source archive.
 rm -rf "$CACHE/musl-$MUSL_VERSION"
+say "musl $MUSL_VERSION"
+tar xzf "$MUSL_TGZ" -C "$CACHE"
+python3 -I "$HERE/patch-musl.py" "$CACHE/musl-$MUSL_VERSION"
+rm -f "$MUSL_SO"
+CRT="$(find "$SR" -name 'libclang_rt.builtins-aarch64.a' | head -1)"
+MUSL_KEY=""
+# Opt-in benchmark only: the workflow supplies a fresh RUNNER_TEMP namespace.
+# Source-collection builds intentionally retain fresh compilation in this trial.
+if [ -n "${YOUCODED_COMMON_NATIVE_CACHE:-}" ] && [ "${YOUCODED_COLLECT_SOURCES:-0}" != 1 ]; then
+  MUSL_KEY="$(python3 -I "$HERE/native-cache.py" key \
+    --input "archive=$MUSL_TGZ" --input "patch=$HERE/patch-musl.py" \
+    --input "build=$HERE/build-runtime.sh" --input "helper=$HERE/native-cache.py" \
+    --input "pins=$HERE/pins.env" --input "sysroot=$OUT/evidence/sysroot/inputs.json" --input "crt=$CRT" \
+    --value "clang=$(clang --version)" --value "linker=$(ld.lld --version)" --value "host=$(uname -m)" \
+    --value "flags=--target=aarch64-linux-musl -fuse-ld=lld --prefix=/ --syslibdir=/lib" \
+    --value "CFLAGS=${CFLAGS:-}" --value "CPPFLAGS=${CPPFLAGS:-}" --value "LDFLAGS=${LDFLAGS:-}" \
+    --value "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-}" --value "jobs=$(nproc)")"
+  if python3 -I "$HERE/native-cache.py" restore "$YOUCODED_COMMON_NATIVE_CACHE" "$MUSL_KEY" "$MUSL_SO"; then
+    say "musl verified run-local cache hit"
+  else
+    say "musl cache miss; compiling exact inputs"
+  fi
+fi
 if [ ! -s "$MUSL_SO" ]; then
-  say "musl $MUSL_VERSION"
-  tar xzf "$MUSL_TGZ" -C "$CACHE"
-  python3 -I "$HERE/patch-musl.py" "$CACHE/musl-$MUSL_VERSION"
-  CRT="$(find "$SR" -name 'libclang_rt.builtins-aarch64.a' | head -1)"
+  say "musl compilation"
   (cd "$CACHE/musl-$MUSL_VERSION" && CC="clang --target=aarch64-linux-musl -fuse-ld=lld" \
     ./configure --target=aarch64-linux-musl --prefix=/ --syslibdir=/lib LIBCC="$CRT" >/dev/null && make -j"$(nproc)" lib/libc.so >/dev/null)
+  if [ -n "$MUSL_KEY" ]; then
+    python3 -I "$HERE/native-cache.py" store "$YOUCODED_COMMON_NATIVE_CACHE" "$MUSL_KEY" "$MUSL_SO"
+  fi
 fi
 cp "$MUSL_SO" "$JNI/libldmusl.so"
 python3 -I "$HERE/runtime-redistribution.py" record "$OUT/evidence/sysroot" "$SR" "$CRT" "$JNI/libldmusl.so"

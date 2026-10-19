@@ -1,4 +1,12 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+
+// WHY: "outside every project folder" requires an explicit empty saved-folder
+// fixture. Other workers can seed Home in the shared sandbox via folders:list,
+// which correctly changes this refusal to not-in-home-project instead.
+vi.mock('../../src/main/saved-folders', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/main/saved-folders')>(),
+  readFolders: () => [],
+}));
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
