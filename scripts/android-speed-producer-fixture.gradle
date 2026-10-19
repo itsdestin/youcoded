@@ -1,0 +1,36 @@
+// Small file-copy unit proof of the ACTUAL generated-source adapter. No APK,
+// runtime, web build or native compilation task is executed by this proof.
+gradle.projectsEvaluated {
+    def app = rootProject.project(':app')
+    def example = app.tasks.named('materializeReleaseTestSpeedPayload').get()
+    def type = example.class.superclass
+    def base = new File(app.layout.buildDirectory.get().asFile, 'speed-producer-fixture')
+    def web = new File(base, 'input/web')
+    def backend = new File(base, 'input/backend')
+    def runtime = new File(base, 'input/runtime')
+    [web, backend, new File(runtime, 'assets/runtime'), new File(runtime, 'assets/legal'), new File(runtime, 'jniLibs/arm64-v8a')].each { it.mkdirs() }
+    new File(web, 'index.html').text = 'page'
+    new File(backend, 'backend.tgz').text = 'backend archive'
+    new File(runtime, 'assets/runtime/app-id.txt').text = 'variant identity'
+    new File(runtime, 'assets/legal/NOTICE.txt').text = 'legal notice'
+    def nativeFile = new File(runtime, 'jniLibs/arm64-v8a/libfixture.so')
+    nativeFile.text = 'native fixture'
+    nativeFile.setExecutable(true, false)
+    app.tasks.register('verifySpeedProducerFixture', type) {
+        webDirectory.set(web)
+        backendDirectory.set(backend)
+        runtimeDirectory.set(runtime)
+        assetDirectory.set(new File(base, 'output/assets'))
+        nativeDirectory.set(new File(base, 'output/jniLibs'))
+        doLast {
+            def assets = assetDirectory.get().asFile
+            def nativeOutput = new File(nativeDirectory.get().asFile, 'arm64-v8a/libfixture.so')
+            assert new File(assets, 'web/index.html').text == 'page'
+            assert new File(assets, 'backend.tgz').text == 'backend archive'
+            assert new File(assets, 'runtime/app-id.txt').text == 'variant identity'
+            assert new File(assets, 'legal/NOTICE.txt').text == 'legal notice'
+            assert nativeOutput.text == 'native fixture' && nativeOutput.canExecute()
+            println 'Actual generated-source adapter preserved web/backend/runtime/legal paths and native bytes/mode.'
+        }
+    }
+}

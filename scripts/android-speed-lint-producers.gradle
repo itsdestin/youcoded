@@ -1,22 +1,31 @@
-// Diagnostic proof only: configuration validation must cover generated assets
-// consumed by release lint, not just assemble's eventual mergeAssets tasks.
-gradle.projectsEvaluated {
+// Diagnostic-only proof over Gradle's completed public execution graph. AGP's
+// generated-sources API must carry dependencies to EVERY selected lint reader,
+// not just a hard-coded subset of internal model task names.
+gradle.taskGraph.whenReady { graph ->
     if (rootProject.findProperty('ciPackagingDependencies') != 'true') return
-    def app = rootProject.project(':app')
-    for (def variant : ['Release', 'ReleaseTest']) {
-        def checked = 0
-        for (def suffix : ['ReportModel', 'Model']) {
-            def name = "generate${variant}LintVital${suffix}"
-            def task = app.tasks.findByName(name)
-            if (task == null) continue
-            checked++
-            // Raw explicit edges avoid resolving the task graph outside its lock.
-            def dependencies = task.dependsOn.toString()
-            assert dependencies.contains('bundleWebUi') : name + ' lacks web producer: ' + dependencies
-            assert dependencies.contains('buildBackend') : name + ' lacks backend producer: ' + dependencies
-            assert dependencies.contains("buildRuntime${variant}") : name + ' lacks native producer: ' + dependencies
+    def ancestors = { task ->
+        def visited = [] as Set
+        def queue = new ArrayDeque(graph.getDependencies(task))
+        while (!queue.isEmpty()) {
+            def next = queue.removeFirst()
+            if (visited.add(next)) queue.addAll(graph.getDependencies(next))
         }
-        assert checked > 0 : variant + ' has no recognized lint-vital model task; update the experiment proof'
+        visited*.name as Set
     }
-    println 'Release lint explicitly depends on generated web/backend/native asset producers.'
+    for (def variant : ['Release', 'ReleaseTest']) {
+        def consumers = graph.allTasks.findAll { task ->
+            task.project.path == ':app' && task.name.toLowerCase().contains('lint') &&
+                (task.name.endsWith(variant) || task.name.startsWith("generate${variant}Lint"))
+        }
+        for (def task : consumers) {
+            def dependencies = ancestors(task)
+            assert dependencies.contains('bundleWebUi') : task.name + ' lacks web producer: ' + dependencies
+            assert dependencies.contains('buildBackend') : task.name + ' lacks backend producer: ' + dependencies
+            assert dependencies.contains("buildRuntime${variant}".toString()) : task.name + ' lacks native producer: ' + dependencies
+        }
+        if (graph.allTasks.any { it.name == "assemble${variant}" }) {
+            assert !consumers.isEmpty() : variant + ' assembly has no recognized lint consumers; update proof'
+        }
+    }
+    println 'Selected release lint consumers carry generated web/backend/native producer edges.'
 }

@@ -14,6 +14,32 @@ val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) load(FileInputStream(keystorePropertiesFile))
 }
 
+// Diagnostic producer adapter for AGP's generated-sources API. The API carries
+// dependency edges to EVERY asset/JNI reader (including lint), rather than a
+// brittle list of internal task names. Default builds do not register this task.
+abstract class SpeedPayloadTask : org.gradle.api.DefaultTask() {
+    @get:org.gradle.api.tasks.InputDirectory abstract val webDirectory: org.gradle.api.file.DirectoryProperty
+    @get:org.gradle.api.tasks.InputDirectory abstract val backendDirectory: org.gradle.api.file.DirectoryProperty
+    @get:org.gradle.api.tasks.InputDirectory abstract val runtimeDirectory: org.gradle.api.file.DirectoryProperty
+    @get:org.gradle.api.tasks.OutputDirectory abstract val assetDirectory: org.gradle.api.file.DirectoryProperty
+    @get:org.gradle.api.tasks.OutputDirectory abstract val nativeDirectory: org.gradle.api.file.DirectoryProperty
+    @get:javax.inject.Inject abstract val fileOperations: org.gradle.api.file.FileSystemOperations
+
+    @org.gradle.api.tasks.TaskAction
+    fun materialize() {
+        fileOperations.sync {
+            from(webDirectory) { into("web") }
+            from(backendDirectory)
+            from(runtimeDirectory.dir("assets"))
+            into(assetDirectory)
+        }
+        fileOperations.sync {
+            from(runtimeDirectory.dir("jniLibs"))
+            into(nativeDirectory)
+        }
+    }
+}
+
 // WHY: benchmark only. Defaults retain the current production task graph; the
 // opt-in connects expensive generated payloads to packaging, not JVM tests.
 val ciPackagingDependencies = providers.gradleProperty("ciPackagingDependencies")
@@ -127,8 +153,8 @@ android {
     // The runtime's programs name their package's files folder (/data/data/<applicationId>/files/usr/lib),
     // so each variant gets its own build of them (runtimeTasks below); the backend is the same for all.
     sourceSets {
-        getByName("main").assets.srcDir(layout.buildDirectory.dir("backend-assets"))
-        for (variant in listOf("debug", "release", "releaseTest")) {
+        if (!ciPackagingDependencies) getByName("main").assets.srcDir(layout.buildDirectory.dir("backend-assets"))
+        for (variant in listOf("debug", "release", "releaseTest").filter { !ciPackagingDependencies }) {
             getByName(variant).jniLibs.srcDir(layout.buildDirectory.dir("runtime/$variant/jniLibs"))
             getByName(variant).assets.srcDir(layout.buildDirectory.dir("runtime/$variant/assets"))
         }
@@ -272,14 +298,7 @@ val buildBackend = tasks.register<Exec>("buildBackend") {
     }
 }
 
-if (ciPackagingDependencies) {
-    // Assets include BOTH the shared web page and backend. Keeping this on the
-    // actual consumer prevents blank/stale APKs while leaving JVM tests light.
-    tasks.matching { it.name.matches(Regex("merge(Debug|Release|ReleaseTest)Assets|generate(Debug|Release|ReleaseTest)LintVital(Report)?Model")) }.configureEach {
-        dependsOn(bundleWebUi, buildBackend)
-    }
-}
-
+val runtimeTasks = mutableMapOf<String, org.gradle.api.tasks.TaskProvider<Exec>>()
 val variantAppIds = mapOf("Debug" to "com.youcoded.app.dev", "Release" to "com.youcoded.app", "ReleaseTest" to "com.youcoded.app.releasetest")
 for ((variant, appId) in variantAppIds) {
     val runtimeTask = tasks.register<Exec>("buildRuntime$variant") {
@@ -305,18 +324,35 @@ for ((variant, appId) in variantAppIds) {
         outputs.dir(out)
         commandLine(bashCommand(file("runtime/build-runtime.sh"), appId, out.absolutePath))
     }
-    if (ciPackagingDependencies) {
-        // JNI and runtime assets have separate consumers; BOTH require the
-        // variant-specific producer, including the production Release variant.
-        // Release lint models read the generated asset directories too; fresh
-        // ReleaseTest-only assembly exposed their otherwise implicit dependency.
-        tasks.matching { it.name == "merge${variant}JniLibFolders" || it.name == "merge${variant}Assets" ||
-            it.name == "generate${variant}LintVitalReportModel" || it.name == "generate${variant}LintVitalModel" }.configureEach {
-            dependsOn(runtimeTask)
-        }
-    } else {
+    runtimeTasks[variant] = runtimeTask
+    if (!ciPackagingDependencies) {
         tasks.matching { it.name == "pre${variant}Build" }.configureEach {
             dependsOn(runtimeTask, buildBackend)
+        }
+    }
+}
+
+if (ciPackagingDependencies) {
+    androidComponents.onVariants { variant ->
+        val capital = variant.name.replaceFirstChar { it.uppercaseChar() }
+        val payload = tasks.register<SpeedPayloadTask>("materialize${capital}SpeedPayload") {
+            dependsOn(bundleWebUi, buildBackend, runtimeTasks.getValue(capital))
+            webDirectory.set(layout.projectDirectory.dir("src/main/assets/web"))
+            backendDirectory.set(layout.buildDirectory.dir("backend-assets"))
+            runtimeDirectory.set(layout.buildDirectory.dir("runtime/${variant.name}"))
+            assetDirectory.set(layout.buildDirectory.dir("speed-payload/${variant.name}/assets"))
+            nativeDirectory.set(layout.buildDirectory.dir("speed-payload/${variant.name}/jniLibs"))
+        }
+        // WHY: public AGP source registration propagates producer dependencies
+        // to merge, lint and future consumers without guessing task names.
+        variant.sources.assets?.addGeneratedSourceDirectory(payload, SpeedPayloadTask::assetDirectory)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(payload, SpeedPayloadTask::nativeDirectory)
+        // AGP 8.7 lint also reads the static source-provider asset roots. Order
+        // its ENTIRE variant lint family after the one modeled source producer,
+        // not a growing list of individual internal model/analyzer task names.
+        tasks.matching { it.name.contains("lint", ignoreCase = true) &&
+            (it.name.endsWith(capital) || it.name.startsWith("generate${capital}Lint")) }.configureEach {
+            dependsOn(payload)
         }
     }
 }
