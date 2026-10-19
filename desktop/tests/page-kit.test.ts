@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { prepareHostedDocument } from '../src/renderer/components/pages/page-theme';
 import { PAGE_KIT_CSS } from '../src/renderer/components/pages/page-kit';
+import { kitPiecesPage } from '../src/renderer/dev/workbench/fixtures/kit-pieces-page';
 
 // WHY a dynamic import by name: jsdom ships without type declarations in this install (as money-page.test.ts).
 const JSDOM_MODULE = 'jsdom';
@@ -51,6 +52,19 @@ function mount() {
 }
 
 describe('the page kit dropdown', () => {
+  it('opens the showcase menu before the hosted document finishes loading', async () => {
+    const page = kitPiecesPage(null);
+    const dom = new JSDOM(prepareHostedDocument(page.html, ':root{}', PAGE_KIT_CSS, { demoMenu: 'k-meal' }), { runScripts: 'dangerously', pretendToBeVisual: true });
+    const w = dom.window;
+    try {
+      // WHY: shoot can capture as soon as the frame loads; an idle timer is not readiness.
+      await new Promise<void>((resolve) => w.addEventListener('load', () => resolve(), { once: true }));
+      const select = w.document.getElementById('k-meal')!;
+      expect(select.getAttribute('aria-expanded')).toBe('true');
+      expect(w.document.querySelector('.yc-menu[role="listbox"]')).not.toBeNull();
+      expect(w.document.activeElement).toBe(select);
+    } finally { w.close(); }
+  });
   it('is put into every hosted page', () => {
     expect(prepareHostedDocument(PAGE, '', PAGE_KIT_CSS)).toContain('<script id="youcoded-kit-js">');
   });

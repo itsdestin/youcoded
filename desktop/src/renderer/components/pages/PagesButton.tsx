@@ -72,7 +72,7 @@ export function PinnedPageButtons({ className = '' }: { className?: string } = {
               aria-label={`Open ${p.name}`}
               aria-pressed={active}
             >
-              <PageGlyph icon={p.icon} />
+              <PageGlyph icon={p.icon} customIcon={p.customIcon} />
             </button>
           </Tooltip>
         );

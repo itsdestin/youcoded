@@ -21,6 +21,7 @@ import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { fingerprint, parseConnections, withApprovedAddress } from './page-connections';
 import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore, hashHtml } from './connections-store';
 import { hashProgramFileCached } from './page-program';
+import { parsePageCustomIcon } from '../../shared/page-custom-icon';
 import type {
   PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
   PageLoadFailure, PageRefreshState, PageSummary,
@@ -150,6 +151,7 @@ export class PagesStore {
         out.push({
           id,
           name: manifest.name,
+          ...(manifest.customIcon ? { customIcon: manifest.customIcon } : {}),
           description: manifest.description,
           icon: manifest.icon,
           home: h.home,
@@ -201,7 +203,7 @@ export class PagesStore {
 
   /** page.json, with conflict copies folded by their `updatedAt` stamp. Returns
    *  null when there is no readable manifest (then the folder is not a page). */
-  private async readManifest(dir: string): Promise<{ name: string; description: string; icon: PageIcon; connections: PageConnection[] } | null> {
+  private async readManifest(dir: string): Promise<{ name: string; description: string; icon: PageIcon; customIcon?: import('../../shared/page-custom-icon').PageCustomIcon; connections: PageConnection[] } | null> {
     await this.foldJsonCopies(dir, 'page.json', 'updatedAt');
     let raw: string;
     try { raw = await fs.readFile(path.join(dir, 'page.json'), 'utf8'); } catch { return null; }
@@ -212,10 +214,12 @@ export class PagesStore {
     const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 80) : path.basename(dir);
     const description = typeof o.description === 'string' ? o.description.trim().slice(0, 200) : '';
     const icon = (typeof o.icon === 'string' && ICONS.has(o.icon) ? o.icon : 'page') as PageIcon;
+    // WHY: tolerate missing/future/malformed icon metadata so it cannot make an otherwise readable page disappear.
+    const customIcon = parsePageCustomIcon(o.customIcon);
     // Phase 2 (§2): additive, and strict — parseConnections drops what it
     // cannot vouch for and drops the whole list when it contradicts itself, so
     // an old page.json with no `connections` still reads as a page.
-    return { name, description, icon, connections: parseConnections(o.connections) };
+    return { name, description, icon, ...(customIcon ? { customIcon } : {}), connections: parseConnections(o.connections) };
   }
 
   /** Where a page's approvals are filed. Project pages use the project's

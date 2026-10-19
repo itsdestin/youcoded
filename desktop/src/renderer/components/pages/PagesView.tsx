@@ -161,7 +161,7 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
     >
       <div className="flex items-start gap-3">
         <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">
-          <PageGlyph icon={page.icon} className="w-5 h-5" />
+          <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-5 h-5" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
