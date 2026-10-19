@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import { LinuxPackager } from 'electron-builder';
 import { parse as parseYaml } from 'yaml';
 import { readSource } from './helpers/guard-scope';
 
@@ -76,6 +78,49 @@ describe('desktop icons (electron-builder.yml)', () => {
     const b = bytes('icon.png');
     expect(b.subarray(1, 4).toString('latin1')).toBe('PNG');
     expect([b.readUInt32BE(16), b.readUInt32BE(20)]).toEqual([1024, 1024]);
+  });
+});
+
+describe('Linux launcher icons', () => {
+  // Retain the old 1024px package path too, so existing absolute links do not break.
+  const sizes = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024];
+
+  it('Linux explicitly selects its own icon directory', () => {
+    expect(sectionValue('linux', 'icon')).toBe('icons');
+  });
+
+  it.each(sizes)('ships a correctly sized %ipx PNG for hicolor lookup', (size) => {
+    const b = bytes(`icons/${size}x${size}.png`);
+    expect(b.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect([b.readUInt32BE(16), b.readUInt32BE(20)]).toEqual([size, size]);
+  });
+
+  it('electron-builder resolves all standard Linux sizes without falling back to another platform', async () => {
+    // WHY exercise builder's real resolver: a single 1024px PNG passed our asset checks,
+    // but builder installed only that unindexed hicolor size, which KDE/Qt could not find.
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-linux-icons-'));
+    try {
+      // Supply only filesystem context, not a fake conversion. Use the public dependency
+      // entry point so the test does not rely on a hoisted, undeclared app-builder-lib.
+      const packager = {
+        config: { directories: { output: outDir } },
+        projectDir: DESKTOP,
+        buildResourcesDir: ASSETS,
+        expandMacro: (value: string) => value,
+      } as LinuxPackager;
+      const icons = await LinuxPackager.prototype.resolveIcon.call(
+        packager,
+        [CONFIG.linux?.icon, CONFIG.mac?.icon, CONFIG.icon].filter(Boolean),
+        [],
+        'set',
+      );
+      expect(icons.map(icon => icon.size)).toEqual(sizes);
+      for (const icon of icons) {
+        expect(path.relative(ASSETS, icon.file)).toBe(path.join('icons', `${icon.size}x${icon.size}.png`));
+      }
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 });
 

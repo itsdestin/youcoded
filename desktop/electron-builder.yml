@@ -90,6 +90,10 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: YouCoded turns your speech into text on this computer.
 linux:
+  # WHY a Linux-only PNG set: a lone 1024px icon lands in hicolor/1024x1024/apps,
+  # which the standard hicolor index does not list. Ship indexed sizes instead;
+  # keep the shared 1024px window icon and other platforms' artwork unchanged.
+  icon: icons
   # AppImage runs on any distro but stays a loose file. deb / rpm / pacman are
   # real installers (Debian-Ubuntu / Fedora / Arch) that install to a fixed
   # path and register a menu entry + icon, so YouCoded pins to the taskbar and

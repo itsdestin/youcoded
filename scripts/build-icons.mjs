@@ -3,6 +3,7 @@
 // theme's own icon set, from ONE drawing: scripts/icons/brand-icons.html.
 //
 //   node scripts/build-icons.mjs                       (from the youcoded repo root)
+//   node scripts/build-icons.mjs --linux-only          only the Linux launcher PNG set
 //   node scripts/build-icons.mjs --themes <dir>        also write each theme's icons into a
 //                                                      wecoded-themes checkout's themes/<slug>/assets/app-icon/
 //   node scripts/build-icons.mjs --site docs/brand     only the website's icons (skips the app's)
@@ -19,6 +20,7 @@
 //
 // Writes (desktop/assets/):
 //   icon.png (1024), icon.ico                  app + window icon (Windows, Linux)
+//   icons/<size>x<size>.png                     Linux launcher set (16–512px + legacy 1024px)
 //   icon-mac.png (1024), icon-mac.icns         the flat Mac icon, on Apple's ~80% grid (older macOS)
 //   icon.icon/                                 the macOS 26 Liquid Glass icon: background + face + eyes layers
 //   installer-icon.ico / .icns                 Windows installer, the opened Mac disk
@@ -62,6 +64,15 @@ const resize = (src, px, out) => { execFileSync('magick', [src, '-filter', 'Lanc
 function sizes(icon, theme, list) {
   const big = shoot(icon, theme, 1024), small = shoot(icon, theme, 512, true);
   return Object.fromEntries(list.map((px) => [px, resize(px <= 48 ? small : big, px, path.join(TMP, `${icon}-${theme}-${px}-${shots++}.png`))]));
+}
+// Keep 1024 too: existing absolute launcher links must survive an upgrade.
+const LINUX_SIZES = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024];
+function linuxIcons(app) {
+  // WHY explicit sizes: electron-builder passes a lone PNG through without making smaller
+  // copies, and standard hicolor indexes do not include our 1024px window icon's directory.
+  const dir = path.join(ASSETS, 'icons');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const px of LINUX_SIZES) fs.copyFileSync(app[px], path.join(dir, `${px}x${px}.png`));
 }
 const ico = (pngs, out) => execFileSync('magick', [...pngs, out]);
 function icns(pngs, out) {
@@ -221,8 +232,15 @@ function siteIcons(dir) {
 const themesArg = process.argv.indexOf('--themes');
 const siteArg = process.argv.indexOf('--site');
 const themesOnly = process.argv.includes('--themes-only') || siteArg > 0;
-if (!themesOnly) {
-  const app = sizes('app', 'default', [16, 20, 24, 32, 40, 48, 64, 128, 256, 512, 1024]);
+const linuxOnly = process.argv.includes('--linux-only');
+if (linuxOnly) {
+  // WHY a narrow mode: fixing Linux packaging must not regenerate other platforms' assets.
+  linuxIcons(sizes('app', 'default', LINUX_SIZES));
+  console.log('icons written: desktop/assets/icons (Linux only)');
+}
+if (!themesOnly && !linuxOnly) {
+  const app = sizes('app', 'default', [16, 20, 24, 32, 40, 48, 64, 96, 128, 256, 512, 1024]);
+  linuxIcons(app);
   fs.copyFileSync(app[1024], path.join(ASSETS, 'icon.png'));
   ico([16, 20, 24, 32, 40, 48, 64, 128, 256].map((px) => app[px]), path.join(ASSETS, 'icon.ico'));
   // WHY a PNG twin of the Mac icon: on macOS before 26 the running app swaps the Dock icon per theme
