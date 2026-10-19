@@ -1,0 +1,96 @@
+name: EXPERIMENT ONLY - Android matched-host pairs
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: android-paired-experiment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    if: github.head_ref == 'session/29-android-paired-bench'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Prepare parsed-workflow unit-test dependency
+        run: |
+          python3 -m venv "$RUNNER_TEMP/paired-yaml"
+          "$RUNNER_TEMP/paired-yaml/bin/pip" install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Verify paired reset, ordering and workflow guards
+        run: '"$RUNNER_TEMP/paired-yaml/bin/python" -B -m unittest discover -s scripts -p test_android_speed_paired.py -v'
+  pairs:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        order: [baseline-first, combined-first]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install unchanged native toolchain
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang lld
+      - name: Configure exact Alpine comparator
+        run: |
+          docker pull alpine:3.24
+          echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
+      - name: Restore same immutable downloaded inputs before relocation
+        uses: actions/cache@v4
+        with:
+          path: app/build/runtime-cache
+          key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
+      - name: Run both cold-output modes on this same runner
+        env:
+          ORDER: ${{ matrix.order }}
+        run: python3 scripts/android-speed-paired.py run "$ORDER" "$RUNNER_TEMP/android-paired/$ORDER"
+      - name: Retain reports and task profiles, not APKs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-paired-${{ matrix.order }}
+          path: ${{ runner.temp }}/android-paired/${{ matrix.order }}/
+          retention-days: 1
+          if-no-files-found: error
+  validation:
+    if: always() && github.head_ref == 'session/29-android-paired-bench'
+    needs: [checks, pairs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: android-paired-*
+          path: reports
+      - name: Require both complete paired producers
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          PAIRS_RESULT: ${{ needs.pairs.result }}
+        run: test "$CHECKS_RESULT" = success && test "$PAIRS_RESULT" = success
+      - name: Compare exact inputs, all JVM identities and complete payloads
+        run: python3 scripts/android-speed-paired.py compare reports
+      - name: Retain measured comparison
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-paired-summary
+          path: reports/paired-summary.json
+          retention-days: 1
+          if-no-files-found: error
