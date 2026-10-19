@@ -3523,7 +3523,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         var match = asset && /\/YouCoded-Installer-(\d+)\.(\d+)\.(\d+)-(?:arm64|x64)\.dmg$/.exec(asset.url);
         if (!match) return '';
         var signed = +match[1] > 1 || (+match[1] === 1 && (+match[2] > 3 || (+match[2] === 3 && +match[3] >= 2)));
-        return signed ? 'Signed by Destin\'s Adventures, LLC. Notarized by Apple.' :
+        return signed ? '' :
           'This older release is not Apple-signed. If macOS blocks it, open <strong>System Settings → Privacy &amp; Security → Open Anyway</strong>, then confirm.';
       }
 
@@ -3548,10 +3548,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         },
         'dl-windows': {
           platformLabel: 'Windows',
-          intro: 'The Windows installer is signed by <strong>Destin Moss</strong>.',
+          intro: '',
           steps: [
             'Open the downloaded <code>.exe</code> installer.',
-            'If SmartScreen says <strong>Windows protected your PC</strong>, choose <strong>More info</strong>. Check the publisher is <strong>Destin Moss</strong> before choosing <strong>Run anyway</strong>.',
+            'If SmartScreen says <strong>Windows protected your PC</strong>, choose <strong>More info → Run anyway</strong>.',
             'Follow the installer prompts, then open YouCoded.'
           ],
           note: null
@@ -3790,7 +3790,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         var bannerHtml = p.banner ? '<p class="install-modal-banner" role="note">' + p.banner + '</p>' : '';
         return '' +
           bannerHtml +
-          '<p class="install-modal-intro">' + p.intro + '</p>' +
+          (p.intro ? '<p class="install-modal-intro">' + p.intro + '</p>' : '') +
           pickerHtml +
           '<div class="install-modal-section">' +
             '<ol>' + stepsHtml + '</ol>' +

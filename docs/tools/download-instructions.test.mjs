@@ -29,10 +29,11 @@ function modal(platform, version = '1.3.2') {
   };
 }
 
-test('Windows describes signing and conditional SmartScreen, not guaranteed bypasses', () => {
+test('Windows gives installation steps without personal signing callouts', () => {
   const r = modal('dl-windows');
   try {
-    assert.match(r.body.textContent, /signed.*Destin Moss/i);
+    assert.doesNotMatch(r.body.textContent, /Destin|signed by|publisher/i);
+    assert.equal(r.body.querySelector('.install-modal-intro'), null);
     assert.match(r.body.textContent, /If.*SmartScreen/i);
     assert.doesNotMatch(r.body.textContent, /isn't signed|only.*first time|remembers your choice|Don't click/i);
     assert.match(r.button.href, /\.exe$/);
@@ -43,7 +44,8 @@ test('Mac signed releases have three short installation steps on both chips', ()
   for (const version of ['1.3.2', '1.3.3', '1.4.0', '2.0.0']) {
     const r = modal('dl-macos', version);
     try {
-      assert.match(r.body.textContent, /Signed by Destin.s Adventures, LLC\. Notarized by Apple\./);
+      assert.doesNotMatch(r.body.textContent, /Destin|signed by|Notarized by/);
+      assert.equal(r.body.querySelector('.install-modal-note'), null);
       assert.doesNotMatch(r.body.textContent, /Open Anyway|cannot check|\$99/);
       assert.equal(r.body.querySelector('.install-modal-section ol').children.length, 3);
       assert.match(r.button.href, /arm64\.dmg$/);
