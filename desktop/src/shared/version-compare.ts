@@ -1,5 +1,6 @@
 /**
  * Semver-ish comparison uses numeric components so 1.10 sorts above 1.9.
+ * Missing numeric components compare as zero, keeping 1.2 equal to 1.2.0.
  * Returns true if `latest` is greater than `installed`.
  * Falls back to strict inequality for non-numeric
  * version strings (different = update available).
