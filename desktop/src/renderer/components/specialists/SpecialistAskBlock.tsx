@@ -102,7 +102,9 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
       {compact && leading && (
         <div className="flex items-center gap-3 flex-wrap">
           <div className="min-w-0 flex-1">{leading}</div>
-          <div className="shrink-0 ml-auto">{buttons}</div>
+          {/* WHY: safety stops include explanatory text, not just buttons;
+              cap this non-shrinking flex item so it wraps inside the popup card. */}
+          <div className="shrink-0 max-w-full ml-auto">{buttons}</div>
         </div>
       )}
       {segment.external && (
