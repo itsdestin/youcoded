@@ -1,6 +1,7 @@
 /**
- * Phase 3b: semver-ish comparison. Returns true if `latest` is a greater
- * version than `installed`. Falls back to strict inequality for non-numeric
+ * Semver-ish comparison uses numeric components so 1.10 sorts above 1.9.
+ * Returns true if `latest` is greater than `installed`.
+ * Falls back to strict inequality for non-numeric
  * version strings (different = update available).
  */
 export function isNewerVersion(installed: string | undefined, latest: string | undefined): boolean {
