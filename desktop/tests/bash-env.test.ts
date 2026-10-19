@@ -90,9 +90,13 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  // WHY: a suite launched inside YouCoded inherits its live askpass variables.
+  // Each fixture models its own server availability, never the test runner's parent app.
+  for (const key of ['SUDO_ASKPASS', 'YOUCODED_ASKPASS_SOCKET', 'YOUCODED_ASKPASS_RUNTIME']) vi.stubEnv(key, undefined);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-env-'));
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   try {
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   } catch {

@@ -1143,7 +1143,9 @@ describe('GitTransport downloads', () => {
     const t = new GitTransport({ deviceName: 'T', fetchIdleMs: 300 });
     await expect(t.push(a, 'while stalled')).resolves.toMatchObject({ pushed: false, contacted: false });
     gitIn(a, ['config', '--unset', 'remote.origin.uploadpack']);
-    await expect(t.push(a, 'recovered')).resolves.toMatchObject({ pushed: true });
+    // WHY use the normal transport after removing the fault: a healthy Windows fetch
+    // can exceed the injected 300ms stall budget under CI load. Recovery is not a speed test.
+    await expect(h.transport.push(a, 'recovered')).resolves.toMatchObject({ pushed: true });
     await h.cleanup();
   });
 });

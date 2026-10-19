@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";var t;e((()=>{t=`@layer proposal{button.border-edge-dim{border-color:var(--edge)!important}}`}))();export{t as default};

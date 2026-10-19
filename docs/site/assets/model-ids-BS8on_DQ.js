@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";function t(e){return/^<.*>$/.test(e.trim())}function n(e){let t=e.toLowerCase();for(let e of r)if(t.includes(e.replace(/\[.*$/,``)))return e;return null}var r,i,a=e((()=>{r=[`haiku`,`sonnet`,`opus[1m]`,`fable`],i={haiku:`Haiku`,sonnet:`Sonnet`,"opus[1m]":`Opus`,fable:`Fable`}}));export{t as a,a as i,i as n,n as r,r as t};

@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";function t(e){return e===n}var n,r,i=e((()=>{n=`youcoded://no-folder`,r=`No folder`}));export{t as i,r as n,i as r,n as t};

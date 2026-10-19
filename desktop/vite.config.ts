@@ -10,6 +10,8 @@ const viteDevPort = 5173 + (Number.isFinite(portOffset) ? portOffset : 0);
 
 export default defineConfig({
   plugins: [react()],
+  // WHY: Vite resolves --outDir from this root, not the shell directory. build:site
+  // therefore needs ../../../docs/site; ../docs/site silently left the public embed stale.
   root: 'src/renderer',
   server: {
     port: viteDevPort,

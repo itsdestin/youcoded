@@ -1,0 +1,1 @@
+.settings-drawer-header{position:relative}.settings-drawer-header:after{content:"";pointer-events:none;background:linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);height:1px;position:absolute;bottom:0;left:16px;right:16px}

@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -5 30 30">
+  <!--
+    Example rig: Kuromi Dreamer — the theme's flat mascot set rebuilt to the rig contract.
+    Outline (white-body) style: depth comes from the shade gradient, not highlights.
+    Identity colors (hardcoded on purpose):
+      line #1A0F28 (theme fg) · charm pink #FF4FB8 · shade #d9cbe9
+    Signature components baked into slots: jester hat + skull charm (slot-hat), devil
+    tail as an extra part (rig-tail — optional id, trails like a limb if the app
+    chooses to animate it).
+    Contract: mascots/README.md (from the repo root)
+  -->
+  <defs>
+    <linearGradient id="g-lo" x1="0" y1="0" x2="0.22" y2="1">
+      <stop offset="52%" stop-color="#d9cbe9" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#d9cbe9" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+  <g id="rig-root">
+    <g id="rig-tail" data-pivot="19 14">
+      <path d="M19 14 Q21 14 21.5 15.5 Q22 17 20.5 17.2 L21.5 18.2 L20 18 L21 19 L19.5 18.5 Z" fill="#1A0F28" opacity="0.85"/>
+    </g>
+    <g id="rig-arm-left" data-pivot="2.5 9">
+      <rect x="1" y="9" width="3" height="4" rx="0.8" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+    </g>
+    <g id="rig-arm-right" data-pivot="21.5 9">
+      <rect x="20" y="9" width="3" height="4" rx="0.8" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+      <g id="slot-item"/>
+    </g>
+    <g id="rig-leg-left" data-pivot="8.95 17">
+      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+    </g>
+    <g id="rig-leg-right" data-pivot="15.05 17">
+      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+    </g>
+    <g id="rig-body">
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="url(#g-lo)"/>
+      <g id="rig-face-idle">
+        <path d="M8 10 Q9.3 8.9 10.6 10" fill="none" stroke="#1A0F28" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.8 Q14.7 8.7 16 9.8" fill="none" stroke="#1A0F28" stroke-width="0.85" stroke-linecap="round"/><ellipse cx="12" cy="13.4" rx="0.5" ry="0.42" fill="#1A0F28"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-welcome" style="display:none">
+        <ellipse cx="9.3" cy="9.35" rx="1.35" ry="1.9" fill="#1A0F28"/><g class="pupil"><circle cx="9.68" cy="8.63" r="0.52" fill="#FFFFFF"/><circle cx="8.82" cy="9.85" r="0.21" fill="#FFFFFF" fill-opacity="0.85"/></g><ellipse cx="14.7" cy="9.15" rx="1.35" ry="1.9" fill="#1A0F28"/><g class="pupil"><circle cx="15.08" cy="8.43" r="0.52" fill="#FFFFFF"/><circle cx="14.22" cy="9.65" r="0.21" fill="#FFFFFF" fill-opacity="0.85"/></g><g transform="rotate(-2 12 13.35)"><path d="M10.8 13.35 Q10.8 13.05 12 13.05 Q13.2 13.05 13.2 13.35 A1.1 1 0 0 1 10.8 13.35 Z" fill="#1A0F28"/></g><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-curious" style="display:none">
+        <ellipse cx="9.3" cy="9.35" rx="1.35" ry="1.9" fill="#1A0F28"/><g class="pupil"><circle cx="9.68" cy="8.63" r="0.52" fill="#FFFFFF"/><circle cx="8.82" cy="9.85" r="0.21" fill="#FFFFFF" fill-opacity="0.85"/></g><ellipse cx="14.7" cy="9.15" rx="1.35" ry="1.9" fill="#1A0F28"/><g class="pupil"><circle cx="15.08" cy="8.43" r="0.52" fill="#FFFFFF"/><circle cx="14.22" cy="9.65" r="0.21" fill="#FFFFFF" fill-opacity="0.85"/></g><path d="M8 7 L10.6 6.8" fill="none" stroke="#1A0F28" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.5 Q14.7 5.6 16.05 5.9" fill="none" stroke="#1A0F28" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12.05" cy="13.4" rx="0.45" ry="0.5" fill="#1A0F28"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-shocked" style="display:none">
+        <ellipse cx="9.3" cy="9.5" rx="1.51" ry="2.13" fill="#1A0F28"/><g class="pupil"><circle cx="9.73" cy="8.69" r="0.58" fill="#FFFFFF"/><circle cx="8.76" cy="10.06" r="0.24" fill="#FFFFFF" fill-opacity="0.85"/></g><ellipse cx="14.7" cy="9.3" rx="1.51" ry="2.13" fill="#1A0F28"/><g class="pupil"><circle cx="15.13" cy="8.49" r="0.58" fill="#FFFFFF"/><circle cx="14.16" cy="9.86" r="0.24" fill="#FFFFFF" fill-opacity="0.85"/></g><path d="M7.95 6.4 Q9.3 5.8 10.65 6.4" fill="none" stroke="#1A0F28" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.1 Q14.7 5.5 16.05 6.1" fill="none" stroke="#1A0F28" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12" cy="13.65" rx="0.7" ry="0.85" fill="#1A0F28"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-dizzy" style="display:none">
+        <path d="M9.3 9.6 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="#1A0F28" stroke-width="0.6" stroke-linecap="round"/><path d="M14.7 9.5 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="#1A0F28" stroke-width="0.6" stroke-linecap="round"/><path d="M10.4 13.65 L11.2 13.05 L12 13.65 L12.8 13.05 L13.6 13.65" fill="none" stroke="#1A0F28" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="11" x2="7" y2="11.3"/><line x1="5.5" y1="12" x2="7" y2="12.3"/><line x1="17" y1="11.3" x2="18.5" y2="11"/><line x1="17" y1="12.3" x2="18.5" y2="12"/></g>
+      </g>
+      <g id="rig-face-blink" style="display:none">
+        <path d="M8 9.8 Q9.3 10.3 10.6 9.8" fill="none" stroke="#1A0F28" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.6 Q14.7 10.1 16 9.6" fill="none" stroke="#1A0F28" stroke-width="0.85" stroke-linecap="round"/><g transform="rotate(-2 12 13.35)"><path d="M10.8 13.35 Q10.8 13.05 12 13.05 Q13.2 13.05 13.2 13.35 A1.1 1 0 0 1 10.8 13.35 Z" fill="#1A0F28"/></g><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-happy" style="display:none">
+        <path d="M8 10.2 Q9.3 8.4 10.6 10.2" fill="none" stroke="#1A0F28" stroke-width="0.9" stroke-linecap="round"/><path d="M13.4 10 Q14.7 8.2 16 10" fill="none" stroke="#1A0F28" stroke-width="0.9" stroke-linecap="round"/><path d="M10.3 13.05 Q10.3 12.75 12 12.75 Q13.7 12.75 13.7 13.05 A1.7 1.5 0 0 1 10.3 13.05 Z" fill="#1A0F28"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="10.5" x2="7" y2="10.5"/><line x1="5.5" y1="11.5" x2="7" y2="11.5"/><line x1="17" y1="10.5" x2="18.5" y2="10.5"/><line x1="17" y1="11.5" x2="18.5" y2="11.5"/></g>
+      </g>
+      <g id="rig-face-shutdown" style="display:none">
+        <path d="M8 9.8 L10.6 9.8" fill="none" stroke="#1A0F28" stroke-width="0.8" stroke-linecap="round"/><path d="M13.4 9.7 L16 9.7" fill="none" stroke="#1A0F28" stroke-width="0.8" stroke-linecap="round"/><path d="M11.3 13.35 L12.7 13.35" fill="none" stroke="#1A0F28" stroke-width="0.5" stroke-linecap="round"/><g stroke="#1A0F28" stroke-width="0.4" stroke-linecap="round"><line x1="5.5" y1="11" x2="7" y2="11.3"/><line x1="5.5" y1="12" x2="7" y2="12.3"/><line x1="17" y1="11.3" x2="18.5" y2="11"/><line x1="17" y1="12.3" x2="18.5" y2="12"/></g>
+      </g>
+      <g id="slot-eyewear"/>
+    </g>
+    <g id="slot-hat">
+      <!-- signature component: jester peaks + bells + skull charm (also in ../components/hats/jester.svg) -->
+      <path d="M7 4 L6.5 1.5 L9 3.5 Z" fill="#1A0F28"/>
+      <path d="M17 4 L17.5 1.5 L15 3.5 Z" fill="#1A0F28"/>
+      <circle cx="6.5" cy="1.5" r="0.5" fill="#FF4FB8"/><circle cx="17.5" cy="1.5" r="0.5" fill="#FF4FB8"/>
+      <circle cx="12" cy="5.8" r="0.9" fill="#FF4FB8"/>
+      <circle cx="11.7" cy="5.6" r="0.22" fill="#1A0F28"/><circle cx="12.3" cy="5.6" r="0.22" fill="#1A0F28"/>
+      <rect x="11.7" y="6" width="0.6" height="0.4" fill="#1A0F28"/>
+    </g>
+    <g id="rig-hand-peek-right" style="display:none">
+      <rect x="20.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+    </g>
+    <g id="rig-hand-peek-left" style="display:none">
+      <rect x="0.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="#FFFFFF" stroke="#1A0F28" stroke-width="0.6"/>
+    </g>
+  </g>
+</svg>

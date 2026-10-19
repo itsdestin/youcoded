@@ -46,7 +46,8 @@ THEME_RIG = 'docs/mascots/%s.rig.svg'
 # faces here would paint this script's older copies over the characters' current ones.
 # Refresh docs/mascots/<slug>.rig.svg from the registry before running.
 PICKER = [
-    ('cotton-candy-sky',   'Cotton Candy Sky',   '#8B47B8', False, 'float',   'wave cheer'),
+    # WHY: the default chip returns to the app's new YouCoded Light theme.
+    ('youcoded',           'YouCoded Light',     '#8B47B8', False, 'float',   'wave cheer'),
     ('meadow-mist',        'Meadow Mist',        '#2F7D55', False, 'breathe', 'shrug nod'),
     ('halftone-dimension', 'Halftone Dimension', '#E51F48', False, 'scan',    'think startle'),
     ('golden-sunbreak',    'Golden Sunbreak',    '#ffc030', False, 'bob',     'tada armwave'),

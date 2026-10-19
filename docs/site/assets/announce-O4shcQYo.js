@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-DkW27tQK.js";function t(e,t){typeof window>`u`||window.dispatchEvent(new CustomEvent(n,{detail:{message:e,durationMs:t}}))}var n,r=e((()=>{n=`youcoded:notice`}));export{t as n,r,n as t};
