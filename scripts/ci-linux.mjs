@@ -93,14 +93,38 @@ async function nativeMetadata(format, installer, payload, directory, expected) {
   json(path.join(directory, 'integration.json'), { ...value, entries: integration, controls: await manifest(metadata) });
   return path.join(payload, 'opt', expected.productName);
 }
-async function appImagePayload(installer, payload, post, directory, expected) {
-  // WHY: run only the AppImage extraction runtime, never AppRun/Electron. Bound
-  // extraction separately so a malformed runtime cannot hang the required gate.
-  await run('timeout', ['120s', installer, '--appimage-extract'], payload);
-  const app = path.join(payload, 'squashfs-root'), installed = await manifest(app), corePaths = new Set(post.map(entry => entry.path));
+export async function extractSquashfs(installer, destination, offset) {
+  assert.ok(path.isAbsolute(installer) && path.isAbsolute(destination));
+  assert.ok(Number.isSafeInteger(offset) && offset >= 0 && offset <= fs.statSync(installer).size - 4, 'Invalid SquashFS offset');
+  const descriptor = fs.openSync(installer, 'r');
+  try {
+    const magic = Buffer.alloc(4);
+    assert.equal(fs.readSync(descriptor, magic, 0, 4, offset), 4);
+    assert.equal(magic.toString('ascii'), 'hsqs', 'Offset does not address a SquashFS filesystem');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  await run('timeout', ['120s', 'unsquashfs', '-no-progress', '-o', String(offset), '-d', destination, installer]);
+}
+export async function appImagePayload(installer, payload, post, directory, expected) {
+  // WHY: the checksummed FUSE2 runtime's --appimage-extract recreates every
+  // directory as 0700, discarding the stored 0755/0750 modes. Read its filesystem
+  // offset only, then preserve the actual stored modes with unsquashfs. Never
+  // normalize or exempt directory permissions, and never launch AppRun/Electron.
+  const offset = (await run('timeout', ['120s', installer, '--appimage-offset'], payload)).toString().trim();
+  assert.match(offset, /^[1-9][0-9]*$/, 'AppImage runtime did not return a filesystem offset');
+  const app = path.join(payload, 'squashfs-root');
+  await extractSquashfs(installer, app, Number(offset));
+  const installed = await manifest(app), corePaths = new Set(post.map(entry => entry.path));
   verifyInstalled(post, installed.filter(entry => corePaths.has(entry.path)));
   const extras = installed.filter(entry => !corePaths.has(entry.path));
-  for (const entry of extras) assert.ok(entry.path === 'AppRun' || entry.path === '.DirIcon' || entry.path === `${expected.name}.desktop` || entry.path === `${expected.name}.png` || /^usr\/(?:lib|share\/icons)(?:\/|$)/.test(entry.path), `Unexpected AppImage integration ${entry.path}`);
+  for (const entry of extras) {
+    // WHY: current builder output includes these two structural parents of the
+    // verified library/icon trees. Permit only directories with stored 0755,
+    // not arbitrary files or an exemption of anything beneath usr/share.
+    const structuralParent = ['usr', 'usr/share'].includes(entry.path) && entry.type === 'directory' && entry.mode === 0o755;
+    assert.ok(structuralParent || entry.path === 'AppRun' || entry.path === '.DirIcon' || entry.path === `${expected.name}.desktop` || entry.path === `${expected.name}.png` || /^usr\/(?:lib|share\/icons)(?:\/|$)/.test(entry.path), `Unexpected AppImage integration ${entry.path}`);
+  }
   const desktopFile = fs.readFileSync(path.join(app, `${expected.name}.desktop`), 'utf8');
   assert.ok(desktopFile.includes(`Name=${expected.productName}`)); assert.match(desktopFile, /^Exec=.+/m);
   assert.ok(installed.some(entry => entry.path === 'AppRun' && entry.type === 'file' && (entry.mode & 0o111) !== 0));

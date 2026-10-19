@@ -106,8 +106,10 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - name: Test beta version numbering
         run: node --test ../scripts/beta-version.test.mjs
-      - name: Ensure prepared transport tool
-        run: command -v zstd || (sudo apt-get update && sudo apt-get install -y zstd)
+      - name: Ensure transport and filesystem proof tools
+        # WHY: AppImage's extraction runtime discards directory modes; prove the
+        # stored filesystem with a mode-preserving extractor and a real fixture.
+        run: (command -v zstd && command -v unsquashfs && command -v mksquashfs) || (sudo apt-get update && sudo apt-get install -y zstd squashfs-tools)
       - name: Test CI policy and evidence
         run: node --test ../scripts/ci-policy.test.mjs ../scripts/ci-evidence.test.mjs ../scripts/ci-linux.test.mjs ../scripts/ci-inputs.test.mjs
       - run: npm ci
@@ -160,7 +162,7 @@ jobs:
       - run: npm ci
         working-directory: desktop
       - name: Install Linux build deps
-        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools zstd time
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools zstd time squashfs-tools
       - uses: actions/download-artifact@v8
         with:
           name: prepared-app

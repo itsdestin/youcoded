@@ -1,6 +1,38 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { packageArgs, validateMetadata } from './ci-linux.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { run } from './ci-policy.mjs';
+import { manifest, verifyInstalled } from './ci-evidence.mjs';
+import { extractSquashfs, packageArgs, validateMetadata } from './ci-linux.mjs';
+test('SquashFS extraction preserves stored directory, file and symlink modes at a validated image offset', { skip: process.platform !== 'linux' }, async () => {
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'ci-squashfs-'));
+  try {
+    const source = path.join(root, 'source');
+    fs.mkdirSync(path.join(source, 'resources', 'nested'), { recursive: true });
+    fs.chmodSync(path.join(source, 'resources'), 0o755);
+    fs.chmodSync(path.join(source, 'resources', 'nested'), 0o750);
+    fs.writeFileSync(path.join(source, 'resources', 'nested', 'payload'), 'current payload\n');
+    fs.chmodSync(path.join(source, 'resources', 'nested', 'payload'), 0o640);
+    fs.symlinkSync('nested/payload', path.join(source, 'resources', 'link'));
+    const squash = path.join(root, 'filesystem.squashfs');
+    await run('mksquashfs', [source, squash, '-noappend', '-no-progress', '-processors', '2']);
+    const image = path.join(root, 'fixture.AppImage'), offset = 4096;
+    fs.writeFileSync(image, Buffer.concat([Buffer.alloc(offset), fs.readFileSync(squash)]));
+    const destination = path.join(root, 'extracted');
+    await extractSquashfs(image, destination, offset);
+    verifyInstalled(await manifest(source), await manifest(destination));
+    for (const badOffset of [-1, 1.5, NaN, '4096', Number.MAX_SAFE_INTEGER, 0]) {
+      await assert.rejects(() => extractSquashfs(image, path.join(root, 'invalid'), badOffset));
+    }
+    fs.chmodSync(path.join(destination, 'resources'), 0o700);
+    const expected = await manifest(source), changed = await manifest(destination);
+    assert.throws(() => verifyInstalled(expected, changed));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
 test('format commands are fixed publish-never, private prepackaged copies with explicit safe compression mode', () => {
   for (const format of ['AppImage', 'deb', 'rpm', 'pacman']) {
     const defaults = packageArgs(format, 'default', '/private/app', '/private/out');
