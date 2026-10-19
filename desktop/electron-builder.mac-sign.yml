@@ -1,0 +1,16 @@
+# Used only by protected Mac release/master-beta jobs. The base path stays ad-hoc
+# for desktop CI, local development and branches with no Apple credentials.
+# WHY an explicit identity: inheriting '-' would ignore the real certificate and
+# silently produce an ad-hoc app even with CSC_LINK configured.
+extends: ./electron-builder.yml
+mac:
+  # WHY no "Developer ID Application:" prefix: v26 rejects it in the qualifier;
+  # it selects the certificate type automatically for direct (non-MAS) distribution.
+  identity: "Destin's Adventures, LLC (C2PSZTNNA4)"
+  forceCodeSigning: true
+  hardenedRuntime: true
+  notarize: true
+# WHY: the final DMG is submitted/stapled separately after electron-builder has
+# notarized the app. A signed disk image also permits primary-signature assessment.
+dmg:
+  sign: true

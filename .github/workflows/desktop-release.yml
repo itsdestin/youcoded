@@ -38,9 +38,13 @@ jobs:
     # environment:windows-signing, so no Azure password lives in GitHub), and that
     # environment only admits master and v* tags. Every other leg/run gets no
     # environment and builds exactly as before.
-    environment: ${{ (matrix.name == 'windows' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master')) && 'windows-signing' || '' }}
+    # WHY: the Mac signing environment has its own master/v* deployment rules and
+    # secrets. Nontrusted branches must never receive either signing identity.
+    environment: ${{ (matrix.name == 'windows' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master')) && 'windows-signing' || (matrix.name == 'macos' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master')) && 'macos-signing' || '' }}
     env:
       SIGN_WINDOWS: ${{ matrix.name == 'windows' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master') }}
+      SIGN_MACOS: ${{ matrix.name == 'macos' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master') }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
     permissions:
       contents: write
       # Lets azure/login trade GitHub's short-lived OIDC token for Azure access.
@@ -146,7 +150,33 @@ jobs:
         shell: bash
         run: az account get-access-token --scope https://codesigning.azure.net/.default -o none
 
+      - name: Build signed Mac installers
+        if: env.SIGN_MACOS == 'true'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export APPLE_API_KEY="$RUNNER_TEMP/youcoded-apple-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.p8"
+          trap 'rm -f "$APPLE_API_KEY"' EXIT
+          # WHY a file: electron-builder/notarytool expect APPLE_API_KEY to be a
+          # path, not base64. Keep it outside the checkout and artifact globs.
+          node -e 'for (const k of ["CSC_LINK","CSC_KEY_PASSWORD","APPLE_API_KEY_BASE64","APPLE_API_KEY_ID","APPLE_API_ISSUER","APPLE_TEAM_ID"]) { if (!process.env[k]) throw new Error(k + " is missing from macos-signing"); } require("fs").writeFileSync(process.env.APPLE_API_KEY, Buffer.from(process.env.APPLE_API_KEY_BASE64,"base64"), {mode:0o600,flag:"wx"});'
+          npm run build -- --config electron-builder.mac-sign.yml
+          node scripts/notarize-mac-installers.mjs release
+
+      - name: Remove Apple API key
+        if: always() && env.SIGN_MACOS == 'true'
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/youcoded-apple-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.p8"
+
       - name: Build
+        if: env.SIGN_MACOS != 'true'
         shell: bash
         run: |
           if [ "$SIGN_WINDOWS" = "true" ]; then

@@ -41,16 +41,24 @@ function run(env: Record<string, string> = {}) {
      fi
      if [ "$1" = "-d" ]; then
        [ -n "\${CODESIGN_IDENT:-}" ] && echo "Identifier=\${CODESIGN_IDENT}"
-       echo "Signature=adhoc"; exit 0
+       if [ "\${TRUSTED_SIGNATURE:-false}" = true ]; then
+         echo "Authority=Developer ID Application: Destin's Adventures, LLC (C2PSZTNNA4)"
+         echo "TeamIdentifier=\${SIGNING_TEAM:-C2PSZTNNA4}"
+         [ "\${NO_RUNTIME:-false}" = true ] || echo 'CodeDirectory v=20500 flags=0x10000(runtime) hashes=1+0 location=embedded'
+         [ "\${NO_TIMESTAMP:-false}" = true ] || echo 'Timestamp=Oct 19, 2026'
+       else echo "Signature=adhoc"; fi
+       exit 0
      fi
      exit 2`,
   );
   // The stand-in PlistBuddy just prints the file's content (the tests write the bare id).
   const plistbuddy = writeStub('PlistBuddy', 'cat "$3"');
+  const xcrun = writeStub('xcrun', `echo "stub stapler output"; exit "\${STAPLER_EXIT:-0}"`);
+  const spctl = writeStub('spctl', `echo "stub Gatekeeper output"; exit "\${SPCTL_EXIT:-0}"`);
   const r = spawnSync('bash', [SCRIPT, path.join(tmp, 'release')], {
     cwd: tmp,
     encoding: 'utf8',
-    env: { ...process.env, CODESIGN: codesign, PLISTBUDDY: plistbuddy, CODESIGN_IDENT: 'com.youcoded.desktop', ...env },
+    env: { ...process.env, CODESIGN: codesign, PLISTBUDDY: plistbuddy, XCRUN: xcrun, SPCTL: spctl, SIGN_MACOS: 'false', CODESIGN_IDENT: 'com.youcoded.desktop', ...env },
   });
   return { status: r.status, out: (r.stdout ?? '') + (r.stderr ?? '') };
 }
@@ -59,7 +67,7 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-mac-sig-'));
 });
 afterEach(() => {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3 });
 });
 
 describe('verify-mac-signature.sh', () => {
@@ -134,6 +142,30 @@ describe('verify-mac-signature.sh', () => {
     const r = run();
     expect(r.status).toBe(1);
     expect(r.out).toContain('carries Office but no converter/x2t');
+  });
+
+  const trusted = { SIGN_MACOS: 'true', APPLE_TEAM_ID: 'C2PSZTNNA4', TRUSTED_SIGNATURE: 'true' };
+
+  it('accepts a Developer ID app only after staple and Gatekeeper validation', () => {
+    makeApp('mac-arm64');
+    const r = run(trusted);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain('Developer ID and notarization verified');
+  });
+
+  it.each([
+    ['ad-hoc signature', { TRUSTED_SIGNATURE: 'false' }, 'Developer ID'],
+    ['wrong team', { SIGNING_TEAM: 'OTHERTEAM1' }, 'TeamIdentifier'],
+    ['missing expected team', { APPLE_TEAM_ID: '' }, 'APPLE_TEAM_ID'],
+    ['missing hardened runtime', { NO_RUNTIME: 'true' }, 'hardened runtime'],
+    ['missing secure timestamp', { NO_TIMESTAMP: 'true' }, 'timestamp'],
+    ['invalid notarization ticket', { STAPLER_EXIT: '1' }, 'stub stapler output'],
+    ['Gatekeeper rejection', { SPCTL_EXIT: '1' }, 'stub Gatekeeper output'],
+  ])('rejects %s in trusted builds', (_name, overrides, reason) => {
+    makeApp('mac-arm64');
+    const r = run({ ...trusted, ...overrides });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain(reason);
   });
 
   it('fails loudly when no .app bundle exists (the mac build never ran)', () => {

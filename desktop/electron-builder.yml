@@ -52,18 +52,11 @@ mac:
   # rejects it as a BROKEN app rather than an unverified one — which removes the
   # "Open Anyway" button from System Settings and leaves users with no way in at all.
   #
-  # We have no Apple certificate, so "-" means "sign it as ourselves, unverified".
-  # electron-builder used to do this automatically: up to 26.8.1 it fell back to an
-  # ad-hoc signature when it found no certificate. 26.15.3 (Dependabot, 2026-07-23,
-  # c2dac26b) deleted that fallback and now silently skips signing, which is how
-  # v1.2.4 shipped correctly sealed and 1.3.0-beta.72 shipped unopenable.
-  # This line restores exactly what v1.2.4 had.
-  #
-  # WHEN A REAL APPLE CERTIFICATE ARRIVES, DELETE THIS LINE - do not just add the
-  # CSC_LINK secrets beside it. electron-builder treats '-' as a name to look for in
-  # the keychain first, finds nothing, and falls back to ad-hoc - so with this line
-  # present a real certificate would sit unused and every build would still be
-  # self-signed, and the CI check below cannot tell the two apart by identifier.
+  # "-" keeps local, CI and untrusted-branch builds sealed without Apple credentials.
+  # electron-builder 26.15.3 removed the automatic ad-hoc fallback, so this remains
+  # explicit. Trusted beta/release jobs use electron-builder.mac-sign.yml instead:
+  # it MUST override this identity (adding CSC_LINK alone would leave it ad-hoc).
+  # verify-mac-signature.sh enforces Developer ID + team + notarization for those jobs.
   identity: '-'
   # WHY: electron-builder's own fail-loud switch. With it, "could not sign" is a build
   # ERROR instead of a warning, so a local `npm run build` on a Mac, a VM test build,
@@ -75,7 +68,7 @@ mac:
   forceCodeSigning: true
   # WHY (Task 9): the signer signs every non-text file in the app one by one, and the Office
   # add-on has ~600 (editor images, fonts, templates). Only its converter is code: x2t and its
-  # dylibs, which DO get signed (ad hoc, like the app) — macOS refuses to run unsigned code on
+  # dylibs, which DO get signed (with the app's identity) — macOS refuses to run unsigned code on
   # Apple silicon, and upstream's own signature does not survive into our bundle's seal. Every
   # other add-on file is still covered by the app's seal as a plain resource, so
   # verify-mac-signature.sh's --deep --strict check sees any change to any of them.

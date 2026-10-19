@@ -30,7 +30,36 @@ set -euo pipefail
 
 CODESIGN="${CODESIGN:-codesign}"
 PLISTBUDDY="${PLISTBUDDY:-/usr/libexec/PlistBuddy}"
+XCRUN="${XCRUN:-xcrun}"
+SPCTL="${SPCTL:-spctl}"
 RELEASE_DIR="${1:-release}"
+
+# WHY: a valid ad-hoc seal is sufficient for dev, but is NOT evidence of Apple trust.
+# Trusted workflows must fail closed if they lose the certificate or notarization.
+if [ "${SIGN_MACOS:-false}" = true ] && [ -z "${APPLE_TEAM_ID:-}" ]; then
+  echo '::error::APPLE_TEAM_ID is required to verify a trusted Mac build'
+  exit 1
+fi
+
+verify_developer_id() {
+  local code="$1" info="$2"
+  if ! printf '%s\n' "$info" | grep -q '^Authority=Developer ID Application:'; then
+    echo "::error::$code does not carry a Developer ID Application signature"
+    exit 1
+  fi
+  if ! printf '%s\n' "$info" | grep -Fxq "TeamIdentifier=$APPLE_TEAM_ID"; then
+    echo "::error::$code TeamIdentifier does not match $APPLE_TEAM_ID"
+    exit 1
+  fi
+  if ! printf '%s\n' "$info" | grep -q 'flags=.*(.*runtime.*)'; then
+    echo "::error::$code is missing the hardened runtime"
+    exit 1
+  fi
+  if ! printf '%s\n' "$info" | grep -q '^Timestamp=.'; then
+    echo "::error::$code is missing a secure timestamp"
+    exit 1
+  fi
+}
 
 found=0
 while IFS= read -r app; do
@@ -61,6 +90,19 @@ while IFS= read -r app; do
   fi
   echo "  ok: $ident, $(printf '%s\n' "$details" | sed -n 's/^Signature=//p' | head -n1 | sed 's/^$/certificate/') signature"
 
+  if [ "${SIGN_MACOS:-false}" = true ]; then
+    verify_developer_id "$app" "$details"
+    if ! ticket_out=$("$XCRUN" stapler validate "$app" 2>&1); then
+      echo "::error::$app failed notarization ticket validation: $ticket_out"
+      exit 1
+    fi
+    if ! gatekeeper_out=$("$SPCTL" --assess --verbose=2 --type execute "$app" 2>&1); then
+      echo "::error::$app failed Gatekeeper assessment: $gatekeeper_out"
+      exit 1
+    fi
+    echo '  ok: Developer ID and notarization verified'
+  fi
+
   # 3. The Office converter (x2t and its dylibs) is signed on its own. WHY (final review,
   #    2026-09-30): it lives in Contents/Resources/, where --deep does not look for code — the
   #    app's seal covers those files only as plain resources. Apple silicon refuses to run
@@ -78,6 +120,13 @@ while IFS= read -r app; do
       if ! code_out=$("$CODESIGN" --verify --strict --verbose=2 "$code" 2>&1); then
         echo "::error::$code failed codesign --verify: ${code_out:-<no output>}"
         exit 1
+      fi
+      if [ "${SIGN_MACOS:-false}" = true ]; then
+        if ! code_details=$("$CODESIGN" -d --verbose=2 "$code" 2>&1); then
+          echo "::error::could not inspect $code: $code_details"
+          exit 1
+        fi
+        verify_developer_id "$code" "$code_details"
       fi
       n=$((n + 1))
     done
