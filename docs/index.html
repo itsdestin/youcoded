@@ -3668,13 +3668,13 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
           platformLabel: 'Android',
           intro: 'Android 9+ &middot; ARM64 phones. Install the APK directly; YouCoded isn\'t on Google Play yet.',
           steps: [
-            'When the download finishes, tap its notification. Or open <strong>Files → Downloads</strong> and tap the YouCoded <code>.apk</code>.',
-            'If Android shows a warning about installing unknown apps, tap <strong>Settings</strong> in the warning.',
-            'Turn on <strong>Allow from this source</strong> for the app that opened the APK &mdash; usually <strong>Chrome</strong> or <strong>Files</strong>, not YouCoded.',
-            'Tap <strong>Back</strong> to return to the APK. Tap <strong>Install</strong>, then <strong>Open</strong>.',
-            'Can\'t find the switch? Open your phone\'s <strong>Settings</strong>, search for <strong>Install unknown apps</strong>, choose your browser or Files app, and allow it. Then reopen the APK from Downloads.'
+            'When the download finishes, tap the notification (or open <strong>Files → Downloads</strong> and tap the YouCoded APK).',
+            'Android may say <em>"For your security, your phone isn\'t allowed to install unknown apps from this source."</em> Tap <strong>Settings</strong>.',
+            'Enable <strong>Allow from this source</strong> for whichever app you\'re installing from (usually <strong>Chrome</strong>). Tap back.',
+            'Tap <strong>Install</strong>. If <strong>Google Play Protect</strong> asks to scan the app, let it finish. For an unrecognized-app warning, choose <strong>More details → Install anyway</strong> if offered. Stop if it reports harmful software.',
+            'Wait for the install to finish, then tap <strong>Open</strong>.'
           ],
-          note: 'You can turn that install permission off afterward. Use your main phone profile, not a work profile or Secure Folder. If Play Protect requests a scan, let it finish; stop if it reports harmful software.'
+          note: '<strong>On Samsung phones:</strong> If Android doesn\'t take you there automatically, open <strong>Settings → Security and privacy → More security settings → Install unknown apps</strong>. Names vary by Android version; you can also search Settings for <strong>Install unknown apps</strong>. Choose the app opening the APK, usually Chrome. You can turn this permission off afterward. Use your main phone profile, not a work profile or Secure Folder.'
         }
       };
 

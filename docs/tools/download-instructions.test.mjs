@@ -93,13 +93,14 @@ test('unknown Mac downloads do not claim signed status and fall back to releases
 test('Android reflects the shipped rebuild without telling users to bypass security scans', () => {
   const r = modal('dl-android', '1.3.1');
   try {
-    assert.doesNotMatch(r.body.textContent, /major revision|behind the desktop|rebuilt version|400|600|package tier|Install anyway|Claude Code runtime/i);
+    assert.doesNotMatch(r.body.textContent, /major revision|behind the desktop|rebuilt version|400|600|package tier|Claude Code runtime/i);
     assert.match(r.body.textContent, /Android 9\+.*ARM64/);
     assert.match(r.body.textContent, /main phone profile.*work profile.*Secure Folder/);
     assert.match(r.body.textContent, /Files.*Downloads/);
-    assert.match(r.body.textContent, /warning.*Settings/);
-    assert.match(r.body.textContent, /Allow from this source.*Chrome.*Files.*not.*YouCoded/i);
-    assert.match(r.body.textContent, /Back.*APK.*Install/);
+    assert.match(r.body.textContent, /For your security.*Tap Settings/);
+    assert.match(r.body.textContent, /Allow from this source.*usually Chrome.*Tap back/i);
+    assert.match(r.body.textContent, /On Samsung phones:.*Security and privacy.*More security settings.*Install unknown apps/);
+    assert.match(r.body.textContent, /unrecognized-app warning.*More details.*Install anyway.*if offered.*Stop if it reports harmful/i);
     assert.match(r.body.textContent, /search.*Install unknown apps/i);
     assert.match(r.body.textContent, /turn.*permission.*off.*after/i);
     assert.match(r.body.textContent, /Play Protect.*scan/i);
