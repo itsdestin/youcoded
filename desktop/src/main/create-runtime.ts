@@ -136,7 +136,7 @@ export interface NativeRuntime {
   fills: AudienceFills;
   /** A door subscribes to hear an automatic title land (window push + phone push). */
   onTitleApplied(listener: TitleAppliedListener): void;
-  /** Runtime half of app quit. Returns the engine-stop promise so quit can await it. */
+  /** Runtime half of app quit. Joins native teardown and engine stop for the caller. */
   cleanup(): Promise<void>;
 }
 
@@ -646,18 +646,16 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     onTitleApplied: (listener) => { titleListeners.push(listener); },
     cleanup: () => {
       openRouterSignIn.dispose();
-      // Flush + tear down every live native session on quit (best-effort, bounded
-      // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()
-      // is synchronous and callers don't await it, so this mirrors the async
-      // stopSyncSpaces() teardown pattern in main.ts window-all-closed.
-      void nativeHost.destroyAll().catch(() => {});
+      // WHY: quit must wait for native transcript flush/MCP teardown as well as
+      // engine stop. Start both now, isolating failures so neither skips the other.
+      const nativeStopped = nativeHost.destroyAll().catch(() => {});
       stopAdminPassword(); // refuse open password asks; final forget sweep
       // Awaited by the caller: never leave an orphaned llama-server on quit.
       const engineStopped = engineManager.stopAll().catch(() => {});
       sessionState.dispose();
       records.clear();
       fills.clear();
-      return engineStopped;
+      return Promise.all([nativeStopped, engineStopped]).then(() => {});
     },
   };
 }

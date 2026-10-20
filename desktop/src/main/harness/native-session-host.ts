@@ -5271,6 +5271,9 @@ export class NativeSessionHost extends EventEmitter {
     const modelId = entry.session.binding.modelId; // capture before teardown
     entry.session.destroy();             // abort stream + remove our listener → no new appends
     await entry.appendChain;             // drain already-enqueued appends
+    // WHY: publication runs on that same chain. Only now can its parsed history
+    // be released without a late publisher refilling it; never remove the manifest.
+    await this.continuation.acceptedHistory?.releaseSession(sessionId);
     try { await this.store.dispose(sessionId); } // flush the buffered open part
     catch (error) {
       // WHY: a completed child is already absent from childrenOf here. Carry

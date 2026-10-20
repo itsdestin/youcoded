@@ -153,6 +153,14 @@ describe('wireWindowHangDiagnostics', () => {
     expect(hang.unresponsive).toBe(false);
   });
 
+  it('does not carry an old hang into a replacement renderer', () => {
+    const win = Object.assign(new EventEmitter(), { webContents: new EventEmitter() });
+    const hang = wireWindowHangDiagnostics(win as never, 'main');
+    win.emit('unresponsive');
+    win.webContents.emit('render-process-gone');
+    expect(hang.unresponsive).toBe(false);
+  });
+
   it('stays quiet when a healthy window closes', () => {
     const win = new EventEmitter();
     wireWindowHangDiagnostics(win as never, 'main');

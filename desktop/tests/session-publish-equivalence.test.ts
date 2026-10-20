@@ -51,6 +51,20 @@ import { WindowRegistry } from '../src/main/window-registry';
 import { createRuntime } from '../src/main/create-runtime';
 import { createElectronPlatform } from '../src/main/electron-platform';
 import { IPC } from '../src/shared/types';
+import { createPublish } from '../src/main/publish';
+
+it('a failed window delivery cannot stop phones or following session bookkeeping', () => {
+  const toSockets = vi.fn();
+  const afterWindows = vi.fn();
+  const publish = createPublish({
+    records: { note: () => 1, epochOf: () => 'epoch' },
+    toWindows: () => { throw new Error('disposed frame'); },
+    toSockets,
+  });
+  expect(() => publish('s', 'event', {}, { afterWindows })).not.toThrow();
+  expect(afterWindows).toHaveBeenCalledOnce();
+  expect(toSockets).toHaveBeenCalledOnce();
+});
 
 const PRIMARY = 1, OWNER = 2, BUDDY = 3, OTHER = 4;
 const SID = 'sess-1';

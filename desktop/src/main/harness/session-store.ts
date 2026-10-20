@@ -351,7 +351,13 @@ export class SessionStore {
    * the open map can't leak. Must NOT silently discard the part.
    */
   async dispose(sessionId: string): Promise<void> {
-    await this.flush(sessionId);
+    try { await this.flush(sessionId); }
+    finally {
+      // WHY: the host has drained its append chain; closed-session UUID ranges
+      // and failure flags have no remaining reader. Resume hydrates from disk.
+      this.references.delete(sessionId);
+      this.failed.delete(sessionId);
+    }
   }
 
   /**

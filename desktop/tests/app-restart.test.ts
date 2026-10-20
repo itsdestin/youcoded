@@ -4,7 +4,31 @@
 // on the spot if a responsive window has unsaved text edits (and says so each time); otherwise
 // it arms a 10 s watchdog that lets a still-open (hung) window go.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests } from '../src/main/app-restart';
+import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests, shutdownStep } from '../src/main/app-restart';
+
+it('repeated quit stays blocked until teardown is complete', () => {
+  const t = deps(true);
+  let complete = false;
+  expect(quitAfterTeardown({ ...t.d, teardownComplete: () => complete })).toBe(false);
+  expect(t.timers).toHaveLength(0);
+  complete = true;
+  expect(quitAfterTeardown({ ...t.d, teardownComplete: () => complete })).toBe(true);
+});
+
+it('cleanup failures do not skip waiting for other cleanup steps', async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  let done = false;
+  const stopped = Promise.all([
+    shutdownStep('broken', () => { throw new Error('test cleanup'); }),
+    shutdownStep('pending', () => pending),
+  ]).then(() => { done = true; });
+  await Promise.resolve();
+  expect(done).toBe(false);
+  finish();
+  await stopped;
+  expect(done).toBe(true);
+});
 
 function deps(go: boolean, open = 0) {
   const timers: Array<{ fn: () => void; ms: number }> = [];

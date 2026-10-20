@@ -30,6 +30,8 @@ import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
+import { clearRecoveryDraft } from '../state/draft-recovery';
+import { readComposerDraft, writeComposerDraft } from './composer-draft-recovery';
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -175,8 +177,10 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 }
 
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
-  const [text, setText] = useState('');
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [text, setText] = useState(() => readComposerDraft(`composer:${sessionId}`)?.text ?? '');
+  const [attachments, setAttachments] = useState<Attachment[]>(() =>
+    (readComposerDraft(`composer:${sessionId}`)?.attachments ?? []).map((path) =>
+      ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) })));
   // Read by window-event listeners that must not re-subscribe on every change.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -343,24 +347,40 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // across sessions so switching away and back preserves your draft.
   const draftsRef = useRef<Map<string, { text: string; attachments: Attachment[] }>>(new Map());
   const prevSessionRef = useRef<string>(sessionId);
+  const skipDraftSaveRef = useRef(false);
+  const movedDraftFromRef = useRef<string | null>(null);
   useEffect(() => {
     const prev = prevSessionRef.current;
     if (prev === sessionId) return;
     // Save outgoing session's draft (read DOM directly to avoid stale closure)
     const outgoingText = inputRef.current?.value ?? text;
-    if (outgoingText || attachments.length > 0) {
+    if (movedDraftFromRef.current === prev) {
+      movedDraftFromRef.current = null;
+    } else if (outgoingText || attachments.length > 0) {
       draftsRef.current.set(prev, { text: outgoingText, attachments });
+      writeComposerDraft(`composer:${prev}`, { text: outgoingText, attachments: attachments.map((a) => a.path) });
     } else {
       draftsRef.current.delete(prev);
+      clearRecoveryDraft(`composer:${prev}`);
     }
-    // Restore incoming session's draft (or blank)
-    const restored = draftsRef.current.get(sessionId);
+    // WHY: this commit still holds the outgoing state. Do not journal it under the incoming id.
+    skipDraftSaveRef.current = true;
+    const saved = readComposerDraft(`composer:${sessionId}`);
+    const restored = draftsRef.current.get(sessionId) ?? (saved ? {
+      text: saved.text, attachments: (saved.attachments ?? []).map((path) =>
+        ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) })),
+    } : undefined);
     setText(restored?.text ?? '');
     setAttachments(restored?.attachments ?? []);
     prevSessionRef.current = sessionId;
   // ESLint needs `--` before the reason; without it the whole trailing phrase is
   // parsed as part of the rule name and the directive silently does nothing.
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally reads text/attachments from refs
+
+  useEffect(() => {
+    if (skipDraftSaveRef.current) { skipDraftSaveRef.current = false; return; }
+    writeComposerDraft(`composer:${sessionId}`, { text, attachments: attachments.map((a) => a.path) });
+  }, [sessionId, text, attachments]);
 
   // Prefill support — used by dev:open-session-in (and any other caller that
   // supplies initialInput on a SessionInfo).  We track consumed session IDs in
@@ -371,6 +391,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   useEffect(() => {
     if ((!initialInput?.trim() && !initialAttachments?.length) || consumedPrefillIds.current.has(sessionId)) return;
     consumedPrefillIds.current.add(sessionId);
+    // WHY: an old startup prefill must not replace newer unsent text recovered after a crash.
+    if (readComposerDraft(`composer:${sessionId}`)) return;
     // Bound the set to prevent unbounded growth over long app lifetimes.
     // Oldest entries can't be re-triggered because their session IDs are
     // no longer active in the session list.
@@ -403,6 +425,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   useImperativeHandle(ref, () => ({
     clear: () => {
+      clearRecoveryDraft(`composer:${sessionId}`);
       setText('');
       setAttachments([]);
       if (inputRef.current) inputRef.current.style.height = 'auto';
@@ -438,7 +461,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const draft = fromId === sessionId
         ? { text: inputRef.current?.value ?? text, attachments }
         : draftsRef.current.get(fromId);
-      if (draft) draftsRef.current.set(toId, draft);
+      if (draft) {
+        draftsRef.current.set(toId, draft);
+        writeComposerDraft(`composer:${toId}`, { text: draft.text, attachments: draft.attachments.map((a) => a.path) });
+      }
+      clearRecoveryDraft(`composer:${fromId}`);
+      movedDraftFromRef.current = fromId;
       draftsRef.current.delete(fromId);
     },
     // Mirrors the initialInput prefill effect above (setText + focus + caret
@@ -948,6 +976,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     setText('');
     setAttachments([]);
     draftsRef.current.delete(sessionId); // Clear stored draft after sending
+    clearRecoveryDraft(`composer:${sessionId}`);
     onCloseDrawer?.();
     // Reset height after clearing
     if (inputRef.current) inputRef.current.style.height = 'auto';
@@ -970,6 +999,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         return;
       }
       window.claude.session.sendInput(sessionId, val + '\r');
+      clearRecoveryDraft(`composer:${sessionId}`);
       setText('');
       if (inputRef.current) {
         inputRef.current.value = '';
@@ -1310,6 +1340,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                   // sees Enter as a distinct keystroke after paste commits.
                   const val = inputRef.current?.value ?? text;
                   window.claude.session.sendInput(sessionId, val + '\r');
+                  clearRecoveryDraft(`composer:${sessionId}`);
                   setText('');
                   if (inputRef.current) {
                     inputRef.current.value = '';

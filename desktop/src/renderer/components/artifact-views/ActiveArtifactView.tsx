@@ -43,7 +43,7 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
     : (a.absolutePath ?? a.path);
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
-import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft } from './draft-store';
+import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft, rememberDraft } from './draft-store';
 import { ScreenMark } from '../../shoot-mode';
 import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
@@ -293,6 +293,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // baseMtimeMs so a save over a changed file is rejected instead of silently
   // clobbering it (spec §12.9). null = no token yet → save runs unguarded.
   const mtimeRef = useRef<number | null>(null);
+  // WHY: a watcher may read newer disk metadata; recovery must keep the draft's original base.
+  const recoveryBaseRef = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   // Mirrors for the unmount stash below — cleanup closures must read the
   // CURRENT values, not the ones captured when the effect last ran.
@@ -323,6 +325,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       pendingRestoreRef.current = undefined;
       setDraft(pending.draft);
       mtimeRef.current = pending.mtimeMs;
+      recoveryBaseRef.current = pending.mtimeMs;
       setEditing(true);
       settleDraft(draftKey(projectRoot, artifact.id), true); // back in the editor (fix round 11)
     } else if (pending && content !== null) {
@@ -341,6 +344,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setEditing(false);
     setSaveError(null);
     mtimeRef.current = null; // token belongs to the previous file
+    recoveryBaseRef.current = null;
     const key = draftKey(projectRoot, artifact.id);
     pendingRestoreRef.current = takeDraft(key);
     // On the FIRST mount content may already be resolved (host kept it warm),
@@ -357,6 +361,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         pendingRestoreRef.current = undefined;
         setDraft(pending.draft);
         mtimeRef.current = pending.mtimeMs;
+      recoveryBaseRef.current = pending.mtimeMs;
         setEditing(true);
         settleDraft(key, true);
       }
@@ -372,7 +377,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
         // Named and savable from the refused-quit prompt (fix rounds 11–13): the file name only.
         const draftText = cur.draft;
-        const baseMtimeMs = mtimeRef.current;
+        const baseMtimeMs = recoveryBaseRef.current;
         const resolvedPath = cur.contentInfo?.resolvedPath ?? null;
         stashDraft(key, {
           draft: draftText, mtimeMs: baseMtimeMs, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
@@ -391,6 +396,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // banner with the disk version. `by` is deliberately ignored: a 'user' save
   // from another window needs exactly the same handling as an 'external' write.
   const dirty = editing && content !== null && draft !== content;
+  const changeDraft = useCallback((value: string) => {
+    setDraft(value);
+    const key = draftKey(projectRoot, artifact.id);
+    if (value === content) clearDraft(key);
+    else rememberDraft(key, { draft: value, mtimeMs: recoveryBaseRef.current, name: artifact.path.split(/[\\/]/).pop() });
+  }, [projectRoot, artifact.id, artifact.path, content]);
   // WHY a ref: the watcher below used to list dirty/draft/content (and the host
   // callbacks) as effect deps, so EVERY keystroke in the editor tore the IPC
   // subscription down and built a new one. It now subscribes once per file and
@@ -447,7 +458,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // may have missed AND captures the concurrency token the save round-trips.
     (window.claude as any).artifacts.get(projectRoot, artifact.id).then((res: any) => {
       if (!res || !res.ok || res.orphan) return;
-      if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
+      if (typeof res.mtimeMs === 'number') {
+        mtimeRef.current = res.mtimeMs;
+        recoveryBaseRef.current = res.mtimeMs;
+        const cur = stateRef.current;
+        if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
+          rememberDraft(draftKey(projectRoot, artifact.id), { draft: cur.draft, mtimeMs: res.mtimeMs, name: artifact.path.split(/[\\/]/).pop() });
+        }
+      }
       if (onDiskRead) onDiskRead(res);
       else if (typeof res.content === 'string' && res.content !== content) onContentChange(res.content);
       // The affordance was decided on the size we knew a moment ago. If THIS
@@ -970,7 +988,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
               isEditable={isEditable}
               editing={editing}
               draft={draft}
-              onDraftChange={setDraft}
+              onDraftChange={changeDraft}
               onStartEdit={handleStartEdit}
               onSaveEdit={handleSave}
               onCancelEdit={handleCancel}

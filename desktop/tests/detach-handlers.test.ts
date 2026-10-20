@@ -25,7 +25,7 @@ type FakeWin = {
   positions: Array<[number, number]>;
   ignoreMouse: boolean[];
   js: (code: string) => Promise<any>;
-  webContents: { id: number; send: (c: string, p: any) => void; once: any; executeJavaScript: (c: string) => Promise<any> };
+  webContents: { id: number; isDestroyed: () => boolean; send: (c: string, p: any) => void; once: any; executeJavaScript: (c: string) => Promise<any> };
   close(): void;
   focus(): void;
   isDestroyed(): boolean;
@@ -47,6 +47,7 @@ function fakeWindow(id: number): FakeWin {
     js: async () => false,
     webContents: {
       id,
+      isDestroyed: () => w.closed,
       send: (channel, payload) => { w.sent.push({ channel, payload }); },
       once: vi.fn(),
       executeJavaScript: (code) => w.js(code),

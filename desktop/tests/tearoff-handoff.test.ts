@@ -59,6 +59,15 @@ describe('PendingAcquireQueue — a handoff survives a renderer that is not list
     expect(q.claim(7).map((p) => p.sessionId)).toEqual(['a']);
   });
 
+  it('a replacement renderer must claim again without losing queued transfers', () => {
+    const q = new PendingAcquireQueue<{ sessionId: string }>();
+    q.claim(7);
+    q.suspend(7);
+    q.enqueue(7, { sessionId: 'during-reload' });
+    expect(q.isReady(7)).toBe(false);
+    expect(q.claim(7)).toEqual([{ sessionId: 'during-reload' }]);
+  });
+
   it('forget() drops a closed window\'s queue and its ready flag', () => {
     const q = new PendingAcquireQueue<{ sessionId: string }>();
     q.enqueue(7, { sessionId: 'a' });
