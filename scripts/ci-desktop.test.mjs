@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,11 +6,20 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { deserialize } from 'node:v8';
 import { appImagePayload, expectedMetadata, packageArgs, encoderProfile, writeEncoderConfig } from './ci-linux.mjs';
 import { run } from './ci-policy.mjs';
 import * as linux from './ci-linux.mjs';
 import { aggregate, identity, manifest, shardArgs } from './ci-evidence.mjs';
 const vitest = fileURLToPath(new URL('../desktop/node_modules/vitest/vitest.mjs', import.meta.url));
+// WHY: builder-util writes directly to stdout, bypassing node:test's console
+// framing. On Node 22 a pipe read containing a V8 frame followed by a builder
+// log is misparsed as another frame. Keep all real logs on the separate stderr
+// pipe instead; do not silence the builder or change the shared CLI launcher.
+const { log: builderLog } = createRequire(new URL('../desktop/package.json', import.meta.url))('builder-util');
+const originalBuilderLogStream = builderLog.stream;
+builderLog.stream = process.stderr;
+after(() => { builderLog.stream = originalBuilderLogStream; });
 const mergeConfigs = [
   ['inline target merge', 'linux: {}\ndeb: { <<: { fpm: ["--custom-sentinel=keep"] } }\nrpm: { <<: { fpm: ["--custom-sentinel=keep"] } }\n'],
   ['inline linux merge', 'linux: { <<: { fpm: ["--custom-sentinel=keep"] } }\n'],
@@ -264,6 +273,47 @@ test('package metadata loads current installed builder defaults and current conf
     const expected = config[format]?.depends ?? config.linux.depends ?? Builder.prototype.getDefaultDepends(format);
     assert.ok(Array.isArray(expected) && expected.length > 0 && expected.every(item => typeof item === 'string' && item.length > 0));
     assert.deepEqual(format === 'pacman' ? actual.pacmanDependencies : actual.nativeDependencies[format], expected);
+  }
+});
+
+test('builder config logs cannot corrupt coalesced Node test protocol frames', () => {
+  // WHY: Node 22 mistakes raw builder stdout following a V8 test frame in the
+  // same pipe read for another serialized frame. Coalesce real writes to make
+  // the OS-dependent boundary deterministic, without fabricating report bytes.
+  const preload = `
+    if (process.env.NODE_TEST_CONTEXT === 'child-v8') {
+      const chunks = [], stdout = process.stdout, write = stdout.write.bind(stdout);
+      stdout.write = (chunk, encoding, callback) => {
+        chunks.push(Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined));
+        const done = typeof encoding === 'function' ? encoding : callback;
+        if (done) queueMicrotask(done);
+        return true;
+      };
+      process.once('beforeExit', () => { stdout.write = write; write(Buffer.concat(chunks)); });
+    }
+  `;
+  // This is an independent runner, not another child of the outer V8 reporter.
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+    '--test', '--test-reporter=tap', '--test-name-pattern=^real builder config resolution', fileURLToPath(import.meta.url)], { env, encoding: 'utf8' });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /ok 1 - real builder config resolution/);
+  assert.match(result.stdout, /loaded configuration/);
+  assert.match(result.stdout, /# fail 0/);
+  // Exercise the actual child-v8 environment too: every stdout byte must be a
+  // framed test event, while the real builder's diagnostics stay on stderr.
+  const child = spawnSync(process.execPath, ['--test-name-pattern=^real builder config resolution', fileURLToPath(import.meta.url)],
+    { env: { ...env, NODE_TEST_CONTEXT: 'child-v8' } });
+  assert.ifError(child.error);
+  assert.equal(child.status, 0, child.stderr.toString());
+  assert.match(child.stderr.toString(), /loaded configuration/);
+  assert.ok(child.stdout.length > 0);
+  for (let offset = 0; offset < child.stdout.length;) {
+    const length = child.stdout.readUInt32BE(offset + 2), end = offset + 6 + length;
+    assert.ok(end <= child.stdout.length, 'stdout must contain only complete V8 frames');
+    assert.match(deserialize(child.stdout.subarray(offset + 6, end)).type, /^test:/);
+    offset = end;
   }
 });
 
