@@ -852,7 +852,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // invoke-skill intent for native sessions (M3 item 1).
       const route = routeSlashResult(provider, dispatchResult);
       if (route.via === 'native') {
-        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast });
+        const compactionOperationId = getSessionState?.(sessionId)?.compactionPending?.id; // WHY: capture before awaiting IPC.
+        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast, compactionOperationId });
         return true;
       }
       if (route.via === 'pty') {

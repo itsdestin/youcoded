@@ -2,6 +2,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
+import { projectTimeline } from '../state/timeline-presentation';
 import { detectLinkTokens } from './markdown-linkify';
 import { detectFilepaths } from '../hooks/useInlineFilepathDetector';
 import { splitComposeRefs } from './context-menu/compose-ref';
@@ -15,11 +16,13 @@ const DOM_BLOCK = 'p,pre,h1,h2,h3,h4,h5,h6,li,blockquote,td,th,hr';
 
 export function extractMessageFindRows(timeline: readonly TimelineEntry[], turns: ReadonlyMap<string, AssistantTurn>): MessageFindRow[] {
   const rows: MessageFindRow[] = [];
-  for (const entry of timeline) {
+  // WHY: Find must reveal the exact folding/DOM key of each visible chunk.
+  const presentation = projectTimeline(timeline, turns);
+  for (const entry of presentation.timeline) {
     // WHY: injected user-role entries are host/tool events, never authored messages.
     if (entry.kind === 'user' && !entry.injected) rows.push({ id: entry.message.id, bodies: [entry.message.content], markdown: false, attachments: entry.message.attachments });
     if (entry.kind === 'assistant-turn') {
-      const turn = turns.get(entry.turnId);
+      const turn = presentation.assistantTurns.get(entry.turnId);
       if (turn) rows.push({ id: entry.turnId, bodies: turn.segments.filter((seg) => seg.type === 'text').map((seg) => seg.content), markdown: true });
     }
   }

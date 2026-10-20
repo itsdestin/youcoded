@@ -2088,16 +2088,13 @@ describe('NativeSessionHost', () => {
       expect(seen.length).toBe(n);
     });
 
-    it('announces a compaction start, and an end only when it finished without a summary line', async () => {
+    it('refuses compaction during a reply without fabricating a lifecycle', async () => {
       const ev: any[] = [];
       host.on('compaction', (e: any) => ev.push(e));
       host.send(id, 'busy');
       const refused = await host.compact(id);                 // a turn is in flight: refused
       expect(refused).toEqual({ ok: false, reason: 'turn-in-flight' });
-      expect(ev).toEqual([
-        { sessionId: id, phase: 'start' },
-        { sessionId: id, phase: 'end', outcome: 'failed' },
-      ]);
+      expect(ev).toEqual([]); // The refusal belongs only to the requester, never to the running reply's lifecycle.
     });
 
     it('overlapping send queues FIFO and both turns complete in order', async () => {

@@ -180,7 +180,7 @@ interface Rec {
   /** The mode the host last read off a Claude Code session's terminal (R5-4a); null until it has seen one. */
   terminalMode: string | null;
   /** A compaction is in progress: the spinner a screen that opens now must draw (R5-4a; restores what a phone lost in R5-2). */
-  compacting: { id: string } | null;
+  compacting: { id: string; startedAt?: number } | null;
   /** Tool calls of the running turn that have started and not finished (the reducer's `running` tools; one-core R5-4b: the stuck check is off while one runs). */
   runningTools: Set<string>;
   /** Claude Code has run a hook for this session: its startup dialogs are behind it (the screens' "initialized" gate). */
@@ -636,7 +636,10 @@ export class SessionRecords {
   }
 
   /** A compaction is waiting for its summary line (the host watches that it does not wait forever). */
-  isCompacting(sessionId: string): boolean { return !!this.records.get(sessionId)?.compacting; }
+  isCompacting(sessionId: string, operationId?: string): boolean {
+    const pending = this.records.get(sessionId)?.compacting;
+    return !!pending && (operationId === undefined || pending.id === operationId);
+  }
 
   /** The cards open now, with when each was raised: what the host checks against the terminal and against later activity. */
   openPrompts(sessionId: string): Array<{ promptId: string; title: string; at: number }> {
@@ -670,7 +673,7 @@ export class SessionRecords {
       out.push({ type: 'native:model-state', payload: { sessionId, ...ms } });
     }
     for (const p of rec.prompts.values()) out.push({ type: 'session:live', payload: p });
-    if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
+    if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', ...rec.compacting } });
     // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
     if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
     // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
@@ -777,8 +780,9 @@ export class SessionRecords {
       return;
     }
     if (type === 'session:live') { this.foldLive(rec, asObject(payload) as Record<string, any>); return; }
-    // The transcript file shrank: a compaction (or a clear) is over, so a spinner that is still up has nothing left to wait for.
-    if (type === 'transcript:shrink') { rec.compacting = null; return; }
+    // WHY: /clear, file rotation and stale rewrites also shrink transcripts.
+    // With no operation identity a shrink cannot finish the currently pending work.
+    if (type === 'transcript:shrink') return;
     if (type !== 'transcript:event') return;
 
     const ev = asObject(payload);
@@ -849,7 +853,8 @@ export class SessionRecords {
         return;
       // The compaction's own line ends the spinner (the "Compacted" note is drawn from it).
       case 'compact-summary':
-        rec.compacting = null;
+        // WHY: an old/automatic/legacy summary is still a durable boundary, but cannot identify a newer manual spinner.
+        if (rec.compacting && d.operationId === rec.compacting.id) rec.compacting = null;
         return;
       default:
         return;
@@ -870,10 +875,12 @@ export class SessionRecords {
         if (typeof live.model === 'string' && live.model) rec.facts.model = live.model;
         return;
       case 'compact-start':
-        if (typeof live.id === 'string') rec.compacting = { id: live.id };
+        // Duplicate delivery/fill must retain the operation's original clock.
+        if (typeof live.id === 'string' && rec.compacting?.id !== live.id) rec.compacting = { id: live.id,
+          ...(typeof live.startedAt === 'number' ? { startedAt: live.startedAt } : {}) };
         return;
       case 'compact-end':
-        rec.compacting = null;
+        if (rec.compacting?.id === live.id) rec.compacting = null;
         return;
       case 'prompt-show':
         if (typeof live.promptId !== 'string' || !live.promptId) return;

@@ -19,6 +19,7 @@ import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
 import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
+import { projectTimeline } from '../../state/timeline-presentation';
 
 interface Props {
   sessionId: string | null;
@@ -47,6 +48,8 @@ export function BubbleFeed({ sessionId }: Props) {
   const dispatch = useChatDispatch();
   const store = useChatStore();
   const state = useChatState(sessionId ?? '');
+  // WHY: use the same stable in-reply boundaries as the main chat and preview.
+  const presentation = useMemo(() => projectTimeline(state.timeline, state.assistantTurns), [state.timeline, state.assistantTurns]);
   const { showTimestamps } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -319,8 +322,8 @@ export function BubbleFeed({ sessionId }: Props) {
             // WHY the shared helper: a native compaction keeps a recent tail
             // above its marker, and only archive-boundary.ts knows to stop the
             // fade there. Compact-only, as before: the buddy never faded /clear.
-            const lastCompactIdx = findArchiveBoundary(state.timeline, ['compact']).index;
-            return state.timeline.map((entry, idx) => {
+            const lastCompactIdx = findArchiveBoundary(presentation.timeline, ['compact']).index;
+            return presentation.timeline.map((entry, idx) => {
               const isPreCompaction = lastCompactIdx >= 0 && idx < lastCompactIdx;
               let key: string;
               let content: React.ReactNode;
@@ -336,7 +339,7 @@ export function BubbleFeed({ sessionId }: Props) {
                     : <UserMessage message={entry.message} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />;
                   break;
                 case 'assistant-turn': {
-                  const turn = state.assistantTurns.get(entry.turnId);
+                  const turn = presentation.assistantTurns.get(entry.turnId);
                   // Shared gate (chat-types.ts) — one function keeps this
                   // mirrored with ChatView.tsx by construction.
                   if (!shouldRenderAssistantTurn(turn)) return null;

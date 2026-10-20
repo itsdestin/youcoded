@@ -30,6 +30,7 @@ const watchedHere = (s: SessionChatState): boolean => !!s.compactionPending && !
 export function useCompactionWatchdog(store: WatchedStore, dispatch: (a: ChatAction) => void, limitMs: number = COMPACTION_WATCHDOG_MS): void {
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
+    const observed = new Map<string, SessionChatState>();
     const check = () => {
       const map = store.getState();
       // Perf: this runs on every reducer dispatch. Steady state (nothing watched, no live timers) short-circuits without walking the map.
@@ -41,21 +42,38 @@ export function useCompactionWatchdog(store: WatchedStore, dispatch: (a: ChatAct
       for (const [sid, session] of map) {
         const existing = timers.current.get(sid);
         if (watchedHere(session)) {
-          // Reset on every reducer tick while pending — if events are flowing for this session, the timer keeps bumping and never fires.
+          // WHY: another session's dispatch must not postpone this session's timeout.
+          if (existing && observed.get(sid) === session) continue;
+          observed.set(sid, session);
           if (existing) clearTimeout(existing);
-          timers.current.set(sid, setTimeout(() => {
-            if (store.getState().get(sid)?.compactionPending) {
-              dispatch({ type: 'COMPACTION_COMPLETE', sessionId: sid, markerId: `compact-timeout-${Date.now()}`, afterContextTokens: null, aborted: true });
-            }
+          const pending = session.compactionPending!;
+          const timer = setTimeout(() => {
+            // WHY: an already queued old callback must neither expire a newer operation nor delete its timer.
+            if (timers.current.get(sid) !== timer) return;
             timers.current.delete(sid);
-          }, limitMs));
+            observed.delete(sid);
+            const current = store.getState().get(sid)?.compactionPending;
+            if (current && (pending.id !== undefined ? current.id === pending.id : current === pending)) {
+              dispatch({ type: 'COMPACTION_COMPLETE', sessionId: sid, operationId: pending.id, markerId: `compact-timeout-${Date.now()}`, afterContextTokens: null, aborted: true });
+            }
+          }, limitMs);
+          timers.current.set(sid, timer);
         } else if (existing) {
           clearTimeout(existing);
           timers.current.delete(sid);
+          observed.delete(sid);
         }
+      }
+      for (const [sid, timer] of timers.current) if (!map.has(sid)) {
+        clearTimeout(timer); timers.current.delete(sid); observed.delete(sid);
       }
     };
     check();
-    return store.subscribeAll(check);
+    const unsubscribe = store.subscribeAll(check);
+    return () => {
+      unsubscribe();
+      for (const timer of timers.current.values()) clearTimeout(timer);
+      timers.current.clear();
+    };
   }, [store, dispatch, limitMs]);
 }

@@ -16,7 +16,8 @@ interface Props {
 
 export default function SystemMarker({ marker }: Props) {
   const [expanded, setExpanded] = useState(false);
-  const time = new Date(marker.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  // WHY: an old transcript may prove compaction but have no usable source time.
+  const time = marker.timestamp > 0 ? new Date(marker.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
   const expandable = !!marker.summary;
 
   return (
@@ -30,9 +31,9 @@ export default function SystemMarker({ marker }: Props) {
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            // WHY: drop the spaced-caps eyebrow (labels batch, guide: no
-            // spaced capitals).
-            className="text-2xs whitespace-nowrap inline-flex items-center gap-1.5 hover:text-fg-2 transition-colors cursor-pointer"
+            // WHY: narrow chats must keep the summary action reachable, not
+            // clip a long freed-token label. Desktop retains the single line.
+            className="text-2xs whitespace-nowrap inline-flex items-center gap-1.5 hover:text-fg-2 transition-colors cursor-pointer max-sm:min-w-0 max-sm:max-w-full max-sm:flex-wrap max-sm:justify-center max-sm:whitespace-normal coarse-hit"
           >
             <svg
               width="8"
@@ -44,15 +45,15 @@ export default function SystemMarker({ marker }: Props) {
               <path d="M2 1 L6 4 L2 7" fill="none" stroke="currentColor" strokeWidth="1.2" />
             </svg>
             {marker.label}
-            <span className="ml-1 text-fg-muted normal-case tracking-normal">· {time}</span>
+            {time && <span className="ml-1 text-fg-muted normal-case tracking-normal">· {time}</span>}
             <span className="ml-1 text-fg-muted normal-case tracking-normal">
               · {expanded ? 'hide' : 'view'} summary
             </span>
           </button>
         ) : (
-          <span className="text-2xs whitespace-nowrap">
+          <span className="text-2xs whitespace-nowrap max-sm:min-w-0 max-sm:whitespace-normal max-sm:text-center">
             {marker.label}
-            <span className="ml-2 text-fg-muted normal-case tracking-normal">· {time}</span>
+            {time && <span className="ml-2 text-fg-muted normal-case tracking-normal">· {time}</span>}
           </span>
         )}
         <div className="flex-1 h-px bg-edge-dim" />

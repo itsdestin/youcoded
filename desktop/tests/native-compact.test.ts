@@ -7,6 +7,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { NativeHome } from '../src/main/native-home';
+import { SessionStore } from '../src/main/harness/session-store';
+import { compactionSourceDigest } from '../src/main/harness/compaction-record';
 import { dispatchSlashCommand } from '../src/renderer/state/slash-command-dispatcher';
 import { runNativeSlashAction } from '../src/renderer/state/native-slash-actions';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
@@ -347,6 +351,36 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
 // The /compact transport and host access fence belong with the user-initiated
 // compaction behavior, not in a separate task-numbered test suite.
 describe('native /compact focus propagation', () => {
+  it('correlates the live successful summary without changing committed source references or digests', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-compact-op-'));
+    const store = new SessionStore(new NativeHome(root));
+    const host = new NativeSessionHost(store, async () => textModel('short summary'), async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null);
+    try {
+      await host.create({ sessionId: 's', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      for (let i = 0; i < 3; i++) {
+        expect(host.send('s', `question ${i} ${'x'.repeat(400)}`)).toMatchObject({ status: 'sent' });
+        await vi.waitFor(() => expect(host.isIdle('s')).toBe(true));
+      }
+      const lives: any[] = [];
+      const events: TranscriptEvent[] = [];
+      host.on('compaction', e => lives.push(e));
+      host.on('transcript-event', e => events.push(e));
+      expect(await host.compact('s')).toEqual({ ok: true });
+      const live = events.find(e => e.type === 'compact-summary')!;
+      expect(live.data).toMatchObject({ operationId: lives[0].id });
+      const disk = await store.readEventsAsync('s', root);
+      const index = disk.findIndex(e => e.uuid === live.uuid);
+      expect(index).toBeGreaterThan(0);
+      const saved = disk[index];
+      expect(saved.data).not.toHaveProperty('operationId');
+      expect(live.data).toMatchObject(saved.data);
+      const record = (saved as any).data.compactionRecord;
+      expect(record.sourceDigest).toBe(compactionSourceDigest(disk.slice(0, index), (saved as any).data.summary, record));
+    } finally {
+      await host.destroyAll();
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+    }
+  });
   const source = (p: string) => fs.readFileSync(path.join(__dirname, '..', 'src', p), 'utf8');
 
   it('retains optional args in native action, with bare /compact unchanged and CC PTY unchanged', () => {
@@ -374,6 +408,27 @@ describe('native /compact focus propagation', () => {
     expect(compactNow.mock.calls).toEqual([['remember tests', undefined], [undefined, undefined]]);
   });
 
+  it('does not let a record-host IPC refusal dispatch anonymous spinner cleanup', async () => {
+    const previous = (globalThis as any).window;
+    (globalThis as any).window = { claude: { capabilities: { sessionRecord: true }, native: { compact: vi.fn(async () => ({ ok: false, reason: 'turn-in-flight' })) } } };
+    try {
+      const dispatch = vi.fn(), onToast = vi.fn();
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch, onToast })).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining('still working'));
+    } finally { (globalThis as any).window = previous; }
+  });
+
+  it('scopes legacy IPC cleanup to the captured pending card', async () => {
+    const previous = (globalThis as any).window;
+    (globalThis as any).window = { claude: { capabilities: { sessionRecord: false }, native: { compact: vi.fn(async () => ({ ok: false, reason: 'interrupted' })) } } };
+    try {
+      const dispatch = vi.fn();
+      await runNativeSlashAction({ kind: 'compact' }, { sessionId: 's', dispatch, compactionOperationId: 'legacy-card' });
+      expect(dispatch).toHaveBeenCalledWith({ type: 'COMPACTION_CANCELLED', sessionId: 's', operationId: 'legacy-card' });
+    } finally { (globalThis as any).window = previous; }
+  });
+
   it('explains a failed summary without claiming any history was trimmed', async () => {
     const previous = (globalThis as any).window;
     (globalThis as any).window = { claude: { native: { compact: vi.fn(async () => ({ ok: false, reason: 'summary-failed' })) } } };
@@ -393,6 +448,9 @@ describe('native /compact focus propagation', () => {
     const pending = NativeSessionHost.prototype.compact.call(fake as any, 's');
     expect(NativeSessionHost.prototype.send.call(fake as any, 's', 'a new message')).toEqual({ status: 'failed', reason: 'compacting' });
     expect(await NativeSessionHost.prototype.compact.call(fake as any, 's')).toEqual({ ok: false, reason: 'turn-in-flight' });
+    expect(fake.emit.mock.calls.filter(([kind]) => kind === 'compaction')).toEqual([
+      ['compaction', expect.objectContaining({ sessionId: 's', phase: 'start', id: expect.any(String), startedAt: expect.any(Number) })],
+    ]);
     finish({ ok: true });
     expect(await pending).toEqual({ ok: true });
     expect(NativeSessionHost.prototype.send.call(fake as any, 's', 'a new message')).toEqual({ status: 'sent' });
@@ -411,6 +469,22 @@ describe('native /compact focus propagation', () => {
     finish({ ok: true });
     await pending;
     expect(fake.kickIdleDeliveryPass).toHaveBeenCalledWith('s');
+  });
+
+  it('publishes no lifecycle when a real reply is in flight', async () => {
+    const fake = { emit: vi.fn(), live: new Map([['s', { inFlight: true, queue: [] }]]) };
+    expect(await NativeSessionHost.prototype.compact.call(fake as any, 's')).toEqual({ ok: false, reason: 'turn-in-flight' });
+    expect(fake.emit).not.toHaveBeenCalled();
+  });
+
+  it.each(['interrupted', 'summary-failed'])('ends only the operation it started on %s', async reason => {
+    const fake = { emit: vi.fn(), live: new Map([['s', { inFlight: false, queue: [], session: { compactNow: async () => ({ ok: false, reason }) } }]]), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
+    await NativeSessionHost.prototype.compact.call(fake as any, 's');
+    const calls = fake.emit.mock.calls.map(([, e]) => e);
+    expect(calls).toEqual([
+      expect.objectContaining({ phase: 'start', id: expect.any(String), startedAt: expect.any(Number) }),
+      { sessionId: 's', phase: 'end', id: calls[0].id, outcome: reason === 'interrupted' ? 'cancelled' : 'failed' },
+    ]);
   });
 
   it('does not publish accepted history when manual compaction refuses without a rewrite', async () => {

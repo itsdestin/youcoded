@@ -150,7 +150,7 @@ interface Props {
   /** Native only (U11) — raise (true) or drop (false) the chat's "compacting"
    *  card around a Summarize-and-switch, so the chat shows the summary running
    *  and its marker lands when it commits. App owns the reducer dispatch. */
-  onNativeSummaryPending?: (sessionId: string, pending: boolean) => void;
+  onNativeSummaryPending?: (sessionId: string, pending: boolean, operationId: string) => void;
   /** Guarded PTY sender (App.guardedPtySend). /fast and /effort are PTY writes
    *  just like /model — while a permission/plan/AskUserQuestion prompt is
    *  pending, CC's Ink select menu is live in the PTY and a raw sendInput would
@@ -341,11 +341,12 @@ function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectMode
     const sid = sessionId;
     switchAbandoned.current = false;
     setSwitchPrompt({ ...prompt, state: { kind: 'working' } });
-    onNativeSummaryPending?.(sid, true);
+    // WHY: the local wait card belongs to this request, not whichever summary
+    // happens to arrive next. A durable marker and transient cleanup are separate.
+    const operationId = `compact-switch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    onNativeSummaryPending?.(sid, true, operationId);
     const result = await requestSwitch(prompt.choice, true, sid);
-    // WHY: a summary that committed has already sent its marker, which ends the
-    // card. Any other outcome committed nothing, so drop the card silently.
-    if (!(result.status === 'switched' && result.summarized)) onNativeSummaryPending?.(sid, false);
+    onNativeSummaryPending?.(sid, false, operationId);
     if (result.status === 'switched') {
       // Honor what actually happened even if the user closed the popup a
       // moment too late: the pill must name the model the chat is really on.

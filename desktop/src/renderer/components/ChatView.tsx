@@ -8,6 +8,7 @@ import type { PromptCardButton } from './PromptCard';
 import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
 import { answerPrompt } from '../state/prompt-input';
 import { findArchiveBoundary } from '../state/archive-boundary';
+import { projectTimeline } from '../state/timeline-presentation';
 import ThinkingIndicator from './ThinkingIndicator';
 import BrowserAskCard from './browser/BrowserAskCard';
 import { browserSupported } from '../state/browser-store';
@@ -284,7 +285,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // only changes when an entry is appended (a delta updates assistantTurns,
   // not timeline), so memoising on it turns a once-per-token scan into a
   // once-per-entry scan. Pinned by tests/ChatView-render-cost.test.tsx.
-  const archiveBoundary = useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
+  // WHY: visible boundaries split presentation, never the tools/usage-owning turn.
+  // With no boundary the projection preserves the original timeline reference.
+  const presentation = useMemo(() => projectTimeline(state.timeline, state.assistantTurns), [state.timeline, state.assistantTurns]);
+  const archiveBoundary = useMemo(() => findArchiveBoundary(presentation.timeline), [presentation.timeline]);
+  const streamingTurnId = state.currentTurnId ? presentation.tailTurnIds.get(state.currentTurnId) ?? state.currentTurnId : null;
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
   // 30s thinking-timeout watchdog + TERMINAL_ACTIVITY heartbeat — the hook
@@ -1069,7 +1074,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // timeline instead, which threw away readable history to express a
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
-              return state.timeline.map((entry, idx) => {
+              return presentation.timeline.map((entry, idx) => {
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
                 // re-renders only the entry that changed (see its header).
@@ -1078,7 +1083,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 switch (entry.kind) {
                   case 'user': key = entry.message.id; break;
                   case 'assistant-turn':
-                    turn = state.assistantTurns.get(entry.turnId);
+                    turn = presentation.assistantTurns.get(entry.turnId);
                     // Shared gate (chat-types.ts): a segment-less turn renders
                     // only when its abnormal stopReason gives the footer row
                     // something to say — the empty_response fix.
@@ -1123,7 +1128,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // (complete, Stop, error), and history replay never sets it — so it is exactly
                     // "the model is writing this turn now". Lets a long open code fence be drawn in
                     // chunks only while that is true (MarkdownContent `live`).
-                    streaming={isAssistant && !!turn && state.currentTurnId === turn.id}
+                    streaming={isAssistant && !!turn && streamingTurnId === turn.id}
                     archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
                     archiveKind={archiveKind}
                     foldHeight={foldHeight}

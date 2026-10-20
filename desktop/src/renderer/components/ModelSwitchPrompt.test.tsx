@@ -127,7 +127,9 @@ describe('model switch popup (U11)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Summarize and switch' }));
     await waitFor(() => expect(onNativeModelChanged).toHaveBeenCalledWith('small-model'));
     expect(switchModel).toHaveBeenLastCalledWith('s1', { providerId: 'cloud', modelId: 'small-model' }, true);
-    expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true]]);   // no cancel: the marker ends it
+    const operationId = onNativeSummaryPending.mock.calls[0]?.[2];
+    expect(operationId).toEqual(expect.any(String));
+    expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true, operationId], ['s1', false, operationId]]);
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -140,7 +142,7 @@ describe('model switch popup (U11)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Summarize and switch' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Even after a summary, the most recent messages are too long for Small Model. Still using Big Model.');
-    expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true], ['s1', false]]);
+    expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true, expect.stringMatching(/^compact-switch-/)], ['s1', false, onNativeSummaryPending.mock.calls[0]?.[2]]]);
     expect(onNativeModelChanged).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -159,7 +161,7 @@ describe('model switch popup (U11)', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(interrupt).toHaveBeenCalledWith('s1');
     finish({ status: 'failed', reason: 'interrupted' });
-    await waitFor(() => expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true], ['s1', false]]));
+    await waitFor(() => expect(onNativeSummaryPending.mock.calls).toEqual([['s1', true, expect.stringMatching(/^compact-switch-/)], ['s1', false, onNativeSummaryPending.mock.calls[0]?.[2]]]));
     expect(onNativeModelChanged).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog', { name: 'Switch model' })).toBeNull();
   });
