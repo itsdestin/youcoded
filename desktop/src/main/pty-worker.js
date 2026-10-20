@@ -197,7 +197,10 @@ function pauseFlow() {
 function guardExitDrain(p) {
   try {
     const sock = p && p._socket;
-    if (!sock || typeof sock.destroy !== 'function' || !('_boundClose' in p)) return;
+    // WHY: UnixTerminal creates _boundClose only in its native exit callback.
+    // Requiring it at spawn silently disabled the guard on every real Unix PTY.
+    // Inspect its value at destroy time below; ConPTY keeps its original path.
+    if (process.platform === 'win32' || !sock || typeof sock.destroy !== 'function') return;
     const destroy = sock.destroy.bind(sock);
     let held = false;
     sock.destroy = function (...args) {
@@ -275,6 +278,57 @@ function stripAnsi(s) {
 // Serialize input handling so message A's echo wait doesn't confuse with
 // message B's echo bytes. Each 'input' message is enqueued and awaited.
 let inputQueue = Promise.resolve();
+let inputGeneration = 0; // abandonment cancels buffered old writes without replaying them
+// WHY: prompt.fill is outside this worker, but its final Enter must own the SAME
+// input lane. Claim behind older input, hold newer writes, revoke out-of-band.
+let queueLease = null;
+let queueIncarnation = null;
+let queueBoundaryHighWater = 0;
+function queueWorkerReply(msg, status) {
+  process.send({ type: 'queue-worker-result', requestId: msg.requestId, attemptId: msg.attemptId, status });
+}
+function queueTokenMatches(msg) {
+  return queueLease && queueLease.attemptId === msg.attemptId && queueLease.incarnation === msg.incarnation && queueLease.boundarySeq === msg.boundarySeq && queueLease.expiresAt === msg.expiresAt;
+}
+function queueWorkerMessage(msg) {
+  if (msg.type === 'queue-acquire') {
+    if (queueLease || !ptyProcess || handoffStopping || typeof msg.attemptId !== 'string' || !msg.attemptId || typeof msg.incarnation !== 'string'
+      || (queueIncarnation !== null && queueIncarnation !== msg.incarnation) || !Number.isSafeInteger(msg.boundarySeq) || msg.boundarySeq <= queueBoundaryHighWater
+      || !Number.isFinite(msg.expiresAt) || msg.expiresAt <= Date.now() || msg.expiresAt - Date.now() > 30000) { queueWorkerReply(msg, 'blocked'); return; }
+    // One producer incarnation per worker. A reloaded native module must reopen its
+    // worker explicitly; it cannot reset this watermark and resurrect an old Enter.
+    queueIncarnation = msg.incarnation; queueBoundaryHighWater = msg.boundarySeq;
+    const lease = { attemptId: msg.attemptId, incarnation: msg.incarnation, boundarySeq: msg.boundarySeq, expiresAt: msg.expiresAt, active: false, revoked: false, entered: false, release: null };
+    queueLease = lease;
+    inputQueue = inputQueue.then(async () => {
+      if (queueLease !== lease || lease.revoked || Date.now() >= lease.expiresAt || !ptyProcess || handoffStopping) { queueWorkerReply(msg, 'revoked'); return; }
+      lease.active = true;
+      const held = new Promise(resolve => { lease.release = resolve; });
+      queueWorkerReply(msg, 'owned'); await held;
+    }).catch(() => { queueWorkerReply(msg, 'unknown'); });
+    return;
+  }
+  if (!queueTokenMatches(msg)) { queueWorkerReply(msg, 'stale'); return; }
+  if (msg.type === 'queue-revoke') { queueLease.revoked = true; queueWorkerReply(msg, 'revoked'); return; }
+  if (msg.type === 'queue-enter') {
+    if (Date.now() >= queueLease.expiresAt) queueLease.revoked = true;
+    if (!queueLease.active || queueLease.revoked || queueLease.entered || !ptyProcess || handoffStopping) { queueWorkerReply(msg, 'revoked'); return; }
+    queueLease.entered = true; // exactly one write; a lost receipt is NOT permission for another Enter
+    try { ptyProcess.write('\r'); queueWorkerReply(msg, 'entered'); } catch { queueLease.revoked = true; queueWorkerReply(msg, 'unknown'); }
+    return;
+  }
+  if (msg.type === 'queue-abandon') {
+    // WHY: native acknowledged the old identity cannot submit. Do NOT flush old
+    // buffered input (possibly Enter) into the preserved human draft on release.
+    const lease = queueLease; lease.revoked = true; inputGeneration++;
+    queueLease = null; lease.release?.(); queueWorkerReply(msg, 'released'); return;
+  }
+  if (msg.type === 'queue-release') {
+    // Expiry/revocation alone cannot release buffered ordinary input over an owned partial draft.
+    if (msg.composerSafe !== true) { queueWorkerReply(msg, 'blocked'); return; }
+    const lease = queueLease; queueLease = null; lease.revoked = true; lease.release?.(); queueWorkerReply(msg, 'released');
+  }
+}
 
 // Submit-protocol constants. PASTE_THRESHOLD is the empirically-bisected
 // ceiling for CC v2.1.119 (see test-conpty/snapshots/cc-2.1.119.json) —
@@ -449,6 +503,8 @@ async function handleInput(text) {
 
 process.on('message', (msg) => {
   switch (msg.type) {
+    case 'queue-acquire': case 'queue-revoke': case 'queue-enter': case 'queue-release': case 'queue-abandon':
+      queueWorkerMessage(msg); break;
     case 'spawn': {
       // Resolve full path — node-pty on Windows needs it (no shell lookup)
       const shell = resolveCommand(msg.command || 'claude');
@@ -474,6 +530,14 @@ process.on('message', (msg) => {
       delete childEnv.CLAUDE_CODE_ENTRYPOINT;
       delete childEnv.CLAUDE_CODE_EXECPATH;
       delete childEnv.CLAUDE_EFFORT;
+      // WHY: an app started from another Claude session must never inherit that
+      // session's control capability. Only this parent-issued pair is admitted.
+      for (const key of Object.keys(childEnv)) if (key.startsWith('YOUCODED_CC_CONTROL_')) delete childEnv[key];
+      if (msg.sessionId && msg.controlEnv) {
+        for (const key of ['YOUCODED_CC_CONTROL_URL', 'YOUCODED_CC_CONTROL_TOKEN']) {
+          if (typeof msg.controlEnv[key] === 'string') childEnv[key] = msg.controlEnv[key];
+        }
+      }
       ptyProcess = pty.spawn(shell, args, {
         name: 'xterm-256color',
         cols: msg.cols || 120,
@@ -536,6 +600,9 @@ process.on('message', (msg) => {
     }
     case 'input': {
       if (handoffStopping) break;
+      // Native Stop remains raw Escape; it revokes staged submission and bypasses
+      // the held lane, never waits behind the Enter transaction it must cancel.
+      if (queueLease && msg.data === '\x1b') { queueLease.revoked = true; if (ptyProcess) ptyProcess.write('\x1b'); break; }
       // Submit strategy for chat → CC, given empirically-pinned facts about
       // CC v2.1.119 (see test-conpty/snapshots/cc-2.1.119.json):
       //
@@ -571,7 +638,8 @@ process.on('message', (msg) => {
       // The renderer-side useSubmitConfirmation retry stays as a third-line
       // defense if echo somehow doesn't arrive within ECHO_TIMEOUT_MS.
       if (!ptyProcess) break;
-      inputQueue = inputQueue.then(() => { if (!handoffStopping) return handleInput(msg.data); }).catch((e) => {
+      const generation = inputGeneration;
+      inputQueue = inputQueue.then(() => { if (!handoffStopping && generation === inputGeneration) return handleInput(msg.data); }).catch((e) => {
         trace('INPUT_ERROR', e && e.message ? e.message : String(e));
       });
       break;
@@ -585,7 +653,8 @@ process.on('message', (msg) => {
       // sit HALF-TYPED on the prompt for the user to run. Queued behind the same
       // inputQueue as 'input' so ordering with real keystrokes is preserved.
       if (!ptyProcess) break;
-      inputQueue = inputQueue.then(() => { if (!handoffStopping) return writeChunked(msg.data); }).catch((e) => {
+      const generation = inputGeneration;
+      inputQueue = inputQueue.then(() => { if (!handoffStopping && generation === inputGeneration) return writeChunked(msg.data); }).catch((e) => {
         trace('INPUT_ERROR', e && e.message ? e.message : String(e));
       });
       break;

@@ -118,6 +118,19 @@ describe('the computer reads a screen exactly as the window does (real captures,
   });
 });
 
+describe('positive queue input safety', () => {
+  it('requires a fully parsed known message box and refuses blank, pending, popup and forgotten screens', async () => {
+    const rig = makeRig({ started: true });
+    expect(rig.screens.queueInputSafe(S)).toBe(false);
+    const rule = '─'.repeat(40); rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \r\n${rule}`);
+    expect(rig.screens.queueInputSafe(S)).toBe(false); // parse has not acknowledged these bytes
+    await rig.settle(); expect(rig.screens.queueInputSafe(S)).toBe(true);
+    rig.output(USAGE_LIMIT); expect(rig.screens.queueInputSafe(S)).toBe(false);
+    await rig.settle(); expect(rig.screens.queueInputSafe(S)).toBe(false);
+    rig.screens.forget(S); expect(rig.screens.queueInputSafe(S)).toBe(false);
+  });
+});
+
 describe('every live Claude Code session has one terminal, from its start to its end', () => {
   it('a session has its terminal from the moment it begins, an idle one costs no work, and its end disposes it', async () => {
     const rig = makeRig({ started: true });

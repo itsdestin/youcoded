@@ -41,6 +41,8 @@ const IPC = {
   HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
+  SESSION_CLAUDE_CONTROL: 'session:claude-control',
+  SESSION_QUEUE_ACTION: 'session:queue-action',
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
   SESSION_SWITCH: 'session:switch',
@@ -1098,10 +1100,11 @@ contextBridge.exposeInMainWorld('claude', {
     canSend: () => true,
     // One device at a time answers a menu by verified navigation — the lock
     // lives in main (menu-answer-lock.ts), shared with the remote host.
-    menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, { sessionId, holder, action }),
+    menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> => ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, { sessionId, holder, action }),
     sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text, notice, sendId }),
+    queue: { action: (sessionId: string, action: import('../shared/conversation-queue-channel-types').ConversationQueueAction) => ipcRenderer.invoke(IPC.SESSION_QUEUE_ACTION, { sessionId, action }) },
+    control: (sessionId: string, request: import('../shared/claude-control-types').ClaudeControlRequest) => ipcRenderer.invoke(IPC.SESSION_CLAUDE_CONTROL, { sessionId, request }),
     // "Did the computer get my message?" (one-core R5-4b). A window's sends never cross a network, but the shape is the same on every screen.
     sendOutcomes: (sessionId: string, ids: string[]) =>
       ipcRenderer.invoke(IPC.SESSION_SEND_OUTCOMES, { sessionId, ids }),

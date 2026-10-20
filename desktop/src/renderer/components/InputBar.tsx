@@ -2,6 +2,9 @@ import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useIm
 import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
+import { createQueueDraft } from '../state/queue-draft';
+import { readQueueTransferDraft, saveQueueTransferDraft, updateQueueTransferDraft } from '../state/queue-transfer-storage';
+import { pendingQueueSend } from '../state/pending-queue-send';
 import TerminalToolbar from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
@@ -30,6 +33,7 @@ import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
+import { sendClaudeCommand } from '../state/claude-control';
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -48,6 +52,8 @@ const isInteractiveTarget = (el: Element | null | undefined): boolean => {
 };
 
 export interface InputBarHandle {
+  queueDraftSnapshot: () => import('../state/queued-edit-actions').QueueDraftSnapshot;
+  fillQueuedDraftIfCurrent: (before: import('../state/queued-edit-actions').QueueDraftSnapshot, text: string, files: string[]) => boolean;
   clear: () => void;
   // Task 11 (cancel/edit queued messages): the edit-refill idiom. There was no
   // existing "external surface reads/replaces InputBar's draft" mechanism —
@@ -175,8 +181,22 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 }
 
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
-  const [text, setText] = useState('');
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const draftAuthority = useRef(createQueueDraft(sessionId));
+  draftAuthority.current.session(sessionId);
+  const [text, setTextState] = useState('');
+  const [attachments, setAttachmentsState] = useState<Attachment[]>([]);
+  const textValue = useRef(''); const filesValue = useRef<Attachment[]>([]);
+  const draftStorageSession=useRef<string|null>(null);
+  const setText = useCallback((update: React.SetStateAction<string>) => {
+    const value = typeof update === 'function' ? update(textValue.current) : update;
+    if(draftStorageSession.current===draftAuthority.current.snapshot().sessionId)updateQueueTransferDraft(draftStorageSession.current,value,filesValue.current.map(a=>a.path));
+    textValue.current = value; draftAuthority.current.text(value); setTextState(value);
+  },[]);
+  const setAttachments = useCallback((update: React.SetStateAction<Attachment[]>) => {
+    const value = typeof update === 'function' ? update(filesValue.current) : update;
+    if(draftStorageSession.current===draftAuthority.current.snapshot().sessionId)updateQueueTransferDraft(draftStorageSession.current,textValue.current,value.map(a=>a.path));
+    filesValue.current = value; draftAuthority.current.files(value.map(a=>a.path)); setAttachmentsState(value);
+  },[]);
   // Read by window-event listeners that must not re-subscribe on every change.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -345,7 +365,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const prevSessionRef = useRef<string>(sessionId);
   useEffect(() => {
     const prev = prevSessionRef.current;
-    if (prev === sessionId) return;
+    draftStorageSession.current=null;
+    if (prev === sessionId) {
+      const transfer=readQueueTransferDraft(sessionId);const pending=pendingQueueSend(sessionId);
+      const recovered=transfer??(pending?{text:pending.payload.originalText,files:pending.payload.attachments}:undefined);
+      if(recovered&&draftAuthority.current.snapshot().empty){setText(recovered.text);setAttachments(recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));}
+      draftStorageSession.current=sessionId;return;
+    }
     // Save outgoing session's draft (read DOM directly to avoid stale closure)
     const outgoingText = inputRef.current?.value ?? text;
     if (outgoingText || attachments.length > 0) {
@@ -354,10 +380,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       draftsRef.current.delete(prev);
     }
     // Restore incoming session's draft (or blank)
-    const restored = draftsRef.current.get(sessionId);
+    const transfer=readQueueTransferDraft(sessionId);const pending=pendingQueueSend(sessionId);
+    const recovered=transfer??(pending?{text:pending.payload.originalText,files:pending.payload.attachments}:undefined);
+    const restored = draftsRef.current.get(sessionId)??(recovered?{text:recovered.text,attachments:recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)}))}:undefined);
     setText(restored?.text ?? '');
     setAttachments(restored?.attachments ?? []);
-    prevSessionRef.current = sessionId;
+    draftStorageSession.current=sessionId;prevSessionRef.current = sessionId;
   // ESLint needs `--` before the reason; without it the whole trailing phrase is
   // parsed as part of the rule name and the directive silently does nothing.
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally reads text/attachments from refs
@@ -402,6 +430,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const sendRef = useRef<(force?: boolean) => void>(() => {});
 
   useImperativeHandle(ref, () => ({
+    queueDraftSnapshot: () => draftAuthority.current.snapshot(),
+    fillQueuedDraftIfCurrent: (before,draftText,paths) => {
+      const current=draftAuthority.current.snapshot();
+      if(!current.empty||current.sessionId!==before.sessionId||current.revision!==before.revision)return false;
+      saveQueueTransferDraft(before,draftText,paths); // durable text/files BEFORE host checkout acknowledgement
+      if (!draftAuthority.current.fill(before,draftText,paths)) return false;
+      // Commit refs synchronously before scheduling React so two in-flight edit
+      // responses cannot both see an empty draft or discard attachment-only input.
+      setText(draftText); setAttachments(paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
+      if (inputRef.current) inputRef.current.value = draftText;
+      return true;
+    },
     clear: () => {
       setText('');
       setAttachments([]);
@@ -598,10 +638,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // No focus() on purpose: on a phone that would pop the keyboard up over a button press that was meant to get rid of something.
   useEffect(() => {
     const listener = (e: Event) => {
-      const d = (e as CustomEvent<{ sessionId?: string; text?: string }>).detail;
-      if (!d?.text || d.sessionId !== sessionId) return;
-      if ((inputRef.current?.value ?? '').trim().length > 0) return;
-      setText(d.text);
+      const d = (e as CustomEvent<{ sessionId?: string; text?: string; paths?: string[] }>).detail;
+      if ((!d?.text && !d?.paths?.length) || d.sessionId !== sessionId || d.sessionId !== draftAuthority.current.snapshot().sessionId || !draftAuthority.current.snapshot().empty) return;
+      setText(d.text ?? '');
+      if(d.paths)setAttachments(d.paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
     };
     window.addEventListener(RESTORE_UNSENT_EVENT, listener);
     return () => window.removeEventListener(RESTORE_UNSENT_EVENT, listener);
@@ -818,8 +858,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         return true;
       }
       if (route.via === 'pty') {
-        // For commands like /clear and /compact that still need Claude Code's own state to change.
-        window.claude.session.sendInput(sessionId, route.text);
+        // Selected commands change Claude's own state through the mod; all other commands keep the existing PTY path.
+        sendClaudeCommand(sessionId, route.text);
         return true;
       }
       if (route.via === 'none-native-no-pty') {
@@ -888,7 +928,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // (see TRANSCRIPT_USER_MESSAGE dedup). Claude Code's input handler auto-resolves file paths into attachments, but paths arriving within Ink's
       // 500ms PASTE_TIMEOUT coalesce into one paste and each new path REPLACES the staged attachment (a 4-image send showed only the last), so each path
       // goes FILE_GAP_MS apart and the text + \r goes last as one write (the pty-worker splits it with its own gap). All of that is in submit-outgoing.ts.
-      sendToClaudeCode({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
+      sendToClaudeCode({ sessionId, provider, originalText: effectiveMessage, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
       return true;
     },
     [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],

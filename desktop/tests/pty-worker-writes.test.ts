@@ -31,6 +31,83 @@ describe('Claude Code specialist model launch default', () => {
   });
 });
 
+describe('Claude control environment isolation', () => {
+  const inherited = { YOUCODED_CC_CONTROL_URL: 'http://old-host', YOUCODED_CC_CONTROL_TOKEN: 'old-secret' };
+  it('uses only this session\'s allowlisted bridge fields', () => {
+    const { spawnedEnv } = loadWorker(undefined, inherited, process.platform, { controlEnv: { YOUCODED_CC_CONTROL_URL: 'http://127.0.0.1:1234', YOUCODED_CC_CONTROL_TOKEN: 'new-secret', PATH: 'untrusted-path' } });
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBe('new-secret');
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_URL).toBe('http://127.0.0.1:1234');
+    expect(spawnedEnv.PATH).not.toBe('untrusted-path');
+  });
+  it('does not leak an inherited bridge into an unsupported session or shell', () => {
+    expect(loadWorker(undefined, inherited).spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBeUndefined();
+    const { spawnedEnv } = loadWorker(undefined, inherited, process.platform, { sessionId: '', controlEnv: inherited });
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_TOKEN).toBeUndefined();
+    expect(spawnedEnv.YOUCODED_CC_CONTROL_URL).toBeUndefined();
+  });
+});
+
+describe('queue-owned worker Enter lease', () => {
+  const token = () => ({ attemptId: 'attempt-one', incarnation: 'live-one', boundarySeq: 1, expiresAt: Date.now() + 5000 });
+  it('acquires behind older input and buffers newer ordinary writers until a safe release', async () => {
+    const w = loadWorker(); const lease = token();
+    w.deliver({ type: 'input', data: 'older' }); w.deliver({ type: 'queue-acquire', ...lease, requestId: 'acquire' });
+    w.deliver({ type: 'input', data: 'newer' });
+    await vi.waitFor(() => expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'queue-worker-result', requestId: 'acquire', status: 'owned' })));
+    expect(w.writes).toEqual(['older']);
+    w.deliver({ type: 'queue-enter', ...lease, requestId: 'enter' });
+    expect(w.writes).toEqual(['older', '\r']);
+    w.deliver({ type: 'queue-release', ...lease, requestId: 'release', composerSafe: true });
+    await vi.waitFor(() => expect(w.writes).toEqual(['older', '\r', 'newer']));
+  });
+  it('abandons only the owned lease, discards buffered old input, and accepts a fresh queue cycle', async () => {
+    const w = loadWorker(); const lease = token();
+    w.deliver({type:'queue-acquire',...lease,requestId:'acquire'});
+    await vi.waitFor(()=>expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({requestId:'acquire',status:'owned'})));
+    w.deliver({type:'input',data:'must-not-replay\r'});
+    w.deliver({type:'queue-abandon',...lease,requestId:'abandon'});
+    expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({requestId:'abandon',status:'released'}));
+    w.deliver({type:'queue-enter',...lease,requestId:'late-enter'});
+    const fresh={...token(),attemptId:'fresh',boundarySeq:2};
+    w.deliver({type:'queue-acquire',...fresh,requestId:'fresh'});
+    await vi.waitFor(()=>expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({requestId:'fresh',status:'owned'})));
+    // Settle old buffered writes before asserting that neither body nor Enter survived abandonment.
+    expect(w.writes).toEqual([]);
+    w.deliver({type:'queue-abandon',...lease,requestId:'late-abandon'});
+    w.deliver({type:'queue-enter',...fresh,requestId:'fresh-enter'});
+    expect(w.writes).toEqual(['\r']);
+    w.deliver({type:'queue-release',...fresh,composerSafe:true,requestId:'release'});
+    w.deliver({type:'input',data:'manual'});
+    await vi.waitFor(()=>expect(w.writes).toEqual(['\r','manual']));
+  });
+  it('rejects replayed acquire/Enter capabilities even after release without retaining an unbounded attempt list', async () => {
+    const w = loadWorker(); const lease = token();
+    w.deliver({ type: 'queue-acquire', ...lease, requestId: 'first' });
+    await vi.waitFor(() => expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'first', status: 'owned' })));
+    w.deliver({ type: 'queue-enter', ...lease, requestId: 'enter' });
+    w.deliver({ type: 'queue-release', ...lease, requestId: 'release', composerSafe: true });
+    w.deliver({ type: 'queue-acquire', ...lease, requestId: 'replay' });
+    w.deliver({ type: 'queue-enter', ...lease, requestId: 'replayed-enter' });
+    await Promise.resolve(); expect(w.writes).toEqual(['\r']);
+    expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'replay', status: 'blocked' }));
+  });
+  it.each(['cancel', 'expiry', 'escape'])('revokes final Enter on %s without releasing unsafe staged input', async why => {
+    const w = loadWorker(); const lease = token();
+    w.deliver({ type: 'queue-acquire', ...lease, requestId: 'acquire' });
+    await vi.waitFor(() => expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'acquire', status: 'owned' })));
+    if (why === 'cancel') w.deliver({ type: 'queue-revoke', ...lease, requestId: 'revoke' });
+    if (why === 'expiry') { const clock = vi.spyOn(Date, 'now').mockReturnValue(lease.expiresAt + 1); w.deliver({ type: 'queue-enter', ...lease, requestId: 'expired' }); clock.mockRestore(); }
+    if (why === 'escape') w.deliver({ type: 'input', data: '\x1b' });
+    w.deliver({ type: 'queue-enter', ...lease, requestId: 'late-enter' });
+    w.deliver({ type: 'input', data: 'later-body' });
+    await Promise.resolve(); expect(w.writes).toEqual(why === 'escape' ? ['\x1b'] : []);
+    w.deliver({ type: 'queue-release', ...lease, requestId: 'unsafe', composerSafe: false });
+    expect(w.fakeProcess.send).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'unsafe', status: 'blocked' }));
+    w.deliver({ type: 'queue-release', ...lease, requestId: 'safe', composerSafe: true });
+    await vi.waitFor(() => expect(w.writes).toContain('later-body'));
+  });
+});
+
 describe('pty-worker handoff stop', () => {
   it('bounds the parent acknowledgment wait and exits on failed send or disconnect', async () => {
     vi.useFakeTimers();

@@ -3,6 +3,7 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { SessionManager, resolveShellCommand, shellDisplayName, prepareRunInTerminal } from '../src/main/session-manager';
+import * as sessionManagerModule from '../src/main/session-manager';
 import { createTransferredExitGate } from '../src/main/conversations/handoff-exit';
 import { createResumeAdmission } from '../src/main/conversations/resume-admission';
 import { DOC_COMMENTS_MCP_SERVER_PREFIX, YOUCODED_PROJECT_ROOT_ENV, YOUCODED_MCP_TOKEN_ENV } from '../src/shared/doc-comments-mcp';
@@ -19,6 +20,7 @@ const captureOn = (...[event, cb]: any[]) => { handlers[event] = cb; };
 const mockWorker = {
   send: vi.fn(),
   on: vi.fn(captureOn),
+  off: vi.fn(),
   disconnect: vi.fn(),
   kill: vi.fn(),
   stderr: { on: vi.fn() },
@@ -32,6 +34,117 @@ vi.mock('child_process', () => ({
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => tmpDir) },
 }));
+
+describe('queue worker transaction calls', () => {
+  it('correlates exact acknowledgements without typing a body or treating IPC send as delivery', async () => {
+    const manager = new SessionManager();
+    try {
+      const info = manager.createSession({ cwd: tmpDir, name: 'owned queue', skipPermissions: false });
+      const command = { type: 'queue-acquire' as const, attemptId: 'attempt', incarnation: 'live', boundarySeq: 1, expiresAt: Date.now() + 10000 };
+      const pending = manager.queueWorkerCommand(info.id, command);
+      const sent = mockWorker.send.mock.lastCall![0]; expect(sent).toMatchObject(command); expect(sent.requestId).toBeTypeOf('string');
+      const receive = mockWorker.on.mock.calls.slice().reverse().find(([event]) => event === 'message')![1];
+      receive({ type: 'queue-worker-result', requestId: 'unrelated', attemptId: command.attemptId, status: 'owned' });
+      receive({ type: 'queue-worker-result', requestId: sent.requestId, attemptId: command.attemptId, status: 'owned' });
+      expect(await pending).toEqual({ status: 'owned' });
+      expect(mockWorker.off).toHaveBeenCalled();
+    } finally { manager.destroyAll(); }
+  });
+});
+
+describe('Claude mod version floor', () => {
+  it.each(['2.1.299 (Claude Code)', '2.0.999', '3.0.0', '2.2.0', 'not installed'])('keeps unknown/old family %s on the legacy path', (version) => {
+    expect(sessionManagerModule.supportsClaudeControlVersion?.(version)).toBe(false);
+  });
+  it.each(['2.1.300 (Claude Code)', '2.1.302 (Claude Code)'])('recognizes tested-family build %s', (version) => {
+    expect(sessionManagerModule.supportsClaudeControlVersion?.(version)).toBe(true);
+  });
+});
+
+describe('Claude direct-control startup', () => {
+  const managers: SessionManager[] = [];
+  const bridge = () => ({ prepare: vi.fn(), execute: vi.fn(async () => ({ status: 'accepted' as const, requestId: 'r' })), isReady: vi.fn(() => true), closeSession: vi.fn(), close: vi.fn(async () => {}), on: vi.fn() });
+  beforeEach(() => { vi.clearAllMocks(); mockWorker.on = vi.fn(captureOn); });
+  afterEach(() => { for (const manager of managers.splice(0)) manager.destroyAll(); });
+
+  it('keeps input unreceived until asynchronous preparation and PTY spawn acknowledgment', async () => {
+    let prepared!: (v: { args: string[]; env: Record<string, string> }) => void;
+    const control = bridge();
+    control.prepare.mockReturnValue(new Promise((resolve) => { prepared = resolve; }));
+    const manager = new SessionManager({ claudeControls: control, detectClaudeMods: async () => true }); managers.push(manager);
+    const info = manager.createSession({ name: 'direct', cwd: tmpDir, skipPermissions: false });
+    await vi.waitFor(() => expect(control.prepare).toHaveBeenCalledWith(info.id));
+    expect(mockWorker.send.mock.calls.some(([m]) => m.type === 'spawn')).toBe(false);
+    expect(manager.sendInput(info.id, 'do not lose this')).toBe(false);
+    expect(await manager.control(info.id, { kind: 'send-text', text: 'hello', sendId: 'send1' })).toMatchObject({ status: 'rejected' });
+    prepared({ args: ['--plugin-dir', '/private/test-plugin'], env: { YOUCODED_CC_CONTROL_URL: 'http://127.0.0.1:1234', YOUCODED_CC_CONTROL_TOKEN: 'secret' } });
+    await vi.waitFor(() => expect(mockWorker.send.mock.calls.some(([m]) => m.type === 'spawn')).toBe(true));
+    const spawn = mockWorker.send.mock.calls.find(([m]) => m.type === 'spawn')![0];
+    expect(spawn.args).toContain('/private/test-plugin');
+    expect(spawn.controlEnv.YOUCODED_CC_CONTROL_TOKEN).toBe('secret');
+    expect(manager.sendInput(info.id, 'still starting')).toBe(false);
+    handlers.message({ type: 'spawned', pid: 1234 });
+    expect(manager.sendInput(info.id, 'raw')).toBe(true);
+    expect(await manager.control(info.id, { kind: 'send-text', text: 'hello', sendId: 'send1' })).toMatchObject({ status: 'accepted' });
+  });
+
+  it('never spawns a closed session after preparation completes', async () => {
+    let prepared!: (v: { args: string[]; env: Record<string, string> }) => void;
+    const control = bridge(); control.prepare.mockReturnValue(new Promise((resolve) => { prepared = resolve; }));
+    const manager = new SessionManager({ claudeControls: control, detectClaudeMods: async () => true }); managers.push(manager);
+    const info = manager.createSession({ name: 'closed', cwd: tmpDir, skipPermissions: false });
+    await vi.waitFor(() => expect(control.prepare).toHaveBeenCalled());
+    manager.destroySession(info.id);
+    prepared({ args: ['--plugin-dir', '/private/test-plugin'], env: {} });
+    await vi.waitFor(() => expect(control.closeSession).toHaveBeenCalledWith(info.id));
+    expect(mockWorker.send.mock.calls.some(([m]) => m.type === 'spawn')).toBe(false);
+  });
+
+  it('does not launch a deferred writer once handoff stopping began', async () => {
+    let prepared!: (v: { args: string[]; env: Record<string, string> }) => void;
+    const control = bridge(); control.prepare.mockReturnValue(new Promise((resolve) => { prepared = resolve; }));
+    const manager = new SessionManager({ claudeControls: control, detectClaudeMods: async () => true }); managers.push(manager);
+    const info = manager.createSession({ name: 'handoff-before-spawn', cwd: tmpDir, skipPermissions: false });
+    await vi.waitFor(() => expect(control.prepare).toHaveBeenCalled());
+    const stopped = manager.stopSessionForHandoff(info.id);
+    prepared({ args: ['--plugin-dir', '/private/test-plugin'], env: {} });
+    await vi.waitFor(() => expect(control.closeSession).toHaveBeenCalledWith(info.id));
+    expect(mockWorker.send.mock.calls.some(([m]) => m.type === 'spawn')).toBe(false);
+    handlers.disconnect();
+    expect(await stopped).toEqual({ status: 'unknown' });
+  });
+
+  it('forwards addressed Stop capture before its receipt and drops both after session destruction', async () => {
+    const control = bridge(); control.prepare.mockResolvedValue(null);
+    const manager = new SessionManager({ claudeControls: control, detectClaudeMods: async () => true }); managers.push(manager);
+    const info = manager.createSession({ name: 'stop', cwd: tmpDir, skipPermissions: false });
+    const targeted = vi.fn(), settled = vi.fn();
+    manager.on('claude-control-stop-targeted', targeted);
+    manager.on('claude-control-settled', settled);
+    const subscriptions = control.on.mock.calls as unknown as Array<[string, (...args: any[]) => void]>;
+    const target = subscriptions.find(([event]) => event === 'stop-targeted')![1];
+    const receipt = subscriptions.find(([event]) => event === 'settled')![1];
+    target(info.id, 'request-one', 'user-one');
+    receipt(info.id, { kind: 'stop' }, { status: 'accepted', requestId: 'request-one' });
+    expect(targeted).toHaveBeenCalledExactlyOnceWith(info.id, 'request-one', 'user-one');
+    expect(settled).toHaveBeenCalledExactlyOnceWith(info.id, { kind: 'stop' }, { status: 'accepted', requestId: 'request-one' });
+    manager.destroySession(info.id);
+    target(info.id, 'late');
+    receipt(info.id, { kind: 'stop' }, { status: 'accepted', requestId: 'late' });
+    expect(targeted).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an unsupported CLI on the existing path', async () => {
+    const control = bridge();
+    const manager = new SessionManager({ claudeControls: control, detectClaudeMods: async () => false }); managers.push(manager);
+    const info = manager.createSession({ name: 'old', cwd: tmpDir, skipPermissions: false });
+    await vi.waitFor(() => expect(mockWorker.send.mock.calls.some(([m]) => m.type === 'spawn')).toBe(true));
+    handlers.message({ type: 'spawned', pid: 1234 });
+    expect(control.prepare).not.toHaveBeenCalled();
+    expect(await manager.control(info.id, { kind: 'stop' })).toEqual({ status: 'unavailable' });
+  });
+});
 
 describe('SessionManager', () => {
   let manager: SessionManager;

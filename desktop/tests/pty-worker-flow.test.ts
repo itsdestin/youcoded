@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { loadWorker } from './helpers/pty-worker-harness';
 
 const SMALL = { YOUCODED_PTY_FLOW_HIGH: '1000', YOUCODED_PTY_FLOW_LOW: '300', YOUCODED_PTY_FLOW_STALL_MS: '5000' };
@@ -261,6 +262,27 @@ describe('pty-worker flow control', () => {
     expect(w.fakePty.resume).toHaveBeenCalledTimes(1);
   });
 
+  it('installs exit drain before node-pty creates its exit flag and holds socket destruction only once', () => {
+    vi.useFakeTimers();
+    // WHY: UnixTerminal creates _boundClose ONLY in its exit callback, not at spawn.
+    // Model that exact shape so the guard cannot silently opt out before a loaded exit.
+    const socket = Object.assign(new EventEmitter(), { destroyed: false, destroy: vi.fn() });
+    const originalDestroy = socket.destroy;
+    const w = loadWorker(undefined, SMALL, 'linux', {}, { _socket: socket });
+    expect('_boundClose' in w.fakePty).toBe(false);
+    expect(socket.destroy).not.toBe(originalDestroy);
+    w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
+    (w.fakePty as any)._boundClose = true;
+    socket.destroy();
+    expect(originalDestroy).not.toHaveBeenCalled();
+    expect(w.fakePty.resume).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(originalDestroy).toHaveBeenCalledTimes(1);
+    socket.destroy();
+    expect(originalDestroy).toHaveBeenCalledTimes(2); // no second drain delay
+    socket.emit('close');
+  });
+
   it('kill and handoff release a paused PTY so the exit is not held open', () => {
     vi.useFakeTimers();
     const k = loadWorker(undefined, SMALL);
@@ -325,6 +347,23 @@ const expected = (lines: number) => {
   return s + 'DONE-MARKER\r\n';
 };
 
+const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve) => {
+  // WHY: Date.now includes system suspend / clock adjustments, but the child
+  // and libuv timers cannot progress while suspended. Keep the SAME active-time budget.
+  const t0 = performance.now();
+  const check = () => { if (pred()) return resolve(true); if (performance.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
+  check();
+});
+
+describe('PTY completion wait', () => {
+  it('keeps waiting for the signal when the wall clock jumps forward', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_001);
+    let checks = 0;
+    try { expect(await until(() => ++checks === 2, 30_000)).toBe(true); }
+    finally { clock.mockRestore(); }
+  });
+});
+
 function startReal(lines: number, env: Record<string, string>, producer = PRODUCER) {
   const child: ChildProcess = fork(WORKER, [], { env: { ...process.env, ...env }, silent: true, execArgv: [] });
   const state = { out: '', sent: 0, acked: 0, maxOwed: 0, messages: 0, exited: false, exitAfterLastData: false, auto: true };
@@ -336,11 +375,6 @@ function startReal(lines: number, env: Record<string, string>, producer = PRODUC
     } else if (m.type === 'exit') { state.exited = true; }
   });
   child.send({ type: 'spawn', command: process.execPath, args: ['-e', producer, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
-  const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve) => {
-    const t0 = Date.now();
-    const check = () => { if (pred()) return resolve(true); if (Date.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
-    check();
-  });
   return { child, state, until, ack: (n: number) => { state.acked += n; child.send({ type: 'ack', n }); } };
 }
 

@@ -37,7 +37,7 @@ export const RING_MAX_BYTES = 2 * 1024 * 1024;
 export const TAIL_MAX_ENTRIES = 4000;
 const TAIL_MAX_BYTES = 2 * 1024 * 1024;
 /** The `session:live` kinds the fill tail keeps (sync-fix3): the dividers, which exist nowhere on disk. */
-const TAIL_LIVE_KINDS = new Set(['model-switch', 'model-switch-retract', 'clear']);
+const TAIL_LIVE_KINDS = new Set(['model-switch', 'model-switch-retract', 'clear', 'stop-confirmed']);
 /** The terminal stream, in UTF-16 units (JavaScript string length): the same 4M the old per-session buffer held. */
 export const PTY_STREAM_UNITS = 4 * 1024 * 1024;
 /** While the newest terminal chunk is this small, append INTO it instead of pushing another entry (one-keystroke chunks). */
@@ -116,6 +116,8 @@ export interface RecordedEvent {
 export interface SessionFacts {
   /** A turn is in flight (what the renderer calls isThinking). */
   working: boolean;
+  /** Recorded user turn addressed by a direct Stop; never inferred from assistant text. */
+  turnUserUuid?: string;
   /** What the events themselves say: ok, stuck (stall warning), stalled, error. */
   attention: string;
   /** The last state a window relayed, or the computer's own "stuck" reading when it said one (R5-4b: the stuck check runs in main, which is the only writer of it). */
@@ -190,6 +192,7 @@ interface Rec {
    *  on a screen that missed the "free" event is cleared. */
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
+  queueSnapshot?: import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
   /** A native model reached 'loaded' at some point. WHY (sync-fix3 review): the screen's Reload button needs it, and a screen that opens late never saw that state. */
   modelEverLoaded: boolean;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
@@ -202,6 +205,8 @@ interface Rec {
   needKey: string;
   /** Ids of the sends the computer received for this session, oldest first (R5-4b). */
   sends: Set<string>;
+  /** Direct control may be queued or its reply lost; absence of acceptance is not non-receipt. */
+  uncertainSends: Set<string>;
   /** True once an old id was let go: an id that is NOT in `sends` may then be one of those. */
   sendsLetGo: boolean;
 }
@@ -313,7 +318,7 @@ export class SessionRecords {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
       },
-      progressAt: 0, seen: new Set(), summaryKey: '', needKey: '', sends: new Set(), sendsLetGo: false,
+      progressAt: 0, seen: new Set(), summaryKey: '', needKey: '', sends: new Set(), uncertainSends: new Set(), sendsLetGo: false,
     });
     // A session appearing is a summary change (the strip learns it exists as "idle, no history").
     this.announceIfChanged(sessionId, this.records.get(sessionId)!);
@@ -518,12 +523,32 @@ export class SessionRecords {
     if (!isSendId(sendId)) return;
     const rec = this.records.get(sessionId);
     if (!rec) return;
+    rec.uncertainSends.delete(sendId);
     rec.sends.add(sendId);
     if (rec.sends.size > SENDS_MAX) {
       const oldest = rec.sends.values().next().value;
       if (oldest !== undefined) rec.sends.delete(oldest);
       rec.sendsLetGo = true;
     }
+  }
+
+  /** WHY: a direct send may have entered Claude even when its acknowledgment never arrives. */
+  noteSendPending(sessionId: string, sendId: unknown): boolean {
+    if (!isSendId(sendId)) return false;
+    const rec = this.records.get(sessionId);
+    if (!rec || rec.sends.has(sendId) || rec.uncertainSends.has(sendId)) return false;
+    rec.uncertainSends.add(sendId);
+    if (rec.uncertainSends.size > SENDS_MAX) {
+      const oldest = rec.uncertainSends.values().next().value;
+      if (oldest !== undefined) rec.uncertainSends.delete(oldest);
+      rec.sendsLetGo = true;
+    }
+    return true;
+  }
+
+  /** Only a proven pre-effect refusal may change uncertainty into non-receipt. */
+  noteSendRefused(sessionId: string, sendId: unknown): void {
+    if (isSendId(sendId)) this.records.get(sessionId)?.uncertainSends.delete(sendId);
   }
 
   /**
@@ -536,7 +561,7 @@ export class SessionRecords {
     const known = !!rec && typeof epoch === 'string' && epoch === rec.epoch;
     for (const id of ids) {
       if (!isSendId(id)) continue;
-      outcomes[id] = !rec || !known ? 'unknown' : rec.sends.has(id) ? 'received' : rec.sendsLetGo ? 'unknown' : 'not-received';
+      outcomes[id] = !rec || !known ? 'unknown' : rec.sends.has(id) ? 'received' : rec.uncertainSends.has(id) || rec.sendsLetGo ? 'unknown' : 'not-received';
     }
     return { epoch: rec?.epoch ?? null, outcomes };
   }
@@ -649,6 +674,7 @@ export class SessionRecords {
     // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
     if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
     // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
+    if (rec.queueSnapshot) out.push({type:'session:live',payload:{sessionId,...rec.queueSnapshot}});
     if (rec.inputBlockSeen) out.push({ type: 'session:live', payload: { sessionId, kind: 'input-block', block: rec.inputBlock } });
     return out;
   }
@@ -764,11 +790,13 @@ export class SessionRecords {
         f.hasHistory = true;
         if (d.slashCommand) return; // a slash command starts no turn (reducer)
         f.working = true;
+        f.turnUserUuid = typeof ev.uuid === 'string' ? ev.uuid : undefined;
         f.attention = 'ok';
         return;
       case 'skill-invoked':
         if (!this.firstTime(rec, ev.uuid)) return;
         f.hasHistory = true; f.working = true; f.attention = 'ok';
+        f.turnUserUuid = typeof ev.uuid === 'string' ? ev.uuid : undefined;
         return;
       case 'assistant-text':
         if (stamped) return;
@@ -805,8 +833,12 @@ export class SessionRecords {
         this.endTurn(rec, ev.timestamp);
         return;
       case 'user-interrupt':
+        // WHY: replay of an old marker must not end the next user turn.
+        if (stamped || !this.firstTime(rec, ev.uuid)) return;
+        this.endTurn(rec, ev.timestamp);
+        return;
       case 'context-clear':
-        this.endTurn(rec, ev.type === 'user-interrupt' ? ev.timestamp : undefined);
+        this.endTurn(rec);
         return;
       case 'session-error':
         this.endTurn(rec, ev.timestamp);
@@ -827,6 +859,13 @@ export class SessionRecords {
   /** The shared lines and live facts (R5-4a). Only what a screen that opens LATER still needs is kept; a divider is just a numbered event. */
   private foldLive(rec: Rec, live: Record<string, any>): void {
     switch (live.kind) {
+      case 'queue':
+        // Host queue state is a replacement snapshot, including empty/paused root identity.
+        if (Array.isArray(live.queue) && live.queue.length <= 64) rec.queueSnapshot = live as import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
+        return;
+      case 'stop-confirmed':
+        if (rec.facts.working && live.userUuid === rec.facts.turnUserUuid) this.endTurn(rec, live.at);
+        return;
       case 'model':
         if (typeof live.model === 'string' && live.model) rec.facts.model = live.model;
         return;

@@ -485,6 +485,7 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
   'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
+  'session:queue-action': 'user-action', // identity/edit/send tokens never replay after reconnect
   'session:input-blocked': 'transport', // Android's own runtime only; true only while connected, never replayed
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
@@ -721,7 +722,7 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
     // master's handoff send-failure path remains here.)
     // WHY: user actions are never queued; reject immediately and forget their
     // timeout instead of leaving a phantom pending action for reconnect.
-    if (!send({ type, id, payload }) && type.startsWith('handoff:')) {
+    if (!send({ type, id, payload }) && (type.startsWith('handoff:') || type === 'session:queue-action')) {
       clearTimeout(timeout);
       pending.delete(id);
       reject(new Error('The connection is unavailable. Try again when connected.'));
@@ -902,8 +903,9 @@ export function applyResponse(
 ): void {
   switch (responseOutcome(channel, payload)) {
     case 'unsupported':
-      noteUnsupported(channel);
-      entry.reject(new Error(`remote-unsupported: ${channel}`));
+      // WHY: the optional direct-control path can fall back only when the host explicitly has no handler.
+      if (channel !== 'session:claude-control') noteUnsupported(channel);
+      entry.reject(Object.assign(new Error(`remote-unsupported: ${channel}`), { code: 'REMOTE_UNSUPPORTED', channel }));
       return;
     // A handler that answered `{ ok:false, error }` is a FAILURE — resolving it
     // hands the caller a failure dressed as a success. See REJECT_ON_NOT_OK.
@@ -2106,6 +2108,13 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
+      queue: { action: (sessionId: string, action: import('../shared/conversation-queue-channel-types').ConversationQueueAction) => {
+        return (action.kind === 'enqueue' && noteSendEpoch(sessionId,action.payload.sendId), invoke('session:queue-action', { sessionId, action }));
+      } },
+      control: (sessionId: string, request: import('../shared/claude-control-types').ClaudeControlRequest) => {
+        if (request.kind === 'send-text') noteSendEpoch(sessionId, request.sendId);
+        return invoke('session:claude-control', { sessionId, request });
+      },
       // WHY a no-op (2026-10-14, Android clean rebuild): only the old Kotlin runtime needed the page to read its terminal for it;
       // every host now runs the desktop backend, which reads the terminal itself (session-screens.ts).
       reportInputBlocked: (_sessionId: string, _blocked: boolean) => {},

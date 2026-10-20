@@ -1,4 +1,7 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
+import type { ClaudeControlBridge } from './claude-control-bridge';
+import type { QueueWorkerCommand } from './claude-queue-transport';
+import type { ClaudeControlRequest, ClaudeControlResult } from '../shared/claude-control-types';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -137,8 +140,34 @@ export function prepareRunInTerminal(command: unknown): { shell: string; command
   return { shell, command, shellToken: RUN_IN_TERMINAL_TOKEN };
 }
 
+type ClaudeControls = Pick<ClaudeControlBridge, 'prepare' | 'execute' | 'isReady' | 'closeSession' | 'close' | 'on'>;
+interface SessionManagerOptions {
+  claudeControls?: ClaudeControls;
+  detectClaudeMods?: () => Promise<boolean>;
+}
+
+/** WHY: unknown major/minor families keep the existing path until their mod contracts are checked. */
+export function supportsClaudeControlVersion(value: string): boolean {
+  const match = /^2\.1\.(\d+)(?:\s|$)/.exec(value.trim());
+  return !!match && Number.isSafeInteger(Number(match[1])) && Number(match[1]) >= 300;
+}
+
+function detectClaudeMods(): Promise<boolean> {
+  if (process.env.YOUCODED_CC_MODS === '0') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    execFile('claude', ['--version'], { timeout: 5000, maxBuffer: 4096, windowsHide: true, encoding: 'utf8' }, (error, stdout) => {
+      resolve(!error && supportsClaudeControlVersion(stdout));
+    });
+  });
+}
+
 interface ManagedSession {
   info: SessionInfo;
+  /** Undefined on the unchanged legacy/shell path; false while an enabled bridge launch awaits PTY spawn. */
+  ptyReady?: boolean;
+  controlPreparing?: boolean;
+  controlsAttached?: boolean;
+  pendingResize?: { cols: number; rows: number };
   // Native sessions have NO PTY worker — their turn loop lives in a
   // HarnessSession owned by NativeSessionHost (ipc-handlers wires it up after
   // createSession returns). Every `session.worker.X` access is guarded.
@@ -159,6 +188,31 @@ export class SessionManager extends EventEmitter {
   private handoffStopping = new Set<string>();
   private static readonly HANDOFF_STOP_TIMEOUT_MS = 15000;
   private pipeName: string = '';
+  private readonly controlOptions: SessionManagerOptions;
+  private controlSupport?: Promise<boolean>;
+  private queueWorkerCalls = 0;
+
+  constructor(options: SessionManagerOptions = {}) {
+    super();
+    this.controlOptions = options;
+    // WHY: a secret/held poll cannot outlive its app-owned CLI, including natural worker failures.
+    if (options.claudeControls) {
+      this.on('session-exit', (id: string) => options.claudeControls!.closeSession(id));
+      options.claudeControls.on('stop-targeted', (id: string, requestId: string, userUuid?: string | null) => {
+        if (this.sessions.has(id)) this.emit('claude-control-stop-targeted', id, requestId, userUuid);
+      });
+      options.claudeControls.on('settled', (id: string, request: ClaudeControlRequest, result: ClaudeControlResult) => {
+        if (this.sessions.has(id)) this.emit('claude-control-settled', id, request, result);
+      });
+    }
+  }
+
+  /** Production bridge capability for instance-level queue wiring; legacy/test control adapters have no queue door. */
+  claudeBridgeForQueues(): ClaudeControlBridge | undefined {
+    const controls = this.controlOptions.claudeControls;
+    if (!controls || !('setQueueInitializer' in controls) || !('attachQueueTransport' in controls)) return undefined;
+    return controls as ClaudeControlBridge;
+  }
 
   setPipeName(name: string) {
     this.pipeName = name;
@@ -402,7 +456,8 @@ export class SessionManager extends EventEmitter {
       ...(provider === 'claude' ? { awaitingStart: true } : {}),
     };
 
-    const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
+    const preparingControls = !isShell && !!this.controlOptions.claudeControls;
+    const session: ManagedSession = { info, worker, ...(preparingControls ? { ptyReady: false, controlPreparing: true } : {}), ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
     this.sessions.set(id, session);
     // WHY: session-created observers immediately construct the host's screen
     // reader. Publish the same geometry we send to the worker BEFORE that event;
@@ -475,6 +530,17 @@ export class SessionManager extends EventEmitter {
 
     worker.on('message', (msg: any) => {
       switch (msg.type) {
+        case 'spawned': {
+          const current = this.sessions.get(id);
+          if (current) {
+            current.ptyReady = true;
+            if (current.pendingResize) {
+              const size = current.pendingResize; current.pendingResize = undefined;
+              this.resizeSession(id, size.cols, size.rows);
+            }
+          }
+          break;
+        }
         case 'size':
           // The worker changed the PTY size (a real resize or the repaint nudge) — in stream order with the data around it.
           // Keep our record of it and tell the computer's screen copy, so output made at that size is laid out at that size.
@@ -537,24 +603,38 @@ export class SessionManager extends EventEmitter {
     // Wrapped in try/catch because send() throws synchronously if
     // the spawn failed (IPC channel never opened), which happens
     // before the async 'error' event fires.
-    try {
-      worker.send({
-        type: 'spawn',
-        command: isShell ? shellCommand : 'claude',
-        args,
-        cwd: resolvedCwd,
-        ...spawnSize,
-        // Session ID + pipe name for hook event correlation. Both are blanked
-        // for a shell session: there is no hook pipe for it, so if the user
-        // happens to start Claude Code inside this terminal it must not report
-        // its hooks as if they belonged to this session (which would attach a
-        // transcript, and a chat view, to a plain shell).
-        sessionId: isShell ? '' : id,
-        pipeName: isShell ? '' : this.pipeName,
+    const launch = (attachment?: { args: string[]; env: Record<string, string> } | null) => {
+      if (!this.sessions.has(id) || workerGone || this.handoffStopping.has(id)) { this.controlOptions.claudeControls?.closeSession(id); return; }
+      session.controlPreparing = false;
+      session.controlsAttached = !!attachment;
+      try {
+        worker.send({
+          type: 'spawn', command: isShell ? shellCommand : 'claude',
+          args: attachment ? [...args, ...attachment.args] : args,
+          cwd: resolvedCwd, ...spawnSize,
+          // Shells must not inherit either hook identity or a mod-control secret.
+          sessionId: isShell ? '' : id, pipeName: isShell ? '' : this.pipeName,
+          ...(attachment ? { controlEnv: attachment.env } : {}),
+        });
+      } catch {
+        // The existing error callback handles failed workers; never report an input receipt meanwhile.
+        if (preparingControls) this.destroySession(id);
+      }
+    };
+    if (preparingControls) {
+      // WHY asynchronous: staging and version discovery must not block every window;
+      // createSession still claims ownership synchronously, while input is gated until spawned.
+      this.controlSupport ??= (this.controlOptions.detectClaudeMods ?? detectClaudeMods)().catch(() => false);
+      void this.controlSupport.then(async (supported) => {
+        if (!this.sessions.has(id) || workerGone || this.handoffStopping.has(id)) return;
+        const attachment = supported ? await this.controlOptions.claudeControls!.prepare(id) : null;
+        launch(attachment);
+      }).catch((error) => {
+        log('WARN', 'SessionManager', 'Direct Claude controls unavailable; retaining terminal controls', { error: String(error) });
+        this.controlOptions.claudeControls?.closeSession(id);
+        launch(null);
       });
-    } catch {
-      // The 'error' handler above will clean up the session asynchronously.
-    }
+    } else launch();
 
     return info;
   }
@@ -615,16 +695,57 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  /** Only explicit chat controls use this route; arbitrary terminal bytes remain raw. */
+  async control(id: string, request: ClaudeControlRequest): Promise<ClaudeControlResult> {
+    const session = this.sessions.get(id);
+    if (!session || this.handoffStopping.has(id)) return { status: 'rejected', message: 'This conversation is not running.' };
+    if (session.info.provider !== 'claude') return { status: 'unavailable' };
+    if (session.controlPreparing || session.ptyReady === false) return { status: 'rejected', message: 'This conversation is still starting. Try again when it is ready.' };
+    if (!session.controlsAttached || !this.controlOptions.claudeControls) return { status: 'unavailable' };
+    try { return await this.controlOptions.claudeControls.execute(id, request); }
+    catch { return { status: 'unknown', message: 'Claude did not confirm this action. Check the conversation before trying again.' }; }
+  }
+
+  isControlReady(id: string): boolean {
+    const session = this.sessions.get(id);
+    return !!session?.controlsAttached && session.ptyReady === true && !!this.controlOptions.claudeControls?.isReady(id);
+  }
+
+  /** Queue transport's private worker door. IPC send alone is never native acceptance or a successful Enter. */
+  queueWorkerCommand(id: string, command: QueueWorkerCommand): Promise<{ status: string }> {
+    const session = this.sessions.get(id); const worker = session?.worker;
+    if (!worker || session?.info.provider !== 'claude' || session.ptyReady === false || this.handoffStopping.has(id) || this.queueWorkerCalls >= 64) return Promise.resolve({ status: 'blocked' });
+    const requestId = randomUUID(); this.queueWorkerCalls++;
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (status: string) => {
+        if (settled) return; settled = true; clearTimeout(timer); this.queueWorkerCalls--;
+        worker.off('message', receive); worker.off('exit', gone); worker.off('disconnect', gone); worker.off('error', gone);
+        resolve({ status });
+      };
+      const gone = () => finish('unknown');
+      const receive = (msg: any) => {
+        if (msg.type === 'queue-worker-result' && msg.requestId === requestId && msg.attemptId === command.attemptId
+          && ['owned', 'entered', 'released', 'revoked', 'blocked', 'stale', 'unknown'].includes(msg.status)) finish(msg.status);
+      };
+      // WHY bounded and unknown: losing a worker reply must never authorize automatic Enter replay.
+      const timer = setTimeout(gone, 12000);
+      worker.on('message', receive); worker.on('exit', gone); worker.on('disconnect', gone); worker.on('error', gone);
+      try { worker.send({ ...command, requestId }); } catch { gone(); }
+    });
+  }
+
   sendInput(id: string, text: string): boolean {
     const session = this.sessions.get(id);
-    if (!session || !session.worker || this.handoffStopping.has(id)) return false; // native sessions have no PTY
+    if (!session || !session.worker || session.ptyReady === false || this.handoffStopping.has(id)) return false; // no receipt before PTY spawn
     try { session.worker.send({ type: 'input', data: text }); } catch { return false; }
     return true;
   }
 
   resizeSession(id: string, cols: number, rows: number): boolean {
     const session = this.sessions.get(id);
-    if (!session || !session.worker) return false; // native sessions have no PTY
+    if (!session || !session.worker) return false;
+    if (session.ptyReady === false) { session.pendingResize = { cols, rows }; return false; } // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
     // WHY no ptySizes.set here: the worker reports every size change in stream order ('size' below) and is the ONE authority. Setting it at
     // request time ran before the PTY had resized and before old-size output had drained, and made the screen copy wobble when a request
@@ -761,5 +882,8 @@ export class SessionManager extends EventEmitter {
     for (const [id] of this.sessions) {
       this.destroySession(id);
     }
+    void this.controlOptions.claudeControls?.close().catch((error) => {
+      log('WARN', 'SessionManager', 'Direct Claude control listener did not close cleanly', { error: String(error) });
+    });
   }
 }

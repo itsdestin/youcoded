@@ -5,6 +5,8 @@ import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
+import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
+import { createConversationQueueActions } from './state/conversation-queue-actions';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import PendingHandoffView from './components/PendingHandoffView';
@@ -790,7 +792,7 @@ function AppInner() {
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
     if (!canPtySend(sessionsRef.current.find((x) => x.id === sid), chatStateMapRef.current.get(sid))) return false;
     if (notifyIfPtyBlocked(sid)) return false;
-    window.claude.session.sendInput(sid, text, notice);
+    sendClaudeCommand(sid, text, notice);
     return true;
   }, [notifyIfPtyBlocked]);
 
@@ -850,15 +852,11 @@ function AppInner() {
   // it too, but that races the transcript watcher — dispatching here removes
   // it immediately, and QUEUED_MESSAGE_REMOVED is a safe no-op if the
   // transcript event's removal already won).
-  const handleCancelQueued = useCallback(async (sid: string, queueId: string) => {
-    const removed = await window.claude.native.queueRemove(sid, queueId);
-    if (!removed) {
-      setToast('Already sending — too late to cancel.');
-      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
-      return;
-    }
-    dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
-  }, [dispatch]);
+  const [queueActions] = useState(() => createConversationQueueActions({
+    provider: sid => sessionsRef.current.find(s=>s.id===sid)?.provider,
+    composer: () => inputBarRef.current, session: sid => chatStateMapRef.current.get(sid), dispatch, toast: setToast,
+  }));
+  const handleCancelQueued = queueActions.cancel;
 
   // Edit = cancel + refill (design ruling — no in-place editing). The draft
   // check MUST happen BEFORE removeQueued runs — brief invariant: never
@@ -869,34 +867,11 @@ function AppInner() {
   // above (dispatch QUEUED_MESSAGE_REMOVED either way) — but the draft is
   // NOT refilled on the too-late path, since the message already reached the
   // host and refilling would duplicate it if the user re-sent.
-  const handleEditQueued = useCallback(async (sid: string, queueId: string, text: string) => {
-    if (inputBarRef.current?.hasDraft()) {
-      setToast({ message: 'Finish or clear your current draft first, then edit the queued message.', durationMs: 4000 });
-      return;
-    }
-    const removed = await window.claude.native.queueRemove(sid, queueId);
-    if (!removed) {
-      setToast('Already sending — too late to cancel.');
-      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
-      return;
-    }
-    dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
-    inputBarRef.current?.fillDraft(text);
-  }, [dispatch]);
+  const handleEditQueued = queueActions.edit;
 
   // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
   // removes it); false = already on its way, handled like Cancel's too-late.
-  const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
-    // WHY catch (PR #585 review): over remote access the request can fail (e.g. the
-    // connection drops) and a click that silently does nothing reads as broken.
-    // The cause is unknown here, so the words stay general and the row stays put.
-    const moved = await window.claude.native.queueSendNow(sid, queueId).catch(() => null);
-    if (moved === null) { setToast("Send now didn't go through — try again."); return; }
-    if (!moved) {
-      setToast('Already sending.');
-      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
-    }
-  }, [dispatch]);
+  const handleSendQueuedNow = queueActions.sendNow;
 
   // Ends a compaction spinner this screen raised itself (hooks/useCompactionWatchdog.ts); the computer ends the ones it raised.
   useCompactionWatchdog(chatStore, dispatch);
@@ -2920,10 +2895,8 @@ function AppInner() {
         window.claude.native.interrupt(s.activeSessionId);
         return;
       }
-      // One byte to the PTY — Claude Code treats it as an interrupt.
-      // Single-byte writes do NOT trigger Ink's 500ms paste-mode coalescing,
-      // so no chunking or pacing is needed. See docs/PITFALLS.md -> "PTY Writes".
-      window.claude.session.sendInput(s.activeSessionId, '\x1b');
+      // WHY: Stop and popup dismissal keep the CLI's native Escape behavior, including running-tool cancellation.
+      stopClaudeTurn(s.activeSessionId);
     };
     // Bubble phase on purpose — EscCloseProvider owns capture phase, and we
     // need to read e.defaultPrevented AFTER capture-phase overlay handlers run.

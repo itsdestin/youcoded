@@ -1,6 +1,6 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
- "total": 275,
+ "total": 277,
  "open": [
   "account:signed-in",
   "account:user",
@@ -178,6 +178,8 @@
   "session-naming:set",
   "session-naming:title",
   "session:browse",
+  "session:claude-control",
+  "session:queue-action",
   "session:create",
   "session:destroy",
   "session:get-meta",

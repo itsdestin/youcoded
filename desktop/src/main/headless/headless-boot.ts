@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 import { app } from 'electron';
 import { SessionManager } from '../session-manager';
+import { ClaudeControlBridge } from '../claude-control-bridge';
 import { HookRelay } from '../hook-relay';
 import { WindowRegistry } from '../window-registry';
 import { registerIpcHandlers } from '../ipc-handlers';
@@ -84,7 +85,7 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   log('INFO', 'Headless', 'Starting the backend', { version: app.getVersion(), host: hasHost() ? 'app' : 'none', port: opts.port });
 
   // --- What main.ts builds at module scope ---
-  const sessionManager = new SessionManager();
+  const sessionManager = new SessionManager({ claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')) });
   const windowRegistry = new WindowRegistry();
   const pipeName = path.join(os.tmpdir(), `claude-desktop-hooks-${process.pid}.sock`);
   sessionManager.setPipeName(pipeName);

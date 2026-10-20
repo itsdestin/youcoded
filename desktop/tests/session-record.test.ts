@@ -68,6 +68,32 @@ describe('the ring', () => {
   });
 });
 
+describe('direct-send uncertainty', () => {
+  it('does not call a pending direct operation not-received', () => {
+    const r = new SessionRecords(); r.begin(S);
+    r.noteSendPending(S, 'send-pending');
+    expect(r.sendOutcomes(S, ['send-pending', 'never'], r.epochOf(S)).outcomes)
+      .toEqual({ 'send-pending': 'unknown', never: 'not-received' });
+    r.noteSend(S, 'send-pending');
+    expect(r.sendOutcomes(S, ['send-pending'], r.epochOf(S)).outcomes['send-pending']).toBe('received');
+  });
+
+  it('clears uncertainty only after definite pre-effect refusal', () => {
+    const r = new SessionRecords(); r.begin(S);
+    r.noteSendPending(S, 'refused'); r.noteSendRefused(S, 'refused');
+    expect(r.sendOutcomes(S, ['refused'], r.epochOf(S)).outcomes.refused).toBe('not-received');
+    r.noteSend(S, 'accepted'); r.noteSendPending(S, 'accepted'); r.noteSendRefused(S, 'accepted');
+    expect(r.sendOutcomes(S, ['accepted'], r.epochOf(S)).outcomes.accepted).toBe('received');
+  });
+
+  it('never turns evicted uncertain IDs into definite non-receipt', () => {
+    const r = new SessionRecords(); r.begin(S);
+    for (let i = 0; i < 600; i++) r.noteSendPending(S, `uncertain-${i}`);
+    expect(r.sendOutcomes(S, ['uncertain-0', 'uncertain-599'], r.epochOf(S)).outcomes)
+      .toEqual({ 'uncertain-0': 'unknown', 'uncertain-599': 'unknown' });
+  });
+});
+
 describe('the epoch', () => {
   it('is new for each record, and random', () => {
     const r = new SessionRecords();

@@ -11,6 +11,9 @@ import { sendChatMessage } from '../components/native-send';
 import { newSendId } from './send-ids';
 import { SEND_CHECK_EVENT } from './send-reconcile';
 import { runPending, optimisticScreen } from './pending-action';
+import { requestClaudeControl } from './claude-control';
+import { screenInputBlock } from './pty-input-gate';
+import { pendingQueueSend, savePendingQueueSend, clearPendingQueueSend } from './pending-queue-send';
 
 /** The gap between attached-file paths sent to Claude Code: longer than Ink's 500 ms paste window, so each path is its own paste (verified on a 4-image send). */
 const FILE_GAP_MS = 600;
@@ -20,6 +23,7 @@ export interface OutgoingSend {
   provider: 'claude' | 'native' | undefined;
   /** The sanitized text (`buildOutgoingMessage(...).ptyText`). */
   ptyText: string;
+  originalText?: string;
   /** The bubble's text (`.content`: the file paths then the text). */
   content: string;
   /** Exact attached-file paths. */
@@ -49,7 +53,67 @@ export const CC_SEND_CHECK_MS = 6000;
  */
 export function sendToClaudeCode(o: OutgoingSend): string {
   const sendId = newSendId();
-  o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId });
+  if (typeof window.claude.session.queue?.action === 'function') {
+    void sendViaHostQueue(o,sendId);
+    return sendId;
+  }
+  return sendToClaudeLegacy(o,sendId);
+}
+
+// WHY: identical text is valid new intent while a previous send awaits its acknowledgement.
+// Only settled-unknown persisted requests are retry candidates; reload intentionally resets this set.
+const inFlightQueueSends = new Set<string>();
+async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> {
+  let allowLegacyFallback=false; let activeSendId: string | undefined;
+  try {
+    let request=pendingQueueSend(o.sessionId,o.originalText??o.ptyText,o.paths,inFlightQueueSends);
+    if(request&&(request.payload.originalText!==(o.originalText??o.ptyText)||JSON.stringify(request.payload.attachments)!==JSON.stringify(o.paths)))throw Error('An earlier queued send is unconfirmed. Retry that saved message before sending a different draft.');
+    if(!request){
+     allowLegacyFallback=true;
+     const identity = await window.claude.session.queue.action(o.sessionId,{kind:'identity'});
+     allowLegacyFallback=false;
+     if (identity.status === 'unavailable') { sendToClaudeLegacy(o,sendId); return; }
+     if (identity.status !== 'identity') throw Error('Queue identity is not ready. The original message was not submitted.');
+     request={kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:o.originalText??o.ptyText,attachments:[...o.paths],displayContent:o.content}};
+     savePendingQueueSend(o.sessionId,request);
+    }
+    activeSendId=request.payload.sendId; inFlightQueueSends.add(activeSendId);
+    const result = await window.claude.session.queue.action(o.sessionId,request);
+    if (result.status === 'queued') {clearPendingQueueSend(o.sessionId,request);return;} // host strip/transcript only
+    if (result.status === 'unavailable') throw Error('Queue availability changed. Check the conversation before sending again.');
+    throw Error('message' in result ? result.message : 'Queued delivery could not be confirmed.');
+  } catch (error) {
+    // A settled failure is already a recovery candidate, even while the notice module loads.
+    if(activeSendId){inFlightQueueSends.delete(activeSendId);activeSendId=undefined;}
+    const unsupported=error as {code?:unknown;channel?:unknown};
+    if(allowLegacyFallback&&unsupported?.code==='REMOTE_UNSUPPORTED'&&unsupported.channel==='session:queue-action'){sendToClaudeLegacy(o,sendId);return;}
+    // No legacy Enter after an uncertain action. Existing notice + unsent refill is deliberate,
+    // not a fabricated history row matching transformed file-read instruction text.
+    const { announce } = await import('../utils/announce');
+    announce(error instanceof Error ? error.message : 'Message outcome is unknown. Check the queue and conversation before trying again.');
+    window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT,{detail:{sessionId:o.sessionId,text:o.originalText ?? o.ptyText,paths:[...o.paths]}}));
+  } finally { if(activeSendId)inFlightQueueSends.delete(activeSendId); }
+}
+
+function sendToClaudeLegacy(o: OutgoingSend, sendId: string): string {
+  // WHY: plugin prompts do not expand @file mentions. Keep every @-bearing message on the CLI composer
+  // path before dispatch rather than guessing its evolving mention grammar (emails safely take that path too).
+  const direct = o.paths.length === 0 && !!o.ptyText && !o.ptyText.includes('@') && !o.ptyText.trimStart().startsWith('/') && typeof window.claude.session.control === 'function';
+  o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId, ...(direct ? { sendTransport: 'direct' as const } : {}) });
+  if (direct) {
+    void requestClaudeControl(o.sessionId, { kind: 'send-text', text: o.ptyText, sendId }).then((result) => {
+      if (result.status === 'unavailable') {
+        // The transport has positively proved no operation was dispatched. Recheck focus after the round trip.
+        if (screenInputBlock(o.sessionId)) { o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: 'not-sent' }); return; }
+        o.dispatch({ type: 'SEND_TRANSPORT', sessionId: o.sessionId, sendId, transport: 'pty' });
+        window.claude.session.sendInput(o.sessionId, o.ptyText + '\r', undefined, sendId);
+      } else if (result.status === 'unknown' || result.status === 'rejected') {
+        o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: result.status === 'unknown' ? 'unsure' : 'not-sent' });
+      }
+    });
+    if (optimisticScreen()) setTimeout(() => window.dispatchEvent(new CustomEvent(SEND_CHECK_EVENT)), CC_SEND_CHECK_MS);
+    return sendId;
+  }
   o.paths.forEach((p, idx) => {
     setTimeout(() => { window.claude.session.sendInput(o.sessionId, p + ' '); }, idx * FILE_GAP_MS);
   });

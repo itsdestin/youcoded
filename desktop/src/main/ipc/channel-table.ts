@@ -36,6 +36,7 @@ import { syncChannels } from './sync';
 import { syncSpacesChannels } from './sync-spaces';
 import { githubChannels } from './github';
 import { sessionChannels } from './session';
+import { queueChannels } from './queue';
 import { nativeChannels } from './native';
 import { permissionsChannels } from './permissions';
 import { specialistsChannels } from './specialists';
@@ -91,6 +92,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...syncSpacesChannels,
   ...githubChannels,
   ...sessionChannels,
+  ...queueChannels,
   ...nativeChannels,
   ...permissionsChannels,
   ...specialistsChannels,

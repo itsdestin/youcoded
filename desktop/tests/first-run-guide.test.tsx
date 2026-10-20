@@ -38,6 +38,7 @@ import {
 } from '../src/renderer/components/guide/guide-state';
 import { dismissTip, resetTipsForSitting, stopAllTips, triggerTip, TIPS } from '../src/renderer/components/guide/tips';
 import GuideTour from '../src/renderer/components/guide/GuideTour';
+import GuideTipHost from '../src/renderer/components/guide/GuideTipHost';
 import { EscCloseProvider, useEscClose } from '../src/renderer/hooks/use-esc-close';
 import type { GuideStop } from '../src/renderer/components/guide/guide-stops';
 
@@ -91,6 +92,41 @@ describe('tips', () => {
       expect(t.text.length).toBeGreaterThan(20);
       expect(t.text.length).toBeLessThan(200);
     }
+  });
+});
+
+describe('GuideTipHost', () => {
+  it('keeps an already visible resume tip readable across queued turn boundaries until dismissed', () => {
+    setTipsArmed(true);
+    expect(triggerTip('resume')).toBe(true);
+    const text = TIPS.find(t => t.id === 'resume')!.text;
+    const { rerender } = render(<GuideTipHost busy={false} />);
+    const bubble = screen.getByText(text);
+    // Each transition is a separate commit, as live turn-complete/thinking events are.
+    for (const busy of [true, false, true, false, true, false]) {
+      rerender(<GuideTipHost busy={busy} />);
+      expect(screen.queryByText(text)).toBe(bubble);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByText(text)).toBeNull();
+    rerender(<GuideTipHost busy={true} />);
+    rerender(<GuideTipHost busy={false} />);
+    expect(screen.queryByText(text)).toBeNull();
+    expect(tipSeen('resume')).toBe(true);
+  });
+
+  it('defers an unseen tip while busy and still lets the person stop all tips', () => {
+    setTipsArmed(true);
+    expect(triggerTip('resume')).toBe(true);
+    const text = TIPS.find(t => t.id === 'resume')!.text;
+    const { rerender } = render(<GuideTipHost busy />);
+    expect(screen.queryByText(text)).toBeNull();
+    rerender(<GuideTipHost busy={false} />);
+    expect(screen.getByText(text)).toBeTruthy();
+    rerender(<GuideTipHost busy />);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop showing tips' }));
+    expect(screen.queryByText(text)).toBeNull();
+    expect(tipsArmed()).toBe(false);
   });
 });
 

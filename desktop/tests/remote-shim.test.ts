@@ -168,6 +168,20 @@ describe('remote-shim — send queue', () => {
       } finally { vi.useRealTimers(); }
     });
 
+    it('refuses every offline queue action instead of buffering a stale epoch/send/edit token on reconnect', async () => {
+      const connectPromise=shim.connect('pw',false);const ws=FakeWebSocket.instances[0];shim.installShim();
+      vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+      try {
+        const before=vi.getTimerCount();
+        for(const action of [{kind:'identity'},{kind:'remove',itemId:'row'},{kind:'send-now',itemId:'row'},{kind:'checkout',itemId:'row',token:{checkoutId:'x',sessionId:'s',draftRevision:1}},{kind:'ack',token:{checkoutId:'x',sessionId:'s',draftRevision:1}},{kind:'cancel',token:{checkoutId:'x',sessionId:'s',draftRevision:1}},{kind:'stop'},{kind:'clear'}]) {
+          await expect((window as any).claude.session.queue.action('s',action)).rejects.toThrow(/connection.*unavailable/i);
+          expect(vi.getTimerCount()).toBe(before);
+        }
+        ws.open();ws.receive({type:'auth:ok',token:'tok',platform:'browser'});await connectPromise;
+        expect(ws.sent.map(raw=>JSON.parse(raw).type)).not.toContain('session:queue-action');
+      } finally {vi.useRealTimers();}
+    });
+
     it('does NOT send application messages while WS is CONNECTING', async () => {
       const connectPromise = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
