@@ -69,8 +69,8 @@ describe('saved cloud budgets in native session lifecycle', () => {
   it('re-resolves the preference on model selection and reports the effective window in usage', async () => {
     await host.create({ sessionId: 'switch', cwd: root, binding });
     expect(await windowAfterTurn('switch')).toBe(272000);
-    preferences = { ...preferences, chatgpt: 'long' };
+    preferences = { ...preferences, chatgpt: 'medium' };
     expect(await host.setBinding('switch', binding)).toBe(true);
-    expect(await windowAfterTurn('switch')).toBe(872000);
+    expect(await windowAfterTurn('switch')).toBe(500000);
   });
 });

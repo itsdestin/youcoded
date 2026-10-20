@@ -29,7 +29,7 @@
 {"type":"subagent_tool_result","parent":"task-2","tool_use_id":"c2-t2","content":"> check-registry\n✓ 2 themes, 0 problems"}
 {"type":"subagent_text","parent":"task-2","text":"Step 1 passes. Step 2 deletes the previews folder before regenerating — that needs a shell command with `rm`."}
 {"type":"subagent_tool_use","parent":"task-2","id":"c2-t3","name":"Bash","input":{"command":"rm -rf dist/previews && npm run previews","description":"Step 2: regenerate previews"}}
-{"type":"subagent_permission_request","parent":"task-2","tool_use_id":"c2-t3","requestId":"native-fx-wren-1","denyListed":true,"permissionMode":"ask","specialist":{"childId":"child-2","agentType":"worker","title":"Wren the Whistling Worker"}}
+{"type":"subagent_permission_request","parent":"task-2","tool_use_id":"c2-t3","requestId":"native-fx-wren-1","denyListed":true,"permissionMode":"full-auto","specialist":{"childId":"child-2","agentType":"worker","title":"Wren the Whistling Worker"}}
 {"type":"subagent_tool_use","parent":"task-4","id":"c4-t1","name":"Read","input":{"file_path":"/home/destin/.youcoded/themes/cache/index.json"}}
 {"type":"subagent_tool_result","parent":"task-4","tool_use_id":"c4-t1","content":"Read on a path outside this specialist's work directory cannot be approved — specialists cannot ask the user to approve leaving their assigned work directory. Stay within it, or note the constraint in your report.","is_error":true}
 {"type":"subagent_text","parent":"task-4","text":"The cache is outside the project folder, which I'm not allowed to read, so I'm stopping here. Nothing was compared."}

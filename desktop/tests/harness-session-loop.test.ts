@@ -22,7 +22,7 @@ import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { NativeTool } from '../src/main/harness/tools/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
-import type { AskRequest, AskDecision } from '../src/main/harness/permission-broker';
+import { PermissionBroker, type AskRequest, type AskDecision } from '../src/main/harness/permission-broker';
 // Scripted-mock builders live in a shared helper — the history-rebuild test
 // (Task 10) drives the same mock model so its deep-equal contract exercises the
 // exact grouping this suite pins.
@@ -1503,17 +1503,98 @@ describe('HarnessSession — multi-step turn driver', () => {
       return { askUser, remembered, ran: (bash as any).calls.length, events };
     };
 
-    it('an admin ask hides Always allow (floorStop \'admin\')', async () => {
+    it('a session-only admin grant covers later commands but is never persisted or inherited by a new session', async () => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow', adminApprovalScope: 'session' } as any));
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide: async () => ({ action: 'ask', denyListed: true }), askUser }), async () => oneBash('sudo true') as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', r => remembered.push(r));
+      collect(session);
+      await session.send('first');
+      await session.send('again');
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect((bash as any).calls).toHaveLength(2);
+      expect(remembered).toEqual([]);
+      session.seedHistory([]);
+      await session.send('restored history');
+      expect(askUser).toHaveBeenCalledTimes(2);
+      const resumed = new HarnessSession(makeOpts({ tools: [bash], decide: async () => ALLOW, askUser }), async () => oneBash('sudo true') as any);
+      collect(resumed);
+      await resumed.send('resume');
+      expect(askUser).toHaveBeenCalledTimes(3);
+    });
+
+    it.each(['command', 'full-auto'] as const)('persists the explicit %s admin scope at the chosen width', async (scope) => {
+      const { remembered } = await run('sudo true', async () => ALLOW, { behavior: 'allow', adminApprovalScope: scope } as any);
+      expect(remembered).toEqual([scope === 'command'
+        ? { tool: 'Bash', pattern: 'sudo true', action: 'allow', match: 'exact' }
+        : { tool: 'AdminFullAuto', action: 'allow', match: 'exact' }]);
+    });
+
+    it.each(['sudo true;rm -rf build', '/usr/bin/sudo true;rm -rf build', 'sudo /usr/bin/rm -rf build',
+      `sudo node -e"require('fs').rmSync('build',{recursive:true,force:true})"`,
+    ])('does not execute %s on broad admin consent alone', async command => {
+      const { askUser, ran } = await run(command,
+        async () => ({ action: 'allow', denyListed: false, passwordlessAdminAllowed: true }),
+        { behavior: 'deny' });
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(ran).toBe(0);
+    });
+
+    it.each(['command', 'full-auto', 'session'] as const)('honors the %s choice on a subsequent destructive ask with no admin floor marker', async scope => {
+      const broker = new PermissionBroker();
+      const requests: any[] = [];
+      broker.on('hook-event', e => {
+        if (e.type !== 'PermissionRequest') return;
+        requests.push(e);
+        broker.respond(e.payload._requestId, { decision: { behavior: 'allow' }, adminApprovalScope: scope });
+      });
+      const bash = bashTool();
+      let command = 'sudo rm -rf build';
+      let existingAdminGrant = true;
+      const session = new HarnessSession(makeOpts({ tools: [bash],
+        decide: async () => ({ action: 'ask', denyListed: true, passwordlessAdminAllowed: existingAdminGrant }),
+        askUser: req => broker.ask(req),
+      }), async () => oneBash(command) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', r => remembered.push(r));
+      collect(session);
+      await session.send('approve the deletion');
+      expect(requests).toHaveLength(1);
+      expect(requests[0].payload.floorStop).toBeUndefined();
+      expect((bash as any).calls).toHaveLength(1);
+      if (scope === 'session') {
+        expect(remembered).toEqual([]);
+        existingAdminGrant = false;
+        command = 'sudo true';
+        await session.send('another admin command');
+        expect(requests).toHaveLength(1);
+        expect((bash as any).calls).toHaveLength(2);
+      } else expect(remembered).toEqual([scope === 'command'
+        ? { tool: 'Bash', pattern: 'sudo rm -rf build', action: 'allow', match: 'exact' }
+        : { tool: 'AdminFullAuto', action: 'allow', match: 'exact' }]);
+    });
+
+    it('honors explicit admin consent but keeps secret and protected-removal floors', async () => {
+      const decide = async () => ({ action: 'ask' as const, denyListed: true, passwordlessAdminAllowed: true });
+      expect((await run('sudo true', decide)).askUser).not.toHaveBeenCalled();
+      const secret = await run('sudo cat ~/.ssh/id_rsa', decide);
+      expect(secret.askUser.mock.calls[0][0].floorStop).toBe('secret-path');
+      const removal = await run('sudo rm -rf ~', decide);
+      expect(removal.askUser.mock.calls[0][0].floorStop).toBe('removal');
+      expect((await run('sudo true', async () => ({ action: 'deny', denyListed: false, passwordlessAdminAllowed: true }))).ran).toBe(0);
+    });
+
+    it('an admin ask carries the admin floor marker', async () => {
       const { askUser, ran } = await run('sudo apt update', async () => ALLOW);
       expect(askUser).toHaveBeenCalledTimes(1);
       expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'admin', external: false });
       expect(ran).toBe(1); // the person said yes, so it runs
     });
 
-    it('a remembered Always-allow rule for `sudo x` does NOT skip the card', async () => {
-      // decide() returning 'allow' with no ask is exactly what a stored
-      // "Always allow" rule produces — the floor must still force a card and
-      // must still refuse to remember anything new (forcedAsk).
+    it('a configured allow without explicit admin consent does not skip the card', async () => {
+      // An unmarked allow can come from a mode or broad Bash rule. Exact saved
+      // approvals carry passwordlessAdminAllowed from the host; this one does not.
       const { askUser, remembered, ran } = await run('sudo systemctl restart nginx', async () => ALLOW);
       expect(askUser).toHaveBeenCalledTimes(1);
       expect(askUser.mock.calls[0][0]).toMatchObject({ floorStop: 'admin' });
@@ -1628,6 +1709,23 @@ describe('HarnessSession — multi-step turn driver', () => {
       const res = events.find((e) => e.type === 'tool-result')!;
       expect(res.data.isError).toBe(true);
       expect(res.data.toolResult).toMatch(/interrupted/i);
+    });
+
+    it('an admin allowance skips speculative password entry, leaving the real askpass flow to ask only if needed', async () => {
+      const svc = fakeAdminPasswordService();
+      const onExecute = vi.fn(async (_args: unknown, ctx: any) => {
+        expect(ctx.adminPasswordService).toBe(svc);
+        return { text: 'ran' };
+      });
+      const bash = fakeTool('Bash', { schema: z.object({ command: z.string() }), permissionSubject: (a: any) => a.command, onExecute });
+      const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'allow' }));
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide: async () => ({ action: 'ask', denyListed: true, passwordlessAdminAllowed: true }), askUser, adminPasswordService: svc }), async () => oneBash('sudo true') as any);
+      collect(session);
+      await session.send('go');
+      expect(askUser).not.toHaveBeenCalled();
+      expect(svc.askUpFront).not.toHaveBeenCalled();
+      expect((bash as any).calls).toHaveLength(1);
+      expect(onExecute).toHaveBeenCalledTimes(1);
     });
 
     it('a command that names no visible sudo line never calls askUpFront', async () => {

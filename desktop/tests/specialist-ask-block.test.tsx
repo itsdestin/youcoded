@@ -58,6 +58,29 @@ describe('SpecialistAskBlock — copy', () => {
     expect(screen.queryByRole('button', { name: 'Allow outside edits for this session' })).toBeNull();
   });
 
+  it('caps the compact permission panel at the popup card width', () => {
+    render(
+      <ChatProvider>
+        <SpecialistAskBlock
+          segment={segment({ input: { command: 'sudo systemctl restart nginx' }, denyListed: true, permissionMode: 'full-auto' })}
+          sessionId="s1"
+          specialistName="Wren"
+          compact
+          leading={<span>Wren wants to: Running a command</span>}
+        />
+      </ChatProvider>,
+    );
+    // jsdom has no layout; pin the width constraint on the real flex item.
+    // Browser screenshots verify the resulting wrapping with the real stylesheet.
+    const panel = screen.getByRole('button', { name: 'Run it' }).closest('.shrink-0');
+    expect(panel).not.toBeNull();
+    expect(panel!.classList.contains('max-w-full')).toBe(true);
+    const innerCard = screen.getByText('Stopped before an admin command').parentElement!.parentElement!;
+    expect(innerCard.classList.contains('rounded-lg')).toBe(true);
+    expect(innerCard.classList.contains('border')).toBe(true);
+    expect(innerCard.classList.contains('border-t')).toBe(false);
+  });
+
   it('external (outside-the-folder) ask says the helper has to ask every time — and offers no Always allow', () => {
     renderBlock({ external: true });
     expect(screen.getByText(/outside the project folder/i).textContent).toBe(

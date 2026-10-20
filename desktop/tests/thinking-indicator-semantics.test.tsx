@@ -351,9 +351,56 @@ describe('ThinkingIndicator — a new reading is not projected forward on arriva
 import { OnScreenContext } from '../src/renderer/state/on-screen-context';
 import BrailleSpinner from '../src/renderer/components/BrailleSpinner';
 
+describe('BrailleSpinner visibility and shared animation', () => {
+  it('keeps hidden subscribers idle while visible spinners share one timer and resume immediately', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    let hiddenCommits = 0;
+    const pane = (visible: boolean) => (
+      <OnScreenContext.Provider value={visible}>
+        <React.Profiler id="hidden-spinner" onRender={() => { hiddenCommits++; }}>
+          <BrailleSpinner />
+        </React.Profiler>
+      </OnScreenContext.Provider>
+    );
+    const hidden = render(pane(false));
+    expect(vi.getTimerCount()).toBe(0);
+    const hiddenGlyph = hidden.container.textContent;
+    const first = render(<BrailleSpinner />);
+    const second = render(<BrailleSpinner />);
+    expect(vi.getTimerCount()).toBe(1);
+    const visibleGlyph = first.container.textContent;
+    const before = hiddenCommits;
+    act(() => { vi.advanceTimersByTime(160); });
+    expect(first.container.textContent).not.toBe(visibleGlyph);
+    expect(second.container.textContent).toBe(first.container.textContent);
+    expect(hidden.container.textContent).toBe(hiddenGlyph);
+    expect(hiddenCommits).toBe(before);
+    const currentGlyph = first.container.textContent;
+    first.unmount(); second.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    hidden.rerender(pane(true));
+    expect(hidden.container.textContent).toBe(currentGlyph);
+    expect(vi.getTimerCount()).toBe(1);
+    hidden.rerender(pane(false));
+    const afterHide = hiddenCommits;
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(hiddenCommits).toBe(afterHide);
+  });
+
+  it('always uses a defined theme colour throughout the colour cycle', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    const r = render(<BrailleSpinner />);
+    for (let phase = 0; phase < 6; phase++) {
+      act(() => { vi.advanceTimersByTime(600); });
+      expect(r.container.querySelector('span')!.style.color).not.toBe('');
+    }
+  });
+});
+
 describe('ThinkingIndicator in a hidden chat', () => {
-  // The spinner glyph has its own shared driver (BrailleSpinner.tsx), outside
-  // this change; these tests count the indicator's OWN timers on top of it.
+  // Visible indicators share the glyph driver; hidden indicators must own no
+  // timers at all, including that shared animation subscription.
   const spinnerTimers = () => {
     const r = render(<BrailleSpinner size="base" />);
     const n = vi.getTimerCount();
@@ -370,12 +417,11 @@ describe('ThinkingIndicator in a hidden chat', () => {
 
   it('runs no timers while hidden — words, prefill ticks or countdown', () => {
     vi.useFakeTimers();
-    const base = spinnerTimers();
     render(inPane(false, { promptProcessing: prefill }));
-    expect(vi.getTimerCount()).toBe(base);
+    expect(vi.getTimerCount()).toBe(0);
     cleanup();
     render(inPane(false, { stallWarning: stall }));
-    expect(vi.getTimerCount()).toBe(base);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('runs them on screen (so the test above can fail)', () => {

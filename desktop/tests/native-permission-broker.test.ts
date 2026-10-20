@@ -46,6 +46,35 @@ describe('PermissionBroker', () => {
     }
   });
 
+  it.each(['command', 'full-auto', 'session'] as const)('accepts the %s admin selector only on an allowed admin ask', async (scope) => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', e => emitted.push(e));
+    for (const [toolName, command, floorStop, behavior, accepted] of [
+      ['Bash', 'sudo true', 'admin', 'allow', true],
+      ['Bash', 'sudo true', undefined, 'allow', true],
+      ['Bash', 'sudo true', 'admin', 'deny', false],
+      ['Bash', 'npm test', undefined, 'allow', false],
+      ['Write', 'sudo true', undefined, 'allow', false],
+      ['Bash', 'sudo cat ~/.ssh/id_rsa', 'secret-path', 'allow', false],
+    ] as const) {
+      const p = broker.ask({ sessionId: 's', toolName, toolInput: { command }, floorStop, denyListed: true });
+      const id = emitted.filter(e => e.type === 'PermissionRequest').at(-1).payload._requestId;
+      broker.respond(id, { decision: { behavior }, adminApprovalScope: scope });
+      const result = await p;
+      expect((result as any).adminApprovalScope).toBe(accepted ? scope : undefined);
+    }
+  });
+
+  it('ignores an invalid admin selector instead of widening approval', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', e => emitted.push(e));
+    const pending = broker.ask({ sessionId: 's', toolName: 'Bash', toolInput: { command: 'sudo true' }, floorStop: 'admin', denyListed: true });
+    broker.respond(emitted[0].payload._requestId, { decision: { behavior: 'allow' }, adminApprovalScope: '*' });
+    expect((await pending as any).adminApprovalScope).toBeUndefined();
+  });
+
   it('rides permissionMode along the PermissionRequest payload (full-auto safety stop keys on it)', () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

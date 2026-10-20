@@ -12,13 +12,13 @@ describe('ContextSettingsStore', () => {
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
   it('normalizes missing and malformed fields independently', async () => {
     const store = new ContextSettingsStore(home);
-    expect(store.read()).toEqual({ openrouter: 'standard', chatgpt: 'standard' });
+    expect(store.read()).toEqual({ openrouter: 'medium', chatgpt: 'medium' });
     for (const context of [null, [], 'long', { openrouter: false }, { chatgpt: 1 }]) {
       await home.writeJson('config.json', { native: { context } });
-      expect(store.read()).toEqual({ openrouter: 'standard', chatgpt: 'standard' });
+      expect(store.read()).toEqual({ openrouter: 'medium', chatgpt: 'medium' });
     }
     await home.writeJson('config.json', { native: { context: { openrouter: 'long', chatgpt: 'bad' } } });
-    expect(store.read()).toEqual({ openrouter: 'long', chatgpt: 'standard' });
+    expect(store.read()).toEqual({ openrouter: 'long', chatgpt: 'medium' });
   });
   it('persists across instances and preserves siblings and unrelated config', async () => {
     const initial = { v: 1, other: { x: 2 }, native: { stepGuard: 40, context: { openrouter: 'long', chatgpt: 'standard' } } };
@@ -26,6 +26,12 @@ describe('ContextSettingsStore', () => {
     await expect(new ContextSettingsStore(home).update({ chatgpt: 'long' })).resolves.toEqual({ openrouter: 'long', chatgpt: 'long' });
     expect(new ContextSettingsStore(new NativeHome(root)).read()).toEqual({ openrouter: 'long', chatgpt: 'long' });
     expect(home.readJson('config.json')).toEqual({ ...initial, native: { ...initial.native, context: { openrouter: 'long', chatgpt: 'long' } } });
+  });
+  it('round-trips every tier without replacing existing saved choices', async () => {
+    for (const mode of ['standard', 'medium', 'long'] as const) {
+      await new ContextSettingsStore(home).update({ openrouter: mode, chatgpt: mode });
+      expect(new ContextSettingsStore(new NativeHome(root)).read()).toEqual({ openrouter: mode, chatgpt: mode });
+    }
   });
   it('composes concurrent distinct-provider patches under the lock', async () => {
     await Promise.all([new ContextSettingsStore(home).update({ openrouter: 'long' }), new ContextSettingsStore(new NativeHome(root)).update({ chatgpt: 'long' })]);

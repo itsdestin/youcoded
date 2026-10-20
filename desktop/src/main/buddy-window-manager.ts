@@ -325,7 +325,10 @@ export class BuddyWindowManager {
     const y = Math.round(at.y);
     this.pos[role] = { x, y };
     if (this.captionLive()) win.setTitle(buildCaption(role, x, y));
-    else win.setPosition(x, y);
+    // WHY: setPosition preserves Electron's rounded native size. On XWayland
+    // at 150% scale that round-trip grows the chat on each move/open. These
+    // windows have fixed role sizes, so always send those with the position.
+    else win.setBounds({ x, y, ...ROLE_SIZE[role] });
     // Only the mascot's position is remembered between runs; the chat and the
     // bar are always re-anchored to him when they open.
     if (role === 'mascot') this.persistMascot();
@@ -714,6 +717,8 @@ export class BuddyWindowManager {
     // stale visibility callback against destroyed windows. The PERSISTED dock
     // edge stays — a dismissed buddy should come back on its edge.
     if (this.glideTimer) { clearInterval(this.glideTimer); this.glideTimer = null; }
+    if (this.chatHideTimer) { clearTimeout(this.chatHideTimer); this.chatHideTimer = null; }
+    this.chatOpenIntent = false;
     // Cancel a show() still waiting on the usable-screen-area lookup — without
     // this, switching the buddy off during that wait would bring him back.
     this.pendingShow = false;
@@ -754,7 +759,9 @@ export class BuddyWindowManager {
     this.chatOpenIntent = false;
     this.chat.webContents.send(IPC_CHAT_STATE, { visible: false });
     const chatRef = this.chat;
-    setTimeout(() => {
+    if (this.chatHideTimer) clearTimeout(this.chatHideTimer);
+    this.chatHideTimer = setTimeout(() => {
+      this.chatHideTimer = null;
       if (chatRef && !chatRef.isDestroyed() && chatRef === this.chat && !this.chatOpenIntent) {
         chatRef.hide();
       }
@@ -767,10 +774,14 @@ export class BuddyWindowManager {
       this.createChat();
       return;
     }
-    if (this.chat.isVisible()) {
+    // WHY: the native window stays visible during its exit fade. A second
+    // click then means reopen, not restart closing; an older hide must not
+    // cut short a later close after that reopen.
+    if (this.chatOpenIntent) {
       this.closeChat();
       this.syncEngagement(); // chat closed — sink back to peek unless attention holds him
     } else {
+      if (this.chatHideTimer) { clearTimeout(this.chatHideTimer); this.chatHideTimer = null; }
       // Re-anchor to current mascot position before showing — the user may
       // have dragged the mascot while the chat was hidden, and the chat
       // should open "wherever the icon is" rather than at its stale last
@@ -1066,6 +1077,7 @@ export class BuddyWindowManager {
   // cleared in the hide path. Guards the delayed exit-animation hide()
   // against rapid re-toggles.
   private chatOpenIntent = false;
+  private chatHideTimer: ReturnType<typeof setTimeout> | null = null;
 
   private createChat(): void {
     this.chatOpenIntent = true;
