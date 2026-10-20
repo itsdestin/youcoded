@@ -98,6 +98,7 @@ export interface OfficeIpcMain {
 interface OfficeSender {
   id: number;
   once(event: 'destroyed', listener: () => void): unknown;
+  on?(event: 'render-process-gone' | 'did-start-navigation', listener: (details?: { isMainFrame?: boolean; isSameDocument?: boolean }) => void): unknown;
   isDestroyed?(): boolean;
   send?(channel: string, ...args: unknown[]): void;
 }
@@ -240,6 +241,8 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
   // WHY track windows: a window that closes (or crashes) never sends office:close, and its
   // documents' temp folders would otherwise stay until quit. One listener per window.
   const watched = new Set<number>();
+  const generations = new Map<number, number>();
+  const closing = new Map<number, Promise<void>>();
   // WHY count opens (fix round 1): a window can hold the same file in more than one place (a
   // tab, and an Edit in a file panel), and each place is handed the same token. Only the
   // last one's close may tear the session down. Keyed by window, then token.
@@ -250,10 +253,24 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
     const id = sender.id;
     if (watched.has(id)) return;
     watched.add(id);
-    sender.once('destroyed', () => {
-      watched.delete(id);
+    generations.set(id, 0);
+    const lostPage = () => {
+      // WHY: the window survives a renderer crash; its editor and open counts do not.
+      generations.set(id, (generations.get(id) ?? 0) + 1);
       opens.delete(id);
-      void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', errorKind(e)));
+      const stopped = (deps.getSessions()?.closeAllFor(id) ?? Promise.resolve())
+        .catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', errorKind(e)));
+      closing.set(id, stopped);
+      void stopped.then(() => { if (closing.get(id) === stopped) closing.delete(id); });
+    };
+    sender.on?.('render-process-gone', lostPage);
+    sender.on?.('did-start-navigation', (details) => {
+      if (details?.isMainFrame && !details.isSameDocument) lostPage();
+    });
+    sender.once('destroyed', () => {
+      lostPage();
+      watched.delete(id);
+      generations.delete(id);
     });
   }
 
@@ -262,6 +279,9 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
   const opening = new Map<string, Promise<OfficeSession>>();
 
   async function open(sender: OfficeSender, filePath: unknown): Promise<OfficeOpen> {
+    watch(sender);
+    const generation = generations.get(sender.id);
+    await closing.get(sender.id);
     const reg = await isReady();
     if (!reg) return fail(MSG.unavailable);
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return fail(MSG.couldNotOpen);
@@ -316,7 +336,7 @@ export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void
     // WHY (fix round 1): the window can close while main was opening. Its destroyed event has
     // then already run (or never will be listened for), so nothing would ever close this
     // session, and it would keep the file claimed until quit.
-    if (sender.isDestroyed?.()) {
+    if (sender.isDestroyed?.() || generations.get(sender.id) !== generation) {
       void reg.close(session.token).catch(() => {});
       return fail(MSG.couldNotOpen);
     }

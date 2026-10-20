@@ -3,6 +3,7 @@ import { Button } from './ui';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
 import { type PromptButton } from '../../shared/ink-select-parser';
 import { keptCardButtons } from '../parser/kept-card-binding';
+import { useOnScreen } from '../state/on-screen-context';
 
 // --- Kept-card actions (a hook socket died, Claude Code's menu may be live) ---
 //
@@ -32,6 +33,7 @@ export function ExpiredApprovalActions({ sessionId, toolName, input, cwd, onDism
   cwd?: string;
   onDismiss: () => void;
 }) {
+  const onScreen = useOnScreen();
   const [buttons, setButtons] = useState<PromptButton[] | null>(null);
   const [clicked, setClicked] = useState(false);
   const [changed, setChanged] = useState(false);
@@ -40,7 +42,9 @@ export function ExpiredApprovalActions({ sessionId, toolName, input, cwd, onDism
   const rearm = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!sessionId) return;
+    // WHY: kept cards remain mounted in hidden chats; reread immediately on return,
+    // but do not poll terminal buffers for options nobody can see.
+    if (!sessionId || !onScreen) return;
     const read = () => {
       const screen = getVisibleScreenText(sessionId);
       setButtons(keptCardButtons(screen, toolName, inputRef.current, cwd));
@@ -48,7 +52,7 @@ export function ExpiredApprovalActions({ sessionId, toolName, input, cwd, onDism
     read();
     const poll = setInterval(read, REBIND_POLL_MS);
     return () => clearInterval(poll);
-  }, [sessionId, toolName, cwd]);
+  }, [sessionId, toolName, cwd, onScreen]);
   useEffect(() => () => { if (rearm.current) clearTimeout(rearm.current); }, []);
 
   const press = (b: PromptButton) => {

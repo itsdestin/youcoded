@@ -16,6 +16,24 @@ function firstPayload(emitted: any[]) {
 }
 
 describe('childAskRouter', () => {
+  it.each([
+    ['command', 'admin'], ['full-auto', 'admin'], ['session', 'admin'],
+    ['command', undefined], ['full-auto', undefined], ['session', undefined],
+  ] as const)('keeps the routed %s admin choice with floor %s scoped to the specialist and never persists a session allowance', async (scope, floorStop) => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', e => emitted.push(e));
+    const remember = vi.fn();
+    const router = childAskRouter({ broker, parentId: 'p', childId: 'c', agentType: 'worker', title: 'W', parentToolCallId: 'tc', remember });
+    const command = floorStop ? 'sudo true' : 'sudo rm -rf build';
+    const pending = router({ sessionId: 'c', toolName: 'Bash', toolInput: { command }, subject: command, floorStop, denyListed: true });
+    broker.respond(firstPayload(emitted)._requestId, { decision: { behavior: 'allow' }, adminApprovalScope: scope });
+    expect((await pending).adminApprovalScope).toBe(scope);
+    if (scope === 'session') expect(remember).not.toHaveBeenCalled();
+    else expect(remember).toHaveBeenCalledWith(scope === 'command'
+      ? { tool: 'Bash', pattern: command, action: 'allow', match: 'exact', specialist: 'worker' }
+      : { tool: 'AdminFullAuto', action: 'allow', match: 'exact', specialist: 'worker' });
+  });
   it('treats doom_loop, but not max_steps, as a non-rememberable budget ask', () => {
     expect(BUDGET_ASK_TOOL_NAMES).toContain('doom_loop');
     expect(BUDGET_ASK_TOOL_NAMES).not.toContain('max_steps');

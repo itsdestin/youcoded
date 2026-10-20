@@ -307,6 +307,11 @@ const PREFIX_CHECK_BYTES = 4096;
 // 2026-09-16): the cache lived for the app's life, one parsed event map per
 // native session ever published. remove() also forgets a session's entry.
 const MAX_CACHED_TRANSCRIPTS = 24;
+// WHY: entry count alone lets a few long conversations retain arbitrary parsed
+// history. Source bytes are a cheap budget proxy, not a claim about JS heap size.
+// Keep ordinary active chats incremental: too small a cap reparses them at every reply.
+const MAX_CACHED_SOURCE_BYTES = 64 * 1024 * 1024;
+const MAX_CACHED_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 
 /**
  * Reads a transcript for publish(), keeping the parsed prefix between calls.
@@ -364,13 +369,21 @@ class IncrementalTranscriptReader {
       const prefixHash = base.hash.copy().update(complete);
       const fullDigest = prefixHash.copy().update(data.subarray(complete.length)).digest('hex');
       const cachedBytes = from + complete.length;
-      if (cachedBytes > 0) {
+      if (cachedBytes > 0 && cachedBytes <= MAX_CACHED_TRANSCRIPT_BYTES) {
         // The check window is the last PREFIX_CHECK_BYTES of the cached prefix,
         // which may straddle the old boundary — take it from what we hold.
         const tail = Buffer.concat([hit && from > 0 ? hit.check : Buffer.alloc(0), complete]);
         this.cache.delete(file); // re-insert so Map order is least-recently-used first
-        this.cache.set(file, { bytes: cachedBytes, hash: prefixHash, events: base.events, check: tail.subarray(Math.max(0, tail.length - PREFIX_CHECK_BYTES)) });
-        while (this.cache.size > MAX_CACHED_TRANSCRIPTS) this.cache.delete(this.cache.keys().next().value!);
+        // WHY: subarray alone pins the entire cold transcript's backing buffer.
+        const check = Buffer.from(tail.subarray(Math.max(0, tail.length - PREFIX_CHECK_BYTES)));
+        this.cache.set(file, { bytes: cachedBytes, hash: prefixHash, events: base.events, check });
+        let sourceBytes = 0;
+        for (const entry of this.cache.values()) sourceBytes += entry.bytes;
+        while (this.cache.size > MAX_CACHED_TRANSCRIPTS || sourceBytes > MAX_CACHED_SOURCE_BYTES) {
+          const oldest = this.cache.keys().next().value!;
+          sourceBytes -= this.cache.get(oldest)!.bytes;
+          this.cache.delete(oldest);
+        }
       } else {
         this.cache.delete(file);
       }
@@ -700,6 +713,17 @@ export class AcceptedHistoryStore {
       ok: true, messages, messageOrigins, eventUuids: [...manifest.eventUuids], revision: manifest.revision,
       ...(manifest.transformation ? { transformation: manifest.transformation } : {}),
     };
+  }
+
+  /** Release runtime-only history after the host has stopped its publisher. */
+  releaseSession(sessionId: string): Promise<void> {
+    // WHY: forgetting before a queued publish finishes lets that publish refill
+    // the cache after teardown. Keep durable manifests/fences and revision safety.
+    return this.enqueue(sessionId, async () => {
+      const transcript = this.transcriptBySession.get(sessionId);
+      if (transcript) this.reader.forget(transcript);
+      this.transcriptBySession.delete(sessionId);
+    });
   }
 
   async remove(sessionId: string): Promise<{ ok: true } | { ok: false; reason: 'unlink-failed' }> {

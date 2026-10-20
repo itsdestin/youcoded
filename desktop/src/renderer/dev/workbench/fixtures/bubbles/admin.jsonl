@@ -1,0 +1,3 @@
+{"type":"user_message","text":"restart the example service"}
+{"type":"tool_use","id":"admin-review","name":"Bash","input":{"command":"sudo systemctl restart example","description":"Restart the example service"}}
+{"type":"permission_request","tool_use_id":"admin-review","requestId":"native-admin-review","denyListed":true,"permissionMode":"full-auto"}

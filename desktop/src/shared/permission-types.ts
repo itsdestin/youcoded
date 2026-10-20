@@ -95,7 +95,9 @@ export const CROSS_PROJECT_SLUG = 'all projects';
  *  flag would have to have been persisted and could disagree with the subject
  *  it sits next to. The subject cannot disagree with itself. */
 export function isCrossProjectRule(rule: Pick<PermissionRule, 'tool' | 'pattern'>): boolean {
-  return rule.tool === 'Task' && /^(read-only|read-write):file:/.test(rule.pattern ?? '');
+  // WHY: the explicit Full Auto admin choice is install-wide, not tied to the project that asked.
+  return (rule.tool === 'AdminFullAuto' && rule.pattern === undefined)
+    || (rule.tool === 'Task' && /^(read-only|read-write):file:/.test(rule.pattern ?? ''));
 }
 
 /** A remembered rule as STORED — the engine's PermissionRule plus provenance
@@ -118,6 +120,10 @@ export interface StoredProject {
 
 export interface PermissionDecision {
   action: PermissionAction;
+  /** Explicit remembered admin consent, evaluated against the current mode. Never a mode baseline. */
+  passwordlessAdminAllowed?: boolean;
+  /** The person approved this whole literal command, not merely its admin step. */
+  passwordlessAdminExact?: boolean;
   /** True when the winning rule came from the destructive deny-list — drives
    *  the consequence-gated "Always allow" warning (spec §2.4 precedence ruling). */
   denyListed: boolean;

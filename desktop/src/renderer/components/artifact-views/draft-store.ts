@@ -22,6 +22,7 @@
 // fails leaves the draft parked, never dropped.
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { holdUnsavedEditor } from '../../state/unsaved-editors';
+import { clearRecoveryDraft, readRecoveryDraft, writeRecoveryDraft } from '../../state/draft-recovery';
 
 export interface StashedDraft {
   draft: string;
@@ -43,7 +44,13 @@ export function draftKey(projectRoot: string, artifactId: string): string {
   return canonicalize(projectRoot, null) + '|' + artifactId;
 }
 
+/** Journal live edits too: a crashing renderer never runs its unmount stash. */
+export function rememberDraft(key: string, entry: StashedDraft): void {
+  writeRecoveryDraft(`file:${key}`, { text: entry.draft, mtimeMs: entry.mtimeMs, name: entry.name });
+}
+
 export function stashDraft(key: string, entry: StashedDraft): void {
+  rememberDraft(key, entry);
   const had = stash.get(key);
   if (had) { had.entry = entry; had.taken = false; return; }
   const release = holdUnsavedEditor({
@@ -61,7 +68,11 @@ export function stashDraft(key: string, entry: StashedDraft): void {
  *  until settleDraft says whether it was applied; a second consumer meanwhile gets nothing. */
 export function takeDraft(key: string): StashedDraft | undefined {
   const p = stash.get(key);
-  if (!p || p.taken) return undefined;
+  if (!p) {
+    const recovered = readRecoveryDraft(`file:${key}`);
+    return recovered ? { draft: recovered.text, mtimeMs: recovered.mtimeMs ?? null, name: recovered.name } : undefined;
+  }
+  if (p.taken) return undefined;
   p.taken = true;
   return p.entry;
 }
@@ -76,6 +87,7 @@ export function settleDraft(key: string, applied: boolean): void {
 }
 
 export function clearDraft(key: string): void {
+  clearRecoveryDraft(`file:${key}`);
   const p = stash.get(key);
   stash.delete(key);
   p?.release();

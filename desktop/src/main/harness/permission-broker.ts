@@ -11,6 +11,8 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import type { GrantScope } from '../../shared/bash-grant-shapes';
+import { isAdminApprovalScope, type AdminApprovalScope } from '../../shared/admin-approval';
+import { adminCommandVerdict } from './tools/admin-command';
 import type { HookEvent, FloorStop } from '../../shared/types';
 
 export interface AskRequest {
@@ -88,6 +90,8 @@ export interface AskDecision {
   grantScope?: GrantScope;
   /** Memory-only consent to outside-folder file edits; never a stored permission rule. */
   allowExternalEditsForSession?: boolean;
+  /** Validated choice on an admin approval; never accepted on other asks or a deny. */
+  adminApprovalScope?: AdminApprovalScope;
   /** A HUMAN answered "no" on a card — set ONLY by respond() below, which is
    *  the only path a person's decision travels (renderer and remote WS
    *  clients both land there), on ANY real deny it produces. The driver reads it on interactive asks: a dismissed
@@ -141,6 +145,7 @@ interface PendingAsk {
   /** Only a permission ask of this shape may mint an ephemeral outside-edit
    *  grant (master, merged in); a password ask never can, so it stays absent. */
   canGrantExternalEdits?: boolean;
+  canGrantAdmin?: boolean;
   /** The exact PermissionRequest/PasswordRequest this ask emitted, minus its
    *  timestamp, kept so the heartbeat re-announces something byte-identical.
    *  Rebuilding it from the fields above would silently drift from the emit
@@ -233,6 +238,9 @@ export class PermissionBroker extends EventEmitter {
         // Only a main assistant's Full Auto Write/Edit outside-folder ask can do so.
         canGrantExternalEdits: req.external === true && req.permissionMode === 'full-auto'
           && !req.raisedBy && (req.toolName === 'Write' || req.toolName === 'Edit'),
+        // WHY: a renderer selector cannot turn an unrelated approval into admin authority.
+        canGrantAdmin: req.toolName === 'Bash' && (!req.floorStop || req.floorStop === 'admin')
+          && typeof req.toolInput.command === 'string' && adminCommandVerdict(req.toolInput.command)?.kind === 'admin',
         resolve,
         announcement,
       };
@@ -387,6 +395,8 @@ export class PermissionBroker extends EventEmitter {
     // AskDecision.dismissed).
     const resolved: AskDecision = {
       behavior, always, grantScope,
+      ...(behavior === 'allow' && entry.canGrantAdmin && isAdminApprovalScope(decision.adminApprovalScope)
+        ? { adminApprovalScope: decision.adminApprovalScope } : {}),
       ...(behavior === 'allow' && entry.canGrantExternalEdits && decision.allowExternalEditsForSession === true
         ? { allowExternalEditsForSession: true } : {}),
       ...(behavior === 'deny' ? { dismissed: true } : {}), ...(updatedInput ? { updatedInput } : {}),

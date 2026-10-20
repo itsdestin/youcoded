@@ -16,6 +16,7 @@ describe('native compaction budget arithmetic', () => {
     [8192, 2000, 2048, 1548, 256, 5376, 844],
     [32768, 8000, 8192, 6192, 1024, 23040, 3760],
     [272000, 8000, 16000, 13107, 2720, 252768, 20000],
+    [500000, 8000, 16000, 13107, 5000, 478488, 20000],
     [1000000, 8000, 16000, 13107, 10000, 973488, 20000],
   ])('plans C=%i with fixed cost %i', (contextLength, fixedCost, replyReserve, summaryAllowance, margin, trigger, tail) => {
     expect(planContextBudget({ contextLength, fixedCost, summaryOverhead: 512, maxTokens: 16000 })).toMatchObject({
@@ -110,18 +111,21 @@ function promptCapturingModel(steps: ScriptStep[], prompts: any[][]) {
 // Driver coverage: the old budget's trigger is a diagnostic comparison, not
 // proof that the new planner can safely summarize an arbitrary retired span.
 describe('driver: compaction happens before any request trimming', () => {
-  it('32k window at ~22k of history: one summary, and the request carries the summary plus the kept tail — nothing silently trimmed', async () => {
+  it.each([
+    [32_768, 22_000],
+    [500_000, 485_000],
+  ])('%i window at ~%i of history: one summary, and the request carries the summary plus the kept tail — nothing silently trimmed', async (contextLength, seedBulkHistoryTokens) => {
     const events: any[] = []; const prompts: any[][] = [];
     let compactedHistory: any[] = [];
     const session = makeSession({
-      contextLength: 32_768, seedBulkHistoryTokens: 22_000, onEvent: (e) => {
+      contextLength, seedBulkHistoryTokens, onEvent: (e) => {
         events.push(e);
         if (e.type === 'compact-summary') compactedHistory = [...(session as any).history];
       }, harness: PRODUCTION_RESERVE,
       model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts),
     });
     const original = [...(session as any).history, { role: 'user', content: 'continue' }];
-    const plan = planContextBudget({ contextLength: 32_768, fixedCost: (session as any).requestFixedCost(),
+    const plan = planContextBudget({ contextLength, fixedCost: (session as any).requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt().length / 4), maxTokens: 16_000 });
     await drainTurn(session, 'continue');
     expect(events.filter((e) => e.type === 'compact-summary')).toHaveLength(1);

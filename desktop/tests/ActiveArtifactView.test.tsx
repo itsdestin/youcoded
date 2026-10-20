@@ -11,6 +11,9 @@ import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/c
 import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 import { addComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
+import { flushRecoveryDrafts, readRecoveryDraft, writeRecoveryDraft } from '../src/renderer/state/draft-recovery';
+
+beforeEach(() => { flushRecoveryDrafts(); sessionStorage.clear(); });
 
 const commentLayout = vi.hoisted(() => ({
   narrow: false, expanded: undefined as boolean | undefined,
@@ -133,6 +136,29 @@ describe('edit and save guards', () => {
         content: 'export {};',
       });
       expect(ref.current!.isEditable).toBe(true);
+    });
+
+    it('journals live edits before unmount and clears recovery only after saving', async () => {
+      const { ref, utils } = mountView({ artifact: { id: 'live-recovery', kind: 'internal', path: 'notes.md' } as any });
+      await act(async () => { ref.current!.startEdit(); });
+      fireEvent.change(utils.container.querySelector('textarea')!, { target: { value: 'unsaved live edit' } });
+      flushRecoveryDrafts();
+      expect(readRecoveryDraft('file:/proj|live-recovery')).toMatchObject({ text: 'unsaved live edit', mtimeMs: 42 });
+      await act(async () => { await ref.current!.saveEdit(); });
+      flushRecoveryDrafts();
+      expect(readRecoveryDraft('file:/proj|live-recovery')).toBeNull();
+    });
+
+    it('recovers a previous renderer draft with its original concurrency token', async () => {
+      writeRecoveryDraft('file:/proj|crashed-edit', { text: 'recovered edit', mtimeMs: 7, name: 'notes.md' });
+      flushRecoveryDrafts();
+      const { ref, utils } = mountView({ artifact: { id: 'crashed-edit', kind: 'internal', path: 'notes.md' } as any });
+      await waitFor(() => expect(ref.current!.editing).toBe(true));
+      expect(utils.container.querySelector('textarea')!.value).toBe('recovered edit');
+      // Restoring is not saving: another crash must still recover it.
+      expect(readRecoveryDraft('file:/proj|crashed-edit')).toMatchObject({ text: 'recovered edit', mtimeMs: 7 });
+      await act(async () => { await ref.current!.saveEdit(); });
+      expect(save.mock.calls[0][6]).toMatchObject({ baseMtimeMs: 7 });
     });
 
     it('round-trips the mtime token captured at startEdit into the save', async () => {

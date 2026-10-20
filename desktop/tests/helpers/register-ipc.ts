@@ -15,7 +15,15 @@ import { createElectronPlatform } from '../../src/main/electron-platform';
 export function registerWithRuntime(register: (...args: any[]) => any, ...args: any[]): any {
   const padded = [...args];
   while (padded.length < 12) padded.push(undefined);
-  const [, sessionManager] = padded;
+  const [, sessionManager, window] = padded;
+  // Real WebContents has its own liveness API; the window-only fakes predate recovery.
+  if (window?.webContents && typeof window.webContents.isDestroyed !== 'function') {
+    window.webContents.isDestroyed = () => window.isDestroyed?.() ?? false;
+  }
+  const registry = padded[8];
+  if (registry && typeof registry.getMainWindowIds !== 'function') {
+    registry.getMainWindowIds = () => registry.getWindowIds?.() ?? [];
+  }
   // The core notes each terminal chunk through the session manager and reads its size (one-core R5-4b); a test's hand-made manager only has to
   // supply what the test is about, so the two small methods are filled in here when it did not.
   if (sessionManager && typeof sessionManager.setChunkNoter !== 'function') sessionManager.setChunkNoter = () => {};

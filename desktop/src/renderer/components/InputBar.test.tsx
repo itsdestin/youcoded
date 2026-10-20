@@ -12,6 +12,10 @@ import { Dialog } from './ui/Dialog';
 import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 import { queueBrowserStorage } from '../../../tests/helpers/queue-browser-storage';
+import { flushRecoveryDrafts, readRecoveryDraft, writeRecoveryDraft } from '../state/draft-recovery';
+import { makeDraftToken, expandDraftTokens } from './context-menu/compose-ref';
+
+beforeEach(() => { flushRecoveryDrafts(); sessionStorage.clear(); });
 
 // jsdom (per this repo's vitest.config.ts) has no global setupFiles/polyfills —
 // parts of InputBar (the quick-chip row's skill picker uses useScrollFade) reach
@@ -108,6 +112,18 @@ describe('InputBar — context-menu image paste', () => {
     expect(JSON.parse(window.localStorage.getItem('youcoded:queue-transfer-draft:persisted')!)).toEqual({text:'durable é\ntext',files:['/tmp/durable.png']});
     mounted.unmount();render(composer);expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('durable é\ntext');expect(screen.getByRole('button',{name:'Remove durable.png'})).toBeInTheDocument();
   });
+  it('keeps crash-recovered text and files authoritative against a late queue edit', () => {
+    writeRecoveryDraft('composer:recovered', { text: 'unsent crash draft', attachments: ['/tmp/recovered.png'] });
+    flushRecoveryDrafts();
+    const ref = React.createRef<InputBarHandle>();
+    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="recovered" provider="claude" /></SkillProvider></ChatProvider>);
+    const before = ref.current!.queueDraftSnapshot();
+    expect(before.empty).toBe(false);
+    act(() => { expect(ref.current!.fillQueuedDraftIfCurrent(before, 'late queued text', [])).toBe(false); });
+    expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('unsent crash draft');
+    expect(screen.getByRole('button', { name: 'Remove recovered.png' })).toBeInTheDocument();
+  });
+
   it('does not transfer ownership if durable draft storage fails',()=>{
     const ref=React.createRef<InputBarHandle>();render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="blocked" provider="claude" /></SkillProvider></ChatProvider>);
     const set=vi.spyOn(window.localStorage,'setItem').mockImplementation(()=>{throw Error('quota');});
@@ -165,6 +181,43 @@ describe('InputBar freshness wait — draft without submission', () => {
     };
   });
   afterEach(cleanup);
+
+  it('restores typed text and attachments after remount without submitting', () => {
+    const wrap = () => <ChatProvider><SkillProvider><InputBar sessionId="recovery" provider="native"
+      initialInput="initial" initialAttachments={['/project/image.png']} /></SkillProvider></ChatProvider>;
+    const first = render(wrap());
+    fireEvent.change(screen.getByPlaceholderText('Message your assistant...'), { target: { value: 'my newer unsent words' } });
+    flushRecoveryDrafts();
+    first.unmount();
+    render(wrap());
+    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('my newer unsent words');
+    expect(screen.getByText('image.png')).toBeTruthy();
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+
+  it('recovers quoted reference chips without depending on the previous renderer registry', () => {
+    const marker = expandDraftTokens(makeDraftToken({ id: 'saved-ref', kind: 'doc', path: '/project/notes.md', fileName: 'notes.md', quote: 'quoted words', label: 'notes.md' }));
+    writeRecoveryDraft('composer:ref-recovery', { text: `Review ${marker}` });
+    flushRecoveryDrafts();
+    render(<ChatProvider><SkillProvider><InputBar sessionId="ref-recovery" provider="native" /></SkillProvider></ChatProvider>);
+    const value = (screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value;
+    expect(value).not.toContain('quoted words');
+    expect(expandDraftTokens(value)).toBe(`Review ${marker}`);
+  });
+
+  it('does not restore a submitted message from a pending draft write', async () => {
+    const wrap = () => <ChatProvider><SkillProvider><InputBar sessionId="sent-recovery" provider="native" /></SkillProvider></ChatProvider>;
+    const first = render(wrap());
+    const input = screen.getByPlaceholderText('Message your assistant...');
+    fireEvent.change(input, { target: { value: 'send once' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalledOnce());
+    flushRecoveryDrafts();
+    expect(readRecoveryDraft('composer:sent-recovery')).toBeNull();
+    first.unmount();
+    render(wrap());
+    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('');
+  });
 
   it('exports a pending draft for the newly admitted detached window', () => {
     const ref = React.createRef<InputBarHandle>();

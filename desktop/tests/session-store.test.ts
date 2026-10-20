@@ -1,6 +1,6 @@
 // Contract for SessionStore — native session JSONL persistence (Phase 1 Task 7).
 // Line 1 = header, lines 2+ = transcript events, per-partId delta coalescing.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -371,10 +371,23 @@ describe('SessionStore', () => {
     expect(await store.openingTitle('no-such-session', HEADER.cwd)).toBeUndefined();
   });
 
+  it('dispose releases reference and failure bookkeeping even when its final flush fails', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'partial', partId: 'p1' }, 'a1') as any);
+    (store as any).failed.add('s-1');
+    const home = (store as any).home as NativeHome;
+    const append = vi.spyOn(home, 'appendSessionLine').mockRejectedValueOnce(new Error('disk failed'));
+    await expect(store.dispose('s-1')).rejects.toThrow('disk failed');
+    append.mockRestore();
+    expect((store as any).references.has('s-1')).toBe(false);
+    expect((store as any).failed.has('s-1')).toBe(false);
+  });
+
   it('dispose flushes the in-flight part and clears the open buffer', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'partial', partId: 'p1' }, 'a1') as any);
     await store.dispose('s-1'); // graceful mid-stream teardown — must persist the part
+    expect((store as any).references.has('s-1')).toBe(false);
     // The part is now on disk...
     expect(store.readEvents('s-1', HEADER.cwd)).toMatchObject([{ type: 'assistant-text', data: { text: 'partial' } }]);
     // ...and the open map no longer holds it: a follow-up delta with the SAME

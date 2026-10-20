@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { describeRule, ruleKind } from '../src/renderer/components/permissions/describe-rule';
 
 describe('describeRule', () => {
+  it('describes admin approvals by their actual scope, never an internal tool id', () => {
+    expect(describeRule({ tool: 'AdminFullAuto', action: 'allow', match: 'exact' })).toEqual({ verb: 'Run passwordless admin commands in Full Auto', subject: undefined, width: 'tool-wide' });
+    expect(describeRule({ tool: 'Bash', pattern: 'sudo true', action: 'allow', match: 'exact' })).toEqual({ verb: 'Run', subject: 'sudo true', width: 'exact' });
+    expect(ruleKind({ tool: 'AdminFullAuto', action: 'allow' })).toBe('commands');
+    expect(ruleKind({ tool: 'Bash', action: 'allow' })).toBe('commands');
+  });
   it('renders a Bash grant as the command it runs', () => {
     expect(describeRule({ tool: 'Bash', pattern: 'git push origin main', action: 'allow' }))
       .toEqual({ verb: 'Run', subject: 'git push origin main', width: 'exact' });
