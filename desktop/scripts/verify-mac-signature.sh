@@ -6,7 +6,7 @@
 # ad-hoc fallback). Every Mac build from then to 2026-09-03 shipped without a seal,
 # which macOS treats as a BROKEN app — no "Open Anyway" button, no way in — and not
 # one check anywhere went red. Postmortem:
-#   youcoded-dev/docs/active/investigations/2026-09-03-macos-beta72-unopenable-postmortem.md
+#   youcoded-dev/docs/archive/investigations/2026-09-03-macos-beta72-unopenable-postmortem.md
 #
 # Both mac-producing workflows (desktop-release.yml, desktop-test-build.yml) call this
 # ONE script so betas and releases are held to the same standard. Run from desktop/.
