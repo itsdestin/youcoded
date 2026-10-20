@@ -16,7 +16,8 @@ process.env.TZ = 'UTC';
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, cleanup } from '@testing-library/react';
+import { render as rtlRender, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { ANDROID_LOCAL_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 import { renderToStaticMarkup } from 'react-dom/server';
 import '@testing-library/jest-dom/vitest';
 import { PlanWindows, windowLengthLabel, windowBarLabel } from '../src/renderer/components/plan-windows';
@@ -227,6 +228,7 @@ describe('a plan with no windows', () => {
 describe('Assistant settings — the ChatGPT card and chatgpt.supported', () => {
   function stub(chatgpt: unknown) {
     (window as any).claude = {
+      capabilities: { openExternal: true },
       native: { supported: true },
       chatgpt,
       providers: { list: async () => [], catalog: async () => [], test: async () => ({ ok: true, message: '' }) },
@@ -246,6 +248,40 @@ describe('Assistant settings — the ChatGPT card and chatgpt.supported', () => 
     stub({ supported: true, status: async () => ({ state: 'signed-out' }) });
     open();
     expect(await screen.findByText('Sign in with ChatGPT')).toBeInTheDocument();
+  });
+
+  it('starts ChatGPT sign-in on Android using its own backend', async () => {
+    vi.useRealTimers();
+    const signIn = vi.fn(async () => true);
+    stub({ supported: true, status: async () => ({ state: 'signed-out' }), signIn });
+    (window as any).claude.capabilities = ANDROID_LOCAL_CAPABILITIES;
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with ChatGPT' }));
+    await waitFor(() => expect(signIn).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/To connect ChatGPT, sign in on the host device/)).toBeNull();
+  });
+
+  it.each([false, true])('shows remote sign-in guidance without a dead button (reauth=%s)', async (reauth) => {
+    vi.useRealTimers();
+    const signIn = vi.fn(async () => false);
+    stub({ supported: true, status: async () => ({ state: 'signed-out', reauth }), signIn });
+    (window as any).claude.capabilities = REMOTE_SCREEN_CAPABILITIES;
+    open();
+    expect(await screen.findByText('To connect ChatGPT, sign in on the host device.')).toBeInTheDocument();
+    expect(screen.getByText('ChatGPT')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).toBeNull();
+    expect(signIn).not.toHaveBeenCalled();
+  });
+
+  it('shows the host account and usage remotely when already signed in', async () => {
+    vi.useRealTimers();
+    stub({ supported: true, status: async () => ({ state: 'signed-in', email: 'host@example.com', plan: 'plus', usage: { five_hour: { utilization: 12, resets_at: new Date().toISOString() } } }) });
+    (window as any).claude.capabilities = REMOTE_SCREEN_CAPABILITIES;
+    open();
+    expect(await screen.findByText('Signed in as host@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText('To connect ChatGPT, sign in on the host device.')).toBeNull();
   });
 
   it('hides the card when supported is false', async () => {

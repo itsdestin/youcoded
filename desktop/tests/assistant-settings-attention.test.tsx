@@ -12,8 +12,8 @@
  * row has, and it only works if it is rare and true.
  */
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import AssistantSettingsRow from '../src/renderer/components/assistant-settings/AssistantSettings';
 import { startSummary } from '../src/renderer/components/assistant-settings/pages';
@@ -37,6 +37,18 @@ function stub(claude: Record<string, unknown>) {
 
 const row = () => render(<AssistantSettingsRow defaults={DEFAULTS} onDefaultsChange={() => {}} />);
 const dot = () => screen.queryByRole('img', { name: 'A provider needs attention' });
+
+describe('Assistant settings — Android provider pages', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; vi.unstubAllGlobals(); });
+
+  it('offers Cloud providers on Android when its backend supports native sessions', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: true, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    stub({ native: { supported: true } });
+    render(<AssistantSettingsRow defaults={DEFAULTS} onDefaultsChange={() => {}} platform="android" />);
+    fireEvent.click(screen.getByRole('button', { name: /Assistant settings/ }));
+    expect(await screen.findByRole('button', { name: /Cloud providers/ })).toBeInTheDocument();
+  });
+});
 
 describe('Assistant settings — the attention dot', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });

@@ -11,6 +11,7 @@ import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldEr
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
+import { getCapabilities } from '../platform';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
 // The provider blocks of Settings → Assistant settings (2026-09-05). This file
@@ -74,8 +75,10 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
       {screen && <ScreenMark name={screen} />}
       {/* items-start: the button sits on the title line, top-right, not
           centred against however many lines the status grows to (P-1/P-2). */}
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
+      {/* WHY stack only at phone width: sign-in/account buttons otherwise
+          squeeze the provider name to zero and paint over it. Wide cards stay unchanged. */}
+      <div className="flex items-start gap-3 max-sm:flex-col">
+        <div className="flex-1 min-w-0 max-sm:w-full">
           <p className="text-xs text-fg font-medium inline-flex items-center gap-1.5">
             {title}
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
@@ -83,7 +86,7 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
           {status && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
         </div>
         {(account || (action && !notice?.actions)) && (
-          <div className="shrink-0 flex items-center gap-1.5">
+          <div className="shrink-0 flex items-center gap-1.5 max-sm:self-end max-sm:flex-wrap max-sm:justify-end max-sm:max-w-full">
             {account && (
               <Button variant="secondary" size="sm"
                 onClick={() => void (window as any).claude.shell.openExternal(account)}>
@@ -311,6 +314,9 @@ export function ChatGptBlock() {
   // straight onto the Cloud providers page, so the gate travels with the card
   // or it does not exist at all. Merged 2026-09-07.
   const supported = (window as any).claude?.chatgpt?.supported === true;
+  // WHY: the account is visible remotely too, but OAuth must open a browser on
+  // the backend's own device. Android local has this ability; visiting clients do not.
+  const canSignIn = getCapabilities().openExternal;
   const [status, setStatus] = useState<ChatGptAccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -411,12 +417,12 @@ export function ChatGptBlock() {
       onClick={() => void run(() => chatGptApi().signOut(), 'Could not sign out.')}>
       Sign out
     </Button>
-  ) : (
+  ) : canSignIn ? (
     <Button size="sm" disabled={busy || !status}
       onClick={() => void run(() => chatGptApi().signIn(), 'Could not open the sign-in page.')}>
       Sign in with ChatGPT
     </Button>
-  );
+  ) : null;
 
   if (!supported) return null;
 
@@ -466,7 +472,8 @@ export function ChatGptBlock() {
         // inside made the box twice as tall as its one sentence
         // (provider-notices#PN-4: "much taller than it needs to be") — it stays
         // with the card's other buttons at the top.
-        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason } : null}
+        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason }
+          : status?.state === 'signed-out' && !canSignIn ? { tone: 'warning', text: 'To connect ChatGPT, sign in on the host device.' } : null}
         // Review R-1 (Destin, 2026-10-06): the official card keeps My Account
         // like today; Manage usage lives only on the limit message.
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}

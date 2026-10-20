@@ -452,6 +452,7 @@ function stubClaude(opts: {
   };
   const catalog = vi.fn(opts.catalog ?? (async () => []));
   (window as any).claude = {
+    capabilities: { openExternal: true },
     firstRun,
     off: vi.fn(),
     providers: { catalog },
@@ -566,6 +567,14 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
 
     await openKind('A plan you already pay for');
     expect(screen.getByText('Log in with Claude')).toBeTruthy();
+    expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
+  });
+
+  it('does not offer a browser sign-in from a visiting remote client', async () => {
+    stubClaude({ state: viewState({}), chatgptSupported: true });
+    (window as any).claude.capabilities.openExternal = false;
+    render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
+    await openKind('A plan you already pay for');
     expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
   });
 
