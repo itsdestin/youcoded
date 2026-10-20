@@ -16,6 +16,7 @@ import { IPC } from '../../shared/backend-contract';
 import type { SessionOwnershipAcquired } from '../../shared/types';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../../shared/handoff-draft';
 import type { PendingAcquireQueue } from '../pending-acquire';
+import { markRendererReady, sendToRenderer } from '../renderer-recovery';
 import type { AudienceFills } from '../audience-fill';
 import type { WindowRegistry } from '../window-registry';
 import type { SessionManager } from '../session-manager';
@@ -48,7 +49,10 @@ function makeOps(deps: DetachDeps) {
   // Fix shape: the renderer PULLS once mounted rather than being pushed at before it can listen. `readyWindows` is what
   // makes the two paths exclusive — before a window has pulled, transfers queue; after, they push as before — so a payload
   // is delivered exactly once either way.
-  const claimPending = (evt: Evt) => pendingAcquire.claim(evt.sender.id);
+  const claimPending = (evt: Evt) => {
+    markRendererReady(evt.sender.id);
+    return pendingAcquire.claim(evt.sender.id);
+  };
 
   // Transfer a session from its current owner window to a target window.
   // Rejects if the source claim is stale (race protection). Emits ownership
@@ -65,15 +69,15 @@ function makeOps(deps: DetachDeps) {
     fills?.begin(`w${targetWindowId}`, sessionId);
     const src = windowFromWcId(srcWindowId);
     const tgt = windowFromWcId(targetWindowId);
-    src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });
+    sendToRenderer(src?.webContents, IPC.SESSION_OWNERSHIP_LOST, [{ sessionId }]);
     // WHY: only this newly admitted detach carries unsent composer state;
     // never mutate the authoritative SessionInfo kept by SessionManager.
     const payload = { sessionId, sessionInfo: draft
       ? { ...info, initialInput: draft.text, initialAttachments: draft.attachments } : info, freshWindow };
     // A window that has not yet pulled (DETACH_CLAIM_PENDING) has no listener —
     // a send would be dropped on the floor. Queue for its pull instead.
-    if (pendingAcquire.isReady(targetWindowId)) {
-      tgt?.webContents.send(IPC.SESSION_OWNERSHIP_ACQUIRED, payload);
+    if (pendingAcquire.isReady(targetWindowId) && sendToRenderer(tgt?.webContents, IPC.SESSION_OWNERSHIP_ACQUIRED, [payload])) {
+      // Delivered to the listening page; otherwise retain it for the next claim.
     } else {
       pendingAcquire.enqueue(targetWindowId, payload);
     }

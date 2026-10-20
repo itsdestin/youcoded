@@ -131,6 +131,8 @@ export function reportPreviousCrashes(): void {
  */
 export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): { readonly unresponsive: boolean } {
   let hungSince: number | null = null;
+  // WHY: a dead page cannot emit responsive; its replacement is not that hung page.
+  win.webContents?.on('render-process-gone', () => { hungSince = null; });
 
   win.on('unresponsive', () => {
     hungSince = Date.now();

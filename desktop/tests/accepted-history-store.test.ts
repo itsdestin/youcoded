@@ -750,6 +750,50 @@ describe('AcceptedHistoryStore', () => {
       return store.publish(proposal({ ...input, revision }));
     }
 
+    it('keeps only an independently allocated suffix of a cold transcript', async () => {
+      fs.appendFileSync(transcript, JSON.stringify({ type: 'user-message', uuid: 'large', data: { text: 'x'.repeat(128 * 1024) } }) + '\n');
+      await store.reader.read(transcript);
+      const hit = (store.reader as any).cache.get(transcript);
+      expect(hit.check.length).toBe(4096);
+      // Compare to an independent copy: Node's pool size and allocator padding
+      // vary by runtime, so a fixed 8 KB ceiling would test Node, not retention.
+      const smallCopy = Buffer.from(Buffer.alloc(4096));
+      expect(hit.check.buffer.byteLength).toBeLessThanOrEqual(smallCopy.buffer.byteLength);
+      expect(hit.check.buffer.byteLength).toBeLessThan(fs.statSync(transcript).size);
+    });
+
+    it('bounds cached source bytes and bypasses huge transcripts without losing events', async () => {
+      const cache = (store.reader as any).cache as Map<string, { bytes: number }>;
+      const large = { type: 'user-message', uuid: 'large', data: { text: 'x'.repeat(12 * 1024 * 1024) } };
+      for (let i = 0; i < 6; i++) {
+        const file = path.join(root, `cached-${i}.jsonl`);
+        fs.writeFileSync(file, JSON.stringify(large) + '\n');
+        expect((await store.reader.read(file))?.events.has('large')).toBe(true);
+      }
+      expect([...cache.values()].reduce((sum, entry) => sum + entry.bytes, 0)).toBeLessThanOrEqual(64 * 1024 * 1024);
+      fs.appendFileSync(transcript, JSON.stringify({ ...large, data: { text: 'x'.repeat(17 * 1024 * 1024) } }) + '\n');
+      expect((await store.reader.read(transcript))?.events.has('large')).toBe(true);
+      expect(cache.has(transcript)).toBe(false);
+    });
+
+    it('releases runtime cache after queued publication without deleting its continuation', async () => {
+      let entered!: () => void;
+      let unblock!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<void>(resolve => { unblock = resolve; });
+      store = new AcceptedHistoryStore(path.join(root, 'electron-user-data'), { beforeRename: async () => { entered(); await gate; } });
+      const publication = store.publish(proposal());
+      await started;
+      let releasing: Promise<void>;
+      try { releasing = (store as any).releaseSession(sessionId); }
+      finally { unblock(); }
+      await expect(publication).resolves.toEqual({ ok: true });
+      await releasing;
+      expect((store.reader as any).cache.has(transcript)).toBe(false);
+      expect((store as any).transcriptBySession.has(sessionId)).toBe(false);
+      expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
+    });
+
     it('a second publish after an append reads incrementally and restore still sees the whole-file digest', async () => {
       await expect(publishFresh()).resolves.toEqual({ ok: true });
       expect(store.reader.stats).toEqual({ full: 1, incremental: 0 });

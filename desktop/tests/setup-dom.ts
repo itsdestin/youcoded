@@ -48,6 +48,14 @@ afterEach(async () => {
   if (typeof globalThis.window === 'undefined') return;
   const { cleanup } = await import('@testing-library/react');
   cleanup();
+  // WHY: recovery deliberately survives a React unmount. Tests still need independent windows.
+  const { flushRecoveryDrafts } = await import('../src/renderer/state/draft-recovery');
+  flushRecoveryDrafts();
+  try {
+    for (const key of Object.keys(window.sessionStorage)) {
+      if (key.startsWith('youcoded-draft-v1:')) window.sessionStorage.removeItem(key);
+    }
+  } catch { /* a test may deliberately make storage unavailable */ }
   // WHY here, not per file: useTagRegistry is one module-level store now (render-cost
   // consolidation 2026-09-18) — a registry loaded by test A in a file is still there for
   // test B in the same file otherwise, and a forgotten per-file reset leaks one test's

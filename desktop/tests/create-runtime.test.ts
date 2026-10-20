@@ -164,6 +164,31 @@ describe('createRuntime with a temp folder and a fake platform', () => {
     expect(state.sessionIdMap.size).toBe(0);
   });
 
+  it('cleanup waits for both native teardown and engine stop', async () => {
+    const local = await build();
+    let finishNative!: () => void;
+    let finishEngine!: () => void;
+    const native = vi.spyOn(local.nativeHost, 'destroyAll').mockImplementation(() => new Promise<void>(resolve => { finishNative = resolve; }));
+    const engine = vi.spyOn(local.engineManager, 'stopAll').mockImplementation(() => new Promise<void>(resolve => { finishEngine = resolve; }));
+    let settled = false;
+    const cleanup = local.cleanup().then(() => { settled = true; });
+    try {
+      expect(native).toHaveBeenCalledOnce();
+      expect(engine).toHaveBeenCalledOnce();
+      finishEngine();
+      // Settle the engine promise and its cleanup handlers without a wall-clock sleep.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+    } finally {
+      finishNative();
+      finishEngine();
+      await cleanup;
+      native.mockRestore();
+      engine.mockRestore();
+    }
+    expect(settled).toBe(true);
+  });
+
   it('tells a subscribed door when an automatic title lands (the core never paints windows)', async () => {
     const heard: Array<[string, string]> = [];
     runtime.onTitleApplied((id, title) => heard.push([id, title]));

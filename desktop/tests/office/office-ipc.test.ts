@@ -182,6 +182,26 @@ describe('office IPC channels', () => {
     expect(sessions.get(again.token)).toBeUndefined();
   });
 
+  it('releases document ownership when its renderer dies without destroying the window', async () => {
+    const file = await aDocx();
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    win1.emit('render-process-gone', {}, { reason: 'crashed' });
+    await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
+    await expect(call('office:open', win2, file)).resolves.toMatchObject({ ok: true });
+  });
+
+  it('releases old editor references on main-page navigation, not iframe navigation', async () => {
+    const file = await aDocx();
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    win1.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
+    expect(sessions.get(token)).toBeDefined();
+    win1.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    await vi.waitFor(() => expect(sessions.get(token)).toBeUndefined());
+    const again = (await call('office:open', win1, file)) as { token: string };
+    await call('office:close', win1, again.token);
+    expect(sessions.get(again.token)).toBeUndefined();
+  });
+
   it('does not leave a session behind for a window that closed while it was being opened', async () => {
     const file = await aDocx();
     const gone = Object.assign(fakeSender(3), { isDestroyed: () => true });

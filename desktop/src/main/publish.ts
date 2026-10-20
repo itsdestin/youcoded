@@ -53,7 +53,7 @@ interface PublishOptions {
    * noting it would have made the record open a phantom session under that id. It is small and rare, so everyone gets it.
    */
   everyPhone?: boolean;
-  /** Runs between the windows' leg and the phones' leg (if it throws, phones are skipped). */
+  /** Runs between the windows' leg and the phones' leg; failures never block another audience. */
   afterWindows?: () => void;
   /** Replaces the windows' leg when a session-scoped push has a window route of its own (the Claude Code hook relay goes to the
    *  owner, never to a buddy subscriber). The phones' leg and the record are unchanged. */
@@ -76,8 +76,9 @@ export function createPublish(deps: PublishDeps): Publish {
     const holdWindow: HoldFn | undefined = fills ? (id, deliver) => fills.hold(`w${id}`, sessionId, deliver) : undefined;
     const holdSocket: HoldFn | undefined = fills ? (id, deliver) => fills.hold(`s${id}`, sessionId, deliver) : undefined;
     // Windows first, then phones: the order the pairs always had.
-    (options?.windows ?? deps.toWindows)(sessionId, type, options?.windowArgs ?? [payload], holdWindow);
-    options?.afterWindows?.();
-    deps.toSockets({ type, payload, ...(stamp ?? {}) }, options?.everyPhone ? undefined : deps.socketsFor?.(sessionId), options?.everyPhone ? undefined : holdSocket);
+    // WHY: one disposed renderer must not stop phone delivery or the native tool loop.
+    try { (options?.windows ?? deps.toWindows)(sessionId, type, options?.windowArgs ?? [payload], holdWindow); } catch { /* page loss is isolated */ }
+    try { options?.afterWindows?.(); } catch { /* independent bookkeeping */ }
+    try { deps.toSockets({ type, payload, ...(stamp ?? {}) }, options?.everyPhone ? undefined : deps.socketsFor?.(sessionId), options?.everyPhone ? undefined : holdSocket); } catch { /* disconnected phone */ }
   };
 }
