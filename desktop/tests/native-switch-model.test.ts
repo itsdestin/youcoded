@@ -145,7 +145,7 @@ it('Summarize and switch says a compaction began, on the same push every screen 
   host.compact = NativeSessionHost.prototype.compact.bind(host);
   const result = await NativeSessionHost.prototype.switchModel.call(host, 's', { providerId: 'p', modelId: 'small' }, true);
   expect(result).toEqual({ status: 'switched', summarized: true });
-  expect(emitted).toContainEqual(['compaction', { sessionId: 's', phase: 'start' }]);
+  expect(emitted).toContainEqual(['compaction', { sessionId: 's', phase: 'start', id: expect.any(String), startedAt: expect.any(Number) }]);
 });
 
 // Merge with the skill repeat guard (master, 2026-09-23): a summary retires the

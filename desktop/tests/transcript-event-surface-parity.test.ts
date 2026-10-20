@@ -71,8 +71,10 @@ describe('transcript event surface parity', () => {
 
     it('the statusline fallback only ever feeds the marker\'s "after" figure', () => {
       const c = MATRIX.find((m) => m.name === 'compact-summary pending, statusline fallback')!;
-      const main = eventToAction(c.event, mainWindow(true)).find((a) => a.type === 'COMPACTION_COMPLETE') as Extract<ChatAction, { type: 'COMPACTION_COMPLETE' }>;
-      const buddy = eventToAction(c.event, buddyWindow(true)).find((a) => a.type === 'COMPACTION_COMPLETE') as Extract<ChatAction, { type: 'COMPACTION_COMPLETE' }>;
+      if (c.event.type !== 'compact-summary') throw new Error('Expected summary fixture');
+      const certified = { ...c.event, data: { ...c.event.data, operationId: 'host-certified' } };
+      const main = eventToAction(certified, mainWindow(true)).find((a) => a.type === 'COMPACTION_COMPLETE') as Extract<ChatAction, { type: 'COMPACTION_COMPLETE' }>;
+      const buddy = eventToAction(certified, buddyWindow(true)).find((a) => a.type === 'COMPACTION_COMPLETE') as Extract<ChatAction, { type: 'COMPACTION_COMPLETE' }>;
       expect(main.afterContextTokens).toBe(777);
       expect(buddy.afterContextTokens).toBeNull();
       expect(buddy.markerId).toBe(main.markerId); // the same dedupe key either way

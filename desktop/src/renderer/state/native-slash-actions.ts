@@ -13,6 +13,7 @@
 // point of this milestone, so every outcome here either succeeds or explains
 // itself.
 import type React from 'react';
+import { getCapabilities } from '../platform';
 import type { ChatAction } from './chat-types';
 import type { NativeSlashAction, DispatcherResult } from './slash-command-dispatcher';
 
@@ -36,6 +37,8 @@ export interface NativeActionDeps {
   sessionId: string;
   dispatch: React.Dispatch<ChatAction>;
   onToast?: (message: string) => void;
+  /** Legacy hosts only: capture the screen's pending card before awaiting IPC. */
+  compactionOperationId?: string;
 }
 
 /**
@@ -47,12 +50,13 @@ export interface NativeActionDeps {
  */
 export async function runNativeSlashAction(
   action: NativeSlashAction,
-  { sessionId, dispatch, onToast }: NativeActionDeps,
+  { sessionId, dispatch, onToast, compactionOperationId }: NativeActionDeps,
 ): Promise<boolean> {
   if (action.kind === 'clear') return runNativeClear({ sessionId, onToast });
   if (action.kind === 'invoke-skill') return runNativeSkill(action.skill, action.args, { sessionId, onToast });
   if (action.kind !== 'compact') return false;
 
+  const hostOwned = getCapabilities().sessionRecord;
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {
     result = await window.claude.native.compact(sessionId, action.focus);
@@ -72,11 +76,13 @@ export async function runNativeSlashAction(
   // Clear the spinner the dispatcher optimistically raised (COMPACTION_PENDING),
   // otherwise a refused compaction leaves a card spinning forever. A Stop drops
   // it silently: "Compaction may have failed" would be false after a Stop.
-  dispatch(result.reason === 'interrupted'
-    ? { type: 'COMPACTION_CANCELLED', sessionId }
+  // WHY: on record-capable hosts only the host lifecycle owns cleanup. A concurrent IPC refusal owns no spinner.
+  if (!hostOwned) dispatch(result.reason === 'interrupted'
+    ? { type: 'COMPACTION_CANCELLED', sessionId, operationId: compactionOperationId }
     : {
       type: 'COMPACTION_COMPLETE',
       sessionId,
+      operationId: compactionOperationId,
       markerId: `compact-failed-${Date.now()}`,
       afterContextTokens: null,
       aborted: true,

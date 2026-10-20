@@ -1524,7 +1524,10 @@ export function registerIpcHandlers(
 
   // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
 
-  transcriptWatcher.on('transcript-event', (event: any) => {
+  transcriptWatcher.on('transcript-event', (sourceEvent: TranscriptEvent) => {
+    // WHY: certify the operation before the record and screens consume a live
+    // CC summary, without mutating the saved transcript line.
+    const event = liveFacts.prepareTranscript(sourceEvent);
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
     // Conversation Store (Phase 2a): feed live activity into the record store.
@@ -1751,11 +1754,8 @@ export function registerIpcHandlers(
   nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
   });
-  // A native compaction began or ended without a summary line (stopped or refused): the spinner on every screen.
-  nativeHost.on('compaction', (e: { sessionId: string; phase: 'start' | 'end'; outcome?: 'cancelled' | 'failed' }) => {
-    if (e.phase === 'start') liveFacts.compactStarted(e.sessionId);
-    else liveFacts.compactEnded(e.sessionId, e.outcome ?? 'failed');
-  });
+  // A native compaction began or ended without a summary (stopped or failed): the spinner on every screen.
+  nativeHost.on('compaction', liveFacts.noteNativeCompaction);
   // A native session's model changed (the picker, from any screen): the label on every screen.
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });

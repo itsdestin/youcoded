@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import type { TranscriptEvent } from '../../shared/types';
 import type { PersistedEventReference } from './session-store';
 
+/** WHY: correlation is live metadata. Mutating a saved source/checkpoint would
+ * invalidate future digests and portable references; decorate only a live copy. */
+export function withLiveCompactionOperation(event: TranscriptEvent, operation?: { id: string }): TranscriptEvent {
+  return event.type === 'compact-summary' && !event.data.autoCompaction && operation
+    ? { ...event, data: { ...event.data, operationId: operation.id } } : event;
+}
+
 /** Bind a summary's claimed cut to the exact committed transcript prefix.
  * This detects damaged/shifted records and source events after restart. It is
  * not an authentication signature against a person who can rewrite the entire

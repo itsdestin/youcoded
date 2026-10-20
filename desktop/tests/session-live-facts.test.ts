@@ -11,6 +11,7 @@ import { SessionLiveFacts, COMPACT_IDLE_LIMIT_MS } from '../src/main/session-liv
 import { detectPermissionMode } from '../src/shared/permission-mode-detect';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import { parseTranscriptLine } from '../src/main/transcript-watcher';
 import { routeSessionLive } from '../src/renderer/state/transcript-batch';
 import { EventEmitter } from 'node:events';
 import { subscribeClaudeControlReceipts } from '../src/main/claude-control-receipts';
@@ -30,6 +31,111 @@ function host(opts: { claude?: boolean; now?: () => number; setTimer?: any; clea
   const lives = () => sent.filter((m) => m.type === 'session:live').map((m) => m.payload);
   return { records, live, sent, lives };
 }
+
+describe('Claude Code summary correlation', () => {
+  it('certifies a new live CC summary with its host operation without changing the source event', () => {
+    const h = host({ now: () => 100, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'cc-request', 100);
+    const event = { type: 'compact-summary', sessionId: S, uuid: 'cc-summary', timestamp: 120,
+      data: { summary: 'The real summary', sourceTimestamp: 120 } } as const;
+    const annotated = h.live.prepareTranscript(event);
+    expect(annotated).toMatchObject({ data: { operationId: 'cc-request' } });
+    expect(event.data).not.toHaveProperty('operationId');
+    h.records.note(S, 'transcript:event', annotated);
+    h.live.noteTranscript(S, annotated);
+    expect(h.records.isCompacting(S)).toBe(false);
+    const actions = eventToAction(annotated, { live: true });
+    expect(actions).toContainEqual(expect.objectContaining({ type: 'COMPACTION_COMPLETE', recorded: true, operationId: 'cc-request' }));
+  });
+
+  it.each([undefined, 'not-a-date'])('does not certify a parsed summary with unknown source time (%s)', timestamp => {
+    const h = host({ now: () => 100, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'new', 100);
+    const [event] = parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'old', timestamp,
+      isCompactSummary: true, message: { role: 'user', content: 'Old summary' } }), S);
+    const annotated = h.live.prepareTranscript(event);
+    expect(annotated).toBe(event);
+    h.records.note(S, 'transcript:event', annotated);
+    h.live.noteTranscript(S, annotated);
+    expect(h.records.isCompacting(S, 'new')).toBe(true);
+    expect(eventToAction(annotated, { live: true, compactionPending: true })).toEqual([]);
+  });
+
+  it('does not relabel an older CC summary as the currently pending operation', () => {
+    const h = host({ now: () => 100, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'new', 100);
+    const event = { type: 'compact-summary', sessionId: S, uuid: 'old-summary', timestamp: 99,
+      data: { summary: 'Old resume summary' } } as const;
+    expect(h.live.prepareTranscript(event)).toBe(event);
+    expect(eventToAction(event, { live: true, compactionPending: true })).toEqual([]);
+    h.records.note(S, 'transcript:event', event);
+    expect(h.records.isCompacting(S)).toBe(true);
+  });
+
+  it('does not clear an identified host operation merely because a transcript file shrinks', () => {
+    const h = host({ now: () => 100, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'new', 100);
+    h.records.note(S, 'transcript:shrink', { sessionId: S });
+    expect(h.records.isCompacting(S, 'new')).toBe(true);
+  });
+
+  it('does not publish a second CC start that could replace a running operation', () => {
+    const h = host({ now: () => 100, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'first', 100);
+    h.live.compactStarted(S, 'second', 110);
+    h.live.compactEnded(S, 'failed', 'second');
+    expect(h.lives().filter(e => e.kind === 'compact-start').map(e => e.id)).toEqual(['first']);
+    expect(h.records.isCompacting(S, 'first')).toBe(true);
+  });
+});
+
+describe('compaction operation correlation', () => {
+  it('preserves host identity and original time through duplicate starts and late-screen fill', () => {
+    let now = 100;
+    const h = host({ now: () => now, setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'one', 42);
+    now = 200;
+    h.live.compactStarted(S, 'one', 99);
+    h.records.note(S, 'session:live', { sessionId: S, kind: 'compact-start', id: 'one', startedAt: 99 });
+    expect(h.records.liveFill(S).map(e => e.payload as any).find(e => e.kind === 'compact-start')).toMatchObject({ id: 'one', startedAt: 42 });
+  });
+  it('ignores stale failure, summary and legacy uncorrelated summary after a newer start', () => {
+    const h = host({ setTimer: vi.fn(), clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'old');
+    h.live.compactEnded(S, 'cancelled', 'old');
+    h.live.compactStarted(S, 'new');
+    h.live.compactEnded(S, 'failed', 'old');
+    h.records.note(S, 'session:live', { kind: 'compact-end', id: 'old', outcome: 'cancelled' });
+    for (const operationId of ['old', undefined]) h.records.note(S, 'transcript:event', { sessionId: S, type: 'compact-summary', uuid: `summary-${operationId}`, timestamp: 1, data: { operationId } });
+    expect(h.records.isCompacting(S)).toBe(true);
+    expect(h.records.liveFill(S).map(e => e.payload as any).find(e => e.kind === 'compact-start').id).toBe('new');
+    h.records.note(S, 'transcript:event', { sessionId: S, type: 'compact-summary', uuid: 'summary-new', timestamp: 2, data: { operationId: 'new' } });
+    expect(h.records.isCompacting(S)).toBe(false);
+  });
+  it('does not let an already queued watchdog callback expire a newer operation', () => {
+    const callbacks: Array<() => void> = [];
+    let now = 0;
+    const h = host({ now: () => now, setTimer: (fn: () => void) => { callbacks.push(fn); return callbacks.length; }, clearTimer: vi.fn() });
+    h.live.compactStarted(S, 'old');
+    h.live.compactEnded(S, 'cancelled', 'old');
+    h.live.compactStarted(S, 'new');
+    h.sent.length = 0; // The prior operation's real cancellation already arrived.
+    now = COMPACT_IDLE_LIMIT_MS * 2;
+    callbacks[0]();
+    expect(h.records.isCompacting(S)).toBe(true);
+    expect(h.lives().filter(e => e.kind === 'compact-end')).toEqual([]);
+  });
+  it('correlates direct-command refusals to their own request object', () => {
+    const h = host({ setTimer: vi.fn(), clearTimer: vi.fn() });
+    const old = { kind: 'command', command: 'compact' } as const;
+    const newer = { kind: 'command', command: 'compact' } as const;
+    h.live.directCommandStarted(S, old);
+    h.live.compactEnded(S, 'cancelled');
+    h.live.directCommandStarted(S, newer);
+    h.live.directCommandFinished(S, old, { status: 'rejected', message: 'busy' });
+    expect(h.records.isCompacting(S)).toBe(true);
+  });
+});
 
 const DIR = path.join(__dirname, 'fixtures', 'plan-menu');
 
@@ -277,14 +383,15 @@ describe('/model, /compact and /clear', () => {
     for (const t of ['/model claude-weird-9\r', 'please /model opus\r', '/mod', 'hello\r', '/modelx opus\r']) h.live.noteInput(S, t, 'model-switch');
     expect(h.sent).toEqual([]);
   });
-  it('/compact (with or without instructions) starts the spinner everywhere; the summary line ends it', () => {
-    const h = host();
-    h.live.noteInput(S, '/compact\r');
-    h.live.noteInput(S, '/compact focus on the tests\r');
-    expect(h.lives().filter((l) => l.kind === 'compact-start')).toHaveLength(2);
+  it.each(['/compact\r', '/compact focus on the tests\r'])('%s starts one spinner everywhere; the certified summary ends it', (command) => {
+    const h = host({ now: () => 100 });
+    h.live.noteInput(S, command);
+    expect(h.lives().filter((l) => l.kind === 'compact-start')).toHaveLength(1);
     expect(h.records.isCompacting(S)).toBe(true);
     expect(h.records.liveFill(S).some((p: any) => p.payload.kind === 'compact-start')).toBe(true); // a phone joining mid-compaction sees it
-    h.records.note(S, 'transcript:event', { type: 'compact-summary', sessionId: S, uuid: 'u', timestamp: 1, data: {} });
+    const summary = h.live.prepareTranscript({ type: 'compact-summary', sessionId: S, uuid: 'u', timestamp: 101, data: { summary: 'Completed', sourceTimestamp: 101 } });
+    h.records.note(S, 'transcript:event', summary);
+    h.live.noteTranscript(S, summary);
     expect(h.records.isCompacting(S)).toBe(false);
     expect(h.records.liveFill(S).some((p: any) => p.payload.kind === 'compact-start')).toBe(false);
   });

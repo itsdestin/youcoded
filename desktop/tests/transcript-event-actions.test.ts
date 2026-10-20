@@ -3,7 +3,7 @@
 // tests/fixtures/transcript-event-actions.golden.json was recorded from the OLD
 // code at cfbf69ca5 BEFORE any caller was switched over: App.tsx's live switch
 // (`app`, with the way each action was dispatched), BubbleFeed.tsx's live switch
-// (`buddy`) and pageEventToAction (`page`), for every event type x payload variant
+// (`buddy`) and the former singular pageEventToAction (`page`), for every event type x payload variant
 // in tests/helpers/transcript-event-matrix.ts. So these tests prove the merge kept
 // each screen's behaviour, rather than asserting what the new code happens to do.
 // ONE deliberate departure (R5-pre, 2026-10-01): the two dropPart entries' `page` was
@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 import golden from './fixtures/transcript-event-actions.golden.json';
 import { MATRIX } from './helpers/transcript-event-matrix';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
+import { pageEventToActions } from '../src/renderer/state/transcript-page-actions';
 import type { TranscriptEvent } from '../src/shared/types';
 import { clearDividerId } from '../src/shared/divider-ids';
 import { malformedEv } from './helpers/transcript-events';
@@ -33,6 +33,26 @@ const withoutLiveClearMarker = (type: string, action: any) => {
   return rest;
 };
 
+// Deliberate summary departure: restore native boundaries on every screen,
+// retain CC resume-summary suppression, and preserve the recorded event time.
+function expectedSummary(event: TranscriptEvent, fallback: number | null = null) {
+  if (event.type !== 'compact-summary') throw new Error('Expected summary fixture');
+  const { sessionId, uuid, timestamp, data: d } = event;
+  const recorded = d.contextUsedAfter !== undefined || d.contextUsedBefore !== undefined
+    || d.usage !== undefined || d.autoCompaction !== undefined
+    || d.retainedFromUuid !== undefined || d.compactionRecord !== undefined;
+  return [
+    ...(d.contextUsedAfter !== undefined || d.usage ? [{ type: 'NATIVE_HISTORY_REWRITTEN', sessionId, uuid,
+      contextUsedTokens: d.contextUsedAfter ?? null, usage: d.usage }] : []),
+    ...(recorded ? [{ type: 'COMPACTION_COMPLETE', sessionId,
+      markerId: `compact-done-${uuid}`, timestamp, ...(recorded ? { recorded: true } : {}),
+      afterContextTokens: d.contextUsedAfter ?? fallback, beforeContextTokens: d.contextUsedBefore,
+      ...(d.summary ? { summary: d.summary } : {}), ...(d.autoCompaction ? { auto: true } : {}),
+      ...(d.retainedFromUuid !== undefined ? { retainedFromUuid: d.retainedFromUuid } : {}),
+    }] : []),
+  ];
+}
+
 describe('eventToAction reproduces the old main-window switch', () => {
   for (const c of MATRIX) {
     it(c.name, () => {
@@ -42,7 +62,9 @@ describe('eventToAction reproduces the old main-window switch', () => {
         fallbackContextTokens: c.ctx?.statuslineContextTokens ?? null,
       });
       const old = (golden as any)[c.name].app as { via: string; action: unknown }[];
-      expect(plain(actions)).toEqual(old.map((o) => withoutLiveClearMarker(c.event.type, o.action)));
+      expect(plain(actions)).toEqual(c.event.type === 'compact-summary'
+        ? plain(expectedSummary(c.event, c.ctx?.statuslineContextTokens ?? null))
+        : old.map((o) => withoutLiveClearMarker(c.event.type, o.action)));
       // The golden's `via` (direct vs batched) recorded the old route. R4-3 sends every action
       // through the batcher, so only the actions and their order are compared; the route is
       // pinned in tests/transcript-routing.test.ts.
@@ -50,17 +72,19 @@ describe('eventToAction reproduces the old main-window switch', () => {
   }
 });
 
-describe('eventToAction with live:false reproduces pageEventToAction', () => {
+describe('eventToAction with live:false reproduces pageEventToActions', () => {
   for (const c of MATRIX) {
     it(c.name, () => {
       const old = (golden as any)[c.name].page;
-      expect(plain(eventToAction(c.event, { live: false })[0])).toEqual(plain(old));
-      expect(plain(pageEventToAction(c.event))).toEqual(plain(old));
+      const expected = c.event.type === 'compact-summary' ? expectedSummary(c.event) : old ? [old] : [];
+      expect(plain(eventToAction(c.event, { live: false }))).toEqual(plain(expected));
+      expect(plain(pageEventToActions(c.event))).toEqual(plain(expected));
     });
   }
 
-  it('a page never yields more than one action per event', () => {
-    for (const c of MATRIX) expect(eventToAction(c.event, { live: false }).length).toBeLessThanOrEqual(1);
+  it('a page keeps both the summary accounting and boundary actions', () => {
+    const c = MATRIX.find(c => c.name === 'compact-summary pending, harness figures')!;
+    expect(pageEventToActions(c.event).map(a => a.type)).toEqual(['NATIVE_HISTORY_REWRITTEN', 'COMPACTION_COMPLETE']);
   });
 });
 
@@ -79,21 +103,7 @@ describe('eventToAction with buddy options reproduces the old buddy switch', () 
       });
       const old = (golden as any)[c.name].buddy as { action: any }[];
       if (c.event.type === 'compact-summary') {
-        // Visible change (approved): the marker now says "freed N tokens" and is
-        // deduplicated by event id. The buddy also now records the bookkeeping half
-        // (the summarize call's bill and the window it left), which no buddy
-        // component reads. Marker difference asserted exactly:
-        const marker = actions.find((a) => a.type === 'COMPACTION_COMPLETE') as any;
-        const oldMarker = old.find((o) => o.action.type === 'COMPACTION_COMPLETE')?.action;
-        expect(!!marker).toBe(!!oldMarker);
-        if (marker) {
-          expect(marker.markerId).toBe(`compact-done-${c.event.uuid}`);
-          expect(marker.afterContextTokens).toBe((c.event.data as any).contextUsedAfter ?? null);
-          expect(marker.beforeContextTokens).toBe((c.event.data as any).contextUsedBefore);
-          const { markerId: _a, afterContextTokens: _b, beforeContextTokens: _c, ...rest } = plain(marker);
-          const { markerId: _d, afterContextTokens: _e, ...oldRest } = oldMarker;
-          expect(rest).toEqual(oldRest);
-        }
+        expect(plain(actions)).toEqual(plain(expectedSummary(c.event)));
         return;
       }
       const stripInvisible = (a: any) => {
@@ -128,6 +138,19 @@ describe('a clear\'s divider: a page draws it, a live event does not (the record
   });
   it('page: draws it, with the id the computer\'s record uses for the same clear', () => {
     expect(eventToAction(clear, { live: false })[0]).toMatchObject({ type: 'CLEAR_TIMELINE', markerId: clearDividerId(clear.uuid) });
+  });
+});
+
+describe('compaction certification and explicit legacy fallback', () => {
+  const summary = malformedEv('compact-summary', { summary: 'Unproven old summary' }, { sessionId: 's', uuid: 'old', timestamp: 1 });
+  it('does not turn an uncertified CC summary into success just because another operation is pending', () => {
+    expect(eventToAction(summary, { live: true, compactionPending: true })).toEqual([]);
+    expect(eventToAction(summary, { live: true, compactionPending: true, allowLegacyCompaction: false })).toEqual([]);
+  });
+  it('keeps the pending-only compatibility path exclusive to explicitly legacy hosts', () => {
+    expect(eventToAction(summary, { live: true, compactionPending: true, allowLegacyCompaction: true }))
+      .toEqual([expect.objectContaining({ type: 'COMPACTION_COMPLETE', markerId: 'compact-done-old' })]);
+    expect(eventToAction(summary, { live: false, compactionPending: true, allowLegacyCompaction: true })).toEqual([]);
   });
 });
 

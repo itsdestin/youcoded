@@ -29,7 +29,7 @@ export type SessionLiveBody =
   /** The thin "Conversation cleared" divider (both runtimes: the record says it for Claude Code from the SessionStart hook and for native from the `context-clear` event; the transcript event itself only resets the turn). */
   | { kind: 'clear'; id: string; /** when it happened (ms); see model-switch */ at?: number }
   /** A compaction began: draw the spinner. The "Compacted" note itself comes from the transcript's own compaction line. */
-  | { kind: 'compact-start'; id: string }
+  | { kind: 'compact-start'; id: string; startedAt?: number }
   /** A compaction ended WITHOUT a summary line (stopped or refused): take the spinner away. */
   | { kind: 'compact-end'; id: string; outcome: 'cancelled' | 'failed' }
   /** A card for a question Claude Code is asking in its own terminal (usage limit, trust folder, resume, ...). */

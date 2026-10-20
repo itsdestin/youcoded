@@ -10,6 +10,22 @@ import type { AssistantTurn, TimelineEntry } from '../src/renderer/state/chat-ty
 
 describe('chat message Find corpus', () => {
   afterEach(() => cleanup());
+  it('indexes each side of a compaction using the same stable row keys as the rendered chunks', () => {
+    const turn: AssistantTurn = { id: 'reply', model: null, usage: null, stopReason: null, anthropicRequestId: null, segments: [
+      { type: 'text', content: 'before needle', messageId: 'before' },
+      { type: 'system-marker', marker: { id: 'cut', timestamp: 10, label: 'Conversation compacted', variant: 'compact' } },
+      { type: 'text', content: 'after needle', messageId: 'after' },
+    ] };
+    const rows = extractMessageFindRows([{ kind: 'assistant-turn', turnId: 'reply' }], new Map([['reply', turn]]));
+    expect(rows.map(row => ({ id: row.id, bodies: row.bodies }))).toEqual([
+      { id: 'reply', bodies: ['before needle'] }, { id: 'reply:after:cut', bodies: ['after needle'] },
+    ]);
+    const index = new ChatMessageFindIndex(); index.setRows(rows);
+    expect(index.search('needle')).toEqual([
+      { id: 'reply', body: 0, ordinal: 0 }, { id: 'reply:after:cut', body: 0, ordinal: 0 },
+    ]);
+  });
+
   it('prepares 1000 rows in yielded slices and never publishes partial results', async () => {
     const index = new ChatMessageFindIndex();
     const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `${i}`, bodies: [`**needle${i}**`], markdown: true }));

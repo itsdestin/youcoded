@@ -76,7 +76,7 @@ describe('two screens match with no reply from the second', () => {
       expect(s.get().compactionPending).not.toBeNull();
       expect(s.get().timeline.some((e: any) => e.kind === 'compacting')).toBe(true);
     }
-    for (const s of [A, B]) s.apply({ type: 'COMPACTION_COMPLETE', sessionId: S, markerId: 'compact-done-x', afterContextTokens: 1000 });
+    for (const s of [A, B]) s.apply({ type: 'COMPACTION_COMPLETE', sessionId: S, operationId: s.get().compactionPending?.id, markerId: 'compact-done-x', afterContextTokens: 1000 });
     for (const s of [A, B]) { expect(s.get().compactionPending).toBeNull(); expect(markers(s.get())).toEqual(['Compacted · freed 4,000 tokens']); }
   });
 

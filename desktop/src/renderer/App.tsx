@@ -814,8 +814,8 @@ function AppInner() {
         void runNativeSlashAction(route.action, {
           sessionId: sid,
           dispatch,
-          // Dismissal is <Toast>'s job since master's change 44 (3s default, which
-          // is what this call site rolled by hand before the merge).
+          compactionOperationId: chatStateMapRef.current.get(sid)?.compactionPending?.id, // WHY: capture before awaiting IPC.
+          // Toast owns its own dismissal.
           onToast: (msg: string) => setToast(msg),
         });
         return true;
@@ -4245,9 +4245,9 @@ function AppInner() {
         }}
         // U11 Summarize and switch: the chat's usual compacting card. The switch
         // call's answer ends it (awaitsResult), never the 3-minute watchdog.
-        onNativeSummaryPending={(sid, pending) => dispatch(pending
-          ? { type: 'COMPACTION_PENDING', sessionId: sid, cardId: `compact-switch-${Date.now()}`, beforeContextTokens: null, awaitsResult: true }
-          : { type: 'COMPACTION_CANCELLED', sessionId: sid })}
+        onNativeSummaryPending={(sid, pending, operationId) => dispatch(pending
+          ? { type: 'COMPACTION_PENDING', sessionId: sid, cardId: operationId, beforeContextTokens: null, awaitsResult: true }
+          : { type: 'COMPACTION_CANCELLED', sessionId: sid, operationId })}
       />
       {/* Open tasks popup — rendered at App root so it escapes any inner stacking context.
           Reads from the single `openTasks` useSessionTasks instance declared in AppInner. */}

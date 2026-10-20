@@ -5,6 +5,7 @@ import {
   ChatState,
   SessionChatState,
   TimelineEntry,
+  SystemMarker,
   createSessionChatState,
   deserializeChatState,
   HISTORY_EXPAND_PROMPT_ID,
@@ -12,7 +13,9 @@ import {
   SerializedChatState,
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
-import { pageEventToAction } from './transcript-page-actions';
+import { pageEventToActions } from './transcript-page-actions';
+import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction } from './timeline-boundaries';
+import { reconcilePageSources } from './page-source-anchors';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
@@ -141,28 +144,6 @@ function mergesIntoOpenSegment(
 }
 
 /**
- * Append a timeline entry ABOVE this device's still-pending user bubbles.
- *
- * WHY (Destin, 2026-09-11, phone test of remote access batches 2/3: messages and replies
- * "interweave in different orders across the two platforms"): the device that sends a
- * message draws it at once as a pending bubble, while every other device draws it only
- * when the transcript records it. Anything that arrived in between — the reply to the
- * PREVIOUS message, a message typed in the terminal — used to land below the pending
- * bubble here and above it everywhere else. Keeping pending bubbles as the timeline's
- * tail makes every device show transcript order; a pending bubble joins that order when
- * TRANSCRIPT_USER_MESSAGE confirms it. Pinned by tests/chat-order-sender-matches-receiver.test.ts.
- */
-function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): TimelineEntry[] {
-  let at = timeline.length;
-  while (at > 0) {
-    const prev = timeline[at - 1];
-    if (prev.kind !== 'user' || prev.pending !== true) break;
-    at--;
-  }
-  return [...timeline.slice(0, at), entry, ...timeline.slice(at)];
-}
-
-/**
  * Record a transcript uuid as applied, IN PLACE, and hand the same Set back.
  *
  * WHY in place — the reducer's ONE documented purity exception (2026-09-16
@@ -195,7 +176,7 @@ function markSeen(session: SessionChatState, uuid: string): Set<string> {
  * Returns the current assistant turn (or creates a new one).
  * All assistant text and tool groups within a single turn accumulate here.
  */
-function getOrCreateTurn(session: SessionChatState): {
+function getOrCreateTurn(session: SessionChatState, timestamp?: number): {
   assistantTurns: Map<string, AssistantTurn>;
   timeline: TimelineEntry[];
   currentTurnId: string;
@@ -205,6 +186,14 @@ function getOrCreateTurn(session: SessionChatState): {
   let currentTurnId = session.currentTurnId;
 
   if (currentTurnId && assistantTurns.has(currentTurnId)) {
+    const turn = assistantTurns.get(currentTurnId)!;
+    const last = turn.segments.at(-1);
+    // WHY: create the continuation row only when content arrives, not at the
+    // boundary: inline cards arriving during the pause must stay ahead of it.
+    if (turn.presentationReferences && last?.type === 'system-marker'
+      && !timeline.some(entry => entry.kind === 'assistant-turn' && entry.turnId === currentTurnId && entry.afterMarkerId === last.marker.id)) {
+      timeline = appendAbovePending(timeline, { kind: 'assistant-turn', turnId: currentTurnId, afterMarkerId: last.marker.id });
+    }
     return { assistantTurns, timeline, currentTurnId };
   }
 
@@ -213,7 +202,7 @@ function getOrCreateTurn(session: SessionChatState): {
   assistantTurns.set(currentTurnId, {
     id: currentTurnId,
     segments: [],
-    timestamp: Date.now(),
+    timestamp: timestamp ?? Date.now(),
     stopReason: null,
     model: null,
     usage: null,
@@ -250,7 +239,7 @@ function placeToolInCurrentGroup(
   const turnExists = !!session.currentTurnId && session.assistantTurns.has(session.currentTurnId);
   const created = turnExists ? null : getOrCreateTurn(session);
   let assistantTurns = created ? created.assistantTurns : session.assistantTurns;
-  const timeline = created ? created.timeline : session.timeline;
+  let timeline = created ? created.timeline : session.timeline;
   const currentTurnId = created ? created.currentTurnId : session.currentTurnId!;
   let toolGroups = session.toolGroups;
   let currentGroupId = session.currentGroupId;
@@ -282,6 +271,10 @@ function placeToolInCurrentGroup(
     // the session's own and must be copied before writing.
     if (!created) assistantTurns = new Map(assistantTurns);
     const turn = assistantTurns.get(currentTurnId)!;
+    const last = turn.segments.at(-1);
+    if (turn.presentationReferences && last?.type === 'system-marker') {
+      timeline = getOrCreateTurn({ ...session, timeline }).timeline;
+    }
     assistantTurns.set(currentTurnId, {
       ...turn,
       segments: [...turn.segments, { type: 'tool-group', groupId: currentGroupId }],
@@ -407,11 +400,6 @@ function injectPlanSegment(
   const updated = new Map(assistantTurns);
   updated.set(currentTurnId, { ...turn, segments: newSegments });
   return updated;
-}
-
-// Is a divider with this id already drawn? One helper (sync-fix6) for the compaction, clear and model-switch dividers: every divider draws once because of it.
-function hasMarker(timeline: readonly TimelineEntry[], markerId: string): boolean {
-  return timeline.some((e) => e.kind === 'system-marker' && e.marker.id === markerId);
 }
 
 /**
@@ -1068,8 +1056,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const timeline = session.timeline.filter((e) => !(e.kind === 'system-marker' && e.marker.id === action.markerId));
-      if (timeline.length === session.timeline.length) return state;
-      next.set(action.sessionId, { ...session, timeline });
+      let assistantTurns = session.assistantTurns;
+      for (const [id, turn] of session.assistantTurns) {
+        const segments = turn.segments.filter(segment => !(segment.type === 'system-marker' && segment.marker.id === action.markerId));
+        if (segments.length === turn.segments.length) continue;
+        if (assistantTurns === session.assistantTurns) assistantTurns = new Map(assistantTurns);
+        assistantTurns.set(id, { ...turn, segments });
+      }
+      if (timeline.length === session.timeline.length && assistantTurns === session.assistantTurns) return state;
+      next.set(action.sessionId, { ...session, timeline, assistantTurns });
       return next;
     }
 
@@ -1659,7 +1654,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         return next;
       }
 
-      const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
+      const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session, action.timestamp);
       const turn = assistantTurns.get(currentTurnId)!;
       // Native runtime: same-partId deltas merge into the last text segment
       // (identical semantics to the reasoning path). No partId → CC's
@@ -1668,9 +1663,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const lastIdx = segments.length - 1;
       const last = lastIdx >= 0 ? segments[lastIdx] : null;
       if (action.partId && last && last.type === 'text' && last.partId === action.partId) {
-        segments = [...segments.slice(0, lastIdx), { ...last, content: last.content + action.text }];
+        segments = [...segments.slice(0, lastIdx), { ...last, content: last.content + action.text,
+          lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
       } else {
-        segments = [...segments, { type: 'text', content: action.text, messageId: nextMessageId(), partId: action.partId }];
+        segments = [...segments, { type: 'text', content: action.text, messageId: nextMessageId(), partId: action.partId,
+          sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp }];
       }
       // Task 2.4: Capture model on first text of the turn so the model pill is
       // visible while the turn is in-flight. `?? turn.model` preserves the
@@ -1716,12 +1713,16 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // WHY: reasoning overlaps pages/live feeds just like text. Its source
+      // identity must remain available when a page discovers a later boundary.
+      if (action.uuid && session.seenUuids.has(action.uuid)) return state;
+      const seenUuids = action.uuid ? markSeen(session, action.uuid) : session.seenUuids;
 
       // Same whitespace rule as TRANSCRIPT_ASSISTANT_TEXT above: a blank
       // reasoning chunk that cannot join open reasoning would render as a
       // "Show reasoning" toggle over nothing.
       if (isBlankDelta(action.text) && !mergesIntoOpenSegment(session, 'reasoning', action.partId)) {
-        next.set(action.sessionId, { ...session, lastActivityAt: Date.now() });
+        next.set(action.sessionId, { ...session, seenUuids, lastActivityAt: Date.now() });
         return next;
       }
 
@@ -1736,18 +1737,20 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         && last.type === 'reasoning'
         && last.partId === action.partId
       ) {
-        const merged = { ...last, content: last.content + action.text };
+        const merged = { ...last, content: last.content + action.text,
+          lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp };
         segments = [...segments.slice(0, lastIdx), merged];
       } else {
         segments = [
           ...segments,
-          { type: 'reasoning', content: action.text, messageId: nextMessageId(), partId: action.partId },
+          { type: 'reasoning', content: action.text, messageId: nextMessageId(), partId: action.partId,
+            sourceUuid: action.uuid, sourceTimestamp: action.timestamp, lastSourceUuid: action.uuid, lastSourceTimestamp: action.timestamp },
         ];
       }
       assistantTurns.set(currentTurnId, { ...turn, segments });
 
       next.set(action.sessionId, {
-        ...session, assistantTurns, timeline, currentTurnId,
+        ...session, assistantTurns, timeline, currentTurnId, seenUuids,
         currentGroupId: null,
         lastActivityAt: Date.now(),
         // Visible OUTPUT arrived (not merely activity). The thinking indicator
@@ -2225,6 +2228,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // carries one. The two should agree when both are present.
             model: action.model ?? turn.model,
             anthropicRequestId: action.anthropicRequestId,
+            sourceCompletionUuid: action.uuid,
             usage: action.usage,
             ...(mintedTimestamp !== null ? { timestamp: mintedTimestamp } : {}),
           });
@@ -3069,7 +3073,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // won (2026-09-24: 2 of 3 in one dev run). A page is only ever requested
       // for a session this window is opening, so its state belongs here;
       // SESSION_INIT is has()-guarded and leaves it intact when it follows.
-      const session = next.get(action.sessionId) ?? createSessionChatState();
+      let session = next.get(action.sessionId) ?? createSessionChatState();
+      const sources = reconcilePageSources(session, action.events);
+      session = sources.session;
 
       // Build this page's own timeline on a SCRATCH state by replaying its
       // events through the very same per-event cases the live path uses, then
@@ -3089,13 +3095,35 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...createSessionChatState(), seenUuids: new Set(session.seenUuids),
         ccBackgroundOutcomes: session.ccBackgroundOutcomes,
       });
-      for (const ev of action.events) {
-        const pageAction = pageEventToAction(ev);
-        // WHY: an EOF page (toEnd, a transfer) overlaps live events; tool cards dedup by toolUseId, which
-        // scratch cannot see, so a tool already on screen doubled. Skip ones the live session holds.
-        if (pageAction?.type === 'TRANSCRIPT_TOOL_USE' && !pageAction.parentAgentToolUseId
-          && session.toolCalls.has(pageAction.toolUseId)) continue;
-        if (pageAction) scratch = chatReducer(scratch, pageAction);
+      let predecessorUuid: string | undefined;
+      let predecessorToolUseId: string | undefined;
+      let compactCommand = false;
+      for (const ev of sources.events) {
+        const compactEcho = ev.type === 'user-message' && !ev.data.parentAgentToolUseId && isCompactCommandEcho(ev.data.text);
+        if (ev.type === 'user-message' && !ev.data.parentAgentToolUseId) compactCommand = compactEcho;
+        // WHY: an actual command followed by its saved summary proves a CC
+        // compaction. A standalone synthetic resume summary proves no new cut.
+        for (const pageAction of pageEventToActions(ev, { restoreCompaction: ev.type === 'compact-summary' && compactCommand })) {
+          // WHY: seen accounting UUIDs suppress overlapping text in scratch,
+          // not a newly discovered boundary anchored to that LIVE source text.
+          if (pageAction.type === 'COMPACTION_COMPLETE' && predecessorUuid
+            && markerAnchor(session, predecessorUuid, predecessorToolUseId) && !hasMarker(session, pageAction.markerId)) {
+            session = chatReducer(new Map([[action.sessionId, session]]), { ...pageAction, predecessorUuid, predecessorToolUseId }).get(action.sessionId)!;
+          }
+          // WHY: an EOF page (toEnd, a transfer) overlaps live events; tool cards dedup by toolUseId, which
+          // scratch cannot see, so a tool already on screen doubled. Skip ones the live session holds.
+          if (pageAction.type === 'TRANSCRIPT_TOOL_USE' && !pageAction.parentAgentToolUseId
+            && session.toolCalls.has(pageAction.toolUseId)) continue;
+          // WHY: bookkeeping and marker identity are independent. The former
+          // still replays; a live turn may already contain this exact boundary.
+          if (pageAction.type === 'COMPACTION_COMPLETE' && hasMarker(session, pageAction.markerId)) continue;
+          scratch = chatReducer(scratch, pageAction);
+        }
+        if (!compactEcho) {
+          predecessorUuid = ev.uuid;
+          predecessorToolUseId = ev.type === 'tool-use' || ev.type === 'tool-result' ? ev.data.toolUseId : undefined;
+        }
+        if (ev.type === 'compact-summary') compactCommand = false;
       }
       // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.
       const replayed = scratch.get(action.sessionId)!;
@@ -3114,7 +3142,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         : endedSess;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...pageSess.timeline.filter((e) => !(e.kind === 'system-marker' && session.timeline.some((l) => l.kind === 'system-marker' && l.marker.id === e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
+        timeline: [...pageSess.timeline.filter((e) => !(e.kind === 'system-marker' && hasMarker(session, e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
         // Union the maps page-first so a live entry always wins over a replayed
         // one for the same key (it is the fresher of the two).
         toolCalls: new Map([...pageSess.toolCalls, ...session.toolCalls]),
@@ -3157,13 +3185,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'COMPACTION_PENDING': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      // Idempotent: if already pending, just update the card (don't stack spinners)
+      // WHY: replaying a start must not move the spinner or restart its clock.
+      if (session.compactionPending?.id === action.cardId) return state;
       const filtered = session.timeline.filter((e) => e.kind !== 'compacting');
-      const startedAt = Date.now();
+      const startedAt = action.timestamp ?? Date.now();
       next.set(action.sessionId, {
         ...session,
-        timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
-        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
+        timeline: appendAbovePending(filtered, { kind: 'compacting', id: action.cardId, startedAt }),
+        compactionPending: { id: action.cardId, startedAt, beforeContextTokens: action.beforeContextTokens,
           ...(action.awaitsResult ? { awaitsResult: true } : {}), ...(action.hostOwned ? { hostOwned: true } : {}) },
       });
       return next;
@@ -3171,10 +3200,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
 
     case 'COMPACTION_CANCELLED': {
       const session = next.get(action.sessionId);
-      if (!session || !session.compactionPending) return state;
+      if (!session || !matchingCompaction(session, action.operationId)) return state;
       next.set(action.sessionId, {
         ...session,
-        timeline: session.timeline.filter((e) => e.kind !== 'compacting'),
+        timeline: session.timeline.filter((e) => e.kind !== 'compacting' || (!!session.compactionPending?.id && e.id !== session.compactionPending.id)),
         compactionPending: null,
       });
       return next;
@@ -3191,19 +3220,23 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'COMPACTION_COMPLETE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      // Native auto-compaction (action.auto) has no compactionPending to satisfy —
-      // it fired spontaneously, not from /compact — so it bypasses this guard. For
-      // the manual/CC path the guard still drops stale/spurious events (notably CC
-      // resume-from-summary, which must NOT insert a marker).
-      if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
-      // WHY: live replay can deliver the same automatic summary again while the
-      // turn is still running. The marker's event ID is the dedupe authority.
-      if (hasMarker(session.timeline, action.markerId)) return state;
+      const matchesPending = matchingCompaction(session, action.operationId, action.recorded === true);
+      // WHY: a terminal failure belongs only to its operation; recorded success
+      // is durable and may restore a boundary without owning this screen's spinner.
+      if (action.aborted ? !matchesPending : !session.compactionPending && !action.auto && !action.recorded) return state;
+      const timeline = matchesPending ? session.timeline.filter(entry => entry.kind !== 'compacting'
+        || (!!session.compactionPending?.id && entry.id !== session.compactionPending.id)) : session.timeline;
+      const pending = matchesPending ? null : session.compactionPending;
+      if (hasMarker(session, action.markerId)) {
+        if (!matchesPending) return state;
+        next.set(action.sessionId, { ...session, timeline, compactionPending: pending });
+        return next;
+      }
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
       // when the user typed /compact.
-      const before = action.beforeContextTokens ?? session.compactionPending?.beforeContextTokens ?? null;
+      const before = action.beforeContextTokens ?? (matchesPending ? session.compactionPending?.beforeContextTokens : null) ?? null;
       const after = action.afterContextTokens;
       let label: string;
       if (action.aborted) {
@@ -3214,34 +3247,18 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       } else {
         label = 'Conversation compacted';
       }
-      // Strip the compacting spinner card but preserve everything else.
-      const preserved = session.timeline.filter((e) => e.kind !== 'compacting');
-      next.set(action.sessionId, {
-        ...session,
-        // WHY: native auto compaction is a history rewrite inside the SAME
-        // turn; ending it here loses running tools and shows a false turn end.
-        // Manual /compact and Claude Code compaction still end their turns.
-        ...(action.auto ? {} : endTurn(session)),
-        timeline: [
-          ...preserved,
-          {
-            kind: 'system-marker',
-            marker: {
-              id: action.markerId,
-              timestamp: Date.now(),
-              label,
-              variant: 'compact',
-              // Attaches the CC-produced summary text so the otherwise-thin
-              // marker can click-to-expand inline. Absent on aborted/watchdog
-              // completions (no summary available).
-              ...(action.summary ? { summary: action.summary } : {}),
-              // WHY: lets the fade stop at the kept tail instead of the marker.
-              ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
-            },
-          },
-        ],
-        compactionPending: null,
-      });
+      const marker: SystemMarker = {
+        id: action.markerId, timestamp: action.timestamp ?? Date.now(), label,
+        // WHY: a failed attempt did not summarize or remove any model context.
+        variant: action.aborted ? 'info' : 'compact',
+        ...(action.summary ? { summary: action.summary } : {}),
+        ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
+      };
+      // WHY: summarization is not turn completion. Keeping the logical turn
+      // protects tools, retries and usage; presentation splits at this segment.
+      next.set(action.sessionId, { ...session,
+        ...appendSystemMarker({ ...session, timeline }, marker, action.recorded,
+          action.predecessorUuid ? markerAnchor(session, action.predecessorUuid, action.predecessorToolUseId) : undefined), compactionPending: pending });
       return next;
     }
 
@@ -3307,7 +3324,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       // The same divider delivered twice (a replay of the host's numbered event) is drawn once (one-core R5-4a).
       const id = action.markerId;
-      if (id !== undefined && hasMarker(session.timeline, id)) return state;
+      if (id !== undefined && hasMarker(session, id)) return state;
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
@@ -3324,10 +3341,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // nothing is destroyed, so a clear the runtime later refuses costs a
         // stray marker rather than a conversation.
         // WHY no marker without an id (sync-fix6): a live native `context-clear` only resets the turn here; the record's `clear` line draws the divider.
-        timeline: id === undefined ? session.timeline : [
-          ...session.timeline,
-          { kind: 'system-marker', marker: { id, timestamp: action.timestamp, label: 'Conversation cleared', variant: 'clear' } },
-        ],
+        timeline: id === undefined ? session.timeline : appendAbovePending(session.timeline,
+          { kind: 'system-marker', marker: { id, timestamp: action.timestamp, label: 'Conversation cleared', variant: 'clear' } }),
       });
       return next;
     }
@@ -3339,21 +3354,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      if (hasMarker(session.timeline, action.markerId)) return state; // see CLEAR_TIMELINE
+      if (hasMarker(session, action.markerId)) return state; // see CLEAR_TIMELINE
       next.set(action.sessionId, {
         ...session,
-        timeline: [
-          ...session.timeline,
-          {
-            kind: 'system-marker',
-            marker: {
-              id: action.markerId,
-              timestamp: action.timestamp,
-              label: action.label,
-              variant: 'model',
-            },
-          },
-        ],
+        ...appendSystemMarker(session, {
+          id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model',
+        }),
       });
       return next;
     }

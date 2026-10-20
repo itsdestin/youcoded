@@ -268,6 +268,11 @@ interface TurnCompleteData extends SubagentStamp {
 }
 
 interface CompactSummaryData extends SubagentStamp {
+  /** Optional host operation correlation; absent on old/automatic summaries. Not a durable checkpoint identity. */
+  operationId?: string;
+  /** CC source provenance: zero means its JSONL timestamp was absent/invalid.
+   * Delivery/display time must never be treated as proof of a new operation. */
+  sourceTimestamp?: number;
   /** The full text of the compaction summary, pre-stripped of system tags. The
    *  reducer attaches it to the SystemMarker so the user can click-to-expand. */
   summary?: string;

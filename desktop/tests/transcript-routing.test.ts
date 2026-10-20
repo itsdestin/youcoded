@@ -62,6 +62,16 @@ const shown = () => state.get(SID)!.timeline.map((t) =>
 // (sync-fix6: a native clear's divider has one source, this one; the `context-clear` event itself only resets the turn).
 const routeLiveClear = (uuid: string) => routeSessionLive({ sessionId: SID, kind: 'clear', id: `clear-${uuid}`, at: 1 }, { batcher, contextTokens: () => null });
 
+it('routes compaction operation identity and original host time without replacing them', () => {
+  routeSessionLive({ sessionId: SID, kind: 'compact-start', id: 'op', startedAt: 42 } as any, { batcher, contextTokens: () => null });
+  routeSessionLive({ sessionId: SID, kind: 'compact-end', id: 'op', outcome: 'cancelled' }, { batcher, contextTokens: () => null });
+  runFrame();
+  expect(applied).toEqual([
+    expect.objectContaining({ type: 'COMPACTION_PENDING', cardId: 'op', timestamp: 42 }),
+    expect.objectContaining({ type: 'COMPACTION_CANCELLED', operationId: 'op' }),
+  ]);
+});
+
 describe('transcript actions keep arrival order', () => {
   it('a live clear EVENT alone draws no divider (the record\'s line does), so a clear can never be drawn twice', () => {
     route(ev('user-message', 'u1', { text: 'hello' }));
@@ -134,11 +144,15 @@ describe('a file shrink and a compaction event in the same frame', () => {
     expect(marker().marker.label).toBe('Compacted · freed 78,000 tokens');
   });
 
-  it('still completes a compaction on its own when only the shrink arrives', () => {
+  it('does not infer either completion or cancellation from an uncorrelated file shrink', () => {
     pending();
+    const original = state.get(SID)!.compactionPending;
+    const originalActions = [...applied];
     routeTranscriptShrink({ sessionId: SID }, deps());
     runFrame();
-    expect(marker()).toBeTruthy();
+    expect(state.get(SID)!.compactionPending).toBe(original);
+    expect(marker()).toBeUndefined();
+    expect(applied).toEqual(originalActions);
   });
 
   it('ignores a shrink when this window is not waiting on /compact', () => {

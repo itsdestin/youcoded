@@ -23,7 +23,7 @@ import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-rebuild';
-import { compactionSourceDigest } from './compaction-record';
+import { compactionSourceDigest, withLiveCompactionOperation } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import type { ModelAttachment } from './busy-message-boundary';
@@ -341,6 +341,7 @@ interface LiveEntry {
   // turn. Distinguish it so a send is explicitly refused, never acknowledged
   // and later dropped by the session's re-entrancy guard.
   compacting?: boolean;
+  compactionOperation?: { id: string; startedAt: number };
   // Awaitable handle on the CURRENT drain (the dispatched turn + any queued
   // follow-ups it drains). Set by send() at dispatch; resolves when runTurns
   // exits (runTurns try/catches its send() so this never rejects). undefined
@@ -3328,8 +3329,8 @@ export class NativeSessionHost extends EventEmitter {
     // not break the turn (the rule is a convenience, re-asked next time).
     session.on('remember-rule', (rule: PermissionRule) => this.rememberRule(sessionId, cwd, rule));
     session.on('transcript-event', (event: TranscriptEvent) => {
-      // (1) Forward NOW — not gated on the disk write (see module header).
-      this.emit('transcript-event', event);
+      // (1) Forward NOW — not gated on disk, with live-only correlation (never mutate the source).
+      this.emit('transcript-event', withLiveCompactionOperation(event, entry.compactionOperation));
       // A committed summary was already appended on this chain. Never write
       // its UUID twice; release teardown/swap only after forwarding the marker.
       if (this.compactionMarkerForwarded(entry, event)) return;
@@ -4652,12 +4653,8 @@ export class NativeSessionHost extends EventEmitter {
     // Being wound down for a takeover (quiesce): would append past the flush.
     // (Combined branch: checked before master's compaction guards, same as send.)
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
-    if (entry.inFlight || entry.compacting || entry.queue.length > 0) {
-      // A refusal still shows what the screen that typed it always showed (a spinner, then a "may have failed" note); say so on every screen.
-      this.emit('compaction', { sessionId, phase: 'start' });
-      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
-      return { ok: false, reason: 'turn-in-flight' };
-    }
+    // WHY: a refused request owns no lifecycle. Publishing a fake start/end here cancels the real operation on other screens.
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
     // WHY: claim the idle session synchronously, before compactNow awaits a
     // provider. A simultaneous send must receive a refusal, not a false 'sent'
     // acknowledgement for a turn the session's re-entrancy guard will drop.
@@ -4665,17 +4662,20 @@ export class NativeSessionHost extends EventEmitter {
     // One-core R5-4a: say a compaction began, so every screen draws the spinner (it used to be drawn only by the screen that typed /compact).
     // The success case ends with the harness's own compact-summary line, which every screen turns into the "Compacted" note; only a
     // compaction that ends WITHOUT one needs an explicit end.
-    this.emit('compaction', { sessionId, phase: 'start' });
+    const operation = { id: randomUUID(), startedAt: Date.now() };
+    entry.compactionOperation = operation;
+    this.emit('compaction', { sessionId, phase: 'start', ...operation });
     try {
       const result = await entry.session.compactNow(focus, targetContextLength);
       // Failed candidates do not rewrite history or publish a checkpoint.
       if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'compaction');
-      else this.emit('compaction', { sessionId, phase: 'end', outcome: result.reason === 'interrupted' ? 'cancelled' : 'failed' });
+      else this.emit('compaction', { sessionId, id: operation.id, phase: 'end', outcome: result.reason === 'interrupted' ? 'cancelled' : 'failed' });
       return result;
     } catch (err) {
-      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
+      this.emit('compaction', { sessionId, id: operation.id, phase: 'end', outcome: 'failed' });
       throw err;
     } finally {
+      entry.compactionOperation = undefined;
       entry.compacting = false;
       // WHY: a report queued while the summary held the idle slot has no
       // runTurns tail to wake it; give pending deliveries an idle pass now.

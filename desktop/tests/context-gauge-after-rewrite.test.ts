@@ -14,7 +14,7 @@ import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import { buildUsageSnapshot } from '../src/renderer/state/usage-snapshot';
-import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
+import { pageEventToActions } from '../src/renderer/state/transcript-page-actions';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { emptyTotals } from '../src/renderer/state/session-totals';
 import type { TranscriptEvent, TranscriptEventType, DataOf } from '../src/shared/types';
@@ -139,7 +139,6 @@ describe('the compaction marker can finally say what it freed', () => {
     state = new Map(state).set(SESSION, { ...current, isThinking: true,
       activeTurnToolIds: new Set(['running-tool']), currentTurnId: 'turn-live',
       toolCalls: new Map([['background-specialist', { status: 'running', name: 'Task' } as any]]),
-      timeline: [...current.timeline, { kind: 'compacting', id: 'spinner' } as any],
     });
     const action: ChatAction = { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
       markerId: 'compact-1', auto: true, beforeContextTokens: 80_000,
@@ -206,7 +205,7 @@ describe('the compaction marker can finally say what it freed', () => {
     expect(onToast).toHaveBeenCalledWith('Compaction stopped. The conversation was left as it was.');
   });
 
-  it('manual /compact and Claude Code completion still close the active turn', () => {
+  it('manual compaction success leaves logical turn completion to the actual completion event', () => {
     for (const native of [true, false]) {
       let state = init();
       const current = sess(state);
@@ -215,6 +214,12 @@ describe('the compaction marker can finally say what it freed', () => {
       state = run(state, { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'pending', beforeContextTokens: 80_000 });
       state = run(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
         markerId: native ? 'manual-native' : 'manual-cc', afterContextTokens: 12_000 });
+      expect(sess(state).isThinking).toBe(true);
+      expect(sess(state).currentTurnId).toBe('turn-live');
+      expect(sess(state).activeTurnToolIds.has('tool')).toBe(true);
+      state = run(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION,
+        uuid: `real-end-${native}`, timestamp: 100, stopReason: 'end_turn', model: null,
+        anthropicRequestId: null, usage: null });
       expect(sess(state).isThinking).toBe(false);
       expect(sess(state).currentTurnId).toBeNull();
       expect(sess(state).activeTurnToolIds.size).toBe(0);
@@ -248,13 +253,13 @@ describe('page replay carries the bookkeeping a resumed session would otherwise 
     mkEv(over.type, over.data, { sessionId: SESSION, uuid: over.uuid ?? 'u', timestamp: 1 });
 
   it('maps subagent-usage — a specialist’s whole spend used to vanish on every reopen', () => {
-    const action = pageEventToAction(ev({
+    const action = pageEventToActions(ev({
       type: 'subagent-usage', uuid: 'sa-1',
       data: {
         usage: { inputTokens: 5000, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.02 },
         parentAgentToolUseId: 'tool-9', agentId: 'agent-3', model: 'm',
       },
-    }))!;
+    }))[0];
     expect(action.type).toBe('TRANSCRIPT_SUBAGENT_USAGE');
 
     let state = init();
@@ -263,15 +268,15 @@ describe('page replay carries the bookkeeping a resumed session would otherwise 
     expect(sess(state).totals.inputTokens).toBe(5000);
   });
 
-  it('maps compact-summary to its bookkeeping half, and to nothing when it carries none', () => {
-    const action = pageEventToAction(ev({
+  it('maps compact-summary to bookkeeping and its durable boundary', () => {
+    const actions = pageEventToActions(ev({
       type: 'compact-summary', uuid: 'cs-1',
       data: { summary: 'they discussed X', contextUsedAfter: 12_000, usage: { inputTokens: 40_000, outputTokens: 600, cacheReadTokens: 0, cacheCreationTokens: 0 } },
-    }))!;
-    expect(action.type).toBe('NATIVE_HISTORY_REWRITTEN');
+    }));
+    expect(actions.map(action => action.type)).toEqual(['NATIVE_HISTORY_REWRITTEN', 'COMPACTION_COMPLETE']);
 
-    // A Claude Code compact-summary has neither field — nothing to replay.
-    expect(pageEventToAction(ev({ type: 'compact-summary', uuid: 'cs-2', data: { summary: 'cc summary' } }))).toBeNull();
+    // CC's synthetic resume summaries have no native evidence: do not draw a new boundary.
+    expect(pageEventToActions(ev({ type: 'compact-summary', uuid: 'cs-2', data: { summary: 'cc summary' } }))).toEqual([]);
   });
 
   // Review finding, 2026-09-16: the protection here is that HISTORY_PAGE_LOADED
@@ -330,10 +335,10 @@ describe('page replay carries the bookkeeping a resumed session would otherwise 
   });
 
   it('carries an interrupted turn’s usage, deduped against the live stream', () => {
-    const action = pageEventToAction(ev({
+    const action = pageEventToActions(ev({
       type: 'user-interrupt', uuid: 'int-1',
       data: { usage: { inputTokens: 300_000, outputTokens: 8000, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 1.02 } },
-    }))! as any;
+    }))[0] as any;
     expect(action.type).toBe('TRANSCRIPT_INTERRUPT');
 
     let state = init();

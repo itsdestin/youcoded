@@ -121,8 +121,9 @@ export function parseTranscriptLine(
         type: 'compact-summary',
         sessionId,
         uuid,
-        timestamp,
-        data: summary ? { summary } : {},
+        // WHY: delayed delivery/replay must not relabel when compaction occurred.
+        timestamp: recordedAt || timestamp,
+        data: { ...(summary ? { summary } : {}), sourceTimestamp: recordedAt },
       });
       return events;
     }

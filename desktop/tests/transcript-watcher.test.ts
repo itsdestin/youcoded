@@ -1436,7 +1436,8 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
         expect.objectContaining({
           type: 'compact-summary',
           sessionId: 'sess-1',
-          data: { summary },
+          timestamp: Date.parse('2026-04-29T05:29:38.615Z'),
+          data: { summary, sourceTimestamp: Date.parse('2026-04-29T05:29:38.615Z') },
         }),
       ]);
     });
@@ -1451,7 +1452,7 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
       const events = parseTranscriptLine(line, 'sess-1');
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('compact-summary');
-      expect(events[0].data).toEqual({});
+      expect(events[0].data).toEqual({ sourceTimestamp: 0 });
     });
   });
 });

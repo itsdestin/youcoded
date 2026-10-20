@@ -68,6 +68,7 @@ beforeEach(() => {
   bridge.open = vi.fn().mockResolvedValue({ ok: true, resume: 'page', epoch: 'e', headSeq: 0, before: [], page: aPage(), after: [], facts: { working: false } });
   const on = (channel: string) => (h: (...a: any[]) => void) => { (bridge.listeners[channel] ??= []).push(h); return () => { bridge.listeners[channel] = bridge.listeners[channel].filter((x) => x !== h); }; };
   (window as any).claude = {
+    capabilities: { sessionRecord: true }, // Current desktop/Android host, not the legacy fallback.
     on: {
       transcriptEvent: (h: any) => { on('transcript:event')(h); return h; },
       hookEvent: (h: any) => { on('hook:event')(h); return h; },
@@ -332,8 +333,14 @@ describe('BubbleFeed live transcript events', () => {
     }));
   });
 
-  it('draws no compaction marker for a compaction this window did not start', () => {
+  it('restores a native compaction marker this window did not start', () => {
     const calls = deliver({ type: 'compact-summary', data: { summary: 'S', contextUsedAfter: 100 } }, { compactionPending: false });
+    expect(calls).toContainEqual(expect.objectContaining({ type: 'COMPACTION_COMPLETE',
+      recorded: true, timestamp: 500, markerId: 'compact-done-u1', summary: 'S' }));
+  });
+
+  it('does not turn a Claude Code resume summary into a fresh compaction', () => {
+    const calls = deliver({ type: 'compact-summary', data: { summary: 'Resume summary' } }, { compactionPending: false });
     expect(calls.map((c) => c.type)).not.toContain('COMPACTION_COMPLETE');
   });
 
