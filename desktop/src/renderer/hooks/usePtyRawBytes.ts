@@ -5,14 +5,11 @@ import { useEffect, useRef } from 'react';
 import './useIpc';
 
 /**
- * Subscribe to the per-session pty:raw-bytes push event (Tier 2 of
- * android-terminal-data-parity). Payload is base64-encoded raw PTY bytes
- * emitted by Android's RawByteListener; this hook decodes to Uint8Array.
- *
- * On desktop (Electron preload), the underlying ptyRawBytesForSession is a
- * no-op stub that returns a no-op unsubscriber — the hook still mounts
- * safely but its callback will never fire because Electron PTY emits
- * pty:output strings instead.
+ * Decode the retained legacy per-session pty:raw-bytes event to Uint8Array.
+ * WHY retain the capability gate: current desktop and rebuilt Android hosts
+ * advertise text transport and emit pty:output, so TerminalView passes null
+ * and this hook does not subscribe. Do not infer raw transport from Android.
+ * Electron preload also retains a no-op ptyRawBytesForSession stub.
  *
  * Malformed base64 is silently ignored to avoid crashing the renderer if
  * the bridge ever emits a corrupt frame; the byte stream resumes on the
