@@ -1805,7 +1805,9 @@ describe('chatgpt:* channel parity', () => {
     // acceptance deck for a tooling reason.
     expect(read('src', 'main', 'preload.ts')).toMatch(/chatgpt:\s*\{\s*supported: process\.env\.YOUCODED_CHATGPT !== '0'/);
     expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const chatgpt = \{[\s\S]*?supported: true,/);
-    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/chatgpt:\s*\{\s*supported: false,/);
+    // WHY: visibility follows the host's account capability now; local Android
+    // sign-in and remote read-only visibility are exercised in remote-shim-connection.
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/chatgpt:\s*\{\s*get supported\(\): boolean \{ return .*capabilities\?\.chatgptAccount === true;/);
   });
 
   it('the shim sends an OBJECT payload or nothing, never bare positional args', () => {

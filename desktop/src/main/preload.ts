@@ -583,6 +583,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   terminalTransport: 'text',
   terminalScreenRead: true,
   nativeSessions: true,
+  chatgptAccount: true,
   buddy: true,
   projectWrites: true,
   contentSearch: true,
@@ -1035,10 +1036,9 @@ contextBridge.exposeInMainWorld('claude', {
 
   // WHY (one-core R4-1, seam S7): what this screen can do, as ONE object. A phone is sent the same shape in `auth:ok`
   // (main/remote-server.ts); the screens read `window.claude.capabilities` and never guess from "am I Android". The
-  // window's own values come from shared/capabilities.ts (copied into the generated block above); only the native
-  // engine varies per run, by the same kill switch `native.supported` reads.
+  // WHY runtime overrides of the generated shared values: native sessions and ChatGPT each have their own kill switch.
   protocolVersion: PROTOCOL_VERSION,
-  capabilities: { ...DESKTOP_WINDOW_CAPABILITIES, nativeSessions: process.env.YOUCODED_NATIVE !== '0' },
+  capabilities: { ...DESKTOP_WINDOW_CAPABILITIES, nativeSessions: process.env.YOUCODED_NATIVE !== '0', chatgptAccount: process.env.YOUCODED_CHATGPT !== '0' },
 
   // Session naming. Its own top-level namespace because the renderer decides
   // whether the whole feature exists by asking whether this own-property is

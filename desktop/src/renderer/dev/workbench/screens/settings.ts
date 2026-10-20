@@ -155,6 +155,11 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // Android-only rows (isAndroid() gates AndroidSettings vs. DesktopSettings).
   { ...settings('settings/android/tier', 'dialog'), params: { platform: 'android' } },
   { ...settings('settings/android/connect-desktop', 'dialog'), params: { platform: 'android' } },
+  // WHY page-level marks: remote clients used to have no ChatGPT card at all,
+  // so before/after captures must prove the whole Cloud providers page is open.
+  { ...settings('settings/assistant/cloud#android-chatgpt', 'dialog', 'sign-in'), params: { platform: 'android', chatgpt: 'signed-out' } },
+  { ...settings('settings/assistant/cloud#remote-chatgpt', 'dialog', 'sign-in'), params: { connection: 'remote', chatgpt: 'signed-out' } },
+  { ...settings('settings/assistant/cloud#remote-chatgpt-account', 'dialog'), params: { connection: 'remote', chatgpt: 'signed-in', planUsage: '1' } },
   // Sign-in and key states of the cloud providers (mock-shim switches); each picture
   // scrolls to its provider's card.
   { ...settings('settings/assistant/cloud/chatgpt#signed-out', 'dialog', 'sign-in'), params: { chatgpt: 'signed-out', planUsage: '1' } },

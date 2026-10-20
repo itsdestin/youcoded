@@ -41,6 +41,9 @@ export interface Capabilities {
    *  A model picker offers native models only when this is true. A phone watching a computer gets true from a computer with the
    *  engine on (one-core R6-1): the session runs on the computer, the phone only drives it. */
   nativeSessions: boolean;
+  /** ChatGPT account status is available on the backend. WHY separate from openExternal:
+   *  remote clients can see the host's account, but only its own screen can finish browser sign-in. */
+  chatgptAccount: boolean;
   /** The floating buddy window exists. */
   buddy: boolean;
   /** This screen may change a project's files and records: copy a file into the folder, record a file the assistant
@@ -73,6 +76,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   terminalTransport: 'text',
   terminalScreenRead: true,
   nativeSessions: true,
+  chatgptAccount: true,
   buddy: true,
   projectWrites: true,
   contentSearch: true,
@@ -97,6 +101,8 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   // FALSE on purpose, like sessionRecord: a computer older than R6-1 says nothing and cannot run a native session for a phone. A
   // current host says true in its handshake (remote-server.ts authOkMessage), never by this default.
   nativeSessions: false,
+  // Older hosts do not advertise account support. A current host overrides this in auth:ok.
+  chatgptAccount: false,
   buddy: false,
   projectWrites: false,
   contentSearch: false,
@@ -122,6 +128,7 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   terminalTransport: 'text',
   terminalScreenRead: true,
   nativeSessions: true,
+  chatgptAccount: true,
   buddy: false,
   projectWrites: true,
   contentSearch: true,

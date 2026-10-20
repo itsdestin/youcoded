@@ -20,7 +20,7 @@
     "main/remote-server.ts": 1325,
     "main/harness/harness-session.ts": 4288,
     "renderer/components/SettingsPanel.tsx": 3291,
-    "renderer/remote-shim.ts": 3434,
+    "renderer/remote-shim.ts": 3429,
     "renderer/state/chat-reducer.ts": 3370,
     "renderer/styles/globals.css": 3106,
     "renderer/components/SessionStrip.tsx": 2884,

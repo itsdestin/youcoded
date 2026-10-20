@@ -12,14 +12,16 @@ import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
 import type { KeyService } from './first-run/recognise-key';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
+import { getCapabilities } from '../platform';
 
 // The ChatGPT kill switch (design §6): main sets `chatgpt.supported` false
 // under YOUCODED_CHATGPT=0, and the button must vanish with it — a button whose
 // backend is switched off would be a dead button on the first screen. Read as
-// `=== true` (the `native.supported` pattern) so a missing namespace, an old
-// preload or the remote shim all read as "not supported".
+// `=== true` so a missing namespace reads as "not supported". WHY openExternal:
+// remote clients can view the host account now, but only the backend's own
+// screen (desktop or Android local) can finish the browser callback.
 function isChatGptSupported(): boolean {
-  return (window as any).claude?.chatgpt?.supported === true;
+  return (window as any).claude?.chatgpt?.supported === true && getCapabilities().openExternal;
 }
 
 /* ------------------------------------------------------------------ */

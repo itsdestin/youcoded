@@ -3269,16 +3269,11 @@ export function installShim(): void {
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
     },
-    // Sign in with ChatGPT (backend design 2026-09-05 §5) — WS transport, no
-    // payload (none of the four takes an argument). `supported: false` on
-    // purpose (review R1-9): the renderer gates the card on `=== true`, and a
-    // remote browser cannot run the sign-in — the browser tab and the
-    // 127.0.0.1:1455 listener live on the desktop. The four invokes still exist
-    // so the five-surface parity test holds and a remote caller gets an honest
-    // answer (status real, sign-in false, cancel / sign-out real) instead of
-    // an undefined namespace.
+    // WHY a host-derived getter: Android's own backend supports ChatGPT sign-in.
+    // Visiting clients must still see the host account; openExternal separately
+    // gates the sign-in button because its browser callback must stay on the host.
     chatgpt: {
-      supported: false,
+      get supported(): boolean { return (window as any).claude?.capabilities?.chatgptAccount === true; },
       status: () => invoke('chatgpt:status'),
       signIn: () => invoke('chatgpt:sign-in'),
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),

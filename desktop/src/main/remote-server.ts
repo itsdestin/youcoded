@@ -173,7 +173,14 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     platform: 'desktop' as const,
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: { ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES), sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
+    capabilities: {
+      ...(local ? ANDROID_LOCAL_CAPABILITIES : REMOTE_SCREEN_CAPABILITIES),
+      sessionRecord: true,
+      nativeSessions: process.env.YOUCODED_NATIVE !== '0',
+      // WHY: account visibility belongs to the host, not the transport. The local
+      // Android owner can sign in; a visiting client still sees status and guidance.
+      chatgptAccount: process.env.YOUCODED_CHATGPT !== '0',
+    },
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
   };
