@@ -241,6 +241,21 @@ describe('NativeSessionHost', () => {
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
 
+  it('releases continuation cache only after the append chain drains on destroy', async () => {
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    let unblock!: () => void;
+    const entry = (host as any).live.get('s-1');
+    entry.appendChain = new Promise<void>(resolve => { unblock = resolve; });
+    const releaseSession = vi.fn(async () => {});
+    (host as any).continuation = { acceptedHistory: { releaseSession }, continuationIdentityFor: () => 'identity' };
+    const destroying = host.destroy('s-1');
+    await vi.waitFor(() => expect(entry.session.listenerCount('transcript-event')).toBe(0));
+    expect(releaseSession).not.toHaveBeenCalled();
+    unblock();
+    await destroying;
+    expect(releaseSession).toHaveBeenCalledWith('s-1');
+  });
+
   it('refuses handoff evidence after a swallowed append failure even when destroy and dispose succeed', async () => {
     const store = new SessionStore(new NativeHome(root));
     const append = store.append.bind(store);

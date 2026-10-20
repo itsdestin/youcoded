@@ -63,6 +63,8 @@ interface GatedQuitDeps {
   refuseForUnsaved?(o: { afterTeardown: boolean; restartDropped: boolean }): boolean;
   setTimer?(fn: () => void, ms: number): ReturnType<typeof setTimeout> | null;
   clearTimer?(t: ReturnType<typeof setTimeout>): void;
+  /** A second quit must not mistake an in-progress teardown for a completed one. */
+  teardownComplete?(): boolean;
 }
 type Deps = Required<Omit<GatedQuitDeps, 'gate' | 'shutdown'>>;
 
@@ -75,6 +77,7 @@ function electronDefaults(): Deps {
     refuseForUnsaved: (o) => refuseQuitForUnsaved(undefined, undefined, o),
     setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
     clearTimer: (t) => clearTimeout(t),
+    teardownComplete: () => true,
   };
 }
 
@@ -107,6 +110,7 @@ function refusedAfterTeardown(d: Deps): boolean {
  */
 export function quitAfterTeardown(deps: Partial<Deps> = {}): boolean {
   const d = { ...electronDefaults(), ...deps };
+  if (!d.teardownComplete()) return false;
   if (refusedAfterTeardown(d)) return false;
   if (watchdog) d.clearTimer(watchdog);
   watchdog = d.setTimer(() => {
@@ -123,6 +127,12 @@ export function quitAfterTeardown(deps: Partial<Deps> = {}): boolean {
     d.exit();
   }, QUIT_WATCHDOG_MS);
   return true;
+}
+
+/** WHY: one failing cleanup must not skip the other services or their pending saves. */
+export async function shutdownStep(name: string, stop: () => unknown): Promise<void> {
+  try { await stop(); }
+  catch (error) { log('WARN', 'quit', 'cleanup failed', { step: name, error: String(error) }); }
 }
 
 /** Tests only. */

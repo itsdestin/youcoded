@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents, dialog } from 'electron';
 import { browserToolService, startBrowserSupport, stopBrowserSupport, wireBrowserSessionCleanup } from './assistant-browser/browser-main';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
@@ -42,11 +42,12 @@ import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-aut
 import { getPermissionOverrides, setForgetSessionAttention } from './app-signals';
 import { IPC, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
-import { MOUNT_PROBE_JS } from './dev-mount-probe';
+import { wireDevLoadRecovery } from './dev-load-recovery';
 import { log, rotateLog } from './logger';
 import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
+import { canDeliverToRenderer, sendToRenderer, wireRendererRecovery } from './renderer-recovery';
 import { registerThemeProtocol } from './theme-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
 import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
@@ -55,7 +56,7 @@ import { getOfficeSessions, quitOfficeSessions } from './office/office-session-r
 import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
 import { syncJournals } from './office/office-journal-sync';
 import { createCloseGate } from './window-close-gate';
-import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
+import { gatedQuit, onWillQuit, quitAfterTeardown, shutdownStep } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
 import { bindFirstRunManager } from './ipc/first-run';
@@ -589,80 +590,6 @@ setForgetSessionAttention(forgetSessionAttention); // ipc-handlers reaches it th
 // windows spawned by the detach subsystem. Keeps webPreferences, security
 // hardening, and fullscreen relay consistent across every window so renderers
 // don't have to guess which features are available.
-/**
- * Dev-only self-healing for Vite-served windows (recurring first-launch
- * failure, diagnosed 2026-07-16): on a cold Vite dependency cache the first
- * window load fires a storm of unbundled module requests plus a mid-load
- * full-reload; Chromium's network service has crashed under it ("Network
- * service crashed or was terminated"), aborting every in-flight request and
- * leaving a permanently blank window — the only remedy was restarting dev.
- * Three recovery paths, because the failure shows up three ways:
- *  - did-fail-load: the main document itself failed to load (also covers
- *    "Electron reached the URL before Vite was actually serving");
- *  - render-process-gone: the renderer process died outright;
- *  - blank-mount watchdog: the document loaded but its module scripts were
- *    aborted mid-boot, so React never mounted and NO failure event fires —
- *    this is the network-service-crash signature. Also fires after a WiFi
- *    disconnect/reconnect (ERR_NETWORK_CHANGED aborts loopback fetches too),
- *    which can outlast any fixed retry budget — hence unbounded retries with
- *    capped backoff (see retry()'s WHY comment).
- * The watchdog is the ONLY path that covers the aborted-sub-resource case, and
- * it silently stopped covering it between 2026-07-20 and 2026-07-26: its probe
- * read `#root.childElementCount`, and index.html began painting the boot
- * skeleton inside `#root`, so every stranded window reported "mounted". The
- * probe now lives in ./dev-mount-probe.ts, pinned against the real index.html by
- * tests/dev-load-recovery.test.tsx — do not inline a new one here (the
- * workspace ast-grep rule main-uses-shared-mount-probe refuses it). Neither
- * sibling path can substitute: did-fail-load never fires (index.html itself
- * loads 200) and render-process-gone never fires (the renderer stays alive).
- * Prod loads local files and is deliberately untouched (callers gate on
- * !app.isPackaged).
- */
-function wireDevLoadRecovery(win: BrowserWindow, devUrl: string): void {
-  let attempts = 0;
-  const retry = (why: string) => {
-    if (win.isDestroyed()) return;
-    attempts += 1;
-    // WHY unbounded (2026-07-23 network-flap lesson): a WiFi
-    // disconnect/reconnect makes Chromium abort EVERY in-flight request
-    // (ERR_NETWORK_CHANGED) — loopback Vite fetches included. The old fixed
-    // 5-attempt budget could be entirely spent while the network was still
-    // flapping, and with the budget gone the window sat on the pre-React
-    // spinner forever. Retrying forever is safe here: the blank-mount
-    // watchdog fires at most once per ~(delay + 8s) cycle, the -3 guard
-    // below already excludes the reload-storm case the cap was protecting
-    // against, and this whole function is dev-only (prod loads local files).
-    const delaySeconds = Math.min(attempts, 5);
-    console.warn(`[dev-recovery] renderer load failed (${why}) — retry ${attempts} in ${delaySeconds}s`);
-    setTimeout(() => {
-      // .catch is not error handling here — `did-fail-load` below is what
-      // actually drives recovery. This only stops a rejected load (ERR_ABORTED
-      // on a racing reload) from surfacing as an unhandled rejection.
-      if (!win.isDestroyed()) void win.loadURL(devUrl).catch(() => {});
-    }, delaySeconds * 1000);
-  };
-  win.webContents.on('did-fail-load', (_e, errorCode, errorDescription, _validatedURL, isMainFrame) => {
-    // -3 = ERR_ABORTED: fired by Vite's own full-reloads and by a loadURL
-    // superseding an in-flight load — retrying on it would loop forever.
-    if (isMainFrame && errorCode !== -3) retry(`did-fail-load ${errorCode} ${errorDescription}`);
-  });
-  win.webContents.on('render-process-gone', (_e, details) => {
-    if (details.reason !== 'clean-exit') retry(`render-process-gone: ${details.reason}`);
-  });
-  win.webContents.on('did-finish-load', () => {
-    setTimeout(() => {
-      if (win.isDestroyed()) return;
-      win.webContents
-        .executeJavaScript(MOUNT_PROBE_JS)
-        .then((mounted) => {
-          if (mounted) attempts = 0; // healthy — future incidents get a fresh retry budget
-          else retry('blank renderer — React never mounted');
-        })
-        .catch(() => { /* window closed or JS context torn down — nothing to heal */ });
-    }, 8000);
-  });
-}
-
 function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar'; buddyTitle?: string }): BrowserWindow {
   // WHY app-icon.ts: Windows gets the crisp multi-size .ico the installer uses.
   const icon = loadDefaultAppIcon(path.join(__dirname, '../../assets'));
@@ -842,11 +769,35 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     void win.loadURL(devUrl).catch(() => {});
     wireDevLoadRecovery(win, devUrl);
   } else {
-    void win.loadFile(path.join(__dirname, '../renderer/index.html'), {
-      // loadFile expects search string WITHOUT the leading '?'
+    const load = () => win.loadFile(path.join(__dirname, '../renderer/index.html'), {
       search: modeQuery ? modeQuery.slice(1) : undefined,
-      // A failed prod load is surfaced by did-fail-load, not by this promise.
-    }).catch(() => {});
+    });
+    // WHY: production used to log renderer death and leave the window blank.
+    // Reuse normal boot/session:open; the backend sessions and approvals survive.
+    if (!opts?.buddy) wireRendererRecovery(win, {
+      load,
+      shuttingDown: () => !!shuttingDown,
+      offerRecovery: async () => {
+        const result = await dialog.showMessageBox(win, {
+          type: 'warning', buttons: ['Try again', 'Close window'], defaultId: 0, cancelId: 1,
+          message: "This window couldn't be restored.",
+          detail: 'Try restoring it again, or close this window. Closing the last window ends the app.',
+          noLink: true,
+        });
+        if (result.response === 0) return true;
+        if (!win.isDestroyed()) {
+          // WHY: destroy bypasses the close gate; stop this window's sessions first.
+          applyCloseAnswer({ close: true, reopen: true }, windowRegistry.sessionsForWindow(win.webContents.id), {
+            untrack: (sid) => welcomeBackStore?.untrack(sid),
+            destroySession: (sid) => sessionManager.destroySession(sid),
+            releaseSession: (sid) => windowRegistry.releaseSession(sid),
+          });
+          win.destroy();
+        }
+        return false;
+      },
+    });
+    void load().catch(() => {}); // did-fail-load drives recovery
   }
 
   // Auto-open DevTools in dev — the app's menu is nulled so F12/Ctrl+Shift+I
@@ -925,10 +876,19 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // the next press asks again.
   // Main-frame, cross-document only: an embedded page (a preview iframe) or an
   // in-page hash change must not take down a prompt someone is reading.
+  const forgetPage = () => {
+    // WHY: page-specific work dies on reload, but session ownership must survive.
+    closeRequests.dropFor(wid);
+    pendingAcquire.suspend(wid);
+    nativeRuntime?.fills.forget(`w${wid}`);
+    cancelWindowHandoffs(wid);
+    attentionReports.delete(wid);
+    debouncedBroadcastAttention();
+  };
   win.webContents.on('did-start-navigation', (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
-    if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
+    if (details?.isMainFrame && !details.isSameDocument) forgetPage();
   });
-  win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
+  win.webContents.on('render-process-gone', forgetPage);
   // The close: the last window's unsaved files, then the sessions prompt (window-close-gate.ts).
   const closeGate = createCloseGate({
     buddy: !!opts?.buddy,
@@ -942,9 +902,20 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
     syncJournals: () => (getOfficeSessions()?.hasFor(win.webContents.id) ? syncJournals(win.webContents) : null), // Office edits to the recovery journal first (≤1.5 s, Task 8 fix round 1)
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
-    ask: (count) => closeRequests.request(wid, count, (push) => {
-      if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
-    }),
+    ask: async (count) => {
+      if (!canDeliverToRenderer(win.webContents)) {
+        // WHY: a gone or still-loading page cannot draw the in-app close prompt.
+        const result = await dialog.showMessageBox(win, {
+          type: 'warning', buttons: ['Close window', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+          message: 'Close this window?',
+          detail: `${count} conversation${count === 1 ? '' : 's'} will stop and remain available to reopen.`,
+        });
+        return { close: result.response === 0, reopen: true };
+      }
+      return closeRequests.request(wid, count, (push) => {
+        sendToRenderer(win.webContents, IPC.WINDOW_CLOSE_REQUEST, [push]);
+      });
+    },
     // The gate passes the sessions owned when the person confirmed AND still owned now: one
     // dragged away meanwhile (review T3) or started later (fix round 8) is never ended.
     apply: (answer, ids) => applyCloseAnswer(answer, ids, {
@@ -1956,15 +1927,16 @@ wireBrowserSessionCleanup(sessionManager);
 function settlePendingCloseRequests(): void {
   closeRequests.settleAll((windowId, requestId) => {
     const win = windowFromWcId(windowId);
-    if (win && !win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST_CANCELLED, { requestId });
+    if (win && !win.isDestroyed()) sendToRenderer(win.webContents, IPC.WINDOW_CLOSE_REQUEST_CANCELLED, [{ requestId }]);
   });
 }
 
 let shuttingDown: Promise<void> | null = null;
+let shutdownComplete = false;
 function shutdownApp(): Promise<void> {
   if (shuttingDown) return shuttingDown;
   settlePendingCloseRequests();
-  shuttingDown = runShutdown();
+  shuttingDown = runShutdown().finally(() => { shutdownComplete = true; });
   return shuttingDown;
 }
 
@@ -1982,16 +1954,16 @@ async function runShutdown(): Promise<void> {
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
   // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.
-  const officeQuit = quitOfficeSessions();
-  const browserStopped = stopBrowserSupport(); // bounded: closes only the browser it launched
+  const officeQuit = shutdownStep('Office', quitOfficeSessions);
+  const browserStopped = shutdownStep('browser', stopBrowserSupport);
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
-  const engineStopped = cleanupIpcHandlers ? cleanupIpcHandlers() : Promise.resolve();
+  const engineStopped = shutdownStep('runtime', () => cleanupIpcHandlers?.());
   // Sign in with ChatGPT: stop the usage poll and close any lingering sign-in
   // listener on 1455. Best-effort like the other teardowns here.
-  const chatgptDisposed = chatgptAuth?.dispose().catch(() => {}) ?? Promise.resolve();
-  destroySocialHandlers(); // tear down the presence WebSocket + its timers
+  const chatgptDisposed = shutdownStep('ChatGPT', () => chatgptAuth?.dispose());
+  const socialStopped = shutdownStep('social', destroySocialHandlers);
   // Kill the speech engine's own program. WHY IT IS HERE and not in its own
   // `app.on('before-quit')`: this function IS the before-quit path (see the
   // header above — the app deliberately has exactly one teardown route, so that
@@ -1999,9 +1971,9 @@ async function runShutdown(): Promise<void> {
   // A second before-quit listener would run on only two of the three routes and
   // leave a 1.14 GB speech process behind on the third.
   try { shutdownVoiceHandlers(); } catch {}
-  sessionManager.destroyAll();
-  hookRelay.stop();
-  remoteServer.stop();
+  const sessionsStopped = shutdownStep('sessions', () => sessionManager.destroyAll());
+  const hooksStopped = shutdownStep('hooks', () => hookRelay.stop());
+  const remoteStopped = shutdownStep('remote', () => remoteServer.stop());
   // Stop the cross-device sync-spaces engine (clears its backup timer + watchers).
   // .catch, not try/catch: it's an async fn, so a failure arrives as a rejected
   // promise — the old `void` call left that rejection unhandled at quit.
@@ -2023,19 +1995,13 @@ async function runShutdown(): Promise<void> {
   try { leaseClient?.destroy(); } catch {}
   // Stop sync service — clears timer, releases locks, removes .app-sync-active marker
   try { setSyncService(null); } catch {}
-  // Wait for the engine to actually die, but never let a wedged teardown hang quit:
-  // race the teardown against a 4s cap (supervisor's own SIGTERM→SIGKILL bound is ~3s).
-  // Returned (not `void`-ed) so the callers below can sequence app.quit()/exit()
-  // after it — this function no longer decides on its own when to quit.
-  // chatgptDisposed joins the race: dispose() promises that every write in
-  // flight lands, and a poll's read-modify-write cut off half-way is exactly the
-  // torn account file the lock exists to prevent (review T4 F5). Same 4s cap.
+  // WHY: wait for every started cleanup even if a different service failed.
+  // Six seconds covers Office's five-second drain and the engine's stop deadline;
+  // a wedged helper must not keep quit pending forever.
   await Promise.race([
-    Promise.all([engineStopped, chatgptDisposed, syncStopped]),
-    new Promise<void>((r) => setTimeout(r, 4_000)),
-  ]).catch(() => {});
-  await officeQuit;
-  await browserStopped;
+    Promise.allSettled([engineStopped, chatgptDisposed, syncStopped, officeQuit, browserStopped, socialStopped, sessionsStopped, hooksStopped, remoteStopped]),
+    new Promise<void>((r) => setTimeout(r, 6_000)),
+  ]);
 }
 
 // Route 1: last window closed. Delegate to app.quit() rather than tearing down
@@ -2052,7 +2018,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (e) => {
   // Second pass: shutdownApp() already ran (or is running) and re-issued the quit below — let it
   // proceed (watchdog armed), unless a window has unsaved text edits (app-restart.ts, fix round 11).
-  if (shuttingDown) { if (!quitAfterTeardown()) e.preventDefault(); return; }
+  if (shuttingDown) {
+    if (!quitAfterTeardown({ teardownComplete: () => shutdownComplete })) e.preventDefault();
+    return;
+  }
   e.preventDefault(); // Unsaved files first: their list shows before any teardown (unsaved-quit.ts).
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: () => !refuseQuitForUnsaved(),

@@ -47,6 +47,9 @@ export class PendingAcquireQueue<T> {
     return list;
   }
 
+  /** WHY: a reload keeps ownership and queued handoffs, but its old listener is gone. */
+  suspend(windowId: number): void { this.ready.delete(windowId); }
+
   /**
    * Drop everything for a closed window. webContents ids are not reused within
    * a run, so this is about not leaking for the app's lifetime — a window that

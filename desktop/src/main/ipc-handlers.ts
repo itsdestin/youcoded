@@ -119,6 +119,7 @@ import { setPermissionOverridesSink } from './prefs-service';
 import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { createPublish } from './publish';
+import { rendererGeneration, sendToRenderer } from './renderer-recovery';
 import { SessionLiveFacts } from './session-live';
 import { SessionScreens } from './session-screens';
 import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summary-push';
@@ -358,13 +359,11 @@ export function registerIpcHandlers(
     if (windowRegistry) {
       for (const wid of windowRegistry.getWindowIds()) {
         const wc = webContents.fromId(wid);
-        if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+        sendToRenderer(wc, channel, args);
       }
       return;
     }
-    if (!mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, ...args);
-    }
+    if (!mainWindow.isDestroyed()) sendToRenderer(mainWindow.webContents, channel, args);
   };
 
   // Route a session-scoped emit to the owner AND any buddy subscribers.
@@ -386,9 +385,10 @@ export function registerIpcHandlers(
         // webContents.id, so previously every peer-window event fell through
         // to the mainWindow fallback (window 1). webContents.fromId does the
         // correct lookup.
+        const generation = rendererGeneration(wid);
         const deliver = () => {
-          const wc = webContents.fromId(wid);
-          if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+          // WHY: a fill held by the old page cannot run in its replacement.
+          sendToRenderer(webContents.fromId(wid), channel, args, generation);
         };
         if (hold?.(wid, deliver)) continue;
         deliver();
@@ -400,7 +400,8 @@ export function registerIpcHandlers(
     // still reach a renderer. Note: if `ids` was non-empty but every target
     // webContents was destroyed, the event is silently dropped — the fallback
     // is only taken when no recipients were identified at all.
-    if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+    const leader = windowRegistry?.getLeaderId();
+    sendToRenderer(leader != null ? webContents.fromId(leader) : (!mainWindow.isDestroyed() ? mainWindow.webContents : null), channel, args);
   };
 
   // WHY (one-core R5-1): the ONE way a session-scoped push leaves the core — the windows by the registry's audience, every
@@ -409,7 +410,7 @@ export function registerIpcHandlers(
   // (session:refill); a phone is hung up on, and its reconnect fills every conversation.
   runtime.fills.setExpireHandler((key, sessionId) => {
     const id = Number(key.slice(1));
-    if (key[0] === 'w') { const wc = webContents.fromId(id); if (wc && !wc.isDestroyed()) wc.send(IPC.SESSION_REFILL, sessionId); }
+    if (key[0] === 'w') sendToRenderer(webContents.fromId(id), IPC.SESSION_REFILL, [sessionId]);
     else remoteServer?.dropAudience(id);
   });
   const publish = createPublish({
@@ -471,7 +472,8 @@ export function registerIpcHandlers(
     if (ids.length === 0) {
       // No registry / nothing registered — preserve the pre-buddy single-window
       // behavior so the event still reaches a renderer.
-      if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+      const leader = windowRegistry?.getLeaderId();
+    sendToRenderer(leader != null ? webContents.fromId(leader) : (!mainWindow.isDestroyed() ? mainWindow.webContents : null), channel, args);
       return;
     }
     for (const wid of ids) {
