@@ -587,7 +587,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="relative h-full flex flex-col overflow-hidden bg-inset select-none">
+    <div className="relative h-full flex flex-col overflow-hidden bg-panel select-none">
       {!showingPicture && <ScreenMark name="chat/browser" />}
       {/* WHY one top row (Destin, 2026-10-14, "styling and fit"): the tabs sit
           beside the panel's buttons, as in Chrome. A separate title row only
