@@ -146,6 +146,7 @@ Cloud-first slice: `~/.youcoded/` home, provider registry + keychain keys, `Harn
 - **`NativeSessionHost` lifecycle** — `send()` still never throws; it now returns a `NativeSendResult` synchronously (`{status:'sent'|'queued'}` or `{status:'failed', reason}`) instead of blocking on the turn. `'sent'` means dispatched, not completed — turn failures arrive later as `session-error` events, not as a rejected call. The dispatch is deferred one `setImmediate` so the invoke ack reaches the renderer before the `user-message` event does (ordering the UI depends on). `destroy()` order is load-bearing: `session.destroy()` (abort + removeAllListeners — synchronous, this stops re-enqueue, NOT the map delete) → await the append chain → `store.dispose()` (flush open part) → `live.delete`. App-quit calls `destroyAll()` (best-effort flush; bounded to one in-flight part).
 - **Step limits are explicit snapshots, never model guesses.** `HarnessSession` applies the existing `max_steps` continuation ask only when its manifest has `limits.maxSteps`. For an ordinary root, `NativeSessionHost` reads `native.stepGuard` once at fresh creation, persists that normalized value in `NativeSessionHeader.stepGuard`, and resumes from the header only; changing Settings cannot alter an existing session, and an old header means no guard. Specialist children have no step cap at all since 2026-09-08 (`fix: remove specialist child step budgets`; a legacy `stepCap` in a personal definition file is ignored); evaluator runs explicitly use `maxSteps: 100`. There is no model-name or model-tier fallback.
 - **`quiesce(id)` (M2) is a SEPARATE, STRONGER teardown than `interrupt()` — cross-device takeover only, never the Stop button.** `interrupt()` aborts only the in-flight turn and leaves the M1 send queue draining (a queued message starts a new turn right after). `quiesce()` additionally clears the queue synchronously, awaits one macrotask (lets a same-tick `send()` finish its deferred dispatch before the abort), and awaits the turn settling + append chain — its postcondition is "no further appends", which a cross-device transcript flush depends on. From its first line until the session is destroyed, `send()`, `/clear`, `/compact`, `/skill` and idle report delivery are refused (`not-live`) — the takeover's flush and lease release come after `quiesce()` returns; `endQuiesce()` lifts the refusal only for a handoff that stopped BEFORE the lease release — after it the conversation belongs to another device, so a session that failed to destroy keeps refusing. `createHolderTakeover` (conversations/takeover.ts) branches to it for a native holder instead of sending the ESC byte. Depth + full 5-step order: `docs/conversations.md` → "Native provider participation".
+- **Startup readiness is separate from open history.** `session-start-registry.ts` fences create/resume generations; `session-tools-startup.ts` owns optional MCP acquisition and the `opening` → `connecting` → `failed`/`ready` fact. Admitted history opens without waiting for connectors, but native sends, skills, history/model mutations and automatic report claims remain gated until the final tool inventory/history is installed. Early input is refused as `initializing`, never acknowledged into a startup queue. Failed connectors expose redacted details and exact-attempt Retry / Continue choices through `native:startup-action`; neither submits the draft, and preparation failures cannot be bypassed. The record retains the numbered `native-startup` live fact for reloads and other screens; revision/generation checks reject stale fills. Tests: `session-start-registry.test.ts`, `session-tools-startup.test.ts`, `native-session-host.test.ts`, `native-channels.test.ts`, `native-startup-store.test.ts`.
 - **M1 send queue** — per-session FIFO capped at `SEND_QUEUE_LIMIT` (10) in the host; drains ONLY on the dispatched `send()`'s turn settling, one queued message per drain step. Interrupt aborts the current turn only — the queue is untouched and still drains after. Past the cap, `send()` refuses honestly (`{status:'failed', reason:'queue-full'}`) rather than silently accepting. Pinned: `native-session-host.test.ts` "send queue (M1)" block.
 - **`native:send` is an `ipcMain.handle` invoke on ALL transports** (desktop IPC and remote WS) over the SAME transcript-event pipe CC uses — same `NativeSendResult` shape either side, no throw-vs-`{ok:false}` divergence (contrast the provider IPC parity gap above). Emits `user-message`/`assistant-text`/`assistant-thinking`/`turn-complete`/`user-interrupt`/`session-error`, forwarded by ONE `publish(sessionId, IPC.TRANSCRIPT_EVENT, event)` (main/publish.ts: the session's windows, every phone, and the session's record in main/session-record.ts — a hand-written `sendForSession` + `broadcast` pair is rejected by the ast-grep rule `no-paired-session-send-and-broadcast`). `TRANSCRIPT_REPLAY` falls through `nativeHost.getHistory(id) ?? transcriptWatcher.getHistory(id)`.
 - **Renderer send branch** — `sendChatMessage` (`native-send.ts`): native → `window.claude.native.send(sessionId, text)` with NO `\r`, no 56-byte chunking, no echo wait, no `FILE_GAP_MS` paste timing, no `hasPendingInteraction` gate. **The native send string MUST equal `buildOutgoingMessage(...).content`** or the optimistic USER_PROMPT bubble never dedups (permanent pending bubble). ESC → `native.interrupt`. `useSubmitConfirmation` is gated OFF for native. The entire claude/PTY path is byte-unchanged below the native early-return.
@@ -536,11 +537,12 @@ budget-gated session wiring, and projection into Claude Code's `~/.claude.json` 
   never rejects.
 - **Manager** (`harness/mcp/mcp-manager.ts`) pools one live connection per server, refcounted
   across every session that acquires it — two sessions using the same server share one
-  subprocess, not two. `acquire()`/`release()` close two overlapping-call race windows (a
-  `release()` landing mid-registration, and a resumed session's re-acquire racing an outgoing
-  release for the same session id) via a synchronous two-pass registration and a `holderTouch`
-  sequence number — see the file's own comments for the exact race shapes. App-quit calls
-  `destroyAll()` — see the leaked-subprocess caveat below.
+  subprocess, not two. `acquire()` registers holders synchronously before awaiting handshakes;
+  each returned lease releases only its own exact connection generations, including retired entries.
+  Explicit retry captures only already-settled failed generations before registry resolution, so
+  concurrent retries join the replacement rather than replacing it again after an await. The
+  startup controller retains healthy old holders until replacement ownership exists. App-quit
+  calls `destroyAll()`; pending registry resolutions are fenced against that shutdown generation.
 - **Adapter** (`harness/mcp/mcp-tools.ts`) turns a connected server's tools into ordinary
   `NativeTool`s named `mcp__{server}__{tool}` (Claude Code's own convention, so names can't
   collide with the ten built-in tools). Input schemas pass through raw — no local
@@ -594,14 +596,12 @@ budget-gated session wiring, and projection into Claude Code's `~/.claude.json` 
   in phase 1 — it needs `upsert()`, which needs a settings UI, which is phase 2. Not a regression
   (there was never a SAFE way to do this), but worth stating plainly since the unsafe way used to
   quietly work.
-- **A server excluded from a session (not ready, over budget, or missing its secret) is now
-  logged, but still has no UI.** `McpManager.acquire()` logs one `WARN` per server it excludes
-  (naming the server and its real `lastError`) and `HarnessSession.syncMcpTools()` logs one for
-  the whole dropped-for-budget tail — closing the gap where `status()`/`droppedMcpServers` were
-  both accurate and completely unobserved (zero production callers of either). This is a
-  `~/.claude/desktop.log` line, not a user-facing surface: no toast, no session banner, no
-  settings-panel indicator exists yet. A developer can now grep the log for why a server never
-  showed up; an end user still can't tell from inside the app.
+- **Connection failures are visible; budget drops remain diagnostic.** `McpManager.acquire()`
+  returns redacted `unavailableServers` and logs each unavailable connection. Native startup
+  blocks sending and shows those failures above the composer, with explicit Retry / Continue
+  choices. This is not a new MCP configuration screen. `HarnessSession.syncMcpTools()` still
+  logs the dropped-for-budget tail; that separate budget exclusion is not a connector failure
+  and does not acquire the startup failure choices.
 
 **A leaked-subprocess caveat, app-wide and pre-existing — not MCP-specific.**
 `McpManager.destroyAll()` runs from `NativeSessionHost.destroyAll()`, which the app reaches only
@@ -790,11 +790,17 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   specialist-keyed grant never leaks to the root session or a different specialist.
   `~/.youcoded/permissions.json` is `v: 1 | 2`; a v1 file reads as valid v2 with no migration
   step. Full depth: `native-permissions.md` rule.
-- **Restart reconcile + card replay.** On parent resume: a `running` record whose owner failed
-  `isOwnerAlive` is marked `interrupted` HONESTLY (the child remains an ordinary resumable session
-  via `task_id`, never silently discarded); a dead-owner delivery lease is released so the report
-  re-delivers instead of vanishing; a `completed && !delivered` record is queued for delivery at
-  the next idle boundary. `getHistory` now MERGES each child's own JSONL back into the parent's
+- **Restart reconcile + card replay.** On parent resume, `reconcileOwner` checks the snapshot's
+  run/claim identity and current liveness again inside the write lock before interrupting a dead
+  run or releasing its lease. Stale cleanup cannot clear a newer owner's claim. Unattempted
+  completed/failed background records are queued for an idle boundary; an already-attempted
+  injection is not automatically retried merely because its owner died. Known-unstarted rollback
+  and rejected resume-take packets retain exact-token recovery intent across failed writes while
+  the process survives; later locked writes apply it without overwriting concurrent work. Packet
+  recovery obeys the existing newest-50/individual-length limits. A disk commit followed by a
+  notification error is logged as a notification failure, not reported as a failed write. These
+  safeguards do not guarantee recovery of memory-only intent after process death during storage
+  failure. Tests: `specialist-delegation-ledger.test.ts`, `native-session-host.test.ts`. `getHistory` now MERGES each child's own JSONL back into the parent's
   stream — filtered to `SUBAGENT_DISPLAY_TYPES`, re-stamped identically to the live path, and
   spliced immediately after the parent's own Task tool-use event — so the subagent card is no
   longer empty after a restart (see the corrected 1a bullet above).

@@ -16,6 +16,7 @@ import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, Tool
 import { pageEventToActions } from './transcript-page-actions';
 import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction } from './timeline-boundaries';
 import { reconcilePageSources } from './page-source-anchors';
+import { localUserMessage } from './local-user-message';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
@@ -973,51 +974,13 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    case 'UNSENT_RETAINED':
     case 'USER_PROMPT': {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      // ALWAYS append a pending bubble — no content-based dedup. The prior
-      // last-10-entries content match silently dropped legitimate rapid-fire
-      // duplicates (e.g. "yes" twice within five turns). TRANSCRIPT_USER_MESSAGE
-      // confirms this entry by finding the oldest matching pending and
-      // clearing its flag.
-      const message = {
-        id: nextMessageId(),
-        role: 'user' as const,
-        content: action.content,
-        timestamp: action.timestamp,
-        // Exact attachment paths (when provided) so the bubble can pill them
-        // even when a path contains spaces. Content stays the space-joined
-        // string — the transcript dedup matches on content, don't change it.
-        ...(action.attachments?.length ? { attachments: action.attachments } : {}),
-      };
-
-      // USER_PROMPT is unconditionally the 'sent' path: a queued native send never reaches it (the host announces its queue, QUEUE_SYNCED).
-      next.set(action.sessionId, {
-        ...session,
-        // WHY: a delayed Stop cannot close a newly sent, not-yet-recorded message.
-        transcriptTurnUuid: undefined,
-        timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}), ...(action.sendTransport ? { sendTransport: action.sendTransport } : {}) }],
-        isThinking: true,
-        // A message sent while a reply is still streaming does not end that reply: Claude
-        // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
-        // starts the new turn then. Clearing the turn here split the streaming reply in
-        // two on the sending device only (tests/chat-order-sender-matches-receiver.test.ts).
-        currentGroupId: session.currentTurnId ? session.currentGroupId : null,
-        currentTurnId: session.currentTurnId,
-        // Typing again after a provider error is the retry — clear the banner
-        // (attentionState + errorMessage) so a fresh turn starts clean.
-        attentionState: 'ok',
-        errorMessage: null,
-        errorCode: null,
-        stallWarning: null,
-        // A new turn cannot start already parked.
-        stalledSince: null,
-        // Parity with TRANSCRIPT_SKILL_INVOKED: a new turn must not inherit the
-        // previous one's prefill percentage.
-        promptProcessing: null,
-      });
+      // WHY separate: admitted sends and retained refusals share a bubble, not turn-start side effects.
+      next.set(action.sessionId, localUserMessage(session, action, nextMessageId()));
       return next;
     }
 
@@ -1452,6 +1415,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         if (
           entry.kind === 'user' &&
           entry.pending === true &&
+          // WHY: a directly refused native draft was never accepted; older identical history cannot confirm it.
+          // Ordinary send-outcome notes may still be corrected by a later real echo (especially Claude Code).
+          !entry.sendRefused &&
           sameUserMessage(entry.message, action.text)
         ) {
           confirmedIdx = i;

@@ -11,6 +11,25 @@ function fill(r: SessionRecords, n: number, size = 20) {
   for (let i = 1; i <= n; i++) r.note(S, 'transcript:event', text(i, size));
 }
 
+describe('startup facts for late screens', () => {
+  it('keeps startup state outside the trimmed transcript ring', () => {
+    const r = new SessionRecords(); r.begin(S);
+    const state = { phase: 'connecting', attemptId: 'attempt', hostId: 'host', generation: 1, revision: 1 };
+    r.note(S, 'session:live', { sessionId: S, kind: 'native-startup', state });
+    fill(r, RING_MAX_EVENTS + 10);
+    expect(r.liveFill(S)).toContainEqual({ type: 'session:live', payload: { sessionId: S, kind: 'native-startup', state } });
+  });
+  it('replaces a failed initialization with its current ready state', () => {
+    const r = new SessionRecords(); r.begin(S);
+    r.note(S, 'session:live', { sessionId: S, kind: 'native-startup', state: { phase: 'connecting', attemptId: 'a', hostId: 'host', generation: 1, revision: 1 } });
+    const ready = { phase: 'ready', hostId: 'host', generation: 1, revision: 2 };
+    r.note(S, 'session:live', { sessionId: S, kind: 'native-startup', state: ready });
+    expect(r.liveFill(S).filter((p: any) => p.payload.kind === 'native-startup')).toEqual([
+      { type: 'session:live', payload: { sessionId: S, kind: 'native-startup', state: ready } },
+    ]);
+  });
+});
+
 describe('the ring', () => {
   it('numbers events from 1 without gaps', () => {
     const r = new SessionRecords();

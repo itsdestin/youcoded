@@ -145,6 +145,57 @@ describe('channels', () => {
       } finally { vi.unstubAllGlobals(); }
     });
 
+    it.each(['opening', 'connecting', 'failed', 'ready'])('replays native startup %s without changing history or accepting a blocked send', async (phase) => {
+      vi.stubGlobal('location', { search: `?nativeStartup=${phase}` });
+      try {
+        const c = shim();
+        const events: any[] = [];
+        const transcript: any[] = [];
+        const off = c.on.sessionLive((e: any) => events.push(e));
+        c.on.transcriptEvent((e: any) => transcript.push(e));
+        expect(events).toEqual([expect.objectContaining({ sessionId: 'wb-2', kind: 'native-startup', state: expect.objectContaining({ phase }) })]);
+        if (phase !== 'ready') expect(await c.native.send('wb-2', 'Keep this draft')).toEqual({ status: 'failed', reason: 'initializing' });
+        expect(transcript).toEqual([]);
+        off();
+      } finally { vi.unstubAllGlobals(); }
+    });
+
+    it.each(['retry', 'continue'])('settles an exact failed startup %s without sending and replays the current state', async (action) => {
+      vi.stubGlobal('location', { search: '?nativeStartup=failed' });
+      try {
+        const c = shim();
+        const events: any[] = [];
+        const transcript: any[] = [];
+        const off = c.on.sessionLive((e: any) => events.push(e));
+        c.on.transcriptEvent((e: any) => transcript.push(e));
+        expect(await c.native.startupAction('wb-1', 'wb-tools-1', action)).toEqual({ ok: false });
+        expect(await c.native.startupAction('wb-2', 'old-attempt', action)).toEqual({ ok: false });
+        const result = await c.native.startupAction('wb-2', 'wb-tools-1', action);
+        expect(result).toEqual({ ok: true, state: expect.objectContaining({ phase: 'ready', revision: action === 'retry' ? 3 : 2 }) });
+        expect(events.map(e => e.state.phase)).toEqual(action === 'retry' ? ['failed', 'connecting', 'ready'] : ['failed', 'ready']);
+        if (action === 'continue') expect(result.state.skippedTools).toEqual(['wb-reference']);
+        expect(await c.native.startupAction('wb-2', 'wb-tools-1', 'continue')).toEqual({ ok: false });
+        expect(transcript).toEqual([]);
+        off();
+        const replay: any[] = [];
+        const stop = c.on.sessionLive((e: any) => replay.push(e));
+        expect(replay).toEqual([events.at(-1)]);
+        stop();
+      } finally { vi.unstubAllGlobals(); }
+    });
+
+    it('leaves native readiness absent by default and ignores unknown fixture values', () => {
+      for (const search of ['', '?nativeStartup=typo']) {
+        vi.stubGlobal('location', { search });
+        try {
+          const events: any[] = [];
+          const off = shim().on.sessionLive((e: any) => events.push(e));
+          expect(events).toEqual([]);
+          off();
+        } finally { vi.unstubAllGlobals(); }
+      }
+    });
+
     it('session.browse returns the seeded past sessions', async () => {
       expect((await shim().session.browse()).length).toBeGreaterThan(0);
     });

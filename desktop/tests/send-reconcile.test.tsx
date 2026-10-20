@@ -28,7 +28,7 @@ function computer() {
   const sendInput = vi.fn(() => true);
   const nativeSend = vi.fn((_s: string, _t: string, _f: string[]) => ({ status: 'sent' as const }));
   bindSessionOps({ sessionManager: { sendInput } } as any);
-  const ctx = () => ({ door: 'remote', runtime: { records, nativeHost: { send: nativeSend } }, broadcast: () => {}, audienceId: -1000 } as any);
+  const ctx = () => ({ door: 'remote', runtime: { records, nativeHost: { send: nativeSend, inputAdmission: () => 'ready-generation', inputAdmissionCurrent: (_id: string, admission: unknown) => admission === 'ready-generation' } }, broadcast: () => {}, audienceId: -1000 } as any);
   const call = (name: string, req: any) => findChannel(name)!.handler(req, ctx());
   return {
     get records() { return records; },

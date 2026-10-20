@@ -74,6 +74,7 @@ it('Stop during a switch summary: reported as stopped, nothing committed, histor
 function fakeHost(fit: 'fits' | 'needs-summary' | 'too-small', compactResult: any = { ok: true }) {
   const entry = { session: { fitForWindow: vi.fn(() => fit) } };
   const host: any = {
+    entryReady: (NativeSessionHost.prototype as any).entryReady,
     live: new Map([['s', entry]]),
     resolveContextAndProfile: vi.fn(async () => ({ contextLength: 32_768 })),
     compact: vi.fn(async () => compactResult),
@@ -135,6 +136,7 @@ it('Summarize and switch says a compaction began, on the same push every screen 
   const emitted: any[] = [];
   const entry: any = { session: { fitForWindow: () => 'needs-summary', compactNow: vi.fn(async () => ({ ok: true })) }, inFlight: false, compacting: false, queue: [] };
   const host: any = {
+    entryReady: (NativeSessionHost.prototype as any).entryReady,
     live: new Map([['s', entry]]),
     resolveContextAndProfile: vi.fn(async () => ({ contextLength: 32_768 })),
     setBinding: vi.fn(async () => true),

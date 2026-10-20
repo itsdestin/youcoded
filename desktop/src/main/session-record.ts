@@ -29,6 +29,7 @@ import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
 import type { SessionLive } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
+import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
 
 export const RING_MAX_EVENTS = 2000;
@@ -161,6 +162,7 @@ interface TailEntry { type: string; payload: unknown; bytes: number; /** true on
 interface PtyStream { chunks: string[]; length: number; base: number }
 
 interface Rec {
+  nativeStartup?: NativeStartupState;
   epoch: string;
   headSeq: number;
   ring: RecordedEvent[];
@@ -662,6 +664,7 @@ export class SessionRecords {
     if (!rec) return [];
     const out: Array<{ type: string; payload: unknown }> = [];
     if (rec.facts.model) out.push({ type: 'session:live', payload: { sessionId, kind: 'model', model: rec.facts.model } });
+    if (rec.nativeStartup) out.push({ type: 'session:live', payload: { sessionId, kind: 'native-startup', state: rec.nativeStartup } });
     if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
     // A native session's local-model state (sync-fix3): the host pushes it only when it CHANGES, so a screen that opens later (a phone, a second
     // window, a reload) would never see a sleeping or loading model and so no Reload / loading bar. Same payload shape as the live push.
@@ -870,6 +873,9 @@ export class SessionRecords {
         return;
       case 'stop-confirmed':
         if (rec.facts.working && live.userUuid === rec.facts.turnUserUuid) this.endTurn(rec, live.at);
+        return;
+      case 'native-startup':
+        if (isNativeStartupState(live.state)) rec.nativeStartup = live.state;
         return;
       case 'model':
         if (typeof live.model === 'string' && live.model) rec.facts.model = live.model;

@@ -172,9 +172,10 @@ function paneRoot(container: HTMLElement): HTMLElement {
 }
 
 function renderPane(props: { visible: boolean; sessionActive: boolean }) {
-  const { container } = render(
-    <ChatView sessionId="s1" visible={props.visible} sessionActive={props.sessionActive} />,
-  );
+  // Containment applies to a retained, previously visited pane; a never-active
+  // chat is now deferred entirely and has its own mount-budget regression.
+  const { container, rerender } = render(<ChatView sessionId="s1" visible sessionActive />);
+  rerender(<ChatView sessionId="s1" visible={props.visible} sessionActive={props.sessionActive} />);
   return paneRoot(container).style;
 }
 

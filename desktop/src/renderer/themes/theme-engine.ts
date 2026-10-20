@@ -788,8 +788,8 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   const bubbleGlass = hasBackgroundLayer(bg) && !reducedEffects && panelsBlur > 0 && bubbleBlur > 0;
   root.toggleAttribute('data-bubble-glass', bubbleGlass);
 
+  const scrimBlur = Math.min(panelsBlur || 8, 8);
   if (hasBackgroundLayer(bg) && !reducedEffects && panelsBlur > 0) {
-    const scrimBlur = Math.min(panelsBlur, 8);
     const bubbleRule = bubbleBlur > 0 ? `
     [data-wallpaper] .in-view .bg-inset,
     [data-wallpaper] .in-view .bg-accent,
@@ -872,6 +872,14 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     // repeatedly creating/removing the element across theme switches.
     glassEl.textContent = '';
   }
+
+  // WHY: some modal backdrops need to soften app controls even without wallpaper.
+  // Keep the same scrim radius and Reduced Effects gate, not a per-popup CSS filter.
+  if (!reducedEffects) glassEl.textContent += `
+    .layer-scrim[data-blur-background="true"] {
+      backdrop-filter: blur(${scrimBlur}px);
+      -webkit-backdrop-filter: blur(${scrimBlur}px);
+    }`;
 
   // 8. Theme font — inject Google Font <link> and set --font-sans/--font-mono
   applyThemeFont(theme.font);

@@ -7,6 +7,7 @@
 // same line in the same place and a screen that opens later is handed the ones that are still true (main/session-open.ts).
 //
 import type { InputBlock } from './cc-input-focus';
+import type { NativeStartupState } from './native-startup';
 
 // Types only: nothing here runs. In shared/ because the renderer reads them and renderer code does not import from main/.
 
@@ -18,6 +19,8 @@ export interface PromptCardButton { label: string; input: string; submitInput?: 
 export type SessionLiveBody =
   /** Confirmed addressed API abort: lifecycle only, not a fabricated transcript/history record. */
   | { kind: 'stop-confirmed'; id: string; userUuid: string; at: number }
+  /** History may be open while optional tool connections are not ready for a turn. */
+  | { kind: 'native-startup'; state: NativeStartupState }
   /** The queue as it is NOW (a snapshot, so a screen that missed events is right after the next one). Native sessions only. */
   | { kind: 'queue'; queue: QueuedItem[]; queueIdentity?: { queueId: string; sendEpoch: string }; paused?: boolean }
   /** The session's model changed: the raw model id or alias the chip is drawn from. */

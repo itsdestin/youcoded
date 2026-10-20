@@ -88,6 +88,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/voice/vocabulary#narrow', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
+  { name: 'welcome/back', tags: ['dialog'], scenario: 'welcome-back', mark: 'chat/resume',
+    escapeStepsBack: 'Recovery requires an explicit Resume or Start fresh choice; Escape must leave the popup open.' },
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
@@ -103,6 +105,14 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#admin-approval', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' } },
   { ...chat('chat#admin-choices', 'view', 'approval'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'] },
   { ...chat('chat#admin-choices-phone', 'view', 'approval', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-admin', latency: '150' }, open: ['Always allow'], viewport: { width: 390, height: 844 } },
+  // WHY: the same recovered history remains readable at every readiness phase.
+  ...['opening', 'connecting', 'failed', 'ready'].flatMap(phase => [
+    { ...chat(`chat#native-startup-${phase}`, 'view', 'native-startup', ...(phase === 'failed' ? ['error-state'] : [])),
+      session: 'wb-2', params: { nativeStartup: phase }, ...(phase === 'ready' ? {} : { mark: `chat/native-startup-${phase}` }) },
+    { ...chat(`chat#native-startup-${phase}-narrow`, 'view', 'native-startup', 'narrow'),
+      session: 'wb-2', params: { nativeStartup: phase }, viewport: { width: 390, height: 844 },
+      ...(phase === 'ready' ? {} : { mark: `chat/native-startup-${phase}` }) },
+  ]),
   // Dev-only fixture: real shared question card with duplicate wording, selected
   // and typed via explore rather than drawing a stand-in or changing the app.
   { ...chat('chat#questions-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-questions-native' } },

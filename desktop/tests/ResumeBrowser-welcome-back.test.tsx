@@ -87,6 +87,12 @@ function welcomeBack(ids: string[], overrides: Partial<{ onResumeMany: any; onDo
 }
 
 describe('ResumeBrowser — Welcome back mode', () => {
+  it('uses the shared blurred scrim without blurring the popup itself', () => {
+    mockWindowClaude([row()]);
+    const { container } = render(<ResumeBrowser open onClose={() => {}} onResume={() => {}} welcomeBack={welcomeBack(['sess-1'])} />);
+    expect(container.querySelector('.layer-scrim')).toHaveAttribute('data-blur-background', 'true');
+    expect(container.querySelector('.layer-surface')).not.toHaveAttribute('data-blur-background');
+  });
   it('seeds every resumable row ticked', async () => {
     mockWindowClaude([row(), row({ sessionId: 'sess-2', name: 'Session B' })]);
     render(<ResumeBrowser open onClose={() => {}} onResume={() => {}} welcomeBack={welcomeBack(['sess-1', 'sess-2'])} />);

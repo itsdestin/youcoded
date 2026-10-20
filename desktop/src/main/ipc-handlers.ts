@@ -1744,15 +1744,15 @@ export function registerIpcHandlers(
   // WHY (2026-09-30 one-core R3-5): the native:* request channels (send, queue, interrupt, compact, models,
   // permission mode, context prefs, step guard, sessions-list, kill-shell, admin password, context text) are
   // table entries (main/ipc/native.ts). The PUSH below stays here: it fans out to windows and phones as before.
-  // Push every seeded or changed mode to each window showing the session AND
-  // every phone. WHY: the get above can answer before a starting session has
-  // its mode, and a change made in one window or on the phone used to reach
-  // only the caller — so chips elsewhere could show a stricter mode than the
-  // session was really running on. The host emits from ONE place (seedMode /
-  // setPermissionMode), so both the IPC and the remote set paths are covered.
+  // WHY: seedMode/setPermissionMode publish to every window and phone, not just
+  // the caller; early reads may precede seeding and otherwise leave stale chips.
   // One-core R5-4a: the messages waiting behind a running turn, as the host holds them, so EVERY screen draws (and can cancel) the same strip.
   nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
+  });
+  // Startup readiness is a retained host fact, so every window/phone gates the same unsent draft.
+  nativeHost.on('startup-state', (e: { sessionId: string; state: import('../shared/native-startup').NativeStartupState }) => {
+    publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'native-startup', state: e.state });
   });
   // A native compaction began or ended without a summary (stopped or failed): the spinner on every screen.
   nativeHost.on('compaction', liveFacts.noteNativeCompaction);

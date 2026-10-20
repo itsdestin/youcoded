@@ -129,6 +129,8 @@ import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } fr
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 import { reconcilePending, confirmPending } from './state/pending-action';
 import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
+import { useTakeoverPrompts } from './hooks/use-takeover-prompts';
+import { forgetNativeStartup } from './state/native-startup-store';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
 type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
@@ -388,7 +390,15 @@ function AppInner() {
   // reply (or a destroyed conversation's focus) decides the place (decideRemotePlace). Every automatic selection asks mayAutoSelect()
   // first; the desktop is unaffected. Reset when this page starts talking to a different computer.
   const placeDecidedRef = useRef(false);
+  const recoveryBatchRef = useRef(false);
+  const sessionEpochRef = useRef(0); // WHY: an old host's reply must not adopt or fill after reset/teardown.
+  useEffect(() => () => { sessionEpochRef.current++; }, []);
   const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
+  // WHY: replies and pushes must share recovery/transfer selection policy, including reused writers.
+  const selectCreatedSession = useCallback((id: string, recovering = recoveryBatchRef.current) => {
+    if ((!isRemoteMode() || placeDecidedRef.current) && !pendingRef.current?.active)
+      setSessionId((current) => recovering ? current ?? id : id);
+  }, []);
   // Batch 2 (§3): before the computer's list arrives, the no-conversation screen says it is
   // catching up instead of offering New session — a tap there created a stray conversation.
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
@@ -450,24 +460,7 @@ function AppInner() {
   }, []);
   // Await explicit handoff/retry consent. No lease is held while asking;
   // ownership and failure cleanup belong to the backend's session creation.
-  const [takeoverPrompt, setTakeoverPrompt] = useState<{ device: string; phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied' } | null>(null);
-  const takeoverResolveRef = useRef<((choice: boolean) => void) | null>(null);
-  useEffect(() => () => { takeoverResolveRef.current?.(false); }, []);
-  const askTakeover = useCallback((device: string, phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') =>
-    new Promise<boolean>((resolve) => {
-      // Reentrancy guard: only one resolver slot exists. If a second resume opens
-      // a dialog while one is pending, resolve the prior one as "declined" so its
-      // awaiting handleResumeSession returns cleanly instead of hanging forever.
-      takeoverResolveRef.current?.(false);
-      takeoverResolveRef.current = resolve;
-      setTakeoverPrompt({ device, phase });
-    }), []);
-  const resolveTakeover = useCallback((choice: boolean) => {
-    setTakeoverPrompt(null);
-    const r = takeoverResolveRef.current;
-    takeoverResolveRef.current = null;
-    r?.(choice);
-  }, []);
+  const { prompt: takeoverPrompt, ask: askTakeover, answer: resolveTakeover } = useTakeoverPrompts();
   // Task 6 — the resume-time model selector's pre-resume modal. Destin's
   // ruling: native resume ALWAYS offers the provider-scoped model selector and
   // NEVER auto-launches a binding. handleResumeSession's native branch opens
@@ -1112,12 +1105,12 @@ function AppInner() {
     }
   }, [sessionAttention, sessions]);
 
-  // Buddy "open main app" → land on the buddy's viewed session. Reads the
-  // existing sessionsRef mirror so the IPC subscription survives
-  // sessions-array churn without resubscribing.
+  // Buddy "open main app" → its viewed session; sessionsRef keeps this subscription stable.
   useEffect(() => {
     const off = window.claude?.buddy?.onFocusSession?.((sid: string) => {
       if (sessionsRef.current.some((s: any) => s.id === sid)) {
+        // WHY: reused-writer create replies send this same focus request as the buddy.
+        if (recoveryBatchRef.current || pendingRef.current?.active) { selectCreatedSession(sid); return; }
         noteSwitchIntent('other'); // switch marks: the buddy window asked for this one
         setSessionId(sid);
         // Notify Android/remote bridge so the native terminal view switches too
@@ -1210,14 +1203,14 @@ function AppInner() {
         // SESSION_INIT is has()-guarded, so a replayed announcement for a
         // session that already exists changes nothing.
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+        const recovering = recoveryBatchRef.current; // snapshot before the batch's finally can run
         setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return withAnnouncedName(prev, info);
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
-        // WHY: a pending transfer selects its real writer only after the attempt's admission reply.
-        if (mayAutoSelect() && !pendingRef.current?.active) setSessionId(info.id);
+        selectCreatedSession(info.id, recovering);
         return [...prev, info];
       });
       }
@@ -1266,6 +1259,7 @@ function AppInner() {
     });
 
     const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0, focusSessionId?: string | null) => {
+      forgetNativeStartup(id);
       // Plan 2b Moved Gate: this session was TAKEN OVER, not closed. Keep its pill
       // (so clicking it hits the gate), skip the "session died" banner
       // (SESSION_PROCESS_EXITED), and DON'T wipe chat state (SESSION_REMOVE) — the
@@ -1980,6 +1974,8 @@ function AppInner() {
       // Flush all session state
       // Batch 2 (§3): a new host means a new place, decided when its session list arrives.
       placeDecidedRef.current = false;
+      sessionEpochRef.current++;
+      setStartingSession(false); setStartFailed(null); startArgsRef.current = null;
       // Back on this device's own runtime there is no computer's copy to describe; a strip
       // left saying "reconnecting" would never clear (T4 review, 3).
       if (mode === 'local') setConversationStatus(undefined);
@@ -2486,11 +2482,8 @@ function AppInner() {
     [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
 
-  /** Put a just-created session on screen from the computer's ANSWER. session:created still
-   *  arrives and dedups against this; on a phone that announcement is queued behind a catch-up,
-   *  and a remote client would not auto-select it even then (mayAutoSelect). Starting one is a
-   *  decision about where to be, so it also settles the place a hydrate would otherwise pick. */
-  const adoptCreatedSession = useCallback((info: any) => {
+  /** Adopt the create ANSWER ahead of queued announcements, respecting recovery/transfer selection. */
+  const adoptCreatedSession = useCallback((info: any, recovering = false) => {
     placeDecidedRef.current = true;
     dispatch({ type: 'SESSION_INIT', sessionId: info.id });
     setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]));
@@ -2502,8 +2495,8 @@ function AppInner() {
     if (info.provider && info.provider !== 'claude') {
       setInitializedSessions((prev) => (prev.has(info.id) ? prev : new Set(prev).add(info.id)));
     }
-    setSessionId(info.id);
-  }, [dispatch]);
+    selectCreatedSession(info.id, recovering);
+  }, [dispatch, selectCreatedSession]);
 
   // WHY: a pending tab is renderer-only until the backend returns an admitted
   // session. Rebind once, preserving the unsent draft; an earlier created push
@@ -2542,6 +2535,7 @@ function AppInner() {
   }, [artifactState.pageViewOpen, artifactState.pagesViewOpen, settingsOpen, pageCreate]);
 
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string, initialInput?: string) => {
+    const epoch = sessionEpochRef.current;
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
@@ -2570,20 +2564,18 @@ function AppInner() {
         initialInput,
       }));
     } catch (err: any) {
+      if (epoch !== sessionEpochRef.current) return;
       // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
       setStartingSession(false);
       setStartFailed(err?.message ? String(err.message) : '');
       return;
     }
+    if (epoch !== sessionEpochRef.current) return;
     if (info?.id) adoptCreatedSession(info);
     setStartingSession(false);
-    // I1 fix: deliver the RESOLVED harnessId to the live session pill. The
-    // session:created event that seeds the sessions entry is emitted+sent
-    // (process.nextTick) BEFORE the main handler finishes create/resume, so on a
-    // resume it carries harnessId=undefined (session-manager can only seed it for
-    // a fresh create; the resumed id is header-derived, known only after
-    // nativeHost.resume awaits). The main handler re-stamps the resolved id onto
-    // the SessionInfo it RETURNS — patch the entry from that invoke result here.
+    // WHY patch from the reply: session:created runs before nativeHost.resume
+    // resolves the header-derived harnessId, so a resumed pill's announcement
+    // can carry undefined; the returned SessionInfo has the resolved identity.
     if (info?.harnessId) {
       setSessions((prev) => prev.map((s) => (s.id === info.id ? { ...s, harnessId: info.harnessId } : s)));
     }
@@ -2599,6 +2591,7 @@ function AppInner() {
   // session:destroyed event). Mirrors destroyedHandler's state cleanup MINUS the
   // death banner (SESSION_PROCESS_EXITED) — the session moved, it didn't die.
   const removeSessionLocally = useCallback((id: string) => {
+    forgetNativeStartup(id);
     setSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== id);
       setSessionId((curr) => (curr !== id ? curr : (remaining.length > 0 ? remaining[remaining.length - 1].id : null)));
@@ -2629,13 +2622,8 @@ function AppInner() {
     if (pendingRef.current?.close(pendingTab.tabId)) removeSessionLocally(pendingTab.tabId);
   }, [conversationStatus, pendingTab, removeSessionLocally]);
 
-  // Returns whether a resume was actually launched (true), or was aborted / failed
-  // / deferred to the pre-resume picker (false). Callers that own a modal or row
-  // spinner (the pendingNativeResume modal, ResumeBrowser) await this and keep
-  // their UI open on false instead of closing over a silent failure (Task 6 review
-  // — the create ack-gap: a create that never returned an id used to be a silent
-  // `return`, leaving the user staring at nothing).
-  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding, savedName?: string): Promise<boolean> => {
+  // True only for an acknowledged launch; aborted/failed/stale/model-picker replies keep modal/row UI open.
+  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding, savedName?: string, recovering = false): Promise<boolean> => {
     const cwd = projectPath;
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
@@ -2648,10 +2636,12 @@ function AppInner() {
       setPendingNativeResume({ claudeSessionId, projectSlug, projectPath, launchInNewWindow, savedName });
       return false; // no claim or handoff while the model picker is open
     }
+    const epoch = sessionEpochRef.current;
     const resume = (args: ReturnType<typeof buildSessionCreateArgs>) => runLeaseTakeoverGate({
       claudeSessionId,
-      askTakeover,
+      askTakeover: (...args) => epoch === sessionEpochRef.current ? askTakeover(...args) : Promise.resolve(false),
       onHandoff: async () => {
+        if (epoch !== sessionEpochRef.current) return; // host changed while consent was pending
         if (!getCapabilities().liveHandoff) { // R4-1: capability (false only on the Android app's own runtime), was a two-flag guess
           setToast('Live handoff is available from a computer or a remote connection to one.');
           return;
@@ -2659,7 +2649,12 @@ function AppInner() {
         // WHY: explicit consent opens a read/draft tab immediately; only the
         // backend attempt may later create a writer. No legacy lease-force here.
         const attempt = pendingRef.current!;
-        if (attempt.active) return;
+        // WHY: only one transfer tab is supported; concurrent recovery must not
+        // silently ignore consent or replace a transfer that may hold a draft.
+        if (attempt.active) {
+          setToast({ message: 'Finish the current conversation transfer, then try reopening this one again.', durationMs: 8000 });
+          return;
+        }
         const started = attempt.begin(claudeSessionId, provider === 'native' ? 'native' : 'claude', {
           ...args, resumeSessionId: claudeSessionId,
         }, projectSlug, savedName, launchInNewWindow);
@@ -2688,13 +2683,15 @@ function AppInner() {
       },
       onWarn: (message) => setToast({ message, durationMs: 8000 }),
       // WHY: creation and its claim are one backend operation, shared with remote.
-      open: () => window.claude.session.create(args),
+      open: () => epoch === sessionEpochRef.current ? window.claude.session.create(args) : Promise.reject(new Error('Stale session request')),
     }).then((info) => {
-      // Remote creation announcements do not select a conversation. The reply
-      // also covers reusing an existing writer, which emits no new announcement.
-      if (info && isRemoteMode()) adoptCreatedSession(info);
+      if (epoch !== sessionEpochRef.current) return null;
+      // WHY adopt on both doors: late created pushes must dedup even after recovery ends;
+      // reused writers emit no announcement. Only this operation's reply decides its selection.
+      if (info) adoptCreatedSession(info, recovering);
       return info;
     }).catch(() => {
+      if (epoch !== sessionEpochRef.current) return null;
       setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
       return null;
     });
@@ -3170,23 +3167,22 @@ function AppInner() {
   const welcomeBackDone = useCallback(() => {
     setWelcomeBackIds((ids) => { if (ids) void forgetReopenList(ids); return null; });
   }, []);
-  // Resume every ticked row through the same path as a Resume-browser click, one
-  // at a time so each goes through its own lease check. A native row reuses the
-  // model it last ran on (Q-model); one whose model is not set up here is left
-  // on the list for a manual Resume, which asks.
+  // WHY concurrent: independent admission/history must not wait for a slow startup or lease query.
+  // Ownership still asks consent; native rows with unavailable models stay for a manual pick.
   const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<{ launched: string[]; needModel: string[] }> => {
+    const epoch = sessionEpochRef.current;
     const [providers, catalog] = await Promise.all([
       window.claude.providers.list(),
       window.claude.providers.catalog(),
     ]).catch(() => [[], []] as [any[], any[]]);
-    const done: string[] = [];
-    const needModel: string[] = [];
-    for (const r of rows) {
+    if (epoch !== sessionEpochRef.current) return { launched: [], needModel: [] };
+    recoveryBatchRef.current = true;
+    const results = await Promise.all(rows.map(async (r) => {
       let binding: ModelBinding | undefined;
       if (r.provider === 'native') {
         binding = resolveNativeBinding(r.lastUsedModel, providers as any[], catalog as any[]) ?? undefined;
         // Reported, so the screen can say WHY this row stayed (UX review 2, U2).
-        if (!binding) { needModel.push(r.sessionId); continue; }
+        if (!binding) return 'need-model';
       }
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
@@ -3194,11 +3190,15 @@ function AppInner() {
         // WHY always false: this screen shows no Skip permissions switch, so a
         // default of "skip" would have reopened every session with approvals off,
         // unseen. Resuming one row through its own card still shows the switch.
-        false, false, r.provider, binding, r.name,
+        false, false, r.provider, binding, r.name, true,
       );
-      if (ok) done.push(r.sessionId);
-    }
-    return { launched: done, needModel };
+      return ok ? 'launched' : 'failed';
+    })).finally(() => { recoveryBatchRef.current = false; });
+    // Promise.all keeps input order even when startups finish out of order.
+    return {
+      launched: rows.filter((_, i) => results[i] === 'launched').map((r) => r.sessionId),
+      needModel: rows.filter((_, i) => results[i] === 'need-model').map((r) => r.sessionId),
+    };
   }, [handleResumeSession, sessionDefaults]);
   const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
@@ -3388,7 +3388,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => { void askTakeover('Devins laptop', phase); }, openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check

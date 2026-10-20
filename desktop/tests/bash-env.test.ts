@@ -118,6 +118,19 @@ describe('Bash env — the sudo askpass variables', () => {
     expect(r.text).toContain('[][][]');
   });
 
+  it('does not borrow another session askpass channel from the parent environment', async () => {
+    const keys = ['SUDO_ASKPASS', 'YOUCODED_ASKPASS_SOCKET', 'YOUCODED_ASKPASS_RUNTIME'] as const;
+    const previous = keys.map(key => process.env[key]);
+    try {
+      for (const key of keys) process.env[key] = 'another-session-helper';
+      const r = await BashTool.execute({ command: 'echo "[$SUDO_ASKPASS][$YOUCODED_ASKPASS_SOCKET][$YOUCODED_ASKPASS_RUNTIME]"' }, makeCtx());
+      expect(r.text).toContain('[][][]');
+      expect(r.text).not.toContain('another-session-helper');
+    } finally {
+      keys.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+    }
+  });
+
   it('wins over a persisted shellEnv value from an earlier persistent_env call (applied AFTER shellEnv)', async () => {
     const ctx = makeCtx({ adminPasswordEnv: ADMIN_ENV, shellEnv: { SUDO_ASKPASS: '/evil/askpass' } });
     const r = await BashTool.execute({ command: 'echo "$SUDO_ASKPASS"' }, ctx);

@@ -162,7 +162,11 @@ export function buildHydratePayload(): SerializedChatState {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, raw]) => {
       const name = path.split('/').pop()!.replace('.jsonl', '');
-      return [name, raw, SESSION_FOR[name]];
+      // WHY: readiness captures are a reopened, idle history, not the default
+      // native fixture's deliberately unfinished turn (which would show Stop).
+      const phase = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('nativeStartup');
+      const readiness = phase !== null && ['opening', 'connecting', 'failed', 'ready'].includes(phase);
+      return [name, name === 'native' && readiness ? `${raw}\n{"type":"turn_complete"}` : raw, SESSION_FOR[name]];
     });
   if (bubbleName) {
     const raw = bubbleConvos[`./fixtures/bubbles/${bubbleName}.jsonl`];
