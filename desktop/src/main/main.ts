@@ -259,9 +259,7 @@ const holderTakeoverRef: { fn: (sessionId: string, from?: { deviceId: string; de
 // WHY lazy root: the dev userData override is applied later, before the first session; never stage into the built app's profile.
 const sessionManager = new SessionManager({ claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')) });
 
-// Multi-window ownership: maps sessionId -> windowId and tracks leader for
-// singletons (PartyKit lobby). Populated when sessions are created and
-// when windows spawn/close. See window-registry.ts.
+// Multi-window session ownership and singleton leader tracking: see window-registry.ts.
 const windowRegistry = new WindowRegistry();
 
 // Ownership handoffs that arrived before their target window could listen.

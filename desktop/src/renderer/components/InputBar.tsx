@@ -57,15 +57,7 @@ export interface InputBarHandle {
   queueDraftSnapshot: () => import('../state/queued-edit-actions').QueueDraftSnapshot;
   fillQueuedDraftIfCurrent: (before: import('../state/queued-edit-actions').QueueDraftSnapshot, text: string, files: string[]) => boolean;
   clear: () => void;
-  // Task 11 (cancel/edit queued messages): the edit-refill idiom. There was no
-  // existing "external surface reads/replaces InputBar's draft" mechanism —
-  // `initialInput` fills once per session id (already consumed for an ACTIVE
-  // session) and the `youcoded:compose-insert` CustomEvent only prepends
-  // fire-and-forget (no way to check emptiness first, which the brief's
-  // ordering — refuse BEFORE removing the queued entry — requires). Extending
-  // this existing ref (already used by App for `clear()`) with a synchronous
-  // read + an unconditional replace was the smallest addition that supports
-  // the required check-then-act sequence; see task-11-report.md.
+  // Queue edits check the live draft before taking ownership; initialInput is one-shot.
   /** True when the composer currently holds a non-empty (trimmed) draft. */
   hasDraft: () => boolean;
   /** Take focus after the user switched session — only when that is safe (see the method). */
@@ -75,8 +67,7 @@ export interface InputBarHandle {
   readDraftPayload: (sessionId?: string) => { text: string; attachments: string[] };
   /** Carry text and attachments to an admitted session without submitting either. */
   transferDraft: (fromId: string, toId: string) => void;
-  /** Replace the composer's content with `text` and focus it. Caller must call
-   *  hasDraft() first — this does not check emptiness itself. */
+  /** Replace and focus; caller must check hasDraft() first. */
   fillDraft: (text: string) => void;
 }
 
@@ -208,8 +199,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     if(draftStorageSession.current===draftAuthority.current.snapshot().sessionId)updateQueueTransferDraft(draftStorageSession.current,textValue.current,value.map(a=>a.path));
     filesValue.current = value; draftAuthority.current.files(value.map(a=>a.path)); setAttachmentsState(value);
   },[]);
-  // Read by window-event listeners that must not re-subscribe on every change.
-  const attachmentsRef = useRef(attachments);
+  const attachmentsRef = useRef(attachments); // Stable listeners read the current files.
   attachmentsRef.current = attachments;
 
   // Voice prompting (deck 2026-09-05). The draft stays the one source of truth:
@@ -256,27 +246,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // Q-3 note (Destin): "press and hold the spacebar in a bare input box for
   // walkie-talkie mode" — since widened to any box, with or without text.
   //
-  // HOW THE GESTURE IS DECIDED, and why it is decided this way (Destin,
-  // 2026-09-05: "still seems like a bit of a gamble as to whether the spacebar
-  // does voice mode or just enters a bunch of spaces").
-  //
-  // The space bar goes down and NOTHING is typed. If it comes back up, or any
-  // other key goes down, before the hold matures, the space is typed then — one
-  // space, at the caret. If the hold matures, dictation starts and no space is
-  // typed at all.
-  //
-  // The rule that stops it feeling like a coin flip: nothing here may depend on
-  // the browser's `event.repeat` flag. The first attempt suppressed auto-repeat
-  // with `if (e.repeat)`, and Electron on Linux does not reliably set it — when
-  // it is missing every repeated space is typed, which is the run of spaces
-  // instead of the microphone. Whether a hold is open is OUR state
-  // (`spaceHoldTimer`), and every space arriving while it is open is swallowed
-  // whatever the event says about itself. At most one space can ever come out.
-  //
-  // Typing is unharmed: a normal space is released in about a tenth of a second,
-  // and the next key aborts the hold and puts the space in AHEAD of itself — so
-  // "hello world" typed at speed cannot come out "hellow orld", which is what a
-  // naive "insert it on key-up" would produce.
+  // WHY: defer one space until release/another key; a mature hold starts dictation.
+  // Track the hold ourselves: Linux Electron does not reliably mark event.repeat.
+  // Commit before the next character so fast typing cannot reorder its space.
   const SPACE_HOLD_MS = 350;
   const spaceHoldTimer = useRef<number | null>(null);
   const spaceHeld = useRef(false);
@@ -353,17 +325,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // browsers than setting scrollTop on a hidden-overflow element).
   const mirrorContentRef = useRef<HTMLDivElement>(null);
   const dispatch = useChatDispatch();
-  // Task 10 (Destin placement ruling): the stop control lives in the composer
-  // row now, not beside ChatView's ThinkingIndicator. Fix (review finding,
-  // 2026-07-22): useChatState(sessionId) here would re-render the composer —
-  // a controlled textarea — on EVERY dispatch for this session, i.e. every
-  // streaming token/tool delta, just to watch two booleans. useStreamingGate
-  // is a derived cached selector (useSessionAttention.ts idiom) whose
-  // getSnapshot returns a primitive, so useSyncExternalStore skips the
-  // re-render whenever the gate itself hasn't flipped. The predicate is
-  // "a turn is in flight and has not ended" — deliberately NOT
-  // `attentionState === 'ok'`, which used to hide the button for the whole
-  // stall countdown (see useStreamingGate.ts).
+  // WHY: a primitive cached selector keeps streaming tokens from redrawing the
+  // controlled textarea. An in-flight turn keeps Stop reachable even when stalled.
   const showStop = useStreamingGate(sessionId);
   // WHY a second gate: `showStop` keeps the button reachable through stalls and
   // permission asks; `stopLive` only animates it while the turn is really working

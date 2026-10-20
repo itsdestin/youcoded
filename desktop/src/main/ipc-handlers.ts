@@ -441,9 +441,7 @@ export function registerIpcHandlers(
     live: liveFacts,
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
     size: (id) => sessionManager.getPtySize(id),
-    // The tray, the badge and a status bar read the same cache a window's relay fills (attentionMap); the computer's reading goes in too, so
-    // they are right with no window relaying.
-    onAttention: (id, state) => { onMainAttention?.(id, state); },
+    onAttention: (id, state) => { onMainAttention?.(id, state); }, // Host readings fill the same tray/badge cache even with no window.
     onQueueInputReady: id => claudeQueues?.wake(id),
     onInputBlocked: (id, blocked) => { sessionManager.setInputBlocked(id, blocked); }, // WHY: main reads the terminal itself now (master's window reported this over a channel)
   });

@@ -27,14 +27,7 @@ class NoopResizeObserver {
   disconnect() {}
 }
 
-// Task 10: dispatch-capture idiom mirrored from selector-rerender.test.tsx —
-// InputBar now reads chat state via useChatState(sessionId) for the stop
-// button, so these tests need to drive the REAL store through the reducer
-// (USER_PROMPT sets isThinking:true + attentionState:'ok'; ATTENTION_STATE_
-// CHANGED flips attentionState alone) rather than mocking state directly —
-// per the react-renderer rule, useChatState is the only approved render-path
-// read, so exercising it through real dispatches is the honest way to cover
-// the visibility predicate.
+// Drive the real reducer/selectors for Stop visibility rather than mocking chat state.
 beforeEach(()=>{Object.defineProperty(window,'localStorage',{value:queueBrowserStorage(),configurable:true});});
 let capturedDispatch: ((a: any) => void) | null = null;
 function DispatchCapture() {
