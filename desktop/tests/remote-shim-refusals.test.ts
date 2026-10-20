@@ -217,6 +217,13 @@ describe('remote-shim — rejecting failures', () => {
     // The BEHAVIOUR of settling a caller, not a source string. A text pin caught
     // "stopped calling it" and missed "calls it and ignores the answer" — and
     // ignoring the answer IS the original bug.
+    it('brands an explicitly unsupported direct-control channel as definitely undispatched', () => {
+      const resolve = vi.fn(); const reject = vi.fn();
+      applyResponse({ resolve, reject }, 'session:claude-control', { unsupported: true });
+      expect(resolve).not.toHaveBeenCalled();
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ code: 'REMOTE_UNSUPPORTED', channel: 'session:claude-control' }));
+    });
+
     it('a listed channel\u2019s failure REJECTS the caller, with the host\u2019s reason', () => {
       const resolve = vi.fn(); const reject = vi.fn();
       applyResponse({ resolve, reject }, 'models:set-settings', { ok: false, error: 'Context length must be at least 1024 tokens.' });

@@ -6,6 +6,12 @@ const chat = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['
 
 export const CHAT: readonly ScreenEntry[] = [
   chat('chat', 'view'),
+  // UI-only queue review. Before preserves this branch's existing queue design, not old master.
+  ...['idle-before', 'idle-after', 'uncertain-before', 'uncertain-after', 'waiting-after'].map(q => ({
+    ...chat(`chat#queue-${q}`, 'view'), session: 'wb-1', params: { queuePreview: q },
+    ...(q === 'idle-after' ? { sameAs: { name: 'chat', why: 'Immediate delivery intentionally has no extra chrome.' } } : {}),
+  })),
+  { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),

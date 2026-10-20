@@ -89,6 +89,9 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
   const { sessionId } = live;
   const now = deps.now ?? Date.now;
   switch (live.kind) {
+    case 'stop-confirmed':
+      deps.batcher.push({ type: 'DIRECT_STOP_CONFIRMED', sessionId, uuid: `direct-stop-${live.id}`, userUuid: live.userUuid, timestamp: live.at });
+      return;
     case 'queue':
       deps.batcher.push({ type: 'QUEUE_SYNCED', sessionId, queue: live.queue });
       return;

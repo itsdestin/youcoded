@@ -5,6 +5,7 @@
 // does the instant version only on a phone, or on the Android app paired to a computer.
 import type { ChatAction, SessionChatState } from './chat-types';
 import { announce } from '../utils/announce';
+import { stopClaudeTurn } from './claude-control';
 import { runPending, optimisticScreen, connected } from './pending-action';
 
 /** A reply-less Stop waits this long for the record to show the turn ended before it asks the computer. */
@@ -20,9 +21,9 @@ export interface TurnWatch { running(): boolean; subscribe(notify: () => void): 
  */
 export function stopTurn(o: { sessionId: string; provider: 'claude' | 'native' | undefined; turn?: TurnWatch | null }): void {
   const write = () => {
-    // Native sessions have no PTY: interrupt the in-process stream. Claude Code gets the single ESC byte the physical key sends.
+    // Native stays in-process; Claude uses an addressed Stop when supported, with a definite-unavailable fallback only.
     if (o.provider === 'native') window.claude.native.interrupt(o.sessionId);
-    else window.claude.session.sendInput(o.sessionId, '\x1b');
+    else stopClaudeTurn(o.sessionId);
   };
   const turn = o.turn;
   if (!optimisticScreen() || !turn) { write(); return; }

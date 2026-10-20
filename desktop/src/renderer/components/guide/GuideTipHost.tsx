@@ -4,27 +4,29 @@
 // showing tips (decided 2026-09-10, S-2). Mounted once, in App, beside the
 // tour; never while the tour itself is up — one bubble at a time.
 //
-// It also holds the tip back while the person is typing or the assistant is
-// mid-answer (Destin's own con on Q-5: a bubble over your work is an
-// interruption). Those two facts are passed in, because the host has no
-// business reading chat state itself.
+// It holds a new tip back while busy (a bubble appearing over your work is an
+// interruption), but leaves an already visible tip readable until dismissed.
+// Activity is passed in: the host has no business reading chat state itself.
 import React, { useEffect, useState } from 'react';
 import GuideBubble from './GuideBubble';
 import { dismissTip, stopAllTips, useActiveTip } from './tips';
 
 interface Props {
-  /** The composer has focus, or a turn is running: wait. */
+  /** Activity that defers a tip's first appearance, not one already being read. */
   busy: boolean;
 }
 
 export default function GuideTipHost({ busy }: Props) {
   const tip = useActiveTip();
-  // A tip that arrived while busy waits for a quiet moment rather than being
-  // lost — the trigger already spent its one-per-sitting allowance on it.
-  const [held, setHeld] = useState(false);
-  useEffect(() => { if (tip && busy) setHeld(true); if (!busy) setHeld(false); }, [tip, busy]);
+  // WHY: isThinking flips between queued turns. Retracting an unread bubble on
+  // every flip made the same resume tip blink. Once shown, keep that exact tip
+  // readable; a new tip still waits for quiet and dismissal still owns its life.
+  const [shownTip, setShownTip] = useState<typeof tip>(null);
+  useEffect(() => {
+    if (!tip || !busy) setShownTip(tip);
+  }, [tip, busy]);
 
-  if (!tip || busy || held) return null;
+  if (!tip || (busy && shownTip !== tip)) return null;
   return (
     <GuideBubble
       eyebrow="Tip"

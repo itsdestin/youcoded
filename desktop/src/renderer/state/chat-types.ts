@@ -1,5 +1,6 @@
 import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop, type InjectedMeta } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
+import type { QueuedItem } from '../../shared/session-live-types';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
 export type { ToolCallState, AttentionState };
@@ -256,7 +257,7 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -289,6 +290,8 @@ export interface SessionChatState {
   currentGroupId: string | null;
   /** ID of the current assistant turn (text + tool groups accumulate here) */
   currentTurnId: string | null;
+  /** Recorded user identity for scoped direct Stop completion (not an assistant bubble id). */
+  transcriptTurnUuid?: string;
   /** Timestamp of last activity from Claude — used to reset the thinking timeout */
   lastActivityAt: number;
   /** Tool IDs belonging to the current active turn — cleared on turn end */
@@ -444,7 +447,7 @@ export interface SessionChatState {
    * handleEditQueued). content is the same display string the bubble would
    * have shown, so the drain-side removal can content-match it.
    */
-  queuedMessages: Array<{ queueId: string; content: string; timestamp: number }>;
+  queuedMessages: QueuedItem[];
   /**
    * The model the computer last said this session switched to, until a reply proves it (one-core R5-4a). WHY: the chip's model was worked
    * out from the newest assistant turn, so every screen but the one that picked a model showed the old one until the next reply.
@@ -542,7 +545,10 @@ export type ChatAction =
       attachments?: string[];
       /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
       sendId?: string;
+      /** Direct/uncertain sends must never receive the terminal's automatic Enter retry. */
+      sendTransport?: 'direct' | 'pty';
     }
+  | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
   | {
       // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
       type: 'SEND_NOTE';
@@ -563,7 +569,7 @@ export type ChatAction =
       // screen that missed a change, a screen that did not send the message and a screen that reconnected all end up showing the same rows.
       type: 'QUEUE_SYNCED';
       sessionId: string;
-      queue: Array<{ queueId: string; content: string; timestamp: number }>;
+      queue: QueuedItem[];
     }
   | {
       // The host took back a "Model switched to X" divider because Claude Code refused the switch (one-core R5-4a review).
@@ -997,6 +1003,14 @@ export type ChatAction =
   // user-interrupt markers ("[Request interrupted by user]" / "...for tool
   // use"). Task 5 consumes this in the reducer to end the in-flight turn
   // without rendering the marker as a user bubble.
+  | {
+      type: 'DIRECT_STOP_CONFIRMED';
+      sessionId: string;
+      uuid: string;
+      userUuid: string;
+      timestamp: number;
+      usage?: never;
+    }
   | {
       type: 'TRANSCRIPT_INTERRUPT';
       sessionId: string;

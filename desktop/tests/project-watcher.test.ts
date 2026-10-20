@@ -314,24 +314,28 @@ describe('project watcher lifecycle', () => {
   const record = (evt: ExternalChangeEvent) =>
     (PROBE.test(evt.artifactId ?? '') ? probes : events).push(evt);
   let probeSeq = 0;
-  // Rewrite spacing must exceed the 500ms stability window, or each rewrite
-  // restarts the pending write and it never stabilises. Deadline stays under
-  // the setup-waitfor 15s so a dead watch reports HERE, by name.
+  // New probe paths recover from the macOS startup gap without resetting an
+  // older probe's awaitWriteFinish clock when stat polling is delayed by load.
+  // Deadline stays under setup-waitfor's 15s; no timeout inflation.
   const PROBE_REWRITE_MS = 2500;
   const PROBE_DEADLINE_MS = 12_500;
 
-  /** Resolve once a write in `dir` is actually reported — the watch is live. A
-   *  probe written into the macOS startup gap is lost, so it is rewritten until
-   *  one lands. Probe events go to `probes`, never to `events`. */
+  /** Resolve once any of our writes in `dir` is reported. A startup-gap probe
+   *  may be lost; a fresh path retries without starving earlier pending writes. */
   async function untilLive(dir: string): Promise<void> {
-    const name = `watch-probe-${probeSeq++}.txt`;
-    const file = path.join(dir, name);
-    const landed = () => probes.some((e) => (e.artifactId ?? '').split('/').pop() === name);
-    const deadline = Date.now() + PROBE_DEADLINE_MS;
-    for (let attempt = 0; Date.now() < deadline; attempt++) {
-      await fs.promises.writeFile(file, `probe attempt ${attempt}`);
-      const rewriteAt = Date.now() + PROBE_REWRITE_MS;
-      while (Date.now() < rewriteAt) {
+    const names = new Set<string>();
+    const landed = () => probes.some((e) => names.has((e.artifactId ?? '').split('/').pop() ?? ''));
+    // WHY: the suspended watcher gets no CPU; wall-clock jumps must not consume
+    // its entire probe budget before a single post-resume stat can complete.
+    const deadline = performance.now() + PROBE_DEADLINE_MS;
+    for (let attempt = 0; performance.now() < deadline; attempt++) {
+      // WHY: rewriting ONE pending path postpones chokidar's stability clock on
+      // every retry. Unique probes can stabilize even after a slow stat interval.
+      const name = `watch-probe-${probeSeq++}.txt`;
+      names.add(name);
+      await fs.promises.writeFile(path.join(dir, name), `probe attempt ${attempt}`);
+      const rewriteAt = performance.now() + PROBE_REWRITE_MS;
+      while (performance.now() < rewriteAt) {
         if (landed()) return;
         await wait(25);
       }
@@ -371,6 +375,27 @@ describe('project watcher lifecycle', () => {
       expect(e.by).toBe('external');
       expect(e.artifactId).toBe('a.ts'); // discovered id IS the relative path
     }
+  });
+
+  it('waits for a live probe across a forward wall-clock jump', async () => {
+    await watchProject(root, 1);
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_001);
+    try { await untilLive(root); }
+    finally { clock.mockRestore(); }
+    expect(probes.length).toBeGreaterThan(0);
+  });
+
+  it('proves a watch is live even when file stabilization exceeds the probe cadence', async () => {
+    const watch = chokidar.watch.bind(chokidar);
+    // WHY: delayed stat polling can keep a rewritten probe pending forever. Force
+    // stabilization past the rewrite cadence instead of depending on machine load.
+    const spy = vi.spyOn(chokidar, 'watch').mockImplementation((paths, options) =>
+      watch(paths, { ...options, awaitWriteFinish: { stabilityThreshold: PROBE_REWRITE_MS + 500, pollInterval: 100 } }));
+    try {
+      await watchProject(root, 1);
+      await untilLive(root);
+      expect(probes.length).toBeGreaterThan(0);
+    } finally { spy.mockRestore(); }
   });
 
   it('keeps root edits live while provider metadata is blocked, then watches the deferred directory', async () => {

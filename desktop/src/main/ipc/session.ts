@@ -33,6 +33,8 @@ import type { SessionLiveFacts } from '../session-live';
 import type { SessionScreens } from '../session-screens';
 import { openSession, openPtyOnly, type NativeLive } from '../session-open';
 import { isSendId, SEND_OUTCOMES_MAX_IDS } from '../../shared/send-outcome-types';
+import { isClaudeControlRequest, type ClaudeControlRequest, type ClaudeControlResult } from '../../shared/claude-control-types';
+import type { SessionRecords } from '../session-record';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
 import { shareInFlight } from '../share-in-flight';
@@ -47,9 +49,10 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 /** What registerIpcHandlers hands over: the shared maps and objects, and the few bodies that lean on
  *  its private state. A phone and the computer's windows reach the same ones. */
 export interface SessionOps {
+  queueAction?: import('../../shared/conversation-queue-channel-types').ConversationQueueBridge['action'];
   // WHY createSession too (2026-09-30 one-core R3-6): engine:run-in-terminal opens its plain-shell session through
   // the same manager, for a window and for a phone.
-  sessionManager: Pick<SessionManager, 'listSessions' | 'sendInput' | 'resizeSession' | 'getSession' | 'createSession'>;
+  sessionManager: Pick<SessionManager, 'listSessions' | 'sendInput' | 'resizeSession' | 'getSession' | 'createSession' | 'control' | 'isControlReady'>;
   /** desktop session id -> conversation id (session-state.ts): the ONE copy. */
   sessionIdMap: Map<string, string>;
   nativeHost: NativeSessionHost;
@@ -182,6 +185,13 @@ function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive |
   };
 }
 
+/** Also used for late mod receipts after an invoke timed out; these updates are idempotent. */
+export function recordClaudeControlResult(records: Pick<SessionRecords, 'noteSend' | 'noteSendRefused'> | undefined, sessionId: string, request: ClaudeControlRequest, result: ClaudeControlResult, mayClearRefusal = true): void {
+  if (!records || request.kind !== 'send-text') return;
+  if (result.status === 'accepted') records.noteSend(sessionId, request.sendId);
+  else if (mayClearRefusal && (result.status === 'rejected' || result.status === 'unavailable')) records.noteSendRefused(sessionId, request.sendId);
+}
+
 const sessionEntries: MainChannelDef[] = [
   // ── Lifecycle ────────────────────────────────────────────────────────────────
   defineChannel({
@@ -233,6 +243,30 @@ const sessionEntries: MainChannelDef[] = [
   }),
   // Switching is client-side state; this exists so the request is answered on every bridge.
   defineChannel({ name: IPC.SESSION_SWITCH, kind: 'handle', handler: () => ({ ok: true as const }) }),
+
+  // WHY a separate channel: terminal keys and plan/menu answers must never be inferred as chat controls.
+  defineChannel({
+    name: IPC.SESSION_CLAUDE_CONTROL, kind: 'handle',
+    handler: async (payload, ctx): Promise<ClaudeControlResult> => {
+      const { sessionId, request } = payload ?? {};
+      if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 128 || !isClaudeControlRequest(request)
+        || (request.kind === 'send-text' && !isSendId(request.sendId))) {
+        return { status: 'rejected', message: 'This Claude control request is not supported.' };
+      }
+      // WHY: old remote bundles may still request mods Stop. Prove no dispatch so their existing Escape fallback is safe.
+      if (request.kind === 'stop') return { status: 'unavailable' };
+      const o = ops(); const records = ctx.runtime?.records;
+      // WHY: rejecting a conflicting reuse of an ID must not erase the original operation's uncertainty.
+      const newPending = request.kind === 'send-text' ? records?.noteSendPending(sessionId, request.sendId) : false;
+      if (request.kind === 'command' && o.sessionManager.isControlReady(sessionId)) o.liveFacts?.directCommandStarted(sessionId, request);
+      let result: ClaudeControlResult;
+      try { result = await o.sessionManager.control(sessionId, request); }
+      catch { result = { status: 'unknown', message: 'Claude did not confirm this action. Check the conversation before trying again.' }; }
+      recordClaudeControlResult(records, sessionId, request, result, newPending === true);
+      o.liveFacts?.directCommandFinished(sessionId, request, result);
+      return result;
+    },
+  }),
 
   // ── Terminal traffic (fire-and-forget) ───────────────────────────────────────
   // WHY these two call straight through: they run at typing speed. The table lookup is one Map read and

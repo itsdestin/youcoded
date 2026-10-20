@@ -7,6 +7,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { IPC } from '../src/shared/backend-contract';
 import { CHANNEL_TABLE, findChannel, registerDesktopChannels, serveRemoteChannel } from '../src/main/ipc/channel-table';
 import { bindSessionOps } from '../src/main/ipc/session';
+import { SessionRecords } from '../src/main/session-record';
 
 const FAMILY = /^(session|session-naming|transcript):/;
 // Not part of THIS family's count: the drag / detach messages are computer-window plumbing, table entries of their own
@@ -34,7 +35,7 @@ describe('session channels: what is in the table and who may call it', () => {
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && !NOT_YET.has(v));
     // 24 = create destroy list selected switch input resize terminal-ready terminal-ack terminal-repaint menu-lock browse history read-meta
     //      page open unwatch prompt-report set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
-    expect(names.length).toBe(28);
+    expect(names.length).toBe(30); // explicit Claude controls plus provider-neutral queue action; raw input stays unchanged
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
@@ -64,6 +65,66 @@ describe('session channels: what is in the table and who may call it', () => {
     const out: any = await serveRemoteChannel(def, { sessionId: 's', flag: 'bogus', value: true }, phoneCtx);
     expect(out.payload).toEqual({ ok: false, error: 'unknown flag: bogus' });
     expect(out.payload.unsupported).toBeUndefined();
+  });
+});
+
+describe('explicit Claude controls', () => {
+  it('declines mods Stop before dispatch so older screens can use their legacy Escape fallback', async () => {
+    const def = findChannel('session:claude-control')!;
+    const control = vi.fn(async () => ({ status: 'accepted', requestId: 'stop' }));
+    const sendInput = vi.fn();
+    bindSessionOps({ sessionManager: { control, sendInput } } as any);
+    const payload = { sessionId: 's', request: { kind: 'stop' } };
+    expect(await def.handler(payload, desktopCtx())).toEqual({ status: 'unavailable' });
+    expect(await serveRemoteChannel(def, payload, phoneCtx)).toMatchObject({ payload: { status: 'unavailable' } });
+    expect(control).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalled(); // Exactly one caller-owned fallback, not a second host-side write.
+  });
+  it('keeps a dispatched send uncertain until acceptance, on the same window/phone handler', async () => {
+    const def = findChannel('session:claude-control'); expect(def).toBeDefined();
+    const records = new SessionRecords(); records.begin('s');
+    let finish!: (r: any) => void;
+    const control = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    bindSessionOps({ sessionManager: { control, isControlReady: () => true } } as any);
+    const request = { kind: 'send-text', text: 'hello', sendId: 'send-direct' };
+    const pending = def!.handler({ sessionId: 's', request }, desktopCtx({ runtime: { records } }));
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith('s', request));
+    expect(records.sendOutcomes('s', ['send-direct'], records.epochOf('s')).outcomes['send-direct']).toBe('unknown');
+    finish({ status: 'accepted', requestId: 'r' });
+    expect(await pending).toMatchObject({ status: 'accepted' });
+    expect(records.sendOutcomes('s', ['send-direct'], records.epochOf('s')).outcomes['send-direct']).toBe('received');
+  });
+  it.each(['unknown', 'unavailable', 'rejected'])('records %s without typing a fallback itself', async (status) => {
+    const def = findChannel('session:claude-control'); expect(def).toBeDefined();
+    const records = new SessionRecords(); records.begin('s');
+    const sendInput = vi.fn(); const control = vi.fn(async () => ({ status, message: 'test' }));
+    bindSessionOps({ sessionManager: { control, sendInput, isControlReady: () => false } } as any);
+    const result = await serveRemoteChannel(def!, { sessionId: 's', request: { kind: 'send-text', text: 'hello', sendId: 'send-direct' } }, { ...phoneCtx, runtime: { records } });
+    expect(result).toMatchObject({ reply: true, payload: { status } });
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(records.sendOutcomes('s', ['send-direct'], records.epochOf('s')).outcomes['send-direct']).toBe(status === 'unknown' ? 'unknown' : 'not-received');
+  });
+  it('does not erase the original uncertainty when different text reuses its send ID', async () => {
+    const def = findChannel('session:claude-control')!;
+    const records = new SessionRecords(); records.begin('s');
+    let finish!: (r: any) => void;
+    const control = vi.fn((_id: string, request: any) => request.text === 'original'
+      ? new Promise(resolve => { finish = resolve; })
+      : Promise.resolve({ status: 'rejected', message: 'Send ID was already used for different text' }));
+    bindSessionOps({ sessionManager: { control, isControlReady: () => true } } as any);
+    const ctx = desktopCtx({ runtime: { records } });
+    const original = def.handler({ sessionId: 's', request: { kind: 'send-text', text: 'original', sendId: 'same-id' } }, ctx);
+    await def.handler({ sessionId: 's', request: { kind: 'send-text', text: 'different', sendId: 'same-id' } }, ctx);
+    expect(records.sendOutcomes('s', ['same-id'], records.epochOf('s')).outcomes['same-id']).toBe('unknown');
+    finish({ status: 'accepted', requestId: 'original' }); await original;
+    expect(records.sendOutcomes('s', ['same-id'], records.epochOf('s')).outcomes['same-id']).toBe('received');
+  });
+
+  it('refuses unrecognized commands before contacting Claude', async () => {
+    const def = findChannel('session:claude-control'); expect(def).toBeDefined();
+    const control = vi.fn(); bindSessionOps({ sessionManager: { control } } as any);
+    expect(await def!.handler({ sessionId: 's', request: { kind: 'command', command: 'logout' } }, desktopCtx())).toMatchObject({ status: 'rejected' });
+    expect(control).not.toHaveBeenCalled();
   });
 });
 

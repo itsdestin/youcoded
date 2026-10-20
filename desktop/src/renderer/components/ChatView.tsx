@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMe
 import { useChatState, useChatDispatch } from '../state/chat-context';
 import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
+import { workbenchQueuePreview } from '../workbench-mode';
 import ToolCard from './ToolCard';
 import type { PromptCardButton } from './PromptCard';
 import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
@@ -813,7 +814,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
   const QUEUED_STRIP_GAP = '0.5rem'; // visual breathing room above the strip's top edge (Destin's ask)
-  const hasQueuedMessages = state.queuedMessages.length > 0;
+  // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
+  const queuePreview = workbenchQueuePreview();
+  const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;

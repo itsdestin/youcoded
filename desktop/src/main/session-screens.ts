@@ -59,6 +59,7 @@ export interface SessionScreensDeps {
   onAttention?(sessionId: string, state: 'ok' | 'stuck'): void;
   /** Told when a pop-up starts or stops holding the session's keyboard (the session manager gates its own automated writes on it). */
   onInputBlocked?(sessionId: string, blocked: boolean): void;
+  onQueueInputReady?(sessionId: string): void;
   now?: () => number;
   /** Timers are injectable so a test does not wait seconds. */
   setTimer?(fn: () => void, ms: number): unknown;
@@ -107,6 +108,18 @@ export class SessionScreens {
   private readonly per = new Map<string, PerSession>();
   private readonly now: () => number;
   private readonly sizes = new Map<string, { cols: number; rows: number }>();
+  private readonly queueWaiters = new Map<string, Set<() => void>>();
+  waitForQueueInputSafe(sessionId: string, deadline: number): Promise<boolean> {
+    if (this.queueInputSafe(sessionId)) return Promise.resolve(true);
+    if (!this.per.get(sessionId)?.term || Date.now() >= deadline) return Promise.resolve(false);
+    const set = this.queueWaiters.get(sessionId) ?? new Set<() => void>();
+    if (set.size >= 8) return Promise.resolve(false); this.queueWaiters.set(sessionId,set);
+    return new Promise(resolve => {
+      const finish = (safe: boolean) => { clearTimeout(timer); set.delete(check); if(!set.size)this.queueWaiters.delete(sessionId); resolve(safe); };
+      const check = () => { if(!this.per.get(sessionId)?.term)finish(false); else if(this.queueInputSafe(sessionId))finish(true); };
+      const timer = setTimeout(()=>finish(false),Math.max(1,Math.min(15000,deadline-Date.now()))); set.add(check);
+    });
+  }
 
   constructor(private readonly deps: SessionScreensDeps) {
     this.now = deps.now ?? Date.now;
@@ -146,6 +159,14 @@ export class SessionScreens {
     return n;
   }
   hasTerminal(sessionId: string): boolean { return !!this.per.get(sessionId)?.term; }
+  /** Queue automation needs positive parsed ownership; a missing/unknown reading is NEVER safe. */
+  queueInputSafe(sessionId: string): boolean {
+    const s = this.per.get(sessionId); const need = this.deps.records.screenNeed(sessionId);
+    if (!s?.term || s.pending > 0 || !need || need.asking || need.permissionCard || s.reader?.shownCardId) return false;
+    // WHY read the actual current generation synchronously: a prior null input-block
+    // can mean unknown, and a 100ms cached verdict can predate a newly parsed popup.
+    return readInputFocus(this.readScreen(s)).kind === 'message-box';
+  }
 
   // ------------------------------------------------------------------------------------------------------------------------------------
   // Feeding
@@ -175,6 +196,8 @@ export class SessionScreens {
       s.pending--;
       if (s.pending > 0) return;
       if (s.tickWhenReady) { s.tickWhenReady = false; this.tick(sessionId); }
+      for (const notify of [...(this.queueWaiters.get(sessionId) ?? [])]) notify();
+      if (this.queueInputSafe(sessionId)) this.deps.onQueueInputReady?.(sessionId);
     });
     this.scheduleScan(sessionId, s);
   }
@@ -233,6 +256,7 @@ export class SessionScreens {
     const s = this.per.get(sessionId);
     if (s) { this.dispose(sessionId, s); this.per.delete(sessionId); }
     this.sizes.delete(sessionId);
+    for(const notify of [...(this.queueWaiters.get(sessionId) ?? [])])notify();
   }
 
   /** Quit teardown. */

@@ -42,6 +42,8 @@ import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
 import { bindSyncSpacesDeps } from './ipc/sync-spaces';
 import { bindSessionOps, sessionProviderFor, findTranscriptSlug } from './ipc/session';
+import { subscribeClaudeControlReceipts } from './claude-control-receipts';
+import { wireClaudeQueues } from './claude-queue-wiring';
 import { bindThemeMarketplace } from './ipc/theme-marketplace';
 import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
@@ -430,23 +432,22 @@ export function registerIpcHandlers(
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
 
-  // WHY (one-core R5-4b): the computer's own copy of each running Claude Code terminal, read for the "may be stuck" check and for the cards a terminal
-  // shows. Everything it finds leaves through liveFacts (so through publish). It exists only while a turn runs, a session is starting or a menu is up.
-  // The terminal bytes it is fed are noted in the record by the session manager itself (setChunkNoter below), whether or not phone access is on.
+  const stopClaudeControlReceipts = subscribeClaudeControlReceipts(sessionManager, runtime.records, liveFacts);
+  // One host terminal reader drives cards, attention and positive queue input ownership; windows/phones consume its published verdicts.
   let onMainAttention: ((sessionId: string, state: 'ok' | 'stuck') => void) | null = null; // set once the status relay below exists
+  let claudeQueues: ReturnType<typeof wireClaudeQueues>;
   const screens = new SessionScreens({
     records: runtime.records,
     live: liveFacts,
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
     size: (id) => sessionManager.getPtySize(id),
-    // The tray, the badge and a status bar read the same cache a window's relay fills (attentionMap); the computer's reading goes in too, so
-    // they are right with no window relaying.
-    onAttention: (id, state) => { onMainAttention?.(id, state); },
+    onAttention: (id, state) => { onMainAttention?.(id, state); }, // Host readings fill the same tray/badge cache even with no window.
+    onQueueInputReady: id => claudeQueues?.wake(id),
     onInputBlocked: (id, blocked) => { sessionManager.setInputBlocked(id, blocked); }, // WHY: main reads the terminal itself now (master's window reported this over a channel)
   });
+  claudeQueues = wireClaudeQueues(sessionManager,runtime.records,screens,publish,()=>app.getPath('userData'));
   runtime.records.onScreenNeedChange((id) => screens.refresh(id));
-  // The record keeps a session's terminal bytes (up to 4M units) for a phone's terminal view, and ONLY while phone access is on, exactly as the
-  // phone server's own buffer did before the record existed. The computer's headless terminals are fed every chunk directly and need none of it.
+  // Phone terminal replay keeps at most 4M units while remote is on; the host screen/input gate always receives every live chunk.
   sessionManager.setChunkNoter((id, data) => (remoteServer?.isRunning() ? runtime.records.notePty(id, data) : null));
 
   // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
@@ -1056,6 +1057,7 @@ export function registerIpcHandlers(
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
+    void claudeQueues?.forget(sessionId).catch(error => log('WARN','ClaudeQueue','Queue close failed',{error:String(error)}));
     sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, exitCode]);
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     liveFacts.forget(sessionId);
@@ -2023,6 +2025,7 @@ export function registerIpcHandlers(
         // One-core R5-4a: Claude Code's own `source: "clear"` says this rotation is a /clear, so every screen draws "Conversation cleared"
         // (it used to be drawn only by the screen that typed it, and could double on a phone that typed it too).
         liveFacts.noteSessionStart(desktopId, source, claudeId);
+        void claudeQueues?.identityChanged(desktopId,source ?? 'unknown',claudeId).catch(error => log('WARN','ClaudeQueue','Identity transition paused',{error:String(error)}));
       }
 
       // Remap (e.g. /clear rotated the CC session id): tear down the old
@@ -2436,6 +2439,7 @@ export function registerIpcHandlers(
     catch { return false; }
   };
   const cleanup = function cleanup(): Promise<void> {
+    stopClaudeControlReceipts();
     stopThemeWatcher();
     statusPush.stop();
     summaryPush.stop();
@@ -2443,7 +2447,7 @@ export function registerIpcHandlers(
     // The runtime's half of quit (sign-in listener, native sessions, admin-password asks,
     // the llama-server, and session-state's topic watchers + maps) lives with the runtime
     // (create-runtime.ts). It returns the engine-stop promise so quit can AWAIT it.
-    return runtime.cleanup();
+    return (async () => { await claudeQueues?.close(); await runtime.cleanup(); })();
   };
   // firstRunDeps (first-run local models, 2026-09-14): the native objects setup
   // reaches for an API key, a model app or a local download. Built here because
@@ -2465,6 +2469,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
+    queueAction: claudeQueues ? (id,action) => claudeQueues!.action(id,action) : undefined,
     destroySession, signalTerminalReady, ackTerminalOutput, requestTerminalRepaint, transcriptPage, canWriteStoreRecord, publish, liveFacts, screens,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });

@@ -45,6 +45,19 @@ vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 describe('parseTranscriptLine', () => {
   const sessionId = 'desktop-session-1';
 
+  it('recognizes an app mod command envelope even without promptId', () => {
+    const events = parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'mod-model', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>' } }), sessionId);
+    expect(events).toMatchObject([{ type: 'user-message', uuid: 'mod-model', data: { text: '/model sonnet', slashCommand: true } }]);
+  });
+
+  it('drops only the bridge command\'s extra compact row, not actual user text or other plugins', () => {
+    const row = { type: 'user', uuid: 'extra', promptId: 'p', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '/compact preserve details' } };
+    expect(parseTranscriptLine(JSON.stringify(row), sessionId)).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({ ...row, origin: { ...row.origin, asUser: true } }), sessionId)).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
+    expect(parseTranscriptLine(JSON.stringify({ ...row, origin: { kind: 'plugin', name: 'someone-else' } }), sessionId)).toMatchObject([{ type: 'user-message', data: { text: '/compact preserve details' } }]);
+    expect(parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'hidden', message: { role: 'user', content: 'still not a user prompt' } }), sessionId)).toEqual([]);
+  });
+
   it('parses assistant text block → assistant-text event', () => {
     const line = JSON.stringify({
       type: 'assistant',

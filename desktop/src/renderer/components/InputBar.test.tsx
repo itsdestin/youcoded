@@ -11,6 +11,7 @@ import { EscCloseProvider } from '../hooks/use-esc-close';
 import { Dialog } from './ui/Dialog';
 import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
+import { queueBrowserStorage } from '../../../tests/helpers/queue-browser-storage';
 import { flushRecoveryDrafts, readRecoveryDraft, writeRecoveryDraft } from '../state/draft-recovery';
 import { makeDraftToken, expandDraftTokens } from './context-menu/compose-ref';
 
@@ -26,14 +27,8 @@ class NoopResizeObserver {
   disconnect() {}
 }
 
-// Task 10: dispatch-capture idiom mirrored from selector-rerender.test.tsx —
-// InputBar now reads chat state via useChatState(sessionId) for the stop
-// button, so these tests need to drive the REAL store through the reducer
-// (USER_PROMPT sets isThinking:true + attentionState:'ok'; ATTENTION_STATE_
-// CHANGED flips attentionState alone) rather than mocking state directly —
-// per the react-renderer rule, useChatState is the only approved render-path
-// read, so exercising it through real dispatches is the honest way to cover
-// the visibility predicate.
+// Drive the real reducer/selectors for Stop visibility rather than mocking chat state.
+beforeEach(()=>{Object.defineProperty(window,'localStorage',{value:queueBrowserStorage(),configurable:true});});
 let capturedDispatch: ((a: any) => void) | null = null;
 function DispatchCapture() {
   capturedDispatch = useChatDispatch();
@@ -91,6 +86,42 @@ describe('InputBar — context-menu image paste', () => {
     expect(container.querySelector('[data-file-drop-highlight]')).toBeNull();
   });
 
+  it('atomically fills exact queued text and attachment chips once before React paints and refuses a newer draft/session', () => {
+    const ref=React.createRef<InputBarHandle>();
+    const composer=(id:string)=><ChatProvider><SkillProvider><InputBar ref={ref} sessionId={id} provider="claude" /></SkillProvider></ChatProvider>;
+    const rendered=render(composer('sess-1'));const before=ref.current!.queueDraftSnapshot();
+    act(()=>{expect(ref.current!.fillQueuedDraftIfCurrent(before,'é\nexact',['/tmp/queued.png'])).toBe(true);expect(ref.current!.fillQueuedDraftIfCurrent(before,'overwritten',[])).toBe(false);});
+    expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('é\nexact');expect(screen.getByRole('button',{name:'Remove queued.png'})).toBeInTheDocument();
+    const old=ref.current!.queueDraftSnapshot();rendered.rerender(composer('sess-2'));
+    act(()=>{expect(ref.current!.fillQueuedDraftIfCurrent(old,'old session',[])).toBe(false);});
+    const empty=ref.current!.queueDraftSnapshot();fireEvent.change(screen.getByPlaceholderText('Message your assistant...'),{target:{value:'new user draft'}});
+    act(()=>{expect(ref.current!.fillQueuedDraftIfCurrent(empty,'late edit',[])).toBe(false);});
+    expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('new user draft');
+  });
+
+  it('persists a transferred text/file draft before returning success and restores it after actual composer reload',()=>{
+    const ref=React.createRef<InputBarHandle>();const composer=<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="persisted" provider="claude" /></SkillProvider></ChatProvider>;
+    const mounted=render(composer);act(()=>expect(ref.current!.fillQueuedDraftIfCurrent(ref.current!.queueDraftSnapshot(),'durable é\ntext',['/tmp/durable.png'])).toBe(true));
+    expect(JSON.parse(window.localStorage.getItem('youcoded:queue-transfer-draft:persisted')!)).toEqual({text:'durable é\ntext',files:['/tmp/durable.png']});
+    mounted.unmount();render(composer);expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('durable é\ntext');expect(screen.getByRole('button',{name:'Remove durable.png'})).toBeInTheDocument();
+  });
+  it('keeps crash-recovered text and files authoritative against a late queue edit', () => {
+    writeRecoveryDraft('composer:recovered', { text: 'unsent crash draft', attachments: ['/tmp/recovered.png'] });
+    flushRecoveryDrafts();
+    const ref = React.createRef<InputBarHandle>();
+    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="recovered" provider="claude" /></SkillProvider></ChatProvider>);
+    const before = ref.current!.queueDraftSnapshot();
+    expect(before.empty).toBe(false);
+    act(() => { expect(ref.current!.fillQueuedDraftIfCurrent(before, 'late queued text', [])).toBe(false); });
+    expect(screen.getByPlaceholderText('Message your assistant...')).toHaveValue('unsent crash draft');
+    expect(screen.getByRole('button', { name: 'Remove recovered.png' })).toBeInTheDocument();
+  });
+
+  it('does not transfer ownership if durable draft storage fails',()=>{
+    const ref=React.createRef<InputBarHandle>();render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="blocked" provider="claude" /></SkillProvider></ChatProvider>);
+    const set=vi.spyOn(window.localStorage,'setItem').mockImplementation(()=>{throw Error('quota');});
+    expect(()=>ref.current!.fillQueuedDraftIfCurrent(ref.current!.queueDraftSnapshot(),'not durable',['/tmp/a'])).toThrow('quota');expect(ref.current!.queueDraftSnapshot().empty).toBe(true);set.mockRestore();
+  });
   it('stages the saved image path as a visible attachment', async () => {
     saveClipboardImage.mockResolvedValue('/tmp/context-paste.png');
     renderComposer();

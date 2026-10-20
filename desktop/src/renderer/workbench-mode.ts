@@ -91,6 +91,12 @@ export function isWorkbenchMode(): boolean {
  *  than 1. */
 export type TerminalBacking = 'today' | 'legacy' | 'scrim' | 'solid90' | 'solid100';
 
+/** Queue review only: no delivery, journal mutation or native cleanup is simulated as proof. */
+export function workbenchQueuePreview(): string | null {
+  if (!isWorkbenchMode()) return null;
+  return new URLSearchParams(location.search).get('queuePreview');
+}
+
 const TERMINAL_BACKINGS: ReadonlyArray<TerminalBacking> = ['today', 'legacy', 'scrim', 'solid90', 'solid100'];
 
 /** Reads `?termBacking=`; anything unrecognised (or not in workbench mode) is

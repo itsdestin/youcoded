@@ -262,6 +262,27 @@ describe('pty-worker flow control', () => {
     expect(w.fakePty.resume).toHaveBeenCalledTimes(1);
   });
 
+  it('installs exit drain before node-pty creates its exit flag and holds socket destruction only once', () => {
+    vi.useFakeTimers();
+    // WHY: UnixTerminal creates _boundClose ONLY in its exit callback, not at spawn.
+    // Model that exact shape so the guard cannot silently opt out before a loaded exit.
+    const socket = Object.assign(new EventEmitter(), { destroyed: false, destroy: vi.fn() });
+    const originalDestroy = socket.destroy;
+    const w = loadWorker(undefined, SMALL, 'linux', {}, { _socket: socket });
+    expect('_boundClose' in w.fakePty).toBe(false);
+    expect(socket.destroy).not.toBe(originalDestroy);
+    w.emitData('a'.repeat(1200)); vi.advanceTimersByTime(10);
+    (w.fakePty as any)._boundClose = true;
+    socket.destroy();
+    expect(originalDestroy).not.toHaveBeenCalled();
+    expect(w.fakePty.resume).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(originalDestroy).toHaveBeenCalledTimes(1);
+    socket.destroy();
+    expect(originalDestroy).toHaveBeenCalledTimes(2); // no second drain delay
+    socket.emit('close');
+  });
+
   it('kill and handoff release a paused PTY so the exit is not held open', () => {
     vi.useFakeTimers();
     const k = loadWorker(undefined, SMALL);
@@ -326,6 +347,23 @@ const expected = (lines: number) => {
   return s + 'DONE-MARKER\r\n';
 };
 
+const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve) => {
+  // WHY: Date.now includes system suspend / clock adjustments, but the child
+  // and libuv timers cannot progress while suspended. Keep the SAME active-time budget.
+  const t0 = performance.now();
+  const check = () => { if (pred()) return resolve(true); if (performance.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
+  check();
+});
+
+describe('PTY completion wait', () => {
+  it('keeps waiting for the signal when the wall clock jumps forward', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_001);
+    let checks = 0;
+    try { expect(await until(() => ++checks === 2, 30_000)).toBe(true); }
+    finally { clock.mockRestore(); }
+  });
+});
+
 function startReal(lines: number, env: Record<string, string>, producer = PRODUCER) {
   return attachReal(fork(WORKER, [], { env: { ...process.env, ...env }, silent: true, execArgv: [] }), lines, producer);
 }
@@ -378,8 +416,9 @@ function attachReal(child: ChildProcess, lines: number, producer = PRODUCER) {
   child.on('message', onMessage); child.on('disconnect', closed); child.on('exit', closed);
   send({ type: 'spawn', command: process.execPath, args: ['-e', producer, String(lines)], cwd: process.cwd(), cols: 120, rows: 30 });
   const until = (pred: () => boolean, ms: number) => new Promise<boolean>((resolve, reject) => {
-    const t0 = Date.now();
-    const check = () => { if (state.error) return reject(state.error); if (pred()) return resolve(true); if (stopped || Date.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
+    // WHY: preserve active-time waiting across clock jumps while retaining master's IPC error handling.
+    const t0 = performance.now();
+    const check = () => { if (state.error) return reject(state.error); if (pred()) return resolve(true); if (stopped || performance.now() - t0 > ms) return resolve(false); setTimeout(check, 50); };
     check();
   });
   return {

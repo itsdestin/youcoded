@@ -11,13 +11,15 @@ import type { InputBlock } from './cc-input-focus';
 // Types only: nothing here runs. In shared/ because the renderer reads them and renderer code does not import from main/.
 
 /** One message waiting behind the running turn (native sessions): what the docked strip draws. */
-interface QueuedItem { queueId: string; content: string; timestamp: number }
+export interface QueuedItem { queueId: string; content: string; timestamp: number; sendEpoch?: string; sendId?: string; attachments?: string[]; status?: 'waiting' | 'delivering' | 'uncertain'; editing?: boolean; paused?: boolean }
 
 export interface PromptCardButton { label: string; input: string; submitInput?: string; pick?: { signature: string; index: number } }
 
 export type SessionLiveBody =
+  /** Confirmed addressed API abort: lifecycle only, not a fabricated transcript/history record. */
+  | { kind: 'stop-confirmed'; id: string; userUuid: string; at: number }
   /** The queue as it is NOW (a snapshot, so a screen that missed events is right after the next one). Native sessions only. */
-  | { kind: 'queue'; queue: QueuedItem[] }
+  | { kind: 'queue'; queue: QueuedItem[]; queueIdentity?: { queueId: string; sendEpoch: string }; paused?: boolean }
   /** The session's model changed: the raw model id or alias the chip is drawn from. */
   | { kind: 'model'; model: string }
   /** The thin "Model switched to Opus" divider. `id` is deterministic, so a replay cannot draw it twice. */

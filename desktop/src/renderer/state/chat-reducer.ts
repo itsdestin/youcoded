@@ -17,6 +17,8 @@ import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
+import { updatePendingSendEntry } from './pending-send-entry';
+import { interruptedAssistantTurns } from './interrupted-turn';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -1006,7 +1008,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // USER_PROMPT is unconditionally the 'sent' path: a queued native send never reaches it (the host announces its queue, QUEUE_SYNCED).
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}) }],
+        // WHY: a delayed Stop cannot close a newly sent, not-yet-recorded message.
+        transcriptTurnUuid: undefined,
+        timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}), ...(action.sendTransport ? { sendTransport: action.sendTransport } : {}) }],
         isThinking: true,
         // A message sent while a reply is still streaming does not end that reply: Claude
         // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
@@ -1029,19 +1033,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // One-core R5-4b: what the computer's record said about a message this screen sent and has no echo for. Touches only that one still-pending bubble.
+    case 'SEND_TRANSPORT':
     case 'SEND_NOTE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
-      if (idx < 0) return state;
-      const entry = session.timeline[idx] as Extract<TimelineEntry, { kind: 'user' }>;
-      if ((entry.sendNote ?? null) === action.note || (entry.sendNoteDismissed && action.note === 'unsure')) return state; // WHY: after Dismiss a later "unsure" must not bring the note back
-      const timeline = session.timeline.slice();
-      const { sendNote: _old, ...rest } = entry;
-      timeline[idx] = action.note ? { ...rest, sendNote: action.note } : action.dismissed ? { ...rest, sendNoteDismissed: true } : rest;
-      // A message the computer never got starts no turn: the spinner USER_PROMPT put up has nothing behind it (review fix, R5-4b).
-      next.set(action.sessionId, { ...session, timeline, ...(action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
+      const timeline = updatePendingSendEntry(session.timeline, action);
+      if (!timeline) return state;
+      // A definitely unreceived message starts no turn; unknown remains pending without PTY retries.
+      next.set(action.sessionId, { ...session, timeline, ...(action.type === 'SEND_NOTE' && action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
       return next;
     }
 
@@ -1059,8 +1058,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const cur = session.queuedMessages;
-      if (cur.length === action.queue.length && cur.every((q, i) => q.queueId === action.queue[i].queueId && q.content === action.queue[i].content)) return state;
-      next.set(action.sessionId, { ...session, queuedMessages: action.queue.map((q) => ({ queueId: q.queueId, content: q.content, timestamp: q.timestamp })) });
+      // Bounded host rows include epoch/pause/checkout/status; equal text is not equal ownership.
+      if (JSON.stringify(cur) === JSON.stringify(action.queue)) return state;
+      next.set(action.sessionId, { ...session, queuedMessages: structuredClone(action.queue) });
       return next;
     }
 
@@ -1414,6 +1414,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // already applied, drop it — otherwise it appends a duplicate bubble
       // (there is no pending match on the second delivery). See seenUuids.
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
+      if (!action.slashCommand) session = { ...session, transcriptTurnUuid: action.uuid };
       // An unstamped local end closes the lane; only a recorded new user turn
       // opens it, on the host's clock (never on the optimistic renderer clock).
       if (session.usageProgressAt === Infinity) {
@@ -1423,42 +1424,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ? markSeen(session, action.uuid)
         : session.seenUuids;
 
-      // Task 12 (drain-side removal): independent of whether a pending
-      // TIMELINE bubble matches below — clear the OLDEST queuedMessages entry
-      // with matching content, if any. WHY independent rather than gated on
-      // confirmedIdx: a `sent` message never has a queuedMessages entry (the host
-      // never announced it as waiting), so this scan simply finds nothing
-      // and is a no-op on that path — running it unconditionally is correct,
-      // not "unconditionally-but-harmless-because-usually-empty." A `queued`
-      // message, symmetrically, never has a pending bubble to match (Task 12
-      // stopped writing one), so it can ONLY be found here, never in the
-      // confirmedIdx scan — that's what makes the no-pending-match fallback
-      // below the sole place a queued message's timeline entry gets created,
-      // at its true (end-of-timeline) position. Oldest-content-match mirrors
-      // the pending-bubble dedup's own discipline (rapid-fire duplicates).
-      //
-      // Caveat (review finding, traced all orderings): "the two scans never
-      // collide" only holds when contents are DISTINCT across the pending
-      // bubble and the queued list. If the SAME text was both sent immediately
-      // (a pending bubble) AND separately queued (a list entry) — e.g. "hi"
-      // typed twice in a row, once while idle and once while a turn was
-      // in-flight — this dispatch's list scan runs unconditionally regardless
-      // of WHICH of the two "hi"s this particular transcript event confirms.
-      // If it confirms the sent one, the list scan still removes the oldest
-      // queued "hi" row from the STRIP even though that queued message's own
-      // drain event hasn't arrived on the host yet. The eventual TIMELINE
-      // outcome is still correct — that queued message still gets its own
-      // TRANSCRIPT_USER_MESSAGE later, finds no pending bubble (already
-      // consumed), and appends at the true end-of-timeline position via the
-      // fallback below, same as always. The only visible effect is a
-      // duplicate-content STRIP ROW disappearing one drain early (an
-      // under-count for the span between the two events, not a lost or
-      // mis-positioned message) — an acceptable renderer-local display quirk
-      // for a scenario the old bubble-badge design had no better answer for
-      // either (two identical bubbles were already visually indistinguishable
-      // there too).
+      // Legacy native FIFO drain-side removal remains independent of the pending
+      // timeline match: a queued message has no optimistic bubble and joins the
+      // timeline only here, at its true drain position. Legacy rows have no epoch
+      // and still use oldest-content matching; host-owned Claude rows must not.
       let queuedMessages = session.queuedMessages;
-      const queuedIdx = queuedMessages.findIndex((q) => q.content === action.text);
+      // WHY: epoch-bearing Claude rows are authoritative host identities. Matching a
+      // fresh "hi" must not hide a different, still-paused "hi"; only QUEUE_SYNCED retires it.
+      const queuedIdx = queuedMessages.findIndex((q) => !q.sendEpoch && q.content === action.text);
       if (queuedIdx !== -1) {
         queuedMessages = [
           ...queuedMessages.slice(0, queuedIdx),
@@ -2132,6 +2105,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         seenUuids: markSeen(session, action.uuid),
+        transcriptTurnUuid: action.uuid,
         // Like a recorded user message, a skill starts a new turn on the host clock.
         usageProgressAt: session.usageProgressAt === Infinity ? action.timestamp : session.usageProgressAt,
         // A skill invocation IS a turn start, so it must set the same state
@@ -2336,9 +2310,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    case 'DIRECT_STOP_CONFIRMED':
     case 'TRANSCRIPT_INTERRUPT': {
       const session = next.get(action.sessionId);
-      if (!session) return state;
+      if (!session || session.seenUuids.has(action.uuid)) return state;
+      // WHY: receipts and frame-batched/fill events can arrive after a newer user turn.
+      if (action.type === 'DIRECT_STOP_CONFIRMED' && (!session.isThinking || session.transcriptTurnUuid !== action.userUuid)) return state;
 
       // User interrupted (ESC or equivalent): mirror TRANSCRIPT_TURN_COMPLETE
       // but hardcode stopReason='interrupted' so the AssistantTurnBubble
@@ -2346,17 +2323,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // clears turn-scoped state and flips in-flight tools in this turn to
       // failed with error 'Turn interrupted' (vs. 'Turn ended' for normal
       // completion) so the tool card distinguishes user-cancelled.
-      const interruptingTurnId = session.currentTurnId;
-      const assistantTurns = new Map(session.assistantTurns);
-      if (interruptingTurnId) {
-        const turn = assistantTurns.get(interruptingTurnId);
-        if (turn) {
-          assistantTurns.set(interruptingTurnId, {
-            ...turn,
-            stopReason: 'interrupted',
-          });
-        }
-      }
+      const assistantTurns = interruptedAssistantTurns(session);
 
       // The tokens this turn had already spent. Bookkeeping ONLY — deliberately
       // not stamped onto the turn's own `usage`, because an abandoned turn has no
@@ -2370,7 +2337,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         totals,
-        seenUuids: totals === session.totals ? session.seenUuids : markSeen(session, action.uuid),
+        // Even an interrupt with no usage is a consumed lifecycle event.
+        seenUuids: markSeen(session, action.uuid),
         ...endTurn(session, 'Turn interrupted', assistantTurns, action.timestamp),
       });
       return next;

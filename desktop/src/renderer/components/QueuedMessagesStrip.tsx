@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button } from './ui';
+import { workbenchQueuePreview } from '../workbench-mode';
 import { EditPencilButton } from './EditPencilButton';
 
 // Task 12: renders messages the native host FIFO'd behind an in-flight turn
@@ -46,9 +47,9 @@ function TrashGlyph() {
  *  beside the arrow while the label is hidden.
  *  Touch has no hover, so on a phone it stays the arrow alone; its meaning is
  *  in the accessible name for screen readers. */
-function SendNowButton({ onClick }: { onClick: () => void }) {
+function SendNowButton({ onClick, paused = false, uncertain = false }: { onClick: () => void; paused?: boolean; uncertain?: boolean }) {
   return (
-    <Button variant="primary" size="sm" aria-label="Interrupt and send now" onClick={onClick} className="group">
+    <Button variant="primary" size="sm" aria-label={uncertain ? 'Check delivery without resending' : paused ? 'Resume queue and send now' : 'Interrupt and send now'} onClick={onClick} className="group">
       <span className="flex items-center">
         <span
           aria-hidden
@@ -62,7 +63,7 @@ function SendNowButton({ onClick }: { onClick: () => void }) {
           // sideways clip, and a vertical one would cut the trimmed descenders.
           style={{ textBox: 'trim-both cap alphabetic', transition: 'max-width var(--dur-reveal) var(--ease-reveal), opacity var(--dur-reveal) var(--ease-reveal), padding var(--dur-reveal) var(--ease-reveal)' } as React.CSSProperties}
         >
-          Interrupt and Send Now
+          {uncertain ? 'Check Delivery' : paused ? 'Resume and Send Now' : 'Interrupt and Send Now'}
         </span>
         {/* The message box's send arrow, turned to point UP (Destin, round 3:
             "i want an up arrow") — same stroke and caps as InputBar's. */}
@@ -78,6 +79,9 @@ interface QueuedMessage {
   queueId: string;
   content: string;
   timestamp: number;
+  paused?: boolean;
+  status?: 'waiting' | 'delivering' | 'uncertain';
+  editing?: boolean;
 }
 
 interface Props {
@@ -107,9 +111,20 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
   { queuedMessages, onCancel, onEdit, onSendNow },
   ref,
 ) {
+  // WHY: photo fixtures pose approved states only; real dismissal goes through host abandonment.
+  const preview = workbenchQueuePreview();
+  const [dismissed, setDismissed] = React.useState(false);
+  const proposed = preview?.endsWith('-after');
+  if (preview) {
+    queuedMessages = preview === 'idle-after' || preview === 'blocked-after' || dismissed ? [] : [{
+      queueId: 'review-only', content: 'Please check the release notes.', timestamp: 0,
+      status: preview.startsWith('idle') ? 'delivering' : preview.startsWith('waiting') ? 'waiting' : 'uncertain',
+    }];
+  }
   if (queuedMessages.length === 0) return null;
 
   return (
+    <>
     <div
       ref={ref}
       className="queued-messages-strip absolute left-3 right-3 z-10 flex flex-col gap-1.5"
@@ -124,14 +139,14 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
               capitals); bumped 4xs(10px)→3xs(11px) too since this is text a
               user reads and the guide floors readable text at 11px. */}
           <div className="text-3xs text-fg-muted select-none shrink-0">
-            Queued
+            {q.editing ? 'Editing' : q.status === 'uncertain' ? 'Unconfirmed' : q.status === 'delivering' ? 'Sending' : q.paused ? 'Paused' : 'Queued'}
           </div>
           <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>
-          {(onEdit || onCancel || onSendNow) && (
+          {q.status !== 'delivering' && (onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
               {/* The quick chips' own edit button (Destin, 2026-09-28). */}
-              {onEdit && <EditPencilButton plain label="Edit queued message" onClick={() => onEdit(q.queueId, q.content)} />}
-              {onCancel && (
+              {onEdit && q.status !== 'uncertain' && <EditPencilButton plain label="Edit queued message" onClick={() => onEdit(q.queueId, q.content)} />}
+              {onCancel && q.status !== 'uncertain' && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -142,12 +157,16 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
                   <TrashGlyph />
                 </Button>
               )}
-              {onSendNow && <SendNowButton onClick={() => onSendNow(q.queueId)} />}
+              {q.status === 'uncertain' && (!preview || proposed) && (onCancel || proposed) && (
+                <Button variant="secondary" size="sm" aria-label="Dismiss without resending" onClick={() => { if (preview) setDismissed(true); else onCancel?.(q.queueId); }}>Dismiss</Button>
+              )}
+              {onSendNow && <SendNowButton paused={q.paused} uncertain={q.status === 'uncertain'} onClick={() => { if (!preview) onSendNow(q.queueId); }} />}
             </div>
           )}
         </div>
       ))}
     </div>
+    </>
   );
 });
 

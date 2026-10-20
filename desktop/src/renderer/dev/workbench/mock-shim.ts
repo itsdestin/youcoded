@@ -1163,6 +1163,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
     sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
+    // Workbench has no Claude process: exercise the existing scripted fallback, never pretend a real mod is ready.
+    control: async () => ({ status: 'unavailable' as const }),
+    queue: { action: async () => ({ status: 'unavailable' as const }) },
     // No main process here: the screen verdict has no automated writer to gate.
     reportInputBlocked: () => {},
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —

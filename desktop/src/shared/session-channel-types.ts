@@ -11,6 +11,7 @@ import type {
 import type { CreateSessionOpts } from '../main/session-manager';
 import type { OpenRequest, OpenReply } from './session-open-types';
 import type { SendOutcomesReply } from './send-outcome-types';
+import type { ClaudeControlRequest, ClaudeControlResult } from './claude-control-types';
 
 /** What a session-meta write answers: `ok:false` carries the reason a screen can show. */
 type SessionWriteResult = { ok: true } | { ok: false; error: string };
@@ -28,6 +29,7 @@ export interface SessionChannelTypes {
   'session:list': { request: void; response: SessionInfo[] };
   'session:selected': { request: { sessionId: string | null }; response: void };
   'session:switch': { request: { sessionId: string }; response: { ok: true } };
+  'session:claude-control': { request: { sessionId: string; request: ClaudeControlRequest }; response: ClaudeControlResult };
   // Terminal traffic: fire-and-forget on every door.
   'session:input': { request: { sessionId: string; text: string; /** a typed chat command, so the host can draw its divider (R5-4a) */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
   'session:resize': { request: { sessionId: string; cols: number; rows: number }; response: void };
