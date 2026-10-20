@@ -348,11 +348,12 @@ replays its record" (each page now folds its totals in via `mergeTotals`). Befor
 removing a broadcast, enumerate its listeners by CHANNEL and ask what each does when it
 stops. Every fix was to make the consumer ASK rather than wait to be told.
 
-**Still open:** eviction of off-screen turns (cycle 3 — it will amend
-`toolcalls-never-cleared`, since paging itself never clears `toolCalls`), Android
-on-device paging, and a re-docked session still paying a full replay because
-`TRANSCRIPT_REPLAY` also re-sends broker-held asks and specialist runs that live only in
-main's memory.
+**Historical August follow-ups:** off-screen turn eviction (cycle 3, involving
+`toolcalls-never-cleared`) and re-dock replay of broker-held asks and specialist runs.
+Those findings are retained here, not reassessed or marked resolved by this docs cleanup.
+Android-specific paging is no longer a separate implementation task: rebuilt Android uses
+the shared `TRANSCRIPT_PAGE` handler in `main/ipc/session.ts`. This is a source-path
+statement, not a new on-device paging verification claim.
 
 **Measured** (three consecutive rig runs): huge resume 21550 → 614 ms, medium 14049 →
 644 ms, switch p95 10052 → 233 ms, PSS after six sessions 7004 → 1721 MB, medium replay
