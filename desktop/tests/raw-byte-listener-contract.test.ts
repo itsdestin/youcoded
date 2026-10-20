@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
-// Contract test: the pty:raw-bytes WebSocket message shape must
-// round-trip arbitrary bytes via base64 without corruption, including
-// high-bit ANSI control bytes. This locks the wire format so the
-// Android broadcaster and the future xterm.js consumer agree.
+// Legacy wire contract: pty:raw-bytes must round-trip arbitrary bytes via
+// base64 without corruption, including high-bit ANSI control bytes.
+// WHY retain it: usePtyRawBytes still accepts this capability-gated format;
+// current desktop and rebuilt Android hosts select pty:output text instead.
+// This test does not exercise a current Android broadcaster.
 
 describe('pty:raw-bytes wire contract', () => {
   it('base64 round-trips high-bit bytes', () => {
@@ -13,7 +14,7 @@ describe('pty:raw-bytes wire contract', () => {
       0x00, 0xff, 0x7f, 0x80,       // edge bytes
     ]);
 
-    // Base64-encode on one side (Kotlin uses android.util.Base64.NO_WRAP).
+    // Encode the legacy wire format without exercising a platform broadcaster.
     const encoded = Buffer.from(original).toString('base64');
     // Decode on the other (xterm-side / test consumer).
     const decoded = new Uint8Array(Buffer.from(encoded, 'base64'));
