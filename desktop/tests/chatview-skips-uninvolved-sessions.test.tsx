@@ -17,7 +17,7 @@ import React, { useCallback, useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 
-const mocks = vi.hoisted(() => ({ state: {} as any, renders: {} as Record<string, number> }));
+const mocks = vi.hoisted(() => ({ state: {} as any, renders: {} as Record<string, number>, artifactActions: [] as any[] }));
 
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: (id: string) => { mocks.renders[id] = (mocks.renders[id] ?? 0) + 1; return mocks.state; },
@@ -29,7 +29,7 @@ vi.mock('../src/renderer/state/ArtifactContext', () => {
   const state = { drawerOpenBySession: {}, drawerExpanded: false };
   return {
     useArtifactSelector: (select: (s: any) => unknown) => select(state),
-    useArtifactDispatch: () => vi.fn(),
+    useArtifactDispatch: () => (action: any) => { mocks.artifactActions.push(action); },
   };
 });
 
@@ -75,15 +75,37 @@ function Shell({ stable }: { stable: boolean }) {
   );
 }
 
-beforeEach(() => { mocks.state = emptySession; mocks.renders = {}; });
+beforeEach(() => { mocks.state = emptySession; mocks.renders = {}; mocks.artifactActions = []; });
 
 describe('a session switch re-renders only the two conversations involved', () => {
+  it('does not build unvisited chats during bulk recovery, but keeps visited chats mounted', () => {
+    render(<Shell stable />);
+    expect(mocks.renders.s1).toBeGreaterThan(0);
+    expect(mocks.renders.s2).toBeUndefined();
+    expect(mocks.renders.s3).toBeUndefined();
+    act(() => { select('s2'); });
+    expect(mocks.renders.s2).toBeGreaterThan(0);
+    act(() => { select('s1'); });
+    expect(document.querySelector('[data-chat-session-id="s2"]')).not.toBeNull();
+  });
+
+  it('routes Preview from the active terminal before its chat has ever been shown', () => {
+    render(<ChatView sessionId="terminal" visible={false} sessionActive gamePane={null} />);
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:preview-session', {
+      detail: { provider: 'native', id: 'preview-target', title: 'Saved conversation' },
+    })); });
+    expect(mocks.artifactActions).toEqual([
+      expect.objectContaining({ type: 'SESSION_REFERENCED', sessionId: 'terminal' }),
+      expect.objectContaining({ type: 'SESSION_PREVIEW_SET', sessionId: 'terminal', id: 'preview-target' }),
+    ]);
+  });
+
   it('the uninvolved conversation does no work at all', () => {
     render(<Shell stable />);
     const before = { ...mocks.renders };
     act(() => { select('s2'); });
     expect(mocks.renders.s1).toBeGreaterThan(before.s1);   // left
-    expect(mocks.renders.s2).toBeGreaterThan(before.s2);   // arrived
+    expect(mocks.renders.s2).toBeGreaterThan(before.s2 ?? 0);   // arrived
     expect(mocks.renders.s3).toBe(before.s3);              // bystander
   });
 
@@ -98,6 +120,9 @@ describe('a session switch re-renders only the two conversations involved', () =
     // The regression this file exists for, shown live rather than described: the
     // same switch, with an inline arrow, drags the bystander back in.
     render(<Shell stable={false} />);
+    // The bystander has been visited; never-visited views intentionally do no work.
+    act(() => { select('s3'); });
+    act(() => { select('s1'); });
     const before = { ...mocks.renders };
     act(() => { select('s2'); });
     expect(mocks.renders.s3).toBeGreaterThan(before.s3);

@@ -564,6 +564,10 @@ export const BashTool = defineTool({
     // the app is never asked; nothing leaks. Absent entirely when the app's
     // AskpassServer never started (self-test failed, Windows, macOS off):
     // sudo then simply fails as it did before this feature existed.
+    // WHY: a parent/native session's ambient helper is not this call's password channel.
+    delete spawnEnv.SUDO_ASKPASS;
+    delete spawnEnv.YOUCODED_ASKPASS_SOCKET;
+    delete spawnEnv.YOUCODED_ASKPASS_RUNTIME;
     if (ctx.adminPasswordEnv) Object.assign(spawnEnv, ctx.adminPasswordEnv);
     // admin-password design §6/§11 task 5: every return below that means
     // "this call is over and nothing was ever spawned for it" wipes a held

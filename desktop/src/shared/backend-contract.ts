@@ -509,6 +509,7 @@ export const IPC = {
   // parked step; unlike interrupt it never cascades to specialist children or
   // cancels pending permission asks.
   NATIVE_RETRY: 'native:retry',
+  NATIVE_STARTUP_ACTION: 'native:startup-action',
   // M3 item 2 — user-initiated /compact for a native session. invoke (not send):
   // the caller needs the {ok, reason} result to explain a refusal.
   NATIVE_COMPACT: 'native:compact',
@@ -1382,11 +1383,10 @@ interface ClaudeApi {
   app: {
     restart: () => Promise<void>;
   };
-  // Native runtime capability flag (platform roadmap Phase 0 seam). Plain
-  // boolean — no IPC round-trip. Hard-false everywhere except dev Electron
-  // builds launched with YOUCODED_NATIVE=1; the runtime selector gates on it.
+  // Native capability is a plain handshake/preload flag; Electron defaults on unless YOUCODED_NATIVE=0.
   native: {
     supported: boolean;
+    startupAction: (sessionId: string, attemptId: string, action: import('./native-startup').NativeStartupAction) => Promise<{ ok: boolean; state?: import('./native-startup').NativeStartupState }>;
     // M1: acks sent/queued/failed (Task 2 switched the channel from
     // fire-and-forget to invoke) — Task 3's InputBar awaits this to
     // decide whether to show the bubble or a failure toast.

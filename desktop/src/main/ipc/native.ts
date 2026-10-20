@@ -111,10 +111,15 @@ export const nativeChannels: MainChannelDef[] = [
       const files = (Array.isArray(attachments) ? attachments : []).filter((a): a is string => typeof a === 'string');
       if (!ctx.runtime) return NOT_LIVE_SEND;
       const runtime = ctx.runtime;
+      // WHY receipt-time admission: a draft received while blocked must not wait
+      // in image preparation and silently become accepted when startup later finishes.
+      const admission = runtime.nativeHost.inputAdmission(sessionId);
+      if (!admission) return { status: 'failed' as const, reason: runtime.nativeHost.startupStateFor(sessionId) ? 'initializing' as const : 'not-live' as const };
       const previous = sendChains.get(sessionId) ?? Promise.resolve();
       const turn = previous.then(async () => {
         // Pictures are prepared (shrunk to a cached copy when over the model's limits) BEFORE the synchronous send.
         const modelFiles = await modelPathsFor(runtime, sessionId, files);
+        if (!runtime.nativeHost.inputAdmissionCurrent(sessionId, admission)) return { status: 'failed' as const, reason: 'changed' as const };
         const result = runtime.nativeHost.send(sessionId, text, files, modelFiles);
         // The host took it (sent now, or queued behind the running turn): note the id so a phone that lost the answer can learn so (R5-4b).
         // A 'failed' answer is NOT noted: the host did not accept it, which is exactly what "not received" means.
@@ -133,6 +138,11 @@ export const nativeChannels: MainChannelDef[] = [
   // Fire-and-forget: the host never throws for an unknown id.
   defineChannel({ name: IPC.NATIVE_INTERRUPT, kind: 'on', handler: ({ sessionId }, ctx) => { ctx.runtime?.nativeHost.interrupt(sessionId); } }),
   defineChannel({ name: IPC.NATIVE_RETRY, kind: 'on', handler: ({ sessionId }, ctx) => { ctx.runtime?.nativeHost.retryStalledStep(sessionId); } }),
+  defineChannel({ name: IPC.NATIVE_STARTUP_ACTION, kind: 'handle', handler: ({ sessionId, attemptId, action }, ctx) => {
+    const host = ctx.runtime?.nativeHost;
+    const ok = host?.startupAction(sessionId, attemptId, action) ?? false;
+    return { ok, ...(host?.startupStateFor(sessionId) ? { state: host.startupStateFor(sessionId) } : {}) };
+  } }),
   // Never throws across the bridge: a failure is a coded reason the screen can explain (error-message-standards.md).
   defineChannel({
     name: IPC.NATIVE_COMPACT, kind: 'handle',

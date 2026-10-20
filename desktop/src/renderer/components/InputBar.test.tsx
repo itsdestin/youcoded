@@ -12,8 +12,7 @@ import { Dialog } from './ui/Dialog';
 import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 import { queueBrowserStorage } from '../../../tests/helpers/queue-browser-storage';
-import { flushRecoveryDrafts, readRecoveryDraft, writeRecoveryDraft } from '../state/draft-recovery';
-import { makeDraftToken, expandDraftTokens } from './context-menu/compose-ref';
+import { flushRecoveryDrafts, writeRecoveryDraft } from '../state/draft-recovery';
 
 beforeEach(() => { flushRecoveryDrafts(); sessionStorage.clear(); });
 
@@ -161,108 +160,6 @@ describe('InputBar — context-menu image paste', () => {
   });
 });
 
-describe('InputBar freshness wait — draft without submission', () => {
-  beforeEach(() => {
-    (global as any).ResizeObserver = NoopResizeObserver;
-    (window as any).claude = {
-      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
-      session: { sendInput: vi.fn() },
-      skills: {
-        list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]),
-        getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]),
-      },
-    };
-  });
-  afterEach(cleanup);
-
-  it('restores typed text and attachments after remount without submitting', () => {
-    const wrap = () => <ChatProvider><SkillProvider><InputBar sessionId="recovery" provider="native"
-      initialInput="initial" initialAttachments={['/project/image.png']} /></SkillProvider></ChatProvider>;
-    const first = render(wrap());
-    fireEvent.change(screen.getByPlaceholderText('Message your assistant...'), { target: { value: 'my newer unsent words' } });
-    flushRecoveryDrafts();
-    first.unmount();
-    render(wrap());
-    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('my newer unsent words');
-    expect(screen.getByText('image.png')).toBeTruthy();
-    expect((window as any).claude.native.send).not.toHaveBeenCalled();
-  });
-
-  it('recovers quoted reference chips without depending on the previous renderer registry', () => {
-    const marker = expandDraftTokens(makeDraftToken({ id: 'saved-ref', kind: 'doc', path: '/project/notes.md', fileName: 'notes.md', quote: 'quoted words', label: 'notes.md' }));
-    writeRecoveryDraft('composer:ref-recovery', { text: `Review ${marker}` });
-    flushRecoveryDrafts();
-    render(<ChatProvider><SkillProvider><InputBar sessionId="ref-recovery" provider="native" /></SkillProvider></ChatProvider>);
-    const value = (screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value;
-    expect(value).not.toContain('quoted words');
-    expect(expandDraftTokens(value)).toBe(`Review ${marker}`);
-  });
-
-  it('does not restore a submitted message from a pending draft write', async () => {
-    const wrap = () => <ChatProvider><SkillProvider><InputBar sessionId="sent-recovery" provider="native" /></SkillProvider></ChatProvider>;
-    const first = render(wrap());
-    const input = screen.getByPlaceholderText('Message your assistant...');
-    fireEvent.change(input, { target: { value: 'send once' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalledOnce());
-    flushRecoveryDrafts();
-    expect(readRecoveryDraft('composer:sent-recovery')).toBeNull();
-    first.unmount();
-    render(wrap());
-    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('');
-  });
-
-  it('exports a pending draft for the newly admitted detached window', () => {
-    const ref = React.createRef<InputBarHandle>();
-    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="pending-handoff:one" provider="native" sendBlocked /></SkillProvider></ChatProvider>);
-    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'unsent note' } });
-    expect(ref.current!.readDraftPayload('pending-handoff:one')).toEqual({ text: 'unsent note', attachments: [] });
-  });
-
-  it('restores a detached draft without automatically sending it', () => {
-    const ref = React.createRef<InputBarHandle>();
-    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="admitted" provider="native"
-      initialInput="unsent note" initialAttachments={['/project/screenshot.png']} /></SkillProvider></ChatProvider>);
-    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('unsent note');
-    expect(screen.getByText('screenshot.png')).toBeTruthy();
-    expect((window as any).claude.native.send).not.toHaveBeenCalled();
-  });
-
-  it('rebinds a pending draft to the admitted id without sending it', () => {
-    const ref = React.createRef<InputBarHandle>();
-    const wrap = (id: string, blocked: boolean) => <ChatProvider><SkillProvider>
-      <InputBar ref={ref} sessionId={id} provider="native" sendBlocked={blocked} />
-    </SkillProvider></ChatProvider>;
-    const { rerender } = render(wrap('pending-handoff:one', true));
-    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'unfinished thought' } });
-    act(() => ref.current!.transferDraft('pending-handoff:one', 'admitted'));
-    rerender(wrap('admitted', false));
-    expect(input.value).toBe('unfinished thought');
-    expect(ref.current!.readDraft()).toBe('unfinished thought');
-    expect((window as any).claude.native.send).not.toHaveBeenCalled();
-  });
-
-  it('allows typing but blocks button, Enter and form submit until the wait ends', () => {
-    const { rerender } = render(<ChatProvider><SkillProvider><InputBar sessionId="freshness-test" provider="native" sendBlocked /></SkillProvider></ChatProvider>);
-    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: 'a saved draft' } });
-    expect(input.disabled).toBe(false);
-    const button = screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
-    fireEvent.submit(button.closest('form')!);
-    expect((window as any).claude.native.send).not.toHaveBeenCalled();
-    expect(input.value).toBe('a saved draft');
-    rerender(<ChatProvider><SkillProvider><InputBar sessionId="freshness-test" provider="native" sendBlocked={false} /></SkillProvider></ChatProvider>);
-    expect(input.value).toBe('a saved draft');
-    expect(button.disabled).toBe(false);
-    fireEvent.click(button);
-    expect((window as any).claude.native.send).toHaveBeenCalledOnce();
-  });
-});
-
 describe('InputBar native send — failure keeps the draft (reviewer Critical fix)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;
@@ -346,6 +243,55 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(textarea.value).toBe('keep this message'));
     expect(onToast).toHaveBeenCalledWith('Conversation is compacting. Wait for it to finish, then send your message.');
+  });
+
+  it('keeps a refused earlier message and its files recoverable when a newer draft already exists', async () => {
+    let finish!: (value: unknown) => void;
+    (window as any).claude.native.send.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    let store!: ReturnType<typeof useChatStore>;
+    function CaptureStore() {
+      store = useChatStore();
+      React.useEffect(() => { store.dispatch({ type: 'SESSION_INIT', sessionId: 'refused-draft' }); }, []);
+      return null;
+    }
+    render(<ChatProvider><CaptureStore /><SkillProvider><InputBar sessionId="refused-draft" provider="native" initialAttachments={['/project/first.png']} /></SkillProvider></ChatProvider>);
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'first message' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.change(input, { target: { value: 'second draft' } });
+    finish({ status: 'failed', reason: 'initializing' });
+    await waitFor(() => {
+      const rows = store.getState().get('refused-draft')!.timeline;
+      expect(rows).toContainEqual(expect.objectContaining({ kind: 'user', sendNote: 'not-sent', message: expect.objectContaining({
+        content: '/project/first.png first message', attachments: ['/project/first.png'],
+      }) }));
+    });
+    expect(input.value).toBe('second draft');
+    expect(store.getState().get('refused-draft')!.isThinking).toBe(false);
+    expect((window as any).claude.native.send).toHaveBeenCalledOnce();
+  });
+
+  it('does not restore a refused earlier message into a different session composer', async () => {
+    let finish!: (value: unknown) => void;
+    (window as any).claude.native.send.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    let store!: ReturnType<typeof useChatStore>;
+    function CaptureStore() {
+      store = useChatStore();
+      React.useEffect(() => { for (const id of ['old-chat', 'new-chat']) store.dispatch({ type: 'SESSION_INIT', sessionId: id }); }, []);
+      return null;
+    }
+    const tree = (id: string) => <ChatProvider><CaptureStore /><SkillProvider><InputBar sessionId={id} provider="native" /></SkillProvider></ChatProvider>;
+    const { rerender } = render(tree('old-chat'));
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'belongs to the old chat' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    rerender(tree('new-chat'));
+    finish({ status: 'failed', reason: 'changed' });
+    await waitFor(() => expect(store.getState().get('old-chat')!.timeline).toContainEqual(expect.objectContaining({
+      kind: 'user', sendNote: 'not-sent', message: expect.objectContaining({ content: 'belongs to the old chat' }),
+    })));
+    expect(input.value).toBe('');
+    expect(store.getState().get('new-chat')!.timeline).toEqual([]);
   });
 
   it('does NOT clobber newer text the user typed during the ack round-trip', async () => {

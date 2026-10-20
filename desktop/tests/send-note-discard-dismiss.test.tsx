@@ -3,12 +3,13 @@
 // Just a send again button"). Neither button ever sends anything.
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import UserMessage from '../src/renderer/components/UserMessage';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
-import { discardUnsent, RESTORE_UNSENT_EVENT } from '../src/renderer/state/submit-outgoing';
+import { discardUnsent, sendAgain, retainFailedOutgoing, RESTORE_UNSENT_EVENT } from '../src/renderer/state/submit-outgoing';
+import { resetNativeStartups, setNativeStartup } from '../src/renderer/state/native-startup-store';
 
-afterEach(() => { cleanup(); delete (window as any).claude; });
+afterEach(() => { cleanup(); resetNativeStartups(); delete (window as any).claude; });
 const msg = { id: 'm1', role: 'user' as const, content: 'hello', timestamp: 1 };
 const S = 's';
 
@@ -38,12 +39,89 @@ describe('the buttons on the note', () => {
   });
 });
 
-function state(note: 'unsure' | 'not-sent') {
+function state(note: 'unsure' | 'not-sent', attachments: string[] = []) {
   let s = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: S } as any);
-  s = chatReducer(s, { type: 'USER_PROMPT', sessionId: S, content: 'hello', timestamp: 1, sendId: 'id1' } as any);
+  s = chatReducer(s, { type: 'USER_PROMPT', sessionId: S, content: [...attachments, 'hello'].join(' '), attachments, timestamp: 1, sendId: 'id1' } as any);
   return chatReducer(s, { type: 'SEND_NOTE', sessionId: S, sendId: 'id1', note } as any);
 }
 const bubbles = (s: any) => s.get(S).timeline.filter((e: any) => e.kind === 'user');
+
+describe('retaining a refused message is not a new turn', () => {
+  it('does not mistake an older identical transcript message for a known-refused draft', () => {
+    let s = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: S });
+    retainFailedOutgoing({ sessionId: S, provider: 'native', ptyText: 'same words', content: 'same words', paths: [],
+      dispatch: action => { s = chatReducer(s, action); } },
+    { status: 'failed', sendId: 'refused-earlier', result: { status: 'failed', reason: 'changed' } });
+    s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: S, text: 'same words', timestamp: 1, uuid: 'older-message' });
+    expect(bubbles(s)).toHaveLength(2);
+    expect(bubbles(s)).toContainEqual(expect.objectContaining({ sendId: 'refused-earlier', sendNote: 'not-sent', pending: true }));
+    expect(bubbles(s)).toContainEqual(expect.objectContaining({ uuid: 'older-message', pending: false }));
+  });
+  it.each(['error', 'stalled'] as const)('preserves the existing %s state and its recovery controls', attentionState => {
+    let s = state('not-sent');
+    const runtime = { attentionState, errorMessage: attentionState === 'error' ? 'Existing provider error' : null,
+      stalledSince: attentionState === 'stalled' ? 123 : null, isThinking: attentionState === 'stalled',
+      currentTurnId: attentionState === 'stalled' ? 'parked-turn' : null };
+    s.set(S, { ...s.get(S)!, ...runtime });
+    retainFailedOutgoing({ sessionId: S, provider: 'native', ptyText: 'earlier text', content: '/tmp/a.png earlier text',
+      paths: ['/tmp/a.png'], dispatch: action => { s = chatReducer(s, action); } },
+    { status: 'failed', sendId: 'refused-earlier', result: { status: 'failed', reason: 'changed' } });
+    expect(s.get(S)).toMatchObject(runtime);
+    expect(bubbles(s).at(-1)).toMatchObject({ sendId: 'refused-earlier', sendNote: 'not-sent',
+      message: { content: '/tmp/a.png earlier text', attachments: ['/tmp/a.png'] } });
+  });
+});
+
+describe('Send again keeps the original recoverable message until admission', () => {
+  it('keeps text and attachments if a native retry is refused', async () => {
+    let finish!: (value: unknown) => void;
+    const send = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    (window as any).claude = { native: { send }, session: {} };
+    let s = state('not-sent', ['/tmp/a.png']);
+    sendAgain({ sessionId: S, sendId: 'id1', provider: 'native', content: '/tmp/a.png hello', attachments: ['/tmp/a.png'], dispatch: action => { s = chatReducer(s, action); } });
+    expect(bubbles(s)).toHaveLength(1);
+    finish({ status: 'failed', reason: 'initializing' });
+    await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(bubbles(s)[0]).toMatchObject({ sendId: 'id1', message: { content: '/tmp/a.png hello', attachments: ['/tmp/a.png'] } });
+  });
+  it('sends only once when Send again is pressed twice before its answer', async () => {
+    let finish!: (value: unknown) => void;
+    const send = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const notify = vi.fn();
+    (window as any).claude = { native: { send }, session: {} };
+    const args = { sessionId: S, sendId: 'double-retry', provider: 'native' as const, content: 'hello', attachments: [], dispatch: vi.fn(), onToast: notify };
+    sendAgain(args);
+    sendAgain(args);
+    expect(send).toHaveBeenCalledOnce();
+    finish({ status: 'failed', reason: 'initializing' });
+    await waitFor(() => expect(notify).toHaveBeenCalledOnce());
+    // A refusal keeps the old bubble usable: an explicit later retry is allowed.
+    sendAgain(args);
+    expect(send).toHaveBeenCalledTimes(2);
+    finish({ status: 'sent' });
+    await waitFor(() => expect(args.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'SEND_DISCARD', sendId: 'double-retry' })));
+  });
+  it('replaces the old bubble before drawing an accepted retry, preserving its thinking state', async () => {
+    let finish!: (value: unknown) => void;
+    const send = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    (window as any).claude = { native: { send }, session: {} };
+    let s = state('not-sent');
+    sendAgain({ sessionId: S, sendId: 'id1', provider: 'native', content: 'hello', attachments: [], dispatch: action => { s = chatReducer(s, action); } });
+    expect(bubbles(s)[0].sendId).toBe('id1');
+    finish({ status: 'sent' });
+    await waitFor(() => expect(bubbles(s)[0].sendId).not.toBe('id1'));
+    expect(bubbles(s)).toHaveLength(1);
+    expect(s.get(S)!.isThinking).toBe(true);
+  });
+  it('does not submit or remove the old message while startup is blocked', () => {
+    const send = vi.fn(); (window as any).claude = { native: { send }, session: {} };
+    setNativeStartup(S, { phase: 'connecting', attemptId: 'a', hostId: 'h', generation: 1, revision: 1 });
+    let s = state('not-sent');
+    sendAgain({ sessionId: S, sendId: 'id1', provider: 'native', content: 'hello', attachments: [], dispatch: action => { s = chatReducer(s, action); } });
+    expect(send).not.toHaveBeenCalled();
+    expect(bubbles(s)[0].sendId).toBe('id1');
+  });
+});
 
 describe('Dismiss keeps the bubble', () => {
   it('hides the note, keeps the pending bubble, and a later "still not sure" does not bring the note back', () => {

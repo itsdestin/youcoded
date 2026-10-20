@@ -211,6 +211,8 @@ import { log } from '../logger';
 
 export interface HarnessSessionOpts {
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
+  /** Host admission backstop; must run before accepting any model/history mutation. */
+  assertReady?: () => void;
   /** Model context window (from the catalog); null → conservative 32k default. */
   contextLength?: number | null;
   /** Host-only durable commit. Its resolved event has already been appended;
@@ -1091,11 +1093,25 @@ export class HarnessSession extends EventEmitter {
     return createHash('sha256').update(JSON.stringify(shape)).digest('hex');
   }
 
+  /** Host-only initialization: never change a model turn's tool inventory underneath it. */
+  setMcpServers(servers: ReadyServer[] | undefined): void {
+    if (this.abort) throw new Error('Tool connections cannot change during a model turn.');
+    if (this.opts.mcpServers === servers) return;
+    // WHY: the host reseeds under the final inventory before opening its send gate.
+    this.stripOpenAIContinuation();
+    this.continuationBinding = undefined;
+    this.seededContinuationBinding = undefined;
+    this.opts.mcpServers = servers;
+    this.mcpSyncedFor = undefined;
+    this.buildAiTools();
+  }
+
   /** Mid-session model swap (next turn uses the new binding). A swap can cross
    *  capability tiers (e.g. cloud → small local), so the host re-resolves the
    *  profile and passes it in; applied only when provided. */
   setBinding(binding: ModelBinding, contextLength?: number | null, profile?: CapabilityProfile,
              pricing?: ModelPricing | null, free?: boolean): void {
+    this.opts.assertReady?.();
     const changed = this.binding.providerId !== binding.providerId || this.binding.modelId !== binding.modelId;
     this.binding = binding;
     // WHY: continuation ciphertext is scoped to its original backend/model.
@@ -1559,42 +1575,13 @@ export class HarnessSession extends EventEmitter {
     if (!this.toolByName.has('ModelSearch')) this.toolByName.set('ModelSearch', ModelSearchTool);
   }
 
-  /** Add or remove MCP server tools to match the CURRENT profile's budget
-   *  (Task 6, spec §6).
-   *
-   *  WHOLE SERVERS ONLY: a server whose search tool is attached but whose send
-   *  tool is not is worse than an absent server — the model plans against a
-   *  capability it then cannot complete. So this walks registry order
-   *  accumulating cost, and the FIRST server that would push spend over
-   *  budget stops the walk entirely (`break`, not `continue`) — every server
-   *  from that point on is dropped too, which is what keeps the kept set a
-   *  contiguous PREFIX of registry order (pinned by
-   *  mcp-gating.test.ts "drops from the END…") rather than a scattered
-   *  best-fit subset. Drop order is registry order from the END so the user
-   *  controls what survives by ordering their own list.
-   *
-   *  Re-run per buildAiTools (not once in the constructor) for the same
-   *  reason syncSkillTool is: setBinding() re-resolves the profile on a model
-   *  swap, so a server attached under a 128k model must come back OFF on a
-   *  swap to an 8k one, and back on when swapping back.
-   *
-   *  Fix pass 1 / Finding 4: buildAiTools() runs on every turn (see its own
-   *  call site), and until this fix syncMcpTools rebuilt from scratch on
-   *  EVERY one of those calls regardless of whether anything actually
-   *  changed — mcpToolsFor() re-allocates every tool closure and
-   *  estimateToolSchemaTokens() re-JSON.stringifies every server's raw schema,
-   *  which is real, avoidable work on the common case (no binding swap this
-   *  turn). syncSkillTool has a real dirty-check (`toolByName.has('Skill')`);
-   *  this one didn't, despite the header above claiming the same "re-run
-   *  per buildAiTools" reasoning. mcpSyncedFor restores that parity: only the
-   *  budget VALUE and the mcpServers ARRAY REFERENCE are compared (not deep
-   *  equality), because those are the only two things this method's output
-   *  depends on — setBinding() always hands in a freshly resolved profile
-   *  object when the budget changes (mcp-gating.test.ts's re-gate test below
-   *  relies on exactly that), and opts.mcpServers only ever gets a new array
-   *  reference from NativeSessionHost re-acquiring (create/resume), never
-   *  mid-session. Clearing this sync's OWN previously-attached names first
-   *  (on an actual re-sync) makes both directions idempotent. */
+  /** Attach WHOLE servers in registry order; the first over-budget server ends
+   *  the walk, so the user controls the kept prefix by ordering the registry.
+   *  Partial servers let the model plan against a capability it cannot finish.
+   *  WHY budget + array identity: ordinary turns must not rebuild schemas and
+   *  closures. Model switches may change the budget; startup attachment supplies
+   *  a new array before any turn is admitted. Re-sync removes only its own tools.
+   *  Guards: mcp-gating.test.ts (whole-server prefix, re-gating and dirty check). */
   private syncMcpTools(): void {
     const rawServers = this.opts.mcpServers;
     const budget = this.profile.mcpToolBudgetTokens;
@@ -2161,6 +2148,7 @@ export class HarnessSession extends EventEmitter {
    *  the CURRENT model, but the kept tail and the post-compaction check are sized
    *  for the smaller model about to take over, so success means it fits there. */
   async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
+    this.opts.assertReady?.();
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
     // WHY below the guard: a running turn owns history; never rewrite it under that turn.
@@ -2247,6 +2235,7 @@ export class HarnessSession extends EventEmitter {
    *  under a running turn — the same reasoning (and the same honest coded
    *  refusal) as compactNow. */
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
+    this.opts.assertReady?.();
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     const estimateBefore = this.rewriteBaseline();
     this.history = [];
@@ -2439,6 +2428,7 @@ export class HarnessSession extends EventEmitter {
    *  turn whose opening move has no visible cause.
    */
   async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string; cut?: boolean }): Promise<void> {
+    this.opts.assertReady?.();
     if (!inv.cut) this.servedSkills.add(inv.skillId); // a WHOLE body is now in history: a model Skill call for it is a repeat
     const historyText = inv.args ? `${inv.body}\n\n${inv.args}` : inv.body;
     return this.beginTurn(historyText, () => this.emitEvent('skill-invoked', {
@@ -2495,6 +2485,8 @@ export class HarnessSession extends EventEmitter {
    *  in production for weeks, and `<project-rule>` injections still do.
    *  Same idle-only precondition as runNotice: never mid-turn. */
   async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
+    // WHY: a quiet history mutation must obey the same startup gate as a model turn.
+    this.opts.assertReady?.();
     if (this.abort) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
@@ -2608,6 +2600,7 @@ export class HarnessSession extends EventEmitter {
   /** `emit` distinguishes user sends from skill invocation; the driver is shared.
    *  `attachments` is what the MODEL reads (prepared copies where they exist). */
   private async beginTurn(text: string, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
+    this.opts.assertReady?.();
     // Never overwrite the active turn's single-slot state.
     if (this.abort) {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');

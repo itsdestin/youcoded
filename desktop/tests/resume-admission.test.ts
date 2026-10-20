@@ -39,6 +39,28 @@ describe('resumed conversation admission', () => {
     expect(start).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['lease', 'startup'])('admits another conversation while one waits for %s', async (stage) => {
+    const f = fixture();
+    const gate = deferred<void>();
+    f.acquire.mockImplementation(async (id) => {
+      if (id === 'slow' && stage === 'lease') await gate.promise;
+      return { ok: true };
+    });
+    const slowStart = vi.fn(async () => {
+      if (stage === 'startup') await gate.promise;
+      return { id: 'slow' };
+    });
+    const slow = f.admission.open('slow', slowStart);
+    const same = f.admission.open('slow', slowStart);
+    try {
+      expect(await f.admission.open('fast', async () => ({ id: 'fast' }))).toEqual({ id: 'fast' });
+      expect(f.acquire.mock.calls.map(([id]) => id)).toEqual(['slow', 'fast']);
+    } finally { gate.resolve(); }
+    expect(await slow).toEqual({ id: 'slow' });
+    expect(await same).toEqual({ id: 'slow' });
+    expect(slowStart).toHaveBeenCalledOnce();
+  });
+
   it('releases a hold after startup exits before the create promise settles', async () => {
     const f = fixture();
     const finish = deferred<{ id: string }>();

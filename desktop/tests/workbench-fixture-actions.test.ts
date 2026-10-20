@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadFixture } from '../src/renderer/dev/workbench/fixture-loader';
@@ -263,6 +263,19 @@ describe('reply fixtures', () => {
 // deserializes into empty timelines means "the workbench shows no conversation"
 // — with no error anywhere. Guard the round-trip, not just the actions.
 describe('chat hydrate payload', () => {
+  it.each(['opening', 'connecting', 'failed', 'ready'])('replays idle recovered history for native startup %s without changing the default', async (phase) => {
+    const original = deserializeChatState(buildHydratePayload()).get('wb-2')!;
+    vi.stubGlobal('location', { search: `?nativeStartup=${phase}` });
+    vi.resetModules();
+    try {
+      const { buildHydratePayload: readinessPayload } = await import('../src/renderer/dev/workbench/seed-chat');
+      const recovered = deserializeChatState(readinessPayload()).get('wb-2')!;
+      expect(original.isThinking).toBe(true);
+      expect(recovered.isThinking).toBe(false);
+      expect(recovered.timeline.length).toBe(original.timeline.length);
+      expect(recovered.toolCalls.size).toBe(original.toolCalls.size);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('round-trips through the app serializers into populated timelines', () => {
     const restored = deserializeChatState(buildHydratePayload());
 

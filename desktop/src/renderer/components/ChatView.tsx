@@ -1348,7 +1348,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 // arrives through useChatState, which memo does not block. App must hand this
 // STABLE props — hooks/use-chatview-handlers.ts says what one inline arrow costs.
 // Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
-export default React.memo(ChatView);
+const MountedChatView = React.memo(ChatView);
+function DeferredChatView(props: Props) {
+  const visited = useRef(false);
+  if (props.visible || props.sessionActive) visited.current = true;
+  // WHY: recovery must not construct every background chat. The active terminal
+  // still needs this view's Preview routing, even before its chat is shown.
+  // Keep a visited view mounted so switching away never loses its local state.
+  return visited.current ? <MountedChatView {...props} /> : null;
+}
+export default React.memo(DeferredChatView);
 
 // For tests of the view's OWN render logic (scan counts, scroll pinning). Their
 // harness mocks useChatState as a plain getter and delivers "new state" by

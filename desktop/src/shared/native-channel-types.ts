@@ -11,6 +11,7 @@ import type {
 } from './types';
 import type { NativePermissionMode, PermissionRule, StoredProject } from './permission-types';
 import type { ContextPreferences } from './context-preferences';
+import type { NativeStartupAction, NativeStartupState } from './native-startup';
 import type { NativeSessionHost } from '../main/harness/native-session-host';
 
 /** A model a native session is bound to: which provider row, which model on it. */
@@ -26,6 +27,7 @@ export interface NativeChannelTypes {
   'native:queue-send-now': { request: { sessionId: string; queueId: string }; response: boolean };
   'native:interrupt': { request: { sessionId: string }; response: void };
   'native:retry': { request: { sessionId: string }; response: void };
+  'native:startup-action': { request: { sessionId: string; attemptId: string; action: NativeStartupAction }; response: { ok: boolean; state?: NativeStartupState } };
   'native:compact': { request: { sessionId: string; focus?: string }; response: NativeActionResult };
   'native:clear': { request: { sessionId: string }; response: NativeActionResult };
   'native:invoke-skill': { request: { sessionId: string; skill: string; args?: string }; response: NativeActionResult };

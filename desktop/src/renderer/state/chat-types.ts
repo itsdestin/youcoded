@@ -265,7 +265,7 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
   | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -557,6 +557,16 @@ export type ChatAction =
       sendTransport?: 'direct' | 'pty';
     }
   | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
+  | {
+      /** Preserve refused/uncertain text without accepting a turn or changing runtime status. */
+      type: 'UNSENT_RETAINED';
+      sessionId: string;
+      content: string;
+      timestamp: number;
+      attachments?: string[];
+      sendId: string;
+      note: 'unsure' | 'not-sent';
+    }
   | {
       // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
       type: 'SEND_NOTE';

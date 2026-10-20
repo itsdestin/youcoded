@@ -3199,12 +3199,12 @@ export function installShim(): void {
     app: {
       restart: () => invoke('app:restart'),
     },
-    // Native runtime — desktop Electron only. false on Android/remote-browser
-    // so the renderer gates the runtime selector without platform branching.
+    // Native capability comes from the host handshake, including Android's own backend.
     native: {
       get supported(): boolean { return (window as any).claude?.capabilities?.nativeSessions === true; }, // WHY a getter (R6-1): the host's handshake says whether a phone may drive a native session; it arrives after this object is built
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
+      startupAction: (sessionId: string, attemptId: string, action: 'retry' | 'continue') => invoke('native:startup-action', { sessionId, attemptId, action }),
       // M1: invoke — returns {status,reason} so remote UI matches desktop
       send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => (noteSendEpoch(sessionId, sendId), invoke('native:send', { sessionId, text, attachments, sendId })),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).

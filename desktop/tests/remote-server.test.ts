@@ -377,7 +377,7 @@ describe('RemoteServer and the shell provider', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
     const send = vi.fn(() => ({ status: 'sent' }));
-    giveRuntime(server, { nativeHost: { send } });
+    giveRuntime(server, { nativeHost: { send, inputAdmission: () => 'ready-generation', inputAdmissionCurrent: (_id: string, admission: unknown) => admission === 'ready-generation' } });
     await drive(server, { type: 'native:send', id: 'n1', payload: { sessionId: 's1', text: 'look /up/a.png', attachments: ['/up/a.png', 42] } });
     // The fourth argument is the model-facing copy; with no preparer on the runtime it equals the files.
     expect(send).toHaveBeenCalledWith('s1', 'look /up/a.png', ['/up/a.png'], ['/up/a.png']);

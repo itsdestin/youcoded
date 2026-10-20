@@ -71,6 +71,9 @@ import { log } from '../logger';
 // mirror — see slug-encoding.ts.
 import { nativeStoreSlug } from '../slug-encoding';
 import type { McpLease } from './mcp/mcp-manager';
+import { SessionToolsStartup } from './session-tools-startup';
+import { SessionStartRegistry, type SessionStartTicket } from './session-start-registry';
+import type { NativeStartupAction, NativeStartupState } from '../../shared/native-startup';
 
 export interface CreateNativeSessionOpts {
   sessionId: string;
@@ -283,23 +286,9 @@ interface LiveEntry {
   // first real send loads the model; this flag asks runTurns to re-read the
   // slots once after a turn and re-apply the profile if the cap changed.
   refreshSlotsAfterTurn?: boolean;
-  // This generation's MCP lease (undefined when no manager is wired, or when
-  // acquireMcp() caught a whole-registry failure). It lives HERE, on the live
-  // entry, rather than in a sessionId-keyed map on the host.
-  //
-  // BE HONEST ABOUT WHY. This is structural insurance, NOT a fix for a bug
-  // observable today — a sessionId-keyed side map was tried as a mutation and
-  // no test could tell the difference, because it genuinely behaves the same
-  // right now. Two things make it equivalent: resume() awaits any live
-  // destroy() for the same id before acquiring, and destroy() has no await
-  // between `this.live.delete()` and the release call below, so nothing can
-  // interleave and swap the lease out. Both are properties of code that could
-  // change. Reading the lease off the entry destroy() already captured — at
-  // its top, before any await — makes "release the generation you are tearing
-  // down" true by construction rather than by that pair of coincidences, which
-  // is the same discipline McpLease applies inside the manager (where the
-  // equivalent bug WAS reachable and is mutation-tested).
-  mcpLease?: McpLease;
+  // This exact generation owns its pending connections and lease. Children
+  // deliberately have none; closing a tab never waits for an optional handshake.
+  toolStartup?: SessionToolsStartup;
   // True from quiesce() until the session is destroyed (or endQuiesce() after a
   // takeover that did not go ahead). send() refuses meanwhile — see quiesce() (0).
   quiescing?: boolean;
@@ -577,8 +566,20 @@ export class NativeSessionHost extends EventEmitter {
    *  way to retry, so callers that fail to actually deliver must put it back;
    *  see the delivery loop's own catch for that half. */
   private takeInMemoryFallback(parentId: string): { childId: string; rec: DelegationRecord } | undefined {
+    // WHY: a rejected outcome write may have committed. Never inject its
+    // memory copy until readback rules out durable delivery/attempt/lease.
+    // A failed read throws before deleting anything; the idle pass defers.
+    const cwd = this.live.get(parentId)?.cwd;
+    const records = this.ledger && cwd ? this.ledger.listFor(cwd, parentId) : [];
     for (const [childId, entry] of this.inMemoryFallback) {
       if (entry.parentId === parentId) {
+        const durable = records.find((record) => record.childId === childId);
+        if (durable?.delivered || durable?.injectionAttempted ||
+            (durable && durable.status !== 'running')) {
+          this.inMemoryFallback.delete(childId); // durable lane owns terminal outcomes
+          continue;
+        }
+        if (durable?.claimedBy) continue;
         this.inMemoryFallback.delete(childId);
         return { childId, rec: entry.rec };
       }
@@ -957,6 +958,7 @@ export class NativeSessionHost extends EventEmitter {
     // production — but "shouldn't happen" still needs a real answer here
     // rather than a crash a few lines down on `parent.cwd`.
     if (!parent) throw new Error(`Cannot resume a specialist: parent session ${parentId} is not live.`);
+    if (!this.entryReady(parent)) throw new Error('The parent conversation has not finished starting.');
 
     const loc = this.locateOwnChild(parentId, opts.childId);
     if (!loc) return { status: 'not-yours' };
@@ -1013,31 +1015,12 @@ export class NativeSessionHost extends EventEmitter {
     // format postSteer itself uses — the child reads a course-correction it
     // missed identically whether it arrives live or at resume.
     //
-    // Fix pass 3 (external review — the split-write gap survives here too):
-    // fix pass 2 folded the read-and-clear into ONE atomic takeMissedSteers()
-    // call, but the status flip that used to follow it stayed a SEPARATE,
-    // later `update()` — two lock acquisitions. If the take landed (steers
-    // cleared on disk) and that following update() then threw, the catch
-    // below tore the freshly-wired child down and rethrew before this child
-    // ever got a turn — the resume never delivered the brief carrying those
-    // steers, and they were already wiped from the ledger by the take. Lost,
-    // with no retry: exactly the split-write shape fix pass 2 closed for
-    // runDelegation's own completion/failure writes, left open here.
-    //
-    // Fix: takeMissedSteers now accepts the same status-flip patch update()
-    // used to carry, applied INSIDE the same mutateJson callback that reads
-    // and clears missedSteers (see its own WHY). mutateFileUnderLock only
-    // calls atomicWrite AFTER computing the full next value, so a throw from
-    // this one call means NEITHER the clear NOR the patch reached disk — the
-    // record is untouched. This resume attempt still fails and the catch
-    // below still tears the freshly-wired child down (nothing else has taken
-    // ownership of it), but the steers remain exactly where they were,
-    // recoverable by a later resume, instead of vanishing. Read AFTER
-    // wireChildLive (rather than before) so a steer that manages to land in
-    // the moments before this call still gets folded into THIS resumed brief
-    // instead of only the next one. Best-effort fallback to the pre-lock
-    // snapshot when no ledger is wired, matching every other "no ledger"
-    // fallback in this file — that path was never split, so it needs no fix.
+    // WHY: take the packet and flip status under one lock, after wiring the
+    // child so newly posted steers enter this resumed brief. A rejected take
+    // does NOT prove the clear failed to commit. The ledger must retain its
+    // exact packet for token-checked unstarted rollback; this host has not
+    // called runDelegation yet and must never restore a stale record snapshot.
+    // Without a ledger, only the existing pre-lock snapshot is available.
     let missedSteers: string[];
     if (this.ledger && parent.cwd) {
       try {
@@ -1077,14 +1060,9 @@ export class NativeSessionHost extends EventEmitter {
           steps: undefined, stale: undefined, claimedBy: undefined, claimedAt: undefined,
         });
       } catch (err) {
-        // Mirrors recordDelegationStart's own leak guard: if this write
-        // throws, nothing else has taken ownership of the freshly re-wired
-        // child yet (runDelegation, which owns teardown from here on, was
-        // never entered) — so this tears it down itself before rethrowing.
-        // Safe unconditionally: the throw above means the ledger record
-        // itself was never touched (see the WHY above), so this teardown
-        // only ever discards the live child construction this call just did
-        // — it never discards bookkeeping, because none of it committed.
+        // No child turn has started, so tear down only this live construction.
+        // The ledger owns recovery of the rejected take's exact steer packet,
+        // including commit-then-throw; teardown is not proof of storage rollback.
         try { await this.destroy(opts.childId); } catch (destroyErr) {
           log('ERROR', 'NativeSessionHost', 'specialist teardown failed after a resume ledger-flip failure', { childId: opts.childId, parentId, error: String(destroyErr) });
         }
@@ -1502,9 +1480,8 @@ export class NativeSessionHost extends EventEmitter {
    *  child, Task 4) and resumeSpecialist's own `background: true` branch (an
    *  EXISTING child, Task 6) — everything AFTER the child exists and its
    *  ledger row is 'running' is identical between the two: drive the run
-   *  un-awaited, read back whether runDelegation's own completion write
-   *  landed, stash an in-memory fallback if it didn't, then release the
-   *  reservation and kick a delivery pass either way. Fire-and-forget by
+   *  un-awaited, retain its outcome in memory pending durable readback at
+   *  the idle boundary, then release the reservation and kick delivery. Fire-and-forget by
    *  design (the caller has already returned its launch ack by the time this
    *  chain settles) — see spawnSpecialistBackground's own class-level WHY for
    *  why the chain below must never produce an unhandled rejection. */
@@ -1525,59 +1502,34 @@ export class NativeSessionHost extends EventEmitter {
     const startedAt = Date.now();
     void this.runDelegation(parentId, childId, title, opts, reservation)
       .then(
-        async (run) => {
-          // runDelegation's own completion write happens INSIDE its own
-          // try/catch and is log-only on failure — correct for the
-          // FOREGROUND caller (spawnSpecialist), which still has `run` in
-          // hand and returns it to its caller regardless of whether that
-          // write landed. The background path has no return value to fall
-          // back on, so it must independently learn whether the write
-          // actually landed.
-          //
-          // Fix pass 2 (re-review 2026-08-13): fix pass 1 answered this with
-          // a SECOND write (ledger.updateIfRunning) fired synchronously right
-          // after the first failed — rejected, because both methods bottom
-          // out in the same NativeHome.mutateJson call against the same
-          // file, so a systemic cause reproduces on the retry identically.
-          // Instead: READ BACK the record we just tried to write. If it's
-          // still 'running', the write never landed — no further attempt is
-          // made against the same broken store; the report the child
-          // actually produced is stashed in the in-memory fallback lane
-          // instead, so the delivery loop below can still get it to the
-          // parent THIS session (see the field's own WHY for what that
-          // does/doesn't guarantee).
+        (run) => {
+          // WHY: retain the actual outcome BEFORE readback. Both the write
+          // acknowledgement and read can fail after a successful commit;
+          // takeInMemoryFallback reconciles against durable state later.
+          // No detached-handler storage reads means no read rejection can
+          // escape this chain or discard the only copy of the report.
           if (this.ledger && parentCwd) {
-            const stillRunning = this.ledger.listFor(parentCwd, parentId)
-              .find((d) => d.childId === childId)?.status === 'running';
-            if (stillRunning) {
-              this.stashFallbackIfParentAlive(parentId, childId, {
-                childId, parentToolCallId: opts.parentToolCallId, agentType: opts.specialist.id, title,
-                workDir: opts.workDir, description: opts.description, background: true,
-                status: 'completed', startedAt, endedAt: Date.now(), steps: run.steps, rawReport: run.report,
-                delivered: false, owner: OWNER, missedSteers: [],
-              });
-            }
+            this.stashFallbackIfParentAlive(parentId, childId, {
+              childId, parentToolCallId: opts.parentToolCallId, agentType: opts.specialist.id, title,
+              workDir: opts.workDir, description: opts.description, background: true,
+              status: 'completed', startedAt, endedAt: Date.now(), steps: run.steps, rawReport: run.report,
+              delivered: false, owner: OWNER, missedSteers: [],
+            });
           }
         },
         (err: any) => {
           // runDelegation's own catch already attempted a 'failed' write
           // (updateIfRunning, log-only on failure) before rethrowing this
-          // same error. Same read-back-then-fallback shape as the success
-          // branch above, for the identical reason: a record stuck at
-          // 'running' is never claimed, so the parent would never even learn
-          // its specialist died.
+          // same error. Retain it without reading storage, exactly like a
+          // successful report; durable-state reconciliation happens at idle.
           log('ERROR', 'NativeSessionHost', 'background specialist run failed', { childId, parentId, error: String(err?.message ?? err) });
           if (this.ledger && parentCwd) {
-            const stillRunning = this.ledger.listFor(parentCwd, parentId)
-              .find((d) => d.childId === childId)?.status === 'running';
-            if (stillRunning) {
-              this.stashFallbackIfParentAlive(parentId, childId, {
-                childId, parentToolCallId: opts.parentToolCallId, agentType: opts.specialist.id, title,
-                workDir: opts.workDir, description: opts.description, background: true,
-                status: 'failed', startedAt, endedAt: Date.now(), failureText: err?.message ?? String(err),
-                delivered: false, owner: OWNER, missedSteers: [],
-              });
-            }
+            this.stashFallbackIfParentAlive(parentId, childId, {
+              childId, parentToolCallId: opts.parentToolCallId, agentType: opts.specialist.id, title,
+              workDir: opts.workDir, description: opts.description, background: true,
+              status: 'failed', startedAt, endedAt: Date.now(), failureText: err?.message ?? String(err),
+              delivered: false, owner: OWNER, missedSteers: [],
+            });
           }
         },
       )
@@ -1630,7 +1582,7 @@ export class NativeSessionHost extends EventEmitter {
    *  one triggered the kick. */
   private kickIdleDeliveryPass(parentId: string): void {
     const entry = this.live.get(parentId);
-    if (!entry || !this.isIdle(parentId)) return;
+    if (!entry || !this.entryReady(entry) || !this.isIdle(parentId)) return;
     // Held after Stop (see LiveEntry.holdDeliveries): the report stays queued
     // and rides in with the user's next message instead of waking the model.
     if (entry.holdDeliveries) return;
@@ -2184,20 +2136,14 @@ export class NativeSessionHost extends EventEmitter {
   /** Ids (not text) of messages waiting behind the running turn, oldest first, including ones typed while the session
    *  was starting. WHY (R5-1): the session record reads the queue from its one owner instead of keeping a copy. */
   queuedMessageIds(sessionId: string): string[] {
-    return [
-      ...(this.startingSends.get(sessionId) ?? []).map((q) => q.id),
-      ...(this.live.get(sessionId)?.queue ?? []).map((q) => q.id),
-    ];
+    return (this.live.get(sessionId)?.queue ?? []).map(q => q.id);
   }
 
   /** The waiting messages themselves, oldest first: what the docked strip draws on EVERY screen (one-core R5-4a). `content` is the text
    *  exactly as it was sent, which is also what the strip showed when only the sending screen drew it. */
   queuedMessagesFor(sessionId: string): { queueId: string; content: string; timestamp: number }[] {
     const item = (q: { id: string; text: string; at?: number }) => ({ queueId: q.id, content: q.text, timestamp: q.at ?? 0 });
-    return [
-      ...(this.startingSends.get(sessionId) ?? []).map(item),
-      ...(this.live.get(sessionId)?.queue ?? []).map(item),
-    ];
+    return (this.live.get(sessionId)?.queue ?? []).map(item);
   }
 
   /** The last queue announced per session, as its ids. WHY (R5-4a): the queue changes in about ten places (a send, a cancel, a drain, a
@@ -2302,7 +2248,7 @@ export class NativeSessionHost extends EventEmitter {
     // given back through the object acquire() returns, which is what keeps two
     // generations of one RESUMED session (same id, different lease) from
     // releasing each other's connections. See McpLease in mcp-manager.ts.
-    private mcpManager?: { destroyAll(): Promise<void>; acquire(sessionId: string): Promise<McpLease> },
+    private mcpManager?: { destroyAll(): Promise<void>; acquire(sessionId: string, opts?: { retryFailed?: boolean }): Promise<McpLease> },
     // Task 2 (plan 1b) — backs the DelegationLedger this constructor builds
     // below. Takes a NativeHome rather than a pre-built DelegationLedger so
     // this file doesn't need to know delegation-ledger.ts's own construction
@@ -2903,24 +2849,41 @@ export class NativeSessionHost extends EventEmitter {
     };
   }
 
-  /** Acquire this session's pooled MCP servers (Task 6) — the ONE production
-   *  caller of McpManager.acquire(). undefined when no manager is wired (every
-   *  existing test construction, which predates Task 6) or when acquisition
-   *  itself fails: a registry-wide failure (a corrupt `~/.youcoded/mcp.json`,
-   *  a secrets-store read error) must not block the session from opening at
-   *  all — MCP is one optional capability layered onto the tool set, not a
-   *  precondition for having a session at all. A single broken SERVER is
-   *  already handled inside McpManager itself (excluded from the returned
-   *  list, never a rejection) — this only guards the rarer whole-registry
-   *  failure. */
-  private async acquireMcp(sessionId: string): Promise<McpLease | undefined> {
-    if (!this.mcpManager) return undefined;
-    try {
-      return await this.mcpManager.acquire(sessionId);
-    } catch (err) {
-      log('ERROR', 'NativeSessionHost', 'mcp acquire failed — session opens with no MCP servers', { sessionId, error: String(err) });
-      return undefined;
-    }
+  startupStateFor(sessionId: string): NativeStartupState | undefined {
+    return this.starts.get(sessionId)?.state ?? this.live.get(sessionId)?.toolStartup?.state;
+  }
+  startupAction(sessionId: string, attemptId: string, action: NativeStartupAction): boolean {
+    return this.live.get(sessionId)?.toolStartup?.act(attemptId, action) ?? false;
+  }
+  private entryReady(entry: LiveEntry): boolean { return !entry.toolStartup || entry.toolStartup.isReady; }
+  inputAdmission(sessionId: string): object | undefined {
+    const entry = this.live.get(sessionId);
+    return entry && this.entryReady(entry) ? entry : undefined;
+  }
+  inputAdmissionCurrent(sessionId: string, token: object): boolean {
+    return this.live.get(sessionId) === token && this.inputAdmission(sessionId) === token;
+  }
+  private activateTools(sessionId: string, entry: LiveEntry, tools: SessionToolsStartup, seeded: McpLease['servers'] | undefined, reseed?: (current: () => boolean) => Promise<void>): void {
+    tools.activate({
+      isCurrent: () => this.live.get(sessionId) === entry,
+      install: async (lease, current) => {
+        if (!current()) return;
+        entry.session.setMcpServers(lease?.servers);
+        if (reseed && seeded !== lease?.servers) await reseed(current);
+        if (!current()) return;
+        entry.compactionGeneration = this.restoredCompactionGeneration.get(entry.session) ?? entry.compactionGeneration;
+      },
+      ready: () => {
+        try {
+          const context = this.buildSessionContext(entry);
+          if (JSON.stringify(context) !== JSON.stringify(entry.sessionContext)) {
+            entry.sessionContext = context; this.emit('session-context', { sessionId, context });
+          }
+        } catch (error) { log('WARN', 'NativeSessionHost', 'could not describe finalized tools', { sessionId, errorType: error instanceof Error ? error.name : 'unknown' }); }
+        this.kickReadyQueue(sessionId, entry);
+        if (this.pendingDeliveryParents.has(sessionId) || this.pendingHostNotices.get(sessionId)?.length) this.kickIdleDeliveryPass(sessionId);
+      },
+    });
   }
 
   /** Task 5 (plan 1b): one line per NON-DELIVERED delegation for `sessionId`
@@ -3059,39 +3022,27 @@ export class NativeSessionHost extends EventEmitter {
     });
   }
 
-  /**
-   * Messages typed BEFORE the session finished starting, keyed by session id.
-   *
-   * WHY THIS EXISTS (Destin, 2026-09-06). He made a session on a local model and
-   * typed straight away. The app answered "This session is no longer running.
-   * Start or resume it to send messages." Both halves were false: the session had
-   * never run yet — the engine was still loading a 29 GB model — and there was
-   * nothing to start or resume. A minute later the same session answered him
-   * normally. `send()` looked the id up in `this.live`, found nothing, and had
-   * exactly ONE reason code for "not in that map", which covers two opposite
-   * situations: a session that has ENDED, and a session that has not STARTED yet.
-   *
-   * An id is in this map from the moment create()/resume() begins until wire()
-   * makes it live. A send that lands in that window is held here and delivered
-   * the instant the session exists, so the message the user typed is never
-   * thrown away — which is the real harm; better wording alone still loses it.
-   */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[]>();
-
-  /** Mark an id as being built. Called at the TOP of create() and resume(), so
-   *  the window a pre-live send can fall into is covered from its first tick. */
-  private beginStarting(sessionId: string): void {
-    if (!this.startingSends.has(sessionId)) this.startingSends.set(sessionId, []);
+  // WHY tickets, not an early-send queue: a refused submission stays a draft;
+  // closing an opening chat must invalidate work before any awaited stage can wire it.
+  private starts = new SessionStartRegistry<SessionToolsStartup>(tools => {
+    if (tools.isAttached) tools.cancel(); else void tools.dispose();
+  });
+  private beginStartup(sessionId: string): SessionStartTicket<SessionToolsStartup> {
+    const tools = new SessionToolsStartup({
+      acquire: retry => timeSessionSetup('native-mcp', async () => retry ? this.mcpManager?.acquire(sessionId, { retryFailed: true }) : this.mcpManager?.acquire(sessionId)),
+      changed: state => this.emit('startup-state', { sessionId, state }),
+      reportError: error => log('WARN', 'NativeSessionHost', 'session tool initialization failed', { sessionId, errorType: error instanceof Error ? error.name : 'unknown' }),
+    });
+    const ticket = this.starts.begin(sessionId, tools);
+    this.emit('startup-state', { sessionId, state: tools.state });
+    return ticket;
   }
-
-  /** Stop holding sends for an id, returning whatever was held. Called by wire()
-   *  on success, and by create()/resume() when they give up — a message held for
-   *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[] {
-    const held = this.startingSends.get(sessionId) ?? [];
-    this.startingSends.delete(sessionId);
-    return held;
+  private finishStartup(ticket: SessionStartTicket<SessionToolsStartup>): void {
+    if (!this.starts.isCurrent(ticket)) return;
+    if (!this.live.has(ticket.sessionId)) void ticket.value.dispose();
+    this.starts.finish(ticket);
   }
+  private assertStartup(ticket: SessionStartTicket<SessionToolsStartup>): void { this.starts.assertCurrent(ticket); }
 
   /** The private continuation store, but ONLY when an identity resolver came
    *  with it: without one nothing could ever be restored, so publishing would
@@ -3239,7 +3190,9 @@ export class NativeSessionHost extends EventEmitter {
    * continuationIdentityFor throw, which is just another fallback. The ONE
    * throw is a transcript that exists but cannot be read (see below).
    */
-  private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
+  private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession, current: () => boolean = () => true): Promise<void> {
+    const check = () => { if (!current()) throw new Error('This conversation was closed before startup finished.'); };
+    check();
     const store = this.continuationStore();
     // Off the main thread (2026-09-16 C2 review): this ran on every Resume
     // click and read the whole transcript synchronously. (restore() below
@@ -3254,6 +3207,7 @@ export class NativeSessionHost extends EventEmitter {
       log('ERROR', 'NativeSessionHost', 'resume could not read the transcript', { sessionId, error: String(err) });
       throw new Error(TRANSCRIPT_UNREADABLE_MESSAGE);
     }
+    check();
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
     this.store.hydrateReferences(sessionId, persisted);
@@ -3276,6 +3230,7 @@ export class NativeSessionHost extends EventEmitter {
           // must fail the restore (image-oversized) so the gated rebuild above wins.
           imageLimits: session.profileSnapshot.imageLimits,
         });
+        check();
         if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.
           // Their exact provider history may be used, but a portable cut needs
@@ -3317,8 +3272,8 @@ export class NativeSessionHost extends EventEmitter {
 
   /** Subscribe a freshly-built HarnessSession: forward its events to the
    *  renderer immediately, and enqueue each on the session's append chain. */
-  private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease, projectInstructionFiles: readonly ProjectInstructionFile[] = []): void {
-    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, mcpLease, projectInstructionFiles };
+  private wire(sessionId: string, cwd: string, session: HarnessSession, toolStartup: SessionToolsStartup, projectInstructionFiles: readonly ProjectInstructionFile[] = []): LiveEntry {
+    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, toolStartup, projectInstructionFiles };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
     // Persist "Always allow" decisions for THIS session's project. The session
@@ -3363,18 +3318,7 @@ export class NativeSessionHost extends EventEmitter {
       log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
     }
 
-    // Anything the user typed while this session was still being built goes now,
-    // in the order they typed it. The FIRST one is dispatched through the normal
-    // send() path (which sets inFlight and, when that turn ends, drains the rest);
-    // the others are pushed onto the queue KEEPING the ids the renderer was already
-    // given, so Cancel/Edit can still target them.
-    const held = this.endStarting(sessionId);
-    if (held.length > 0) {
-      const [first, ...rest] = held;
-      entry.queue.push(...rest);
-      this.send(sessionId, first.text, first.attachments, first.modelAttachments);
-      this.announceQueue(sessionId); // the first one is no longer waiting
-    }
+    return entry;
   }
 
   // The fitters END their output with the bracketed sentence explaining what they
@@ -3475,34 +3419,29 @@ export class NativeSessionHost extends EventEmitter {
 
   /** Fresh session: write the header, build + wire a live HarnessSession. */
   async create(opts: CreateNativeSessionOpts): Promise<void> {
-    // From here until wire(), a send for this id is HELD rather than refused —
-    // see startingSends. Marked before the first await so there is no tick in
-    // which a typed message would be told the session is "no longer running",
-    // and released in the `finally` if the session never comes up, so a held
-    // message cannot sit in memory for the life of the app.
-    this.beginStarting(opts.sessionId);
-    try {
-      await this.createInner(opts);
-    } finally {
-      if (!this.live.has(opts.sessionId)) this.endStarting(opts.sessionId);
-    }
+    const start = this.beginStartup(opts.sessionId);
+    try { await this.createInner(opts, start); }
+    finally { this.finishStartup(start); }
   }
 
-  private async createInner(opts: CreateNativeSessionOpts): Promise<void> {
+  private async createInner(opts: CreateNativeSessionOpts, start: SessionStartTicket<SessionToolsStartup>): Promise<void> {
     // Same single-writer guard as resume() — create() also ends in wire(), so an
     // id that is somehow still live would gain a second appending listener here
     // too. Cheap and idempotent; closes the class at BOTH wire() entry points
     // rather than only the one we know a caller reached.
     if (this.live.has(opts.sessionId)) {
       log('WARN', 'NativeSessionHost', 'create found a live session under the same id — destroying the orphan first', { sessionId: opts.sessionId });
-      await this.destroy(opts.sessionId);
+      await this.destroy(opts.sessionId, { preserveStartup: true });
     }
+    this.assertStartup(start);
+    start.value.connect();
     const preset = resolvePreset(opts.presetId);
     const stepGuard = this.readStepGuard();
     const harness = stepGuard === null
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: stepGuard } };
     const { contextLength, profile, pricing, free, slotsUnknown } = await timeSessionSetup('native-profile', () => this.resolveContextAndProfile(opts.binding));
+    this.assertStartup(start);
     await this.store.create({
       v: 1,
       sessionId: opts.sessionId,
@@ -3512,6 +3451,7 @@ export class NativeSessionHost extends EventEmitter {
       createdAt: Date.now(),
       ...(stepGuard === null ? {} : { stepGuard }),
     });
+    this.assertStartup(start);
     // The preset seeds the STARTING mode; an explicit setPermissionMode always
     // wins — modeFor is never overwritten here (plan decision 3).
     this.seedMode(opts.sessionId, preset.defaultMode);
@@ -3522,20 +3462,20 @@ export class NativeSessionHost extends EventEmitter {
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
     await timeSessionSetup('native-specialists', () => this.specialistCatalog.ensureFresh(opts.cwd));
+    this.assertStartup(start);
     // The <env> git line, read off the main thread before anything is built
     // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
     const [gitSnapshot, triggers, projectInstructionFiles, skillCatalog] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd), timeSessionSetup('native-instructions', () => prepareProjectInstructions(opts.cwd, profile.injectionBudgetTokens)), this.prepareSkillCatalog(opts.cwd)]);
-    // Acquire this session's MCP servers (Task 6) BEFORE constructing the
-    // session, so mcpServers is available for the very first buildAiTools().
-    const mcpLease = await timeSessionSetup('native-mcp', () => this.acquireMcp(opts.sessionId));
-    const mcpServers = mcpLease?.servers;
+    this.assertStartup(start);
+    // Tools may still connect while history/UI open; no turn is admitted before attachment.
+    const mcpServers = start.value.lease?.servers;
     let session: HarnessSession;
     try {
-      // WHY: fallible construction follows MCP acquisition but precedes wire().
-      // destroy() cannot release a not-yet-live session: release this lease on
-      // failure and preserve the original error rather than stranding its server.
+      // WHY the controller owns both current and future leases: failed construction
+      // must release its own connection generation without waiting for a handshake.
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
+          assertReady: () => { if (!start.value.isReady) throw new Error('This conversation is not ready to send yet.'); },
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(opts.sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
@@ -3543,11 +3483,15 @@ export class NativeSessionHost extends EventEmitter {
         this.modelFactory,
       );
     } catch (err) {
-      await mcpLease?.release();
+      await start.value.dispose();
       throw err;
     }
+    this.assertStartup(start);
     this.presetIdFor.set(opts.sessionId, preset.manifest.id);
-    this.wire(opts.sessionId, opts.cwd, session, mcpLease, projectInstructionFiles);
+    const entry = this.wire(opts.sessionId, opts.cwd, session, start.value, projectInstructionFiles);
+    this.activateTools(opts.sessionId, entry, start.value, mcpServers);
+    if (start.value.hasOutcome) await start.value.pending;
+    this.assertStartup(start);
     if (slotsUnknown) this.live.get(opts.sessionId)!.refreshSlotsAfterTurn = true;
   }
 
@@ -3584,6 +3528,7 @@ export class NativeSessionHost extends EventEmitter {
     // A child with no live parent has nobody to report to and nobody to tear it
     // down — refuse loudly rather than orphan a session.
     if (!parent) throw new Error(`Cannot start a specialist: parent session ${parentId} is not live.`);
+    if (!this.entryReady(parent)) throw new Error('The parent conversation has not finished starting.');
 
     // Containment: the child may work in the parent's directory or a
     // subdirectory of it, never outside. Canonicalized through the SAME helper
@@ -3729,7 +3674,7 @@ export class NativeSessionHost extends EventEmitter {
         // re-syncs on every turn, so leaving this out would silently hand every
         // child the user's whole skill library.
         skillCatalog: { list: () => [], load: (id: string) => { throw new SkillNotFound(id, []); } },
-        // MCP SUPPRESSION: create()/resume() call acquireMcp() at this point;
+        // MCP SUPPRESSION: root create()/resume() start a tools controller;
         // a specialist child (new OR resumed) deliberately never does, and
         // passes no mcpServers — so no MCP tools attach, and there is no lease
         // for destroy() to release.
@@ -3899,18 +3844,13 @@ export class NativeSessionHost extends EventEmitter {
     }
     let hasUndelivered = false;
     for (const rec of records) {
-      if (rec.status === 'running' && !isOwnerAlive(rec.owner)) {
+      if ((rec.status === 'running' && !isOwnerAlive(rec.owner)) ||
+          (rec.claimedBy && !isOwnerAlive(rec.claimedBy))) {
         try {
-          await this.ledger.update(cwd, parentId, rec.childId, { status: 'interrupted', endedAt: Date.now() });
+          // WHY: recheck the exact run/claim under lock, not this stale snapshot.
+          await this.ledger.reconcileOwner(cwd, parentId, rec);
         } catch (err) {
-          log('WARN', 'NativeSessionHost', 'reconcileDelegations: failed to mark a dead-owner running child interrupted', { parentId, childId: rec.childId, error: String((err as any)?.message ?? err) });
-        }
-      }
-      if (rec.claimedBy && !isOwnerAlive(rec.claimedBy)) {
-        try {
-          await this.ledger.releaseClaim(cwd, parentId, rec.childId);
-        } catch (err) {
-          log('WARN', 'NativeSessionHost', 'reconcileDelegations: failed to release a dead-owner delivery lease', { parentId, childId: rec.childId, error: String((err as any)?.message ?? err) });
+          log('WARN', 'NativeSessionHost', 'reconcileDelegations: dead-owner cleanup failed', { parentId, childId: rec.childId, error: String((err as any)?.message ?? err) });
         }
       }
       // Read from the ORIGINAL snapshot, not a re-fetch — a record just
@@ -3959,18 +3899,12 @@ export class NativeSessionHost extends EventEmitter {
    *  would race that read and load the header's (possibly wrong/absent) model
    *  first. */
   async resume(sessionId: string, cwd: string, bindingOverride?: ModelBinding): Promise<boolean> {
-    // Same pre-live send holding as create() — resuming a big local model is
-    // exactly as slow as creating one, and typing during it must not be told the
-    // session is "no longer running".
-    this.beginStarting(sessionId);
-    try {
-      return await this.resumeInner(sessionId, cwd, bindingOverride);
-    } finally {
-      if (!this.live.has(sessionId)) this.endStarting(sessionId);
-    }
+    const start = this.beginStartup(sessionId);
+    try { return await this.resumeInner(sessionId, cwd, bindingOverride, start); }
+    finally { this.finishStartup(start); }
   }
 
-  private async resumeInner(sessionId: string, cwd: string, bindingOverride?: ModelBinding): Promise<boolean> {
+  private async resumeInner(sessionId: string, cwd: string, bindingOverride: ModelBinding | undefined, start: SessionStartTicket<SessionToolsStartup>): Promise<boolean> {
     // SINGLE-WRITER GUARD (2026-07-18): tear down any session already live under
     // this id BEFORE wiring a new one. Without this, resuming an id that is still
     // live leaves the old HarnessSession's transcript-event listener attached —
@@ -3983,9 +3917,11 @@ export class NativeSessionHost extends EventEmitter {
     // actually be created, rather than in each caller.
     if (this.live.has(sessionId)) {
       log('WARN', 'NativeSessionHost', 'resume found a live session under the same id — destroying the orphan first', { sessionId });
-      await this.destroy(sessionId);
+      await this.destroy(sessionId, { preserveStartup: true });
     }
+    this.assertStartup(start);
     const header = await this.store.readHeaderAsync(sessionId, cwd);
+    this.assertStartup(start);
     if (!header) return false;
     // Task 6 — a specialist child can never come back through the ROOT resume
     // path: it would get the resolved PRESET's prompt (never its own
@@ -3996,6 +3932,7 @@ export class NativeSessionHost extends EventEmitter {
     // task_id management surface, below) is the only door back in for a
     // specialist header.
     if (header.sessionKind === 'specialist') return false;
+    start.value.connect();
     // Read-side legacy mapping: a stored 'chat' header (or any unknown id)
     // resolves to Assistant. The stored header is NEVER rewritten (spec
     // decision 8) — the mapping lives only here + in presetIdFor.
@@ -4007,6 +3944,7 @@ export class NativeSessionHost extends EventEmitter {
     // tool posture for the wrong model on every overridden resume.
     const binding = bindingOverride ?? header.binding;
     const { contextLength, profile, pricing, free, slotsUnknown } = await timeSessionSetup('native-profile', () => this.resolveContextAndProfile(binding));
+    this.assertStartup(start);
     // Seed the STARTING mode: the user's saved choice for this conversation,
     // else the preset default (an explicit setPermissionMode always wins).
     // WHY the saved choice: without it, "Ask first" on a Coder conversation
@@ -4016,28 +3954,23 @@ export class NativeSessionHost extends EventEmitter {
     // toolWiring() reads this.specialistCatalog.roster(cwd) below, so a
     // resumed session's first turn never ships an empty roster either.
     await timeSessionSetup('native-specialists', () => this.specialistCatalog.ensureFresh(cwd));
-    // Acquire this session's MCP servers (Task 6). A RESUMED session reuses its
-    // old sessionId, so this acquire() can overlap a release() still in flight
-    // from a destroy() of the SAME id. That used to be the bug: both
-    // generations wrote to one sessionId-keyed holder entry and the outgoing
-    // destroy() closed the incoming session's connections. It is now safe
-    // structurally — this acquire() mints its own lease, and the outgoing
-    // destroy() can only release the lease on the LiveEntry it captured. See
-    // McpLease in mcp-manager.ts.
+    this.assertStartup(start);
+    // The generation's controller owns both current and late MCP leases.
     // The <env> git line + trigger index, off the main thread, before the session is built (C3, B8).
     const [gitSnapshot, triggers, projectInstructionFiles, skillCatalog] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd), timeSessionSetup('native-instructions', () => prepareProjectInstructions(cwd, profile.injectionBudgetTokens)), this.prepareSkillCatalog(cwd)]);
-    const mcpLease = await timeSessionSetup('native-mcp', () => this.acquireMcp(sessionId));
-    const mcpServers = mcpLease?.servers;
+    this.assertStartup(start);
+    const mcpServers = start.value.lease?.servers;
     const harness = header.stepGuard === undefined
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: header.stepGuard } };
     let session: HarnessSession;
     try {
-      // WHY: as on create(), construction/history rebuild can fail before wire().
-      // Release the acquired MCP lease here; destroy() cannot see it yet.
+      // WHY: failed reconstruction releases this generation's current/late lease.
+      // The first model turn remains gated until final tool attachment and reseeding.
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
+          assertReady: () => { if (!start.value.isReady) throw new Error('This conversation is not ready to send yet.'); },
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           takeReadyBusyMessage: () => this.takeReadyBusyMessage(sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
@@ -4050,13 +3983,17 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      await this.seedResumedHistory(sessionId, cwd, session);
+      await this.seedResumedHistory(sessionId, cwd, session, () => this.starts.isCurrent(start));
     } catch (err) {
-      await mcpLease?.release();
+      await start.value.dispose();
       throw err;
     }
+    this.assertStartup(start);
     this.presetIdFor.set(sessionId, preset.manifest.id);
-    this.wire(sessionId, cwd, session, mcpLease, projectInstructionFiles);
+    const entry = this.wire(sessionId, cwd, session, start.value, projectInstructionFiles);
+    this.activateTools(sessionId, entry, start.value, mcpServers, current => this.seedResumedHistory(sessionId, cwd, session, current));
+    if (start.value.hasOutcome) await start.value.pending;
+    this.assertStartup(start);
     if (slotsUnknown) this.live.get(sessionId)!.refreshSlotsAfterTurn = true;
     // Task 9 — AFTER wire(), not before: reconcileDelegations's own
     // queueDelivery() call needs this.live.get(sessionId) to already resolve
@@ -4066,6 +4003,7 @@ export class NativeSessionHost extends EventEmitter {
     // reconcileDelegations already guards every fallible step internally, so
     // it is not wrapped in a try/catch here on top of that.
     await this.reconcileDelegations(sessionId, cwd);
+    this.assertStartup(start);
     return true;
   }
 
@@ -4097,22 +4035,9 @@ export class NativeSessionHost extends EventEmitter {
     // it is what the model reads — a prepared copy of an over-limit picture —
     // and any path that dropped it would resend the original the provider refuses.
     const entry = this.live.get(sessionId);
-    if (!entry) {
-      // Not live YET is not the same as not live any more. A session still being
-      // built holds the message and delivers it the moment it is ready (see
-      // startingSends). Only when that holding area is full does this refuse, and
-      // it refuses with its own reason so the renderer can say "still starting"
-      // instead of the flatly untrue "no longer running".
-      const held = this.startingSends.get(sessionId);
-      if (held) {
-        if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
-        const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments, ...(modelAttachments ? { modelAttachments } : {}), at: Date.now() });
-        this.announceQueue(sessionId);
-        return { status: 'queued', queueId };
-      }
-      return { status: 'failed', reason: 'not-live' };
-    }
+    if (!entry) return { status: 'failed', reason: this.starts.has(sessionId) ? 'initializing' : 'not-live' };
+    // WHY refuse before the FIFO/history: startup must never acknowledge an in-memory draft as sent.
+    if (!this.entryReady(entry)) return { status: 'failed', reason: 'initializing' };
     // A takeover is winding this session down (quiesce): a message now would run
     // a whole turn here after the handoff began. 'not-live' because the session
     // is being stopped on this device; the renderer keeps the draft.
@@ -4174,16 +4099,6 @@ export class NativeSessionHost extends EventEmitter {
    *  renderer's Cancel/Edit affordance can render a single "too late" toast
    *  without needing to distinguish the reason. */
   removeQueued(sessionId: string, queueId: string): boolean {
-    // A message typed while the session was still starting is held OUTSIDE the
-    // live entry (startingSends), and it is exactly the message a user is most
-    // likely to want back — they have been staring at a spinner. Cancel/Edit has
-    // to reach it there too, or it would report "too late" for a message that has
-    // not been sent at all.
-    const held = this.startingSends.get(sessionId);
-    if (held) {
-      const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.splice(i, 1); this.announceQueue(sessionId); return true; }
-    }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
     const idx = entry.queue.findIndex((q) => q.id === queueId);
@@ -4198,11 +4113,6 @@ export class NativeSessionHost extends EventEmitter {
    *  current batch; this is for not waiting at all. Move + stop are sync, so
    *  the drain after the stop finds it first. Contract as removeQueued. */
   sendQueuedNow(sessionId: string, queueId: string): boolean {
-    const held = this.startingSends.get(sessionId); // still starting: reorder only
-    if (held) {
-      const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.unshift(...held.splice(i, 1)); this.announceQueue(sessionId); return true; }
-    }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
     const idx = entry.queue.findIndex((q) => q.id === queueId);
@@ -4220,7 +4130,7 @@ export class NativeSessionHost extends EventEmitter {
   private takeReadyBusyMessage(sessionId: string, session: HarnessSession):
     { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore: () => void } | undefined {
     const entry = this.live.get(sessionId);
-    if (!entry || entry.session !== session || entry.parentSessionId || !entry.inFlight ||
+    if (!entry || !this.entryReady(entry) || entry.session !== session || entry.parentSessionId || !entry.inFlight ||
         entry.quiescing || entry.compacting || entry.queue[0]?.ready === false) return;
     const item = entry.queue.shift();
     if (!item) return;
@@ -4234,7 +4144,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Claim an idle slot for a head whose acknowledgement fence just opened.
    *  Never bypass an unready FIFO head; runTurns does the actual shift. */
   private kickReadyQueue(sessionId: string, entry: LiveEntry): void {
-    if (entry.inFlight || entry.quiescing || entry.compacting || !entry.queue[0] || entry.queue[0].ready === false) return;
+    if (!this.entryReady(entry) || entry.inFlight || entry.quiescing || entry.compacting || !entry.queue[0] || entry.queue[0].ready === false) return;
     entry.inFlight = true;
     entry.running = new Promise<void>((resolve) => {
       setImmediate(() => { void this.runTurns(sessionId, entry, IDLE_PASS).then(resolve, resolve); });
@@ -4252,6 +4162,7 @@ export class NativeSessionHost extends EventEmitter {
     // WHY: even a failed ledger claim or a replaced generation must release
     // this pass's slot; the finally covers every exit.
     try {
+      if (!this.entryReady(entry)) return;
       // WHY: refresh the root's roster once per pass, not per queued turn.
       // Children use their fixed spawn roster; refreshing each child's cwd
       // would grow the catalog cache without a consumer.
@@ -4261,7 +4172,7 @@ export class NativeSessionHost extends EventEmitter {
       // delivery and FIFO dispatch until BOTH lanes are quiet at the same boundary.
       for (;;) {
         while (next !== undefined) {
-          if (this.live.get(sessionId) !== entry) return;
+          if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) return;
           // A user-started turn lifts the post-Stop hold so the model reads
           // parked reports as context, not as a new turn of their own.
           if (entry.holdDeliveries && next !== IDLE_PASS) {
@@ -4319,6 +4230,7 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   private async drainDeliveries(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice'): Promise<void> {
+    if (!this.entryReady(entry)) return; // park before any durable claim/injection stamp
     // Plan 1b Task 8: plain-text host notices drain FIRST, unconditionally —
     // no `this.ledger` gate, since this lane exists whether or not a
     // NativeHome/ledger was ever wired (see pendingHostNotices' own WHY).
@@ -4329,7 +4241,7 @@ export class NativeSessionHost extends EventEmitter {
     const notices = this.pendingHostNotices.get(sessionId);
     if (notices) {
       while (notices.length > 0) {
-        if (this.live.get(sessionId) !== entry) break;
+        if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) break;
         // D8: every shell notice already queued goes out as ONE turn — each
         // runNotice is a full model turn over the whole conversation, so three
         // builds finishing during one busy turn must not cost three turns.
@@ -4418,6 +4330,7 @@ export class NativeSessionHost extends EventEmitter {
       // the SAME `entry.inFlight = false` at the bottom — an early `return`
       // here would leave a session permanently stuck "in flight".
       while (this.pendingDeliveryParents.has(sessionId)) {
+        if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) break;
         // Fix (Task 4 fix pass 3): claimUndelivered itself can throw under the
         // exact systemic failure (disk full, corrupt sidecar, lock
         // exhaustion) the in-memory fallback lane exists to survive — and it
@@ -4431,9 +4344,11 @@ export class NativeSessionHost extends EventEmitter {
         // iteration" — `rec` stays null and control falls through to the
         // fallback lane below in the SAME iteration.
         let rec: DelegationRecord | null = null;
+        let claimFailed = false;
         try {
           rec = await this.ledger.claimUndelivered(entry.cwd, sessionId);   // lease, not delivery
         } catch (err) {
+          claimFailed = true;
           log('WARN', 'NativeSessionHost', 'claimUndelivered failed — falling back to the in-memory lane for this pass', { sessionId, error: String((err as any)?.message ?? err) });
         }
         if (rec) {
@@ -4453,8 +4368,8 @@ export class NativeSessionHost extends EventEmitter {
           // releases the claimed lease (leaving the record claimable again
           // for the next real delivery pass) instead of either silently
           // confirming a report nobody saw or losing the lease forever.
-          if (this.live.get(sessionId) !== entry) {
-            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
+          if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) {
+            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId);
             break;
           }
           // Fix pass 5: stamp the durable "about to inject" marker strictly
@@ -4495,6 +4410,16 @@ export class NativeSessionHost extends EventEmitter {
                 log('WARN', 'NativeSessionHost', 'failed to record a truncation-time spill path in the ledger', { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
               }
             }
+            if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) {
+              // WHY: retain known-unstarted cleanup across failed/commit-then-throw writes;
+              // unlike an attempted delivery, this exact claim is safe to retry.
+              try { await this.ledger.cancelUnstartedInjection(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId); }
+              catch (error) {
+                log('WARN', 'NativeSessionHost', 'unstarted report rollback pending — will retry on the next ledger write', { sessionId, childId: rec.childId, error: String(error) });
+              }
+              this.queueDelivery(sessionId);
+              break;
+            }
             await this.deliverNotice(entry, mode, delivery.text, {
               // Header data for the renderer's compact SpecialistReportCard —
               // from the ledger record, the same source formatDelivery's prose
@@ -4509,7 +4434,7 @@ export class NativeSessionHost extends EventEmitter {
             // never be reached on a session that stopped being live while the
             // notice was in flight.
             if (this.live.get(sessionId) !== entry) {
-              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
+              await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId);
               break;
             }
             await this.ledger.confirmDelivered(entry.cwd, sessionId, rec.childId); // only now is it delivered
@@ -4525,7 +4450,7 @@ export class NativeSessionHost extends EventEmitter {
             // confirmDelivered threw); a SECOND throw from the release call
             // itself must not escape and skip the `break` below, which is
             // what lets the fallback lane still run this same pass.
-            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId);
+            await this.releaseClaimSafely(entry.cwd, sessionId, rec.childId, rec.deliveryClaimId);
             // Final-review fix: this used to unconditionally say "will retry
             // at the next idle boundary". That was false in the dominant
             // case — markInjectionAttempted (above) durably stamps
@@ -4551,17 +4476,17 @@ export class NativeSessionHost extends EventEmitter {
         // to reach the parent THIS session (see inMemoryFallback's own WHY
         // for what that guarantees and what it genuinely does not).
         //
-        // Unlike claimUndelivered/confirmDelivered/releaseClaim above,
-        // takeInMemoryFallback does no I/O — it's a synchronous for..of over
-        // a plain in-memory Map plus a .delete(). Nothing here can throw
-        // (short of an engine-level OOM, which no try/catch in this file
-        // handles either), so it isn't wrapped like the disk-backed calls
-        // are — a try/catch here would guard a path that cannot fire, not
-        // add resilience (fix pass 5, replacing an earlier version of this
-        // comment that argued for the guard on file-wide-consistency grounds
-        // alone while admitting the same thing).
-        const fallback = this.takeInMemoryFallback(sessionId);
-        if (!fallback) { this.pendingDeliveryParents.delete(sessionId); break; }
+        // WHY: unknown write outcomes must not bypass durable attempt markers.
+        // An unreadable sidecar defers this lane, retaining both copy and wake-up.
+        let fallback: ReturnType<NativeSessionHost['takeInMemoryFallback']>;
+        try { fallback = this.takeInMemoryFallback(sessionId); }
+        catch (error) {
+          log('WARN', 'NativeSessionHost', 'fallback outcome readback failed — deferring delivery', { sessionId, error: String(error) });
+          break;
+        }
+        // WHY: an unreadable ledger is not an empty queue. Retain its wake-up
+        // for the next ordinary idle boundary, without spinning on failed storage.
+        if (!fallback) { if (!claimFailed) this.pendingDeliveryParents.delete(sessionId); break; }
         // Same destroy()-race guard as the ledger path above.
         if (this.live.get(sessionId) !== entry) {
           this.inMemoryFallback.set(fallback.childId, { parentId: sessionId, rec: fallback.rec }); // put it back — never delivered, so never drop it
@@ -4630,9 +4555,10 @@ export class NativeSessionHost extends EventEmitter {
    *  same process's own stale lease (fix pass 4's self-claim branch in
    *  claimUndelivered) — an honest degradation, not a silent one; logged here
    *  so it's actually visible. */
-  private async releaseClaimSafely(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  private async releaseClaimSafely(parentCwd: string, parentId: string, childId: string, expectedClaimId?: string): Promise<void> {
     try {
-      await this.ledger?.releaseClaim(parentCwd, parentId, childId);
+      // WHY: an outgoing generation must not release a replacement's newer lease.
+      await this.ledger?.releaseClaim(parentCwd, parentId, childId, expectedClaimId);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'releaseClaim failed — the delivery lease may stay held until owner-liveness reconcile releases it', { parentId, childId, error: String((err as any)?.message ?? err) });
     }
@@ -4647,9 +4573,10 @@ export class NativeSessionHost extends EventEmitter {
    *  turn would corrupt the tool-call/result pairing the whole driver depends on.
    *  The session's own re-entrancy guard is the backstop, but refusing here means
    *  the user gets a real explanation instead of a thrown error. */
-  async compact(sessionId: string, focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  async compact(sessionId: string, focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    if (!this.entryReady(entry)) return { ok: false, reason: 'error', detail: 'This conversation has not finished starting.' };
     // Being wound down for a takeover (quiesce): would append past the flush.
     // (Combined branch: checked before master's compaction guards, same as send.)
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
@@ -4689,9 +4616,10 @@ export class NativeSessionHost extends EventEmitter {
   /** User-initiated /clear for a native session (M3 item 2) — a context BARRIER,
    *  not a deletion. Same refusal discipline as compact(): a clear that landed
    *  mid-turn would drop the history the running turn is still appending to. */
-  clear(sessionId: string): { ok: true } | { ok: false; reason: string } {
+  clear(sessionId: string): { ok: true } | { ok: false; reason: string; detail?: string } {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    if (!this.entryReady(entry)) return { ok: false, reason: 'error', detail: 'This conversation has not finished starting.' };
     // Being wound down for a takeover (quiesce): would append past the flush.
     // (Combined branch: checked before master's compaction guards, same as send.)
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
@@ -4718,6 +4646,7 @@ export class NativeSessionHost extends EventEmitter {
   async invokeSkill(sessionId: string, skill: string, args?: string): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    if (!this.entryReady(entry)) return { ok: false, reason: 'error', detail: 'This conversation has not finished starting.' };
     // Being wound down for a takeover (quiesce): a turn now would run past the flush.
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
     // Same refusal discipline as compact/clear: queueing this would land the
@@ -4731,8 +4660,9 @@ export class NativeSessionHost extends EventEmitter {
       // Match the session's Skill tool: a slash invocation must see this
       // project's .claude/skills too, including on smaller models without Skill.
       const catalog = await this.prepareSkillCatalog(entry.cwd);
-      // Discovery yields: a close/takeover or another turn may have won meanwhile.
+      // WHY: discovery yields; close can cancel readiness before its teardown drops the entry.
       if (this.live.get(sessionId) !== entry || entry.quiescing) return { ok: false, reason: 'not-live' };
+      if (!this.entryReady(entry)) return { ok: false, reason: 'error', detail: 'This conversation has not finished starting.' };
       if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
       loaded = catalog.load(skill);
     } catch (err: any) {
@@ -4902,6 +4832,7 @@ export class NativeSessionHost extends EventEmitter {
   async switchModel(sessionId: string, binding: ModelBinding, summarize = false): Promise<NativeSwitchResult> {
     const entry = this.live.get(sessionId);
     if (!entry) return { status: 'failed', reason: 'not-live' };
+    if (!this.entryReady(entry)) return { status: 'failed', reason: 'error', detail: 'This conversation has not finished starting.' };
     const { contextLength } = await this.resolveContextAndProfile(binding);
     if (this.live.get(sessionId) !== entry) return { status: 'failed', reason: 'not-live' };
     const fit = entry.session.fitForWindow(contextLength);
@@ -4917,7 +4848,7 @@ export class NativeSessionHost extends EventEmitter {
 
   async setBinding(sessionId: string, binding: ModelBinding): Promise<boolean> {
     const entry = this.live.get(sessionId);
-    if (!entry) return false;
+    if (!entry || !this.entryReady(entry)) return false;
     // Cancel an unstarted commit; if append has begun, let its marker be
     // adopted before changing the model/identity it was built against.
     if (!entry.committing?.started) entry.compactionGeneration++;
@@ -4928,6 +4859,7 @@ export class NativeSessionHost extends EventEmitter {
     // (or vice versa) crosses capability tiers, so the driver must pick up the
     // new doom-loop window / tool posture on the next turn.
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
+    if (this.live.get(sessionId) !== entry || !this.entryReady(entry)) return false;
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
     // One-core R5-4a: the model label changes on every screen the moment the host swaps (it used to change only on the screen that picked).
@@ -5193,7 +5125,9 @@ export class NativeSessionHost extends EventEmitter {
    *   3. store.dispose() — flush the buffered open streaming part.
    *   4. drop the map entry. */
   private readonly destroying = new Map<string, Promise<void>>();
-  destroy(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
+  destroy(sessionId: string, opts: { keepShells?: boolean; preserveStartup?: boolean } = {}): Promise<void> {
+    if (!opts.preserveStartup) this.starts.cancel(sessionId);
+    this.live.get(sessionId)?.toolStartup?.cancel();
     // WHY: the explicit handoff stop and session-exit callback can race across
     // destroyChildrenOf's await. Share one drain/dispose, never dispose twice.
     const pending = this.destroying.get(sessionId);
@@ -5225,9 +5159,6 @@ export class NativeSessionHost extends EventEmitter {
       if (entry.committing?.started) await entry.committing.settled;
       else entry.compactionGeneration++;
     }
-    // A session torn down while it was still starting has nowhere to deliver a
-    // held message, so drop it here rather than leave it stranded in memory.
-    this.endStarting(sessionId);
     this.lastQueueAnnounced.delete(sessionId);
     // Specialist children go next, and unconditionally — before the not-live
     // early return, because a child must never outlive its parent even if the
@@ -5327,12 +5258,22 @@ export class NativeSessionHost extends EventEmitter {
     // the top of this method, before any await, so a resume() for this same
     // sessionId racing us installs its own LiveEntry with its own lease and
     // this call cannot reach it. No-ops harmlessly when this session never
-    // acquired anything (no manager wired, or acquireMcp caught a failure).
-    await entry.mcpLease?.release();
+    // acquired anything (no manager wired, or acquisition failed).
+    await entry.toolStartup?.dispose();
   }
 
-  /** App-shutdown path: destroy every live session, then flush any residue. */
-  async destroyAll(): Promise<void> {
+  private destroyingAll: Promise<void> | undefined;
+  destroyAll(): Promise<void> {
+    if (this.destroyingAll) return this.destroyingAll;
+    this.starts.close();
+    const task = this.destroyAllInner().then(() => { this.starts.reopen(); }).finally(() => {
+      if (this.destroyingAll === task) this.destroyingAll = undefined;
+    });
+    this.destroyingAll = task;
+    return task;
+  }
+  /** Drain before permitting a new lifecycle; old tickets remain invalid after reopening. */
+  private async destroyAllInner(): Promise<void> {
     // Cancel every pending ask up front (covers asks whose session is no longer
     // live, which the per-session destroy loop below would miss).
     this.broker.cancelAll();

@@ -67,6 +67,9 @@ export interface McpLease {
   /** Servers that connected successfully. A broken server is pooled and logged
    *  but omitted here — one bad server never denies a session its working ones. */
   readonly servers: ReadyServer[];
+  /** Failed/setup connections, with resolved credentials redacted. Optional for
+   *  compatibility with existing lease implementations. */
+  readonly unavailableServers?: Array<{ id: string; label: string; error: string }>;
   /** Give this lease's hold back. Idempotent: calling twice is a no-op, not a
    *  double-decrement, so a teardown path that fires on two routes is safe. */
   release(): Promise<void>;
@@ -172,6 +175,9 @@ export class McpManager {
   // uniqueness — no ordering is read off it — so wraparound/overflow concerns
   // don't apply at any realistic session count.
   private leaseSeq = 0;
+  // WHY: registry resolution can outlive teardown before any entry exists.
+  // Invalidate that acquire without permanently disabling future acquisitions.
+  private generation = 0;
 
   constructor(deps: { registry: McpRegistryLike; connectionFactory: McpConnectionFactory }) {
     this.registry = deps.registry;
@@ -208,19 +214,30 @@ export class McpManager {
    * once. Without it a hung server blocks every server behind it from even
    * beginning to spawn.
    */
-  async acquire(sessionId: string): Promise<McpLease> {
+  async acquire(sessionId: string, opts?: { retryFailed?: boolean }): Promise<McpLease> {
     const leaseId = `${sessionId}#${++this.leaseSeq}`;
+    const generation = this.generation;
+    // WHY: retry targets the generation observed when requested, not a newer
+    // failed replacement that another retry creates while registry resolution waits.
+    const retryEntries = opts?.retryFailed ? new Map([...this.pool].filter(([, entry]) =>
+      !entry.connecting && (entry.conn.state === 'error' || entry.conn.state === 'needs-setup'))) : undefined;
+    const checkGeneration = () => {
+      if (generation !== this.generation) throw new Error('MCP acquisition invalidated by destroyAll');
+    };
     try {
       const servers = await this.registry.resolveAllEnabled();
+      checkGeneration();
       // Pass 1 — registration. ensureConnected() is synchronous (see its own
       // comment), so this maps over every server without yielding, which is
       // what makes every connect() start concurrently rather than in series.
-      const entries = servers.map((server) => this.ensureConnected(server, leaseId));
+      const entries = servers.map((server) => this.ensureConnected(server, leaseId, retryEntries?.get(server.id)));
 
       // Pass 2 — wait for each connect() and collect the ones that made it.
       const ready: ReadyServer[] = [];
+      const unavailable: NonNullable<McpLease['unavailableServers']> = [];
       for (const entry of entries) {
         if (entry.connecting) await entry.connecting;
+        checkGeneration();
         if (entry.conn.state === 'ready') {
           ready.push({
             id: entry.server.id,
@@ -233,9 +250,11 @@ export class McpManager {
           // the log (a typo'd command was otherwise invisible), but a provider
           // error can echo a resolved credential. Log the error with every
           // secret value this server was given blanked out.
+          const error = redactSecrets(entry.conn.lastError, entry.server) || 'MCP server is not ready.';
+          unavailable.push({ id: entry.server.id,
+            label: servers.find(s => s.id === entry.server.id)?.label ?? entry.server.label, error });
           log('WARN', 'McpManager', 'MCP server excluded from this session — not ready', {
-            sessionId, serverId: entry.server.id, state: entry.conn.state,
-            error: redactSecrets(entry.conn.lastError, entry.server),
+            sessionId, serverId: entry.server.id, state: entry.conn.state, error,
           });
         }
       }
@@ -243,6 +262,7 @@ export class McpManager {
       let released = false;
       return {
         servers: ready,
+        unavailableServers: unavailable,
         release: async () => {
           // Idempotent by design, not by accident: a session torn down on two
           // routes (an error path AND the normal destroy()) must not
@@ -275,14 +295,14 @@ export class McpManager {
   // awaits), so only one connect() ever runs no matter how many sessions ask
   // at once.
   //
-  // WHY no retry for unchanged settings: an error/needs-setup entry stays
-  // pooled until its holders release. A changed effective configuration gets
-  // a fresh generation immediately, without disturbing those older holders;
-  // retrying an unchanged broken connection on each acquire remains out of scope.
-  private ensureConnected(server: ResolvedMcpServer, leaseId: string): PooledEntry {
+  // WHY: ordinary acquire never retries unchanged failures. Explicit retry
+  // retires only the captured generation's settled failures; concurrent retries
+  // join its replacement even when that replacement has already failed.
+  private ensureConnected(server: ResolvedMcpServer, leaseId: string, retryEntry?: PooledEntry): PooledEntry {
     const key = effectiveConfig(server);
     let entry = this.pool.get(server.id);
-    if (entry && entry.configKey !== key) {
+    if (entry && (entry.configKey !== key || (entry === retryEntry && !entry.connecting
+      && (entry.conn.state === 'error' || entry.conn.state === 'needs-setup')))) {
       // WHY: old leases retain their exact connection. Never move holders into
       // the replacement (even an error placeholder): release of OLD must not
       // close NEW, and A→B→A must not resurrect the retired A connection.
@@ -318,9 +338,8 @@ export class McpManager {
         ? {
             state: server.credentialError ? 'error' : 'needs-setup',
             lastError: credentialFailure,
-            // Never actually invoked (no retry while pooled — see this
-            // method's own "WHY no retry" note above) but kept as a real
-            // no-op so this object satisfies McpConnectionLike structurally.
+            // Setup placeholders never connect: explicit retry builds a fresh
+            // generation, resolving credentials again through the registry.
             connect: async () => {},
             listTools: () => [],
             callTool: async () => ({
@@ -398,6 +417,7 @@ export class McpManager {
 
   /** App-quit teardown: close current AND retired/closing generations. */
   async destroyAll(): Promise<void> {
+    ++this.generation; // fence acquires still awaiting registry or connection
     const entries = [...this.entries];
     this.pool.clear(); // no acquisition may reuse a closing connection
     this.leaseEntries.clear();

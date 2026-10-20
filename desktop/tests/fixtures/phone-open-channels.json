@@ -127,6 +127,7 @@
   "native:set-context-preferences",
   "native:set-permission-mode",
   "native:set-step-guard",
+  "native:startup-action",
   "native:submit-admin-password",
   "native:switch-model",
   "openrouter:cancel-sign-in",

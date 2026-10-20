@@ -317,6 +317,7 @@ const IPC = {
   NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
   NATIVE_RETRY: 'native:retry',
+  NATIVE_STARTUP_ACTION: 'native:startup-action',
   NATIVE_COMPACT: 'native:compact',
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
@@ -2085,11 +2086,10 @@ contextBridge.exposeInMainWorld('claude', {
   app: {
     restart: (): Promise<void> => ipcRenderer.invoke(IPC.APP_RESTART),
   },
-  // Native runtime — YouCoded's first-party harness (platform roadmap Phase 0-2).
-  // Enabled by default as of 2026-07-16. Kill switch: YOUCODED_NATIVE=0 disables it
-  // (e.g. YOUCODED_NATIVE=0 bash scripts/run-dev.sh) if a regression needs a fast revert.
+  // Native first-party harness: enabled by default; YOUCODED_NATIVE=0 is the kill switch.
   native: {
     supported: process.env.YOUCODED_NATIVE !== '0',
+    startupAction: (sessionId: string, attemptId: string, action: 'retry' | 'continue') => ipcRenderer.invoke(IPC.NATIVE_STARTUP_ACTION, { sessionId, attemptId, action }),
     // M1: invoke — matches the handle signature, returns {status,reason}
     send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => ipcRenderer.invoke(IPC.NATIVE_SEND, { sessionId, text, attachments, sendId }),
     // Task 11: cancel/edit a queued message before it sends. Request-response

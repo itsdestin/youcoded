@@ -32,8 +32,8 @@ describe('what is in the table and who may call it', () => {
   it('every native, permission(s), specialists, model and handoff request name in the contract has an entry', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !NOT_ENTRIES.has(v));
-    // 20 native + permission:respond + 3 permissions + 5 specialists + 3 model + 8 handoff; a new one must be decided here.
-    expect(names.length).toBe(40);
+    // 21 native + permission:respond + 3 permissions + 5 specialists + 3 model + 8 handoff; a new one must be decided here.
+    expect(names.length).toBe(41);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
@@ -71,10 +71,38 @@ describe('cancelling a queued message from a phone (one-core R5-4a)', () => {
   });
 });
 
+const admissionToken = {};
+const readyAdmission = { inputAdmission: () => admissionToken, inputAdmissionCurrent: () => true };
+
 describe('native:send', () => {
+  it('refuses a startup-window request before attachment preparation or send-chain waiting', async () => {
+    const send = vi.fn(() => ({ status: 'sent' }));
+    const prepare = vi.fn(async () => ({ kind: 'unchanged' }));
+    const rt: any = { nativeHost: { ...readyAdmission, send, inputAdmission: () => undefined, startupStateFor: () => ({ phase: 'connecting' }) },
+      records: { noteSend: vi.fn() }, imagePreparer: { prepare, preparedPathFor: () => null } };
+    expect(await call('native:send', { sessionId: 'opening', text: 'still a draft', attachments: ['/a.png'] }, desktopCtx(rt)))
+      .toEqual({ status: 'failed', reason: 'initializing' });
+    expect(prepare).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+    expect(rt.records.noteSend).not.toHaveBeenCalled();
+  });
+
+  it('never submits prepared input to a replacement session generation', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    let current = true;
+    const send = vi.fn(() => ({ status: 'sent' }));
+    const rt: any = { nativeHost: { ...readyAdmission, send, inputAdmission: () => admissionToken, inputAdmissionCurrent: () => current,
+      imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30000 }) }, records: { noteSend: vi.fn() },
+      imagePreparer: { preparedPathFor: () => null, prepare: async () => { entered(); await gate; return { kind: 'unchanged' }; } } };
+    const pending = call('native:send', { sessionId: 'replaced', text: 'old generation', attachments: ['/a.png'] }, desktopCtx(rt));
+    await preparing; current = false; release();
+    expect(await pending).toEqual({ status: 'failed', reason: 'changed' });
+    expect(send).not.toHaveBeenCalled(); expect(rt.records.noteSend).not.toHaveBeenCalled();
+  });
   it('hands the host only text paths, for a window and for a phone alike', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));
-    const rt: any = { nativeHost: { send } };
+    const rt: any = { nativeHost: { ...readyAdmission, send } };
     await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a.png', 7, null, '/b.txt'] }, desktopCtx(rt));
     await call('native:send', { sessionId: 's', text: 'hi', attachments: '/not-an-array' }, phoneCtx(rt));
     expect(send).toHaveBeenNthCalledWith(1, 's', 'hi', ['/a.png', '/b.txt'], ['/a.png', '/b.txt']);
@@ -85,7 +113,7 @@ describe('native:send', () => {
     const prepare = vi.fn(async (p: string, _limits: unknown) => p.endsWith('huge.png')
       ? { kind: 'prepared', path: '/cache/abc-huge.png', width: 2904, height: 17528, preparedWidth: 1221, preparedHeight: 7372 } : { kind: 'unchanged' });
     const limits = { maxEdgePx: 8192, maxPatches: 30_000 };
-    const rt: any = { nativeHost: { send, imageLimitsFor: () => limits }, records: { noteSend: vi.fn() }, imagePreparer: { prepare, preparedPathFor: () => null } };
+    const rt: any = { nativeHost: { ...readyAdmission, send, imageLimitsFor: () => limits }, records: { noteSend: vi.fn() }, imagePreparer: { prepare, preparedPathFor: () => null } };
     expect(await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a/huge.png', 7, '/b.txt', '/c/ok.png'] }, desktopCtx(rt))).toEqual({ status: 'sent' });
     expect(prepare.mock.calls.map((c: any[]) => c[0])).toEqual(['/a/huge.png', '/c/ok.png']);   // only deliverable images are prepared
     expect(prepare.mock.calls[0][1]).toBe(limits);
@@ -96,14 +124,14 @@ describe('native:send', () => {
   it('a refused preparation reaches the host as a marker carrying the reason, so the note says what really happened', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));
     const reason = 'is 20000×20000 px — too large to downscale for the model (over 80 megapixels). Crop or shrink it with Bash (e.g. magick in.png -resize 4000x4000 out.png) and Read the copy.';
-    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
+    const rt: any = { nativeHost: { ...readyAdmission, send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
       imagePreparer: { prepare: async () => ({ kind: 'refused', reason, width: 20000, height: 20000 }), preparedPathFor: () => null } };
     await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/vast.png'] }, desktopCtx(rt));
     expect(send).toHaveBeenCalledWith('s', 'hi', ['/vast.png'], [{ path: '/vast.png', prepareFailed: reason }]);
   });
   it('a preparer that throws never blocks the send; the original path is used', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));
-    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 1, maxPatches: 1 }) }, records: { noteSend: vi.fn() }, imagePreparer: { prepare: async () => { throw new Error('boom'); }, preparedPathFor: () => null } };
+    const rt: any = { nativeHost: { ...readyAdmission, send, imageLimitsFor: () => ({ maxEdgePx: 1, maxPatches: 1 }) }, records: { noteSend: vi.fn() }, imagePreparer: { prepare: async () => { throw new Error('boom'); }, preparedPathFor: () => null } };
     expect(await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a.png'] }, desktopCtx(rt))).toEqual({ status: 'sent' });
     expect(send).toHaveBeenCalledWith('s', 'hi', ['/a.png'], ['/a.png']);
   });
@@ -113,7 +141,7 @@ describe('native:send', () => {
     let release!: () => void; let entered!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const preparing = new Promise<void>((r) => { entered = r; });   // resolved the moment the preparer is entered — no microtask guessing
-    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
+    const rt: any = { nativeHost: { ...readyAdmission, send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
       imagePreparer: { prepare: async () => { entered(); await gate; return { kind: 'prepared', path: '/cache/x.png' }; }, preparedPathFor: () => null } };
     const first = call('native:send', { sessionId: 's', text: 'with picture', attachments: ['/a.png'] }, desktopCtx(rt));
     const second = call('native:send', { sessionId: 's', text: 'plain follow-up' }, desktopCtx(rt));

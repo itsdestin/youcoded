@@ -25,6 +25,7 @@
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type { NativeHome } from '../../native-home';
+import { log } from '../../logger';
 // nativeStoreSlug (NOT ccProjectSlug): this ledger is an app-private sidecar
 // under ~/.youcoded/sessions/<slug>/ — nothing CC created or reads it, so it
 // takes the FROZEN native-store slug like every other file under sessions/,
@@ -74,6 +75,10 @@ export interface DelegationRecord {
    *  the leaseholder is still alive (see isOwnerAlive). */
   claimedBy?: OwnerStamp;
   claimedAt?: number;
+  /** Exact delivery lease, distinct even across generations in one process. Legacy records omit it. */
+  deliveryClaimId?: string;
+  /** Receipt for a resume's atomic steer take; never authority to restore a whole old row. */
+  missedSteerTakeId?: string;
   owner: OwnerStamp;
   missedSteers: string[];
   stale?: boolean;
@@ -189,6 +194,10 @@ export function isOwnerAlive(owner: OwnerStamp): boolean {
 export type LedgerChangeListener = (parentCwd: string, parentId: string, changed: DelegationRecord[]) => void;
 
 export class DelegationLedger {
+  // WHY: a failed rollback is still known not to have injected. Retain that proof
+  // until a later successful locked write; never retry arbitrary attempted reports.
+  private unstartedRollbacks = new Map<string, Map<string, { claimId: string | undefined; cancelled: boolean }>>();
+  private rejectedSteerTakes = new Map<string, Map<string, { childId: string; steers: string[] }>>();
   // onChange is constructor-only, no setter (plan 1c) — the ONE place a
   // listener can be wired is at construction, so there is never a window
   // where a write happens with a listener silently unset partway through.
@@ -215,13 +224,45 @@ export class DelegationLedger {
    *  the map callback still returns a new object for a matched record.) */
   private async mutate(parentCwd: string, parentId: string, fn: (data: LedgerFile) => LedgerFile): Promise<void> {
     let before: DelegationRecord[] = []; let after: DelegationRecord[] | undefined;
-    await this.home.mutateJson(this.relPath(parentCwd, parentId), (cur) => {
-      const data = this.coerce(cur); before = data.delegations;
+    const key = this.relPath(parentCwd, parentId);
+    const pending = new Map(this.unstartedRollbacks.get(key));
+    const rejectedTakes = new Map(this.rejectedSteerTakes.get(key));
+    await this.home.mutateJson(key, (cur) => {
+      let data = this.coerce(cur); before = data.delegations;
+      if (pending.size) data = { ...data, delegations: data.delegations.map(record => {
+        const rollback = pending.get(JSON.stringify([record.childId, record.deliveryClaimId]));
+        if (!rollback || record.delivered || record.claimedBy?.instanceId !== OWNER.instanceId || record.deliveryClaimId !== rollback.claimId) return record;
+        rollback.cancelled = true;
+        return { ...record, injectionAttempted: undefined, claimedBy: undefined, claimedAt: undefined, deliveryClaimId: undefined };
+      }) };
+      if (rejectedTakes.size) data = { ...data, delegations: data.delegations.map(record => {
+        const take = record.missedSteerTakeId ? rejectedTakes.get(record.missedSteerTakeId) : undefined;
+        if (!take || take.childId !== record.childId) return record;
+        // WHY packet-only rollback: preserve steers appended by another writer and
+        // never overwrite its newer run with the stale pre-resume record.
+        // Keep the existing newest-steers retention policy: repeated failed takes
+        // must not grow the durable instruction list beyond its normal cap.
+        return { ...record, missedSteers: boundMissedSteers(take.steers, record.missedSteers), missedSteerTakeId: undefined,
+          ...(record.status === 'running' && record.owner.instanceId === OWNER.instanceId ? { status: 'interrupted' as const, endedAt: Date.now() } : {}) };
+      }) };
       const next = fn(data); after = next.delegations; return next;
     });
+    // A commit-then-throw keeps the intent; exact claim identity makes replay safe
+    // if a different ledger acquired and injected a newer generation meanwhile.
+    const current = this.unstartedRollbacks.get(key);
+    for (const [childId, intent] of pending) if (current?.get(childId) === intent) current.delete(childId);
+    if (current?.size === 0) this.unstartedRollbacks.delete(key);
+    const takes = this.rejectedSteerTakes.get(key);
+    for (const [token, take] of rejectedTakes) if (takes?.get(token) === take) takes.delete(token);
+    if (takes?.size === 0) this.rejectedSteerTakes.delete(key);
     if (!after || !this.onChange) return;
     const changed = after.filter((d, i) => before[i] !== d);
-    if (changed.length > 0) this.onChange(parentCwd, parentId, changed);
+    if (changed.length > 0) {
+      // WHY: a disconnected subscriber is not a failed disk commit. Never make
+      // callers repeat a destructive take or roll back already-durable state.
+      try { this.onChange(parentCwd, parentId, changed); }
+      catch (error) { log('WARN', 'DelegationLedger', 'ledger notification failed after successful write', { parentId, error: String(error) }); }
+    }
   }
 
   async recordStart(parentCwd: string, parentId: string, rec: DelegationRecord): Promise<void> {
@@ -239,9 +280,10 @@ export class DelegationLedger {
    * independent failure points: if the first landed and the second then
    * threw, the record was durably 'completed'/'failed' while that run's own
    * drained steers were silently dropped — log-only, never retried. A single
-   * mutateJson call means both halves commit together or (on throw) neither
-   * does, restoring the "a ledger failure leaves nothing written" property
-   * the pre-split single write had. Read `d.missedSteers` and append HERE,
+   * mutateJson call makes both halves one atomic write rather than two
+   * independent writes. Rejection can still follow a commit (for example,
+   * lock cleanup fails), so callers must not infer unchanged disk from a throw.
+   * Read `d.missedSteers` and append HERE,
    * inside the callback, for the same reason appendMissedSteers itself does
    * (see that method's own WHY) — so this still commutes with a concurrent
    * steerSpecialist miss-write racing the same record.
@@ -397,27 +439,34 @@ export class DelegationLedger {
    * the steers were gone from the ledger AND never delivered (the resumed
    * child was torn down before ever getting a turn to read them). Accepting
    * `patch` here and merging it into the SAME callback that reads and clears
-   * `missedSteers` restores the all-or-nothing guarantee `update()`'s own
-   * fix pass 2 established for the completion/failure writes: mutateJson's
-   * underlying mutateFileUnderLock only calls atomicWrite AFTER computing the
-   * full next value (see cas-write.ts), so a throw from this call means the
-   * write never reached disk — the record, including `missedSteers`, is left
-   * exactly as it was, not half-cleared. Defaults to `{}` so every other
-   * caller (there is currently only resumeSpecialist) is unaffected.
+   * `missedSteers` keeps them in one storage transaction; a rejected write can
+   * still have committed before lock release failed. The exact take token below
+   * lets a known-unstarted resume restore its packet without a stale-row overwrite.
+   * The former claim that every rejection proves no commit was incorrect.
+   * This is same-process recovery, not crash-proof cross-file acceptance.
+   * Defaults to `{}` for callers that need no status patch.
    */
   async takeMissedSteers(parentCwd: string, parentId: string, childId: string, patch: Partial<DelegationRecord> = {}): Promise<string[]> {
+    const token = randomUUID();
     let taken: string[] = [];
-    await this.mutate(parentCwd, parentId, (data) => {
-      return {
-        v: FILE_VERSION,
-        delegations: data.delegations.map((d) => {
-          if (d.childId !== childId) return d;
-          taken = d.missedSteers;
-          return { ...d, ...patch, missedSteers: [] };
-        }),
-      };
-    });
-    return taken;
+    try {
+      await this.mutate(parentCwd, parentId, data => ({ ...data, delegations: data.delegations.map(record => {
+        if (record.childId !== childId) return record;
+        taken = [...record.missedSteers];
+        return { ...record, ...patch, missedSteers: [], missedSteerTakeId: token };
+      }) }));
+      return taken;
+    } catch (error) {
+      // WHY: runDelegation has not begun when this rejects, so only this exact
+      // packet is safe to restore. Retain intent if storage is still unavailable.
+      const key = this.relPath(parentCwd, parentId);
+      const pending = this.rejectedSteerTakes.get(key) ?? new Map();
+      pending.set(token, { childId, steers: taken });
+      this.rejectedSteerTakes.set(key, pending);
+      try { await this.mutate(parentCwd, parentId, data => data); }
+      catch (rollbackError) { log('WARN', 'DelegationLedger', 'resume steer rollback pending for a later write', { parentId, childId, error: String(rollbackError) }); }
+      throw error;
+    }
   }
 
   /**
@@ -539,7 +588,7 @@ export class DelegationLedger {
       // delivered stays FALSE — this stamps the LEASE only. Only
       // confirmDelivered (after the report is ACTUALLY injected into the
       // parent's conversation) may flip delivered to true.
-      claimed = { ...target, claimedBy: OWNER, claimedAt: Date.now() };
+      claimed = { ...target, claimedBy: OWNER, claimedAt: Date.now(), deliveryClaimId: randomUUID() };
       return {
         v: FILE_VERSION,
         delegations: data.delegations.map((d) => (d.childId === target.childId ? claimed! : d)),
@@ -580,13 +629,43 @@ export class DelegationLedger {
     await this.update(parentCwd, parentId, childId, { delivered: true });
   }
 
-  async releaseClaim(parentCwd: string, parentId: string, childId: string): Promise<void> {
+  /** Call ONLY before runNotice/spliceNotice: no model/history injection may have begun. */
+  async cancelUnstartedInjection(parentCwd: string, parentId: string, childId: string, claimId?: string): Promise<boolean> {
+    const key = this.relPath(parentCwd, parentId);
+    const pending = this.unstartedRollbacks.get(key) ?? new Map();
+    const intent = { claimId, cancelled: false };
+    pending.set(JSON.stringify([childId, claimId]), intent);
+    this.unstartedRollbacks.set(key, pending);
+    await this.mutate(parentCwd, parentId, data => data);
+    return intent.cancelled;
+  }
+
+  /** Cleanup uses a snapshot only as a comparison token, never as write authority. */
+  async reconcileOwner(parentCwd: string, parentId: string, snapshot: DelegationRecord): Promise<void> {
+    await this.mutate(parentCwd, parentId, data => ({ ...data, delegations: data.delegations.map(record => {
+      if (record.childId !== snapshot.childId) return record;
+      let next = record;
+      // WHY: another process may have resumed/reclaimed between the read and this lock.
+      if (snapshot.status === 'running' && record.status === 'running' && record.owner.instanceId === snapshot.owner.instanceId
+        && record.startedAt === snapshot.startedAt && !isOwnerAlive(record.owner)) next = { ...next, status: 'interrupted', endedAt: Date.now() };
+      if (snapshot.claimedBy && record.claimedBy?.instanceId === snapshot.claimedBy.instanceId
+        && record.deliveryClaimId === snapshot.deliveryClaimId && !isOwnerAlive(record.claimedBy)) {
+        next = { ...next, claimedBy: undefined, claimedAt: undefined, deliveryClaimId: undefined };
+      }
+      return next;
+    }) }));
+  }
+
+  async releaseClaim(parentCwd: string, parentId: string, childId: string, expectedClaimId?: string): Promise<void> {
     // Delivery attempt failed (or was abandoned) after claiming — clear the
     // lease so a later pass can claim it again. Explicit undefined (rather
     // than omitting the keys) so the patch actually overwrites whatever lease
     // is on disk; JSON.stringify drops undefined-valued keys on write, so the
     // record reads back exactly like "never claimed".
-    await this.update(parentCwd, parentId, childId, { claimedBy: undefined, claimedAt: undefined });
+    // WHY: an outgoing pass may finish after a replacement acquired a new claim.
+    await this.mutate(parentCwd, parentId, data => ({ ...data, delegations: data.delegations.map(record =>
+      record.childId !== childId || (expectedClaimId !== undefined && record.deliveryClaimId !== expectedClaimId) ? record
+        : { ...record, claimedBy: undefined, claimedAt: undefined, deliveryClaimId: undefined }) }));
   }
 }
 

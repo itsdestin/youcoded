@@ -106,12 +106,9 @@ export interface PasswordAsk {
 export type NativeSendResult =
   | { status: 'sent' }
   | { status: 'queued'; queueId: string }
-  // 'starting' vs 'not-live' are DIFFERENT SITUATIONS and must never be merged
-  // back into one code: 'not-live' is a session that has ended or was never
-  // created, 'starting' is one that has not finished starting yet (a big local
-  // model can take a minute to load). One code for both is what told Destin a
-  // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
+  // WHY distinct: initializing refuses admission and keeps the draft; not-live
+  // means the conversation ended. Legacy 'starting' remains readable for older hosts.
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'initializing' | 'changed' | 'compacting' };
 
 /** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
  *  means nothing changed yet: the chat is too long for the chosen model and the
