@@ -57,7 +57,7 @@ describe('ModelCatalog', () => {
   // create / resume / model swap.
   describe('does not touch the network for a provider list no catalog source can serve', () => {
     const LOCAL = { id: 'local', type: 'local-engine', label: 'Local models', enabled: true, builtIn: true, hasKey: false, ready: true };
-    const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', enabled: true, builtIn: false, hasKey: false, ready: true };
+    const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true, builtIn: false, hasKey: false, ready: true };
 
     it('local-engine alone: zero fetches, and the local rows still come back', async () => {
       const local = new ModelCatalog(dir, fetchMock, {
@@ -70,9 +70,25 @@ describe('ModelCatalog', () => {
       expect(models.map((m) => m.id)).toEqual(['tiny-Q4_K_M']);
     });
 
-    it('openai-compatible alone: zero fetches (it has no catalog at all)', async () => {
+    it('a custom endpoint on this computer alone: zero fetches', async () => {
       expect(await cat.get([CUSTOM] as any)).toEqual([]);
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('a cloud custom endpoint DOES fetch (it can now be matched by address)', async () => {
+      const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+      await new ModelCatalog(dir, f as any).get([{ ...CUSTOM, baseUrl: 'https://api.example.com/v1' }] as any);
+      expect(f).toHaveBeenCalled();
+    });
+
+    it('cacheOnly never fetches and never reads the disk, even with nothing cached', async () => {
+      const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+      // A cache file on disk must be ignored too: reading it is a blocking read on a session path.
+      fs.writeFileSync(path.join(dir, 'provider-catalog-cache.json'), JSON.stringify({ fetchedAt: Date.now(), openrouter: null,
+        modelsdev: { x: { npm: '@ai-sdk/openai-compatible', api: 'https://api.example.com', models: { m: { name: 'M' } } } } }));
+      const rows = await new ModelCatalog(dir, f as any).get([{ ...CUSTOM, baseUrl: 'https://api.example.com/v1' }] as any, { cacheOnly: true });
+      expect(rows).toEqual([]);
+      expect(f).not.toHaveBeenCalled();
     });
 
     it('a DISABLED OpenRouter beside a local provider still costs nothing', async () => {
@@ -489,5 +505,39 @@ describe('catalog pricing', () => {
       .toEqual({ in: 3, out: 15 });
     expect(call({ stringy: { cost: { input: 3, output: 15, cache_read: '0.3', cache_write: '3.75' } } })[0].pricing)
       .toEqual({ in: 3, out: 15 });
+  });
+});
+
+describe('custom endpoints matched to models.dev by address', () => {
+  let dir: string;
+  const MD = {
+    inception: { npm: '@ai-sdk/openai-compatible', api: 'https://api.inceptionlabs.ai/v1/', models: {
+      'mercury-3': { name: 'Mercury 3', limit: { context: 1000000 }, tool_call: true, cost: { input: 0.1, output: 0.35, cache_read: 0.01 } },
+    } },
+    // Same address published twice: the larger list wins, whatever the key order.
+    'gw-small': { npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com', models: { a: { name: 'A' } } },
+    'gw-big': { npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com/v1', models: { a: { name: 'A' }, b: { name: 'B' } } },
+    // Not OpenAI-compatible: never matched even though the address is listed.
+    vendor: { npm: '@ai-sdk/anthropic', api: 'https://vendor.example.com', models: { x: { name: 'X' } } },
+  };
+  const custom = (baseUrl: string) => ({ id: 'c1', type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
+  const make = () => new ModelCatalog(dir, vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : MD })) as any);
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-addr-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+
+  it('a custom endpoint whose address matches gets that service’s models, prices and context', async () => {
+    const rows = await make().get([custom('https://API.inceptionlabs.ai')] as any);
+    expect(rows).toEqual([expect.objectContaining({ id: 'mercury-3', providerId: 'c1', contextLength: 1000000, supportsTools: true,
+      pricing: { in: 0.1, out: 0.35, cacheRead: 0.01 } })]);
+  });
+  it('two entries on one address: the one with more models wins', async () => {
+    const rows = await make().get([custom('https://gw.example.com/')] as any);
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b']);
+  });
+  it('an entry that is not OpenAI-compatible is never matched', async () => {
+    expect(await make().get([custom('https://vendor.example.com')] as any)).toEqual([]);
+  });
+  it('an unknown address gets no models.dev rows', async () => {
+    expect(await make().get([custom('https://nobody.example.com/v1')] as any)).toEqual([]);
   });
 });

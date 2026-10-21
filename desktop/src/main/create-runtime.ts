@@ -297,7 +297,11 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return engineManager.effectiveContextWindow(binding.modelId);
-      return { contextLength: await modelCatalog.contextLengthFor(binding, providers), totalSlots: null };
+      // WHY cacheOnly for a custom endpoint: its rows come from models.dev or its own /models, and
+      // a session start must never wait on either — an unknown window falls back to the profile's
+      // assumption until the picker or Providers screen has loaded the list (custom-providers plan C-1).
+      const cacheOnly = p?.type === 'openai-compatible';
+      return { contextLength: await modelCatalog.contextLengthFor(binding, providers, { cacheOnly }), totalSlots: null };
     },
     // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
     // this. Unknown provider → null, so the host falls back to a cloud-safe
@@ -383,7 +387,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // create/resume/swap (measured 2026-09-05 while fixing the local half).
       // A provider missing from the registry is caught below: `p` undefined
       // means no rows, and the lookup falls through to null as before.
-      const models = await modelCatalog.get(p ? [p] : []);
+      // cacheOnly for a custom endpoint: same reason as the context closure above.
+      const models = await modelCatalog.get(p ? [p] : [], { cacheOnly: p?.type === 'openai-compatible' });
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.pricing ?? null;
     },

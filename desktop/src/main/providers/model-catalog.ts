@@ -1,7 +1,8 @@
 // Merged, disk-cached model catalog (spec §2.2): OpenRouter /api/v1/models for
 // the openrouter provider; models.dev api.json metadata for direct-key
 // providers (anthropic/openai/google). openai-compatible custom endpoints get
-// no catalog in Plan A (users type a model id). External schemas are recorded
+// models.dev rows when their address matches a published provider address
+// (custom-providers spec). External schemas are recorded
 // in docs/provider-dependencies.md — parse DEFENSIVELY; absent fields are
 // omitted, never guessed.
 import * as fs from 'fs';
@@ -9,6 +10,8 @@ import * as path from 'path';
 import type { CatalogModel, ModelBinding, ProviderStatus } from '../../shared/provider-types';
 import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
 import { cloudContextLength } from './cloud-context';
+import { normalizeEndpoint } from '../../shared/endpoint-address';
+import { isLocalEndpoint } from '../../shared/provider-types';
 
 const CACHE_FILE = 'provider-catalog-cache.json';
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h, marketplace-cache precedent
@@ -246,8 +249,28 @@ export class ModelCatalog {
     return out;
   }
 
-  /** Catalog rows scoped to the ENABLED providers passed in. Never throws. */
-  async get(providers: ProviderStatus[]): Promise<CatalogModel[]> {
+  /** The models.dev key whose published address is this endpoint's, or null.
+   *  WHY only OpenAI-compatible entries: those are the ones this app can talk to at an arbitrary
+   *  address. WHY "most models, then key name": models.dev publishes some addresses twice (a gateway
+   *  and its "providers" view); the choice must not depend on JSON key order. */
+  private modelsdevKeyForAddress(payload: any, baseUrl: string | undefined): string | null {
+    const want = baseUrl ? normalizeEndpoint(baseUrl) : null;
+    if (!want || !isObj(payload)) return null;
+    let best: { key: string; count: number } | null = null;
+    for (const [key, entry] of Object.entries(payload)) {
+      if (!isObj(entry) || entry.npm !== '@ai-sdk/openai-compatible' || typeof entry.api !== 'string') continue;
+      if (normalizeEndpoint(entry.api) !== want) continue;
+      const count = isObj(entry.models) ? Object.keys(entry.models).length : 0;
+      if (!best || count > best.count || (count === best.count && key < best.key)) best = { key, count };
+    }
+    return best?.key ?? null;
+  }
+
+  /** Catalog rows scoped to the ENABLED providers passed in. Never throws.
+   *  `cacheOnly`: answer from what is already in memory — never read the disk, never fetch. WHY: the
+   *  session-start closures in create-runtime ask about a custom endpoint on every create/resume/swap;
+   *  widening the network gate to custom endpoints must not put two 15 s fetches in front of a chat. */
+  async get(providers: ProviderStatus[], opts?: { cacheOnly?: boolean }): Promise<CatalogModel[]> {
     // ensureFresh() IS the network — it fetches OpenRouter and models.dev
     // unconditionally, 15 s abort apiece, and on a total failure it returns
     // WITHOUT memoizing, so the next call pays the same price again. Only two
@@ -264,8 +287,12 @@ export class ModelCatalog {
     //
     // Reads `p.enabled` because the loop below does: a DISABLED OpenRouter row
     // contributes no models, so it must not drag the network in either.
-    const needsNetwork = providers.some((p) => p.enabled && (p.type === 'openrouter' || MODELSDEV_KEY[p.type]));
-    const cache = needsNetwork ? await this.ensureFresh() : EMPTY_CACHE;
+    const needsNetwork = providers.some((p) => p.enabled && (
+      p.type === 'openrouter' || MODELSDEV_KEY[p.type]
+      // A custom endpoint elsewhere can now be matched by address (models.dev). One on THIS computer
+      // (Ollama, LM Studio) never is, so a purely local user still pays nothing — see the WHY above.
+      || (p.type === 'openai-compatible' && !!p.baseUrl && !isLocalEndpoint(p.baseUrl))));
+    const cache = !needsNetwork ? EMPTY_CACHE : opts?.cacheOnly ? (this.memo ?? EMPTY_CACHE) : await this.ensureFresh();
     const out: CatalogModel[] = [];
     for (const p of providers) {
       if (!p.enabled) continue; // disabled providers contribute nothing
@@ -291,16 +318,19 @@ export class ModelCatalog {
         // price must read as absent, never $0). A throwing source degrades
         // to no ChatGPT rows; get() keeps its never-throws contract.
         try { out.push(...await this.chatgptModels()); } catch { /* account unavailable */ }
+      } else if (p.type === 'openai-compatible') {
+        // Matched by address to a models.dev provider.
+        const key = this.modelsdevKeyForAddress(cache.modelsdev, p.baseUrl);
+        if (key) out.push(...this.modelsdevModels(cache.modelsdev, key, p.id));
       }
-      // openai-compatible custom endpoints still have no catalog (user types a model id).
     }
     return out;
   }
 
   /** HarnessSession asks this for context-window sizing. null when the model
    *  isn't in the catalog (custom endpoints, stale cache) — caller decides. */
-  async contextLengthFor(binding: ModelBinding, providers: ProviderStatus[]): Promise<number | null> {
-    const models = await this.get(providers);
+  async contextLengthFor(binding: ModelBinding, providers: ProviderStatus[], opts?: { cacheOnly?: boolean }): Promise<number | null> {
+    const models = await this.get(providers, opts);
     const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
     // WHY resolve here, not in get(): catalog metadata describes capability;
     // the saved preference limits only the session's operating budget. Read it
