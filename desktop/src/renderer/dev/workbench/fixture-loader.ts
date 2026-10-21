@@ -126,6 +126,21 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+        // WHY the transcript confirmation too: USER_PROMPT appends a `pending`
+        // bubble, and every later append goes ABOVE pending bubbles
+        // (appendAbovePending), so a fixture that never confirms its user lines
+        // renders them all piled at the END of the conversation. A live session
+        // always follows the optimistic bubble with the transcript's own
+        // user-message event, which is what puts the bubble where it belongs.
+        const confirm: ChatAction = {
+          type: 'TRANSCRIPT_USER_MESSAGE',
+          sessionId,
+          uuid: `${name}-usr-${actions.length}`,
+          text: parsed.text,
+          timestamp: FIXTURE_T0 + actions.length * 1000,
+        };
+        state = chatReducer(state, confirm);
+        actions.push(confirm);
       } else if (parsed.type === 'turn_complete') {
         // Without this a seeded conversation is frozen MID-TURN: the thinking
         // chip ("Contemplating…") and the stop button stay up forever, which
