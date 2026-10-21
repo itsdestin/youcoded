@@ -1,27 +1,9 @@
-// index-service: a metadata change that lands while a refresh cycle is running.
-// WHY a separate file from chatsearch-index-service.test.ts: the vi.mock below
-// replaces conversations/service for the whole file, and that file's
-// onConversationMetaChanged cases need the real one.
-//
-// requestChatsearchRefresh's 3s debounce
-// coalesces BURSTS of triggers before it fires, but a cycle that's still
-// genuinely running when the timer fires used to have that trigger silently
-// dropped — a tag/note applied mid-cycle stayed invisible to the CLI until the
-// next session-end or app-launch refresh, while refreshedAt kept reporting the
-// index as current. This test forces exactly that interleaving.
-//
-// index-service.ts's live-state gather goes through getConversationStore()
-// (conversations/service) and getTagRegistry() (tag-registry-service) — both
-// mocked here (never the fs module) so the test can hold the FIRST cycle
-// suspended on a controlled promise and deterministically fire the debounce
-// timer while it is still in flight. Everything refreshChatsearchIndex itself
-// touches (the build lock, the meta file) still goes through real fs, scoped
-// to os.homedir()'s test sandbox (see vitest.config.ts) and cleaned up below —
-// no other test touches .youcoded/chatsearch/, so there's nothing to collide with.
+// WHY separate from index-service's IO-core tests: these replace the live
+// services and worker constructor, exercising production scheduling without
+// touching any user index. Worker output is checked by probe-chatsearch-worker.js.
 import {
   describe, it, expect, vi, beforeEach, afterEach,
 } from 'vitest';
-import fs from 'node:fs';
 import os from 'node:os';
 
 // vi.hoisted: index-service.ts's static import of conversations/service is
@@ -29,39 +11,56 @@ import os from 'node:os';
 // would otherwise run before a plain `const` had initialized — vi.hoisted
 // forces this state to exist first.
 const state = vi.hoisted(() => ({
-  listCalls: [] as string[],
-  deferredClaudeList: null as null | { resolve: (v: unknown[]) => void },
+  list: vi.fn(() => { throw new Error('record enumeration must run in the worker'); }),
+  core: vi.fn(() => { throw new Error('IO core must run in the worker'); }),
+  jobs: [] as { workerData: unknown }[],
+  workers: [] as { emit: (event: string, value?: unknown) => void; terminate: ReturnType<typeof vi.fn> }[],
+  spawnFails: false,
+  tagList: vi.fn(async () => []),
+  tagsAvailable: true,
+}));
+
+vi.mock('../src/main/chatsearch-index/refresh-core', () => ({
+  refreshChatsearchIndex: state.core,
+  resolveTranscriptPathTwoStep: state.core,
+}));
+
+vi.mock('node:worker_threads', () => ({
+  Worker: class {
+    handlers = new Map<string, ((value?: unknown) => void)[]>();
+    terminate = vi.fn(() => new Promise<number>(() => {}));
+    unref = vi.fn();
+    constructor(_file: string, options: { workerData: unknown }) {
+      if (state.spawnFails) throw new Error('spawn failed');
+      state.jobs.push(options);
+      state.workers.push(this);
+    }
+    on(event: string, fn: (value?: unknown) => void) {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), fn]);
+      return this;
+    }
+    emit(event: string, value?: unknown) { for (const fn of this.handlers.get(event) ?? []) fn(value); }
+  },
 }));
 
 vi.mock('../src/main/conversations/service', () => ({
   getConversationStore: () => ({
-    // Read by refreshFromLiveState's synced-space backstop (see the
-    // chatsearch-paths transcript-resolution fix) before store.list() is
-    // called — the mock must supply it or that read throws and the cycle
-    // never reaches list() at all. Its value is never exercised here since
-    // every list() call in this test resolves to [], so resolveTranscriptPath
-    // is never invoked.
+    // Only the root is safe on main; list throws if production calls it.
     root: () => os.homedir(),
-    list: (provider: string) => {
-      state.listCalls.push(provider);
-      // Only the FIRST 'claude' call is held open — later calls (the
-      // rescheduled cycle) resolve immediately so the test can tell them apart.
-      if (provider === 'claude' && state.listCalls.filter((p) => p === 'claude').length === 1) {
-        return new Promise((resolve) => { state.deferredClaudeList = { resolve }; });
-      }
-      return Promise.resolve([]);
-    },
+    list: state.list,
   }),
   onConversationMetaChanged: () => () => {},
 }));
-vi.mock('../src/main/conversations/tag-registry-service', () => ({ getTagRegistry: () => null }));
+vi.mock('../src/main/conversations/tag-registry-service', () => ({
+  getTagRegistry: () => state.tagsAvailable ? { root: () => os.homedir(), list: state.tagList } : null,
+}));
 
 import {
   requestChatsearchRefresh, startChatsearchIndex, stopChatsearchIndex,
 } from '../src/main/chatsearch-index/index-service';
-import { chatsearchDir } from '../src/main/chatsearch-index/index-store';
+import { createIndexWorkerRunner } from '../src/main/chatsearch-index/index-worker-runner';
 
-const claudeCalls = () => state.listCalls.filter((p) => p === 'claude').length;
+const workerCalls = () => state.jobs.length;
 
 // Drains whatever microtasks the currently-suspended async chain needs without
 // advancing real wall-clock time — `advanceTimersByTimeAsync(0)` still pumps
@@ -72,21 +71,44 @@ const settle = async () => { await vi.advanceTimersByTimeAsync(0); await vi.adva
 describe('chatsearch metadata-change reschedule', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    state.listCalls.length = 0;
-    state.deferredClaudeList = null;
+    state.jobs.length = 0;
+    state.workers.length = 0;
+    state.spawnFails = false;
+    state.list.mockClear();
+    state.core.mockClear();
+    state.tagList.mockClear();
+    state.tagsAvailable = true;
   });
 
   afterEach(() => {
     stopChatsearchIndex();
+    for (const worker of state.workers) worker.emit('exit', 1);
     vi.useRealTimers();
-    try { fs.rmSync(chatsearchDir(os.homedir()), { recursive: true, force: true }); } catch {}
+    expect(state.list).not.toHaveBeenCalled();
+    expect(state.core).not.toHaveBeenCalled();
+    expect(state.tagList).not.toHaveBeenCalled();
+  });
+
+  it('forwards the tag root without enumerating or folding tags on main', async () => {
+    startChatsearchIndex();
+    await settle();
+    expect(state.tagList).not.toHaveBeenCalled();
+    expect(state.jobs[0].workerData).toEqual({ homeRoot: os.homedir(), storeRoot: os.homedir(), tagsRoot: os.homedir() });
+  });
+
+  it('forwards a missing tag registry as null without skipping the refresh', async () => {
+    state.tagsAvailable = false;
+    startChatsearchIndex();
+    await settle();
+    expect(state.jobs[0].workerData).toEqual({ homeRoot: os.homedir(), storeRoot: os.homedir(), tagsRoot: null });
   });
 
   it('runs one more cycle after a trigger arrives mid-cycle, instead of dropping it', async () => {
-    startChatsearchIndex(); // startup scan: first store.list('claude') call, suspended on our deferred promise
+    startChatsearchIndex(); // Startup creates exactly one worker, held until exit.
     await settle();
-    expect(claudeCalls()).toBe(1);
-    expect(state.deferredClaudeList).not.toBeNull();
+    expect(workerCalls()).toBe(1);
+    expect(state.list).not.toHaveBeenCalled();
+    expect(state.jobs[0].workerData).toEqual({ homeRoot: os.homedir(), storeRoot: os.homedir(), tagsRoot: os.homedir() });
 
     // A tag/note change arrives while cycle 1 is still in flight.
     requestChatsearchRefresh();
@@ -95,27 +117,134 @@ describe('chatsearch metadata-change reschedule', () => {
 
     // The fired trigger must be REMEMBERED, not started as a concurrent second
     // cycle (that would race the same build lock) and not silently dropped.
-    expect(claudeCalls()).toBe(1);
+    expect(workerCalls()).toBe(1);
 
     // Let cycle 1 finish.
-    state.deferredClaudeList!.resolve([]);
+    state.workers[0].emit('message', { ok: true, value: true });
+    state.workers[0].emit('exit', 0);
     await settle();
     await settle();
 
     // The remembered trigger ran as a second cycle once the first finished.
-    expect(claudeCalls()).toBe(2);
+    expect(workerCalls()).toBe(2);
+    expect(state.list).not.toHaveBeenCalled();
   });
 
   it('does not queue a rerun when no trigger arrives during the cycle', async () => {
     startChatsearchIndex();
     await settle();
-    expect(claudeCalls()).toBe(1);
+    expect(workerCalls()).toBe(1);
 
-    state.deferredClaudeList!.resolve([]);
+    state.workers[0].emit('message', { ok: true, value: true });
+    state.workers[0].emit('exit', 0);
     await settle();
     await settle();
 
     // Nothing requested a refresh mid-cycle, so there is nothing to catch up on.
-    expect(claudeCalls()).toBe(1);
+    expect(workerCalls()).toBe(1);
+  });
+
+  it('coalesces bursts and waits for actual exit after a success reply', async () => {
+    startChatsearchIndex();
+    await settle();
+    state.workers[0].emit('message', { ok: true, value: true });
+    requestChatsearchRefresh();
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(workerCalls()).toBe(1);
+    state.workers[0].emit('exit', 0);
+    await settle();
+    expect(workerCalls()).toBe(2);
+  });
+
+  it('stops queued reruns and ignores late replies, including across restart', async () => {
+    startChatsearchIndex();
+    await settle();
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    stopChatsearchIndex();
+    expect(state.workers[0].terminate).toHaveBeenCalledOnce();
+    state.workers[0].emit('message', { ok: true, value: true });
+    await settle();
+    expect(workerCalls()).toBe(1);
+    startChatsearchIndex();
+    await settle();
+    expect(workerCalls()).toBe(1);
+    state.workers[0].emit('exit', 1);
+    await settle();
+    expect(workerCalls()).toBe(2);
+    // A stale success must not release or finish the replacement worker.
+    state.workers[0].emit('message', { ok: true, value: true });
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(workerCalls()).toBe(2);
+  });
+
+  it('discards a pending rerun when stopped and the old worker later exits', async () => {
+    startChatsearchIndex();
+    await settle();
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    stopChatsearchIndex();
+    state.workers[0].emit('message', { ok: true, value: true });
+    state.workers[0].emit('exit', 0);
+    await settle();
+    await vi.advanceTimersByTimeAsync(120_000); // settle: no queued trigger survives stop
+    expect(workerCalls()).toBe(1);
+  });
+
+  it('times out without launching a replacement before the old thread exits', async () => {
+    startChatsearchIndex();
+    await settle();
+    // Even a resolved terminate promise is not the worker exit signal.
+    state.workers[0].terminate.mockResolvedValueOnce(1);
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(state.workers[0].terminate).toHaveBeenCalledOnce();
+    expect(workerCalls()).toBe(1);
+    state.workers[0].emit('message', { ok: true, value: true });
+    await settle();
+    expect(workerCalls()).toBe(1);
+    state.workers[0].emit('exit', 1);
+    await settle();
+    expect(workerCalls()).toBe(2);
+  });
+
+  it.each(['error', 'exit', 'reply'] as const)('retries after worker %s failure without running the IO core on main', async (kind) => {
+    startChatsearchIndex();
+    await settle();
+    if (kind === 'error') state.workers[0].emit('error', new Error('disk error'));
+    if (kind === 'reply') state.workers[0].emit('message', { ok: false, error: 'failed build' });
+    state.workers[0].emit('exit', kind === 'reply' ? 0 : 1);
+    await settle();
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(workerCalls()).toBe(2);
+    expect(state.list).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'timeout'] as const)('bounds the caller wait on %s even if termination never resolves', async (kind) => {
+    const runner = createIndexWorkerRunner({ timeoutMs: 100 });
+    const job = { homeRoot: os.homedir(), storeRoot: os.homedir(), tagsRoot: os.homedir() };
+    const result = runner.run(job).catch((error: Error) => error.message);
+    if (kind === 'stop') runner.stop();
+    else await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toMatch(kind === 'stop' ? /stopped/ : /timed out/);
+    expect(runner.busy()).toBe(true);
+    await expect(runner.run(job)).rejects.toThrow('still running or stopping');
+    state.workers[0].emit('exit', 1);
+    expect(runner.busy()).toBe(false);
+  });
+
+  it('retries construction failure on the next trigger with no blocking fallback', async () => {
+    state.spawnFails = true;
+    startChatsearchIndex();
+    await settle();
+    expect(workerCalls()).toBe(0);
+    expect(state.list).not.toHaveBeenCalled();
+    state.spawnFails = false;
+    requestChatsearchRefresh();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(workerCalls()).toBe(1);
   });
 });

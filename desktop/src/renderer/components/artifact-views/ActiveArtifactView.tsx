@@ -1,7 +1,7 @@
 // ActiveArtifactView — shared component for viewing and editing a single artifact.
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
-import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
+import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer, isCommentableBinaryViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
 import { canEditArtifact, draftFileStatus } from './edit-permission';
@@ -292,15 +292,30 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // Optimistic-concurrency token from artifacts:get, round-tripped into save as
   // baseMtimeMs so a save over a changed file is rejected instead of silently
   // clobbering it (spec §12.9). null = no token yet → save runs unguarded.
-  const mtimeRef = useRef<number | null>(null);
+  // WHY: cleanup must retain the outgoing file's token, not a new selection's.
+  const mtimeRef = useMemo(() => ({ current: null as number | null }), [artifact.id, projectRoot, artifact.path]);
   const rootRef = useRef<HTMLDivElement>(null);
   // Mirrors for the unmount stash below — cleanup closures must read the
   // CURRENT values, not the ones captured when the effect last ran.
   // contentInfo rides along so the first-mount draft restore can ask the same
   // editability question as every other entry point (edit-permission.ts).
-  const stateRef = useRef({ editing: false, draft: '', content: null as string | null,
-                            contentInfo: null as ArtifactContentInfo | null | undefined });
-  stateRef.current = { editing, draft, content, contentInfo };
+  // WHY: the host clears content before committing a selection switch. Keep a
+  // separate committed snapshot per selection so cleanup still sees its dirty
+  // draft. Include path: a same-ID rename also clears the host's content. Its
+  // cleanup parks the old draft, then setup takes it under the unchanged root/ID key.
+  const stateRef = useMemo(() => ({ current: { editing: false, draft: '', content: null as string | null,
+                            contentInfo: null as ArtifactContentInfo | null | undefined } }), [artifact.id, projectRoot, artifact.path]);
+  useLayoutEffect(() => {
+    stateRef.current = { editing, draft, content, contentInfo };
+  });
+  // Each selection/read lifecycle owns its deliveries, including an A→B→A
+  // round trip. Invalidate before passive cleanup, and also on retry/unmount.
+  const readScope = useRef({ active: false });
+  useLayoutEffect(() => {
+    const scope = { active: true };
+    readScope.current = scope;
+    return () => { scope.active = false; };
+  }, [artifact.id, projectRoot, artifact.path, onDiskRead]);
   // A stashed draft waiting for content to resolve before it re-enters edit
   // mode (restoring before the fetch lands would fight the draft-reset effect).
   const pendingRestoreRef = useRef<ReturnType<typeof takeDraft>>(undefined);
@@ -381,7 +396,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         });
       }
     };
-  }, [artifact.id, projectRoot]);
+  }, [artifact.id, projectRoot, artifact.path]);
 
   // ── React to on-disk changes (external writes, saves from other windows) ──
   // Runs regardless of edit mode — the old version gated on `editing` AND
@@ -400,9 +415,10 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const watchRef = useRef({ dirty, draft, content, onContentChange, onDiskRead });
   watchRef.current = { dirty, draft, content, onContentChange, onDiskRead };
   useEffect(() => {
+    const scope = readScope.current;
     // artifacts.onChanged is optional — gracefully skip if IPC not wired yet
     const unsubFn = (window.claude as any).artifacts?.onChanged?.((evt: any) => {
-      if (evt.projectRoot !== projectRoot || evt.artifactId !== artifact.id) return;
+      if (!scope.active || evt.projectRoot !== projectRoot || evt.artifactId !== artifact.id) return;
       const { dirty, draft, content, onContentChange, onDiskRead } = watchRef.current;
       if (evt.kind === 'remove') return; // orphan handling is the host's concern
       // These files render from their own bytes, never from `content`. Asking
@@ -411,7 +427,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       // which downstream reads as an ordinary editable text file (spec §4.1).
       if (rendersFromBytesOnly(artifact.path)) return;
       (window.claude as any).artifacts.get(projectRoot, artifact.id).then((res: any) => {
-        if (!res || !res.ok || res.orphan) return;
+        if (!scope.active || !res || !res.ok || res.orphan) return;
         if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
         // Metadata ALWAYS travels with the read, even when the visible text is
         // unchanged and even mid-conflict — an append past the cap leaves the
@@ -428,7 +444,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       });
     });
     return typeof unsubFn === 'function' ? unsubFn : undefined;
-  }, [artifact.id, projectRoot, artifact.path]);
+  }, [artifact.id, projectRoot, artifact.path, onDiskRead]);
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {
@@ -445,8 +461,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     }
     // Refresh from disk on entering edit mode: picks up staleness the watcher
     // may have missed AND captures the concurrency token the save round-trips.
+    const scope = readScope.current;
     (window.claude as any).artifacts.get(projectRoot, artifact.id).then((res: any) => {
-      if (!res || !res.ok || res.orphan) return;
+      if (!scope.active || !res || !res.ok || res.orphan) return;
       if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
       if (onDiskRead) onDiskRead(res);
       else if (typeof res.content === 'string' && res.content !== content) onContentChange(res.content);

@@ -61,6 +61,18 @@ export function useArtifactContent(
   const [contentState, setContentState] = useState<ArtifactContentState>({ phase: 'loading' });
   // Bumping the token re-runs the effect below — the Retry action.
   const [retryToken, setRetryToken] = useState(0);
+  const [selection, setSelection] = useState({ projectRoot, artifactId, artifactPath, retryToken });
+  // WHY: a passive effect is too late to clear the previous file's result.
+  // React retries this component before committing its children, so a new file
+  // never paints an old missing warning, mounts an iframe with stale text, or
+  // reads binary bytes from the previous record's resolvedPath.
+  if (selection.projectRoot !== projectRoot || selection.artifactId !== artifactId
+      || selection.artifactPath !== artifactPath || selection.retryToken !== retryToken) {
+    setSelection({ projectRoot, artifactId, artifactPath, retryToken });
+    setContent(null);
+    setContentInfo(null);
+    setContentState({ phase: 'loading' });
+  }
 
   useEffect(() => {
     // No selection: park in loading (nothing renders the pane in this state).
@@ -142,12 +154,14 @@ export function useArtifactContent(
   // so a file that grew past the cap while open kept its Edit button, and saving
   // would have written the prefix over the whole file (spec §4.4). Editability
   // is derived from sizeBytes, so a stale size is a data-loss bug, not cosmetics.
+  // WHY: viewers use this callback's identity to invalidate pending deliveries
+  // on selection changes and Retry, without resubscribing while the user types.
   const applyDiskRead = useCallback((res: any) => {
     if (!res || !res.ok || res.orphan) return;
     setContent(res.content ?? null);
     setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, ...(typeof res.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
     setContentState({ phase: 'ready' });
-  }, []);
+  }, [selection]);
 
   return { content, setContent: reconciledSetContent, contentInfo, contentState, retryRead, applyDiskRead };
 }
