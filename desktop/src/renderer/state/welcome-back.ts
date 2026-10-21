@@ -45,7 +45,7 @@ export function resolveNativeBinding(
 ): ModelBinding | null {
   if (!ref) return null;
   if (ref.providerType === 'openai-compatible') {
-    // WHY: typed custom models have no catalog. Reuse only an unambiguous saved endpoint name;
+    // WHY: a custom model may have been typed (no catalog row to match). Reuse only an unambiguous saved endpoint name;
     // choosing a different endpoint (or one of two identically named endpoints) could send private history to the wrong server.
     const matches = providers.filter(p => p.type === ref.providerType && p.label === ref.providerLabel);
     const p = matches.length === 1 ? matches[0] : undefined;
