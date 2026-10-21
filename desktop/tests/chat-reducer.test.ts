@@ -295,6 +295,42 @@ describe('transient native usage progress', () => {
   });
 });
 
+describe('a reply shows the time it was last updated', () => {
+  const turnTime = (s: ChatState, turnId: string) => s.get(SESSION)!.assistantTurns.get(turnId)!.timestamp;
+
+  it('moves forward with each text, tool step, tool result and the end of the reply', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'Looking', timestamp: 1_000 });
+    const turnId = s.get(SESSION)!.currentTurnId!;
+    expect(turnTime(s, turnId)).toBe(1_000);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', toolName: 'Bash', toolInput: {}, timestamp: 2_000 });
+    expect(turnTime(s, turnId)).toBe(2_000);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u1', toolUseId: 't1', result: 'ok', isError: false, timestamp: 60_000 });
+    expect(turnTime(s, turnId)).toBe(60_000);
+    s = dispatch(s, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a3', text: 'Done', timestamp: 61_000 });
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'a3', timestamp: 62_000,
+      stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    expect(s.get(SESSION)!.currentTurnId).toBeNull();
+    expect(turnTime(s, turnId)).toBe(62_000);
+  });
+
+  it('never moves backward for a late or replayed event', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'Hi', timestamp: 5_000 });
+    const turnId = s.get(SESSION)!.currentTurnId!;
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', toolName: 'Bash', toolInput: {}, timestamp: 4_000 });
+    expect(turnTime(s, turnId)).toBe(5_000);
+  });
+
+  it('leaves a finished reply alone when a later reply is running', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'First', timestamp: 1_000 });
+    const first = s.get(SESSION)!.currentTurnId!;
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'a1', timestamp: 1_500,
+      stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    s = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u2', text: 'next', timestamp: 2_000 } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a2', text: 'Second', timestamp: 9_000 });
+    expect(turnTime(s, first)).toBe(1_500);
+  });
+});
+
 describe('TRANSCRIPT_TURN_COMPLETE metadata', () => {
   let state: ChatState;
 

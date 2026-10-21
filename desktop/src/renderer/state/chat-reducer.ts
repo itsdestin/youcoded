@@ -23,6 +23,7 @@ import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stop
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
+import { touchTurnTime } from './turn-time';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -886,6 +887,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
   if (next === state || !id) return next;
+  next = touchTurnTime(state, next, id, action);
   next = applyParkedSpecialistRuns(state, next, id);
   const s = next.get(id);
   if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;

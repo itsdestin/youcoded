@@ -161,7 +161,8 @@ export class SubagentWatcher {
       for (const line of raw.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        const parsed = parseTranscriptLine(trimmed, this.sessionId);
+        // WHY 'recorded': this is history, read long after it was written — see parseTranscriptLine.
+        const parsed = parseTranscriptLine(trimmed, this.sessionId, undefined, 'recorded');
         for (const ev of parsed) {
           events.push(this.stamp(ev, parentToolUseId, agentId));
         }

@@ -104,7 +104,8 @@ export interface AssistantTurn {
   presentationReferences?: boolean;
   /** Exact terminal source identity for boundaries discovered in overlapping pages. */
   sourceCompletionUuid?: string;
-  /** Epoch ms — captured from the first segment's transcript event */
+  /** Epoch ms of the LATEST event in this reply (set by its first, moved forward by each later one —
+   *  `touchTurnTime` in turn-time.ts). The time shown under the reply. */
   timestamp?: number;
   /** Only set when stop_reason is non-end_turn (max_tokens, refusal, etc.). Null for normal completions. */
   stopReason: string | null;
@@ -952,6 +953,8 @@ export type ChatAction =
       type: 'TRANSCRIPT_TOOL_RESULT';
       sessionId: string;
       uuid: string;
+      /** When the result happened; moves the reply's shown time forward (touchTurnTime). */
+      timestamp?: number;
       toolUseId: string;
       result: string;
       isError: boolean;

@@ -12,6 +12,8 @@
 // ONE MORE (sync-fix6, Destin 2026-10-04): a LIVE `context-clear` no longer carries the divider's markerId (the record's `session:live` clear draws
 // the line, once, for both runtimes; the event only resets the turn), and the buddy now translates user-interrupt, skill-invoked and context-clear
 // exactly like the main window, so its golden `[]` for those three is replaced by the main window's own actions. Both are asserted below.
+// ONE MORE (Destin 2026-10-21, a reply shows when it was last updated): TRANSCRIPT_TOOL_RESULT now carries the event's
+// `timestamp`, which moves the reply's shown time forward (`withToolResultTime` below).
 import { describe, it, expect } from 'vitest';
 import golden from './fixtures/transcript-event-actions.golden.json';
 import { MATRIX } from './helpers/transcript-event-matrix';
@@ -32,6 +34,10 @@ const withoutLiveClearMarker = (type: string, action: any) => {
   const { markerId: _m, ...rest } = action;
   return rest;
 };
+
+// The tool-result departure (see the header): the recorded action plus the event's own time.
+const withToolResultTime = (event: TranscriptEvent, action: any) =>
+  action?.type === 'TRANSCRIPT_TOOL_RESULT' ? { ...action, timestamp: event.timestamp } : action;
 
 // Deliberate summary departure: restore native boundaries on every screen,
 // retain CC resume-summary suppression, and preserve the recorded event time.
@@ -64,7 +70,7 @@ describe('eventToAction reproduces the old main-window switch', () => {
       const old = (golden as any)[c.name].app as { via: string; action: unknown }[];
       expect(plain(actions)).toEqual(c.event.type === 'compact-summary'
         ? plain(expectedSummary(c.event, c.ctx?.statuslineContextTokens ?? null))
-        : old.map((o) => withoutLiveClearMarker(c.event.type, o.action)));
+        : old.map((o) => plain(withToolResultTime(c.event, withoutLiveClearMarker(c.event.type, o.action)))));
       // The golden's `via` (direct vs batched) recorded the old route. R4-3 sends every action
       // through the batcher, so only the actions and their order are compared; the route is
       // pinned in tests/transcript-routing.test.ts.
@@ -76,7 +82,7 @@ describe('eventToAction with live:false reproduces pageEventToActions', () => {
   for (const c of MATRIX) {
     it(c.name, () => {
       const old = (golden as any)[c.name].page;
-      const expected = c.event.type === 'compact-summary' ? expectedSummary(c.event) : old ? [old] : [];
+      const expected = c.event.type === 'compact-summary' ? expectedSummary(c.event) : old ? [withToolResultTime(c.event, old)] : [];
       expect(plain(eventToAction(c.event, { live: false }))).toEqual(plain(expected));
       expect(plain(pageEventToActions(c.event))).toEqual(plain(expected));
     });
@@ -113,7 +119,7 @@ describe('eventToAction with buddy options reproduces the old buddy switch', () 
         if (x.type === 'NATIVE_SESSION_ERROR') { delete x.uuid; delete x.usage; }
         return x;
       };
-      expect(plain(actions.map(stripInvisible))).toEqual(old.map((o) => plain(stripInvisible(o.action))));
+      expect(plain(actions.map(stripInvisible))).toEqual(old.map((o) => plain(stripInvisible(withToolResultTime(c.event, o.action)))));
     });
   }
 });
