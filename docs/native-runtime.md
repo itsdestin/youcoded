@@ -1334,7 +1334,7 @@ and one way a long task could never finish.
   error (no kind) render exactly as before. A button whose handler a screen
   lacks is left out.
 - **Try again / Keep going = `native:continue-turn`** (five surfaces, phone
-  open — Destin's sign-off owed on the phone list): `NativeSessionHost.continueTurn`
+  open — Destin signed off 2026-10-21: "yes should work on phone"): `NativeSessionHost.continueTurn`
   (refused unless idle) → `HarnessSession.continueTurn` runs the model again on
   the history as it stands, with NO new message; a history ending on the
   assistant gets the history-only `CONTINUE_TURN_TEXT` note. Keep going shows
