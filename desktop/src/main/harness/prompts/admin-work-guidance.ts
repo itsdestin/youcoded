@@ -1,0 +1,3 @@
+// WHY: tool descriptions and both doctrine sizes must agree that permission cards
+// do not replace the user's prior approval to begin administrator-level work.
+export const ADMIN_WORK_GUIDANCE = 'Use administrator privileges only as a last resort. Prefer unprivileged commands and user-writable locations when they can safely accomplish the task. Before beginning work expected to require sudo or other admin commands, explain why and ask the user in chat for approval, noting that additional permission or password prompts may follow. Wait for approval before proceeding. If the need emerges during work, pause and ask then. This approval does not replace the app\'s command-level permission checks.';
