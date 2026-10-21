@@ -441,9 +441,93 @@ function connectedPages(): PageDocument[] {
   ];
 }
 
+// WHY: this is a deliberately hand-authored, inert planning-page mockup in the
+// workbench fixture set; it uses the real PageHost without reading or writing files.
+const MASTER_PLAN_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>YouCoded plan</title>
+<style>
+  /* WHY: one reading surface, separated rows and a small attention rail make the
+     overview scan like a plan rather than a stack of nested dashboard boxes. */
+  .plan { max-width:1200px; margin:auto; padding:32px; display:grid; gap:28px; }
+  .hero { display:flex; justify-content:space-between; gap:24px; align-items:start; padding-bottom:24px; border-bottom:1px solid var(--edge); }
+  .hero p { max-width:760px; margin-top:8px; }
+  .layout { display:grid; grid-template-columns:180px minmax(0,1fr); gap:32px; }
+  .nav { display:grid; align-content:start; gap:8px; }
+  .nav .yc-button { justify-content:start; padding:12px; }
+  button[aria-current=true] { background:var(--accent); color:var(--on-accent); }
+  .overview { display:grid; grid-template-columns:minmax(0,2fr) minmax(230px,1fr); gap:28px; }
+  .item { padding:16px 0; border-bottom:1px solid var(--edge-dim); display:grid; gap:8px; }
+  .item:first-child { padding-top:0; }
+  .item:last-child { border-bottom:0; }
+  .muted { color:var(--fg-muted); } .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .between { justify-content:space-between; }
+  .pill { background:var(--inset); border-radius:var(--radius-sm); padding:4px 8px; font-size:12px; white-space:nowrap; }
+  .summary { display:flex; gap:24px; padding:16px 0 24px; }
+  .summary strong { display:block; font-size:18px; font-weight:600; }
+  .rail { border-left:1px solid var(--edge); padding-left:24px; }
+  #content { display:grid; align-content:start; gap:16px; }
+  .fields { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .fields .wide { grid-column:1/-1; } .fields label { display:grid; gap:6px; }
+  .diff { display:grid; grid-template-columns:1fr 1fr; gap:24px; padding:16px 0; border-block:1px solid var(--edge); }
+  .diff ul { padding-left:20px; display:grid; gap:12px; }
+  .yc-button:active { background:var(--edge); }
+  @media(max-width:640px){.plan{padding:16px}.layout,.overview,.fields,.diff{grid-template-columns:1fr}.nav{grid-template-columns:repeat(2,1fr)}.hero{display:block}.rail{border-left:0;padding-left:0}.summary{gap:16px}}
+</style></head><body><main class="plan">
+<section class="hero"><div><div class="yc-eyebrow">YOUCODED · PRIVATE PLANNING</div><h1>Build an open computing environment</h1><p>Portable, user-owned tools with provider choice and community-built alternatives.</p></div><button id="editVision">Edit vision</button></section>
+<div class="layout"><nav class="nav" aria-label="Plan sections"><button aria-current="true" data-tab="work">Active work</button><button data-tab="vision">Vision</button><button data-tab="history">Sources & history</button><button data-tab="public">Public changes</button><button data-tab="access">Folder access</button></nav>
+<section id="content"><div class="row between"><h2>Active work</h2><button class="yc-button" data-action="edit-item">Edit item</button></div>
+<div class="summary"><div><strong>2</strong><span class="yc-caption">in progress</span></div><div><strong>1</strong><span class="yc-caption">needs a decision</span></div><div><strong>2</strong><span class="yc-caption">ready to start</span></div></div>
+<div class="overview"><div><div class="yc-eyebrow">Now · keep moving</div>
+<article class="item"><div class="row between"><h3>Pages foundation</h3><span class="pill">Building</span></div><p>Connect personal Pages with reusable tools and scoped file access.</p><p class="muted">Next: review the folder approval flow.</p><div class="row yc-small"><span>Owner: Maya</span><span class="muted">Updated 6 Oct</span><button class="yc-button yc-button--ghost" data-tab="history">Sources & reports</button></div></article>
+<article class="item"><div class="row between"><h3>Portable workspace</h3><span class="pill">In review</span></div><p>Bring your conversations, files and preferences to another device.</p><p class="muted">Next: check restore behavior on a second computer.</p><div class="row yc-small"><span>Owner: Leo</span><span class="muted">Updated 5 Oct</span></div></article>
+<div class="yc-eyebrow" style="margin-top:24px">Next · ready to start</div>
+<article class="item"><div class="row between"><h3>Community reports</h3><span class="pill">Planned</span></div><p>Link user reports to the work they inform. Discussion stays in GitHub Issues.</p></article>
+<article class="item"><div class="row between"><h3>Reusable agent tools</h3><span class="pill">Planned</span></div><p>Share small, composable tools across Pages and assistant tasks.</p></article></div>
+<aside class="rail yc-stack"><div class="yc-eyebrow">Needs your attention</div><h3>Where should device work run?</h3><p>Device mesh needs a host-selection decision before it can be scheduled.</p><button class="yc-button" data-tab="vision">Review direction</button><hr class="yc-divider"><div class="yc-eyebrow">Recent progress</div><h3>Workspace export</h3><span class="pill">Merged · 5 Oct</span><p class="muted">Export includes preferences and linked files.</p><h3>Search shortcuts</h3><span class="pill">Released · 3 Oct</span><p class="muted">Available in the latest desktop release.</p><button class="yc-button yc-button--ghost" data-tab="history">View history</button></aside></div></section></div>
+<script>
+const c=document.getElementById('content'); let selected='work';
+const sections={work:c.innerHTML,
+vision:'<h2>Vision</h2><p>A user-owned, open-source computing environment. Choose providers, run local models, keep portable data and make tools your own.</p><article class="item"><div class="yc-eyebrow">Foundation</div><h3>Build once, reuse everywhere</h3><p>Customizable Pages and reusable agent tools share the same runtime. Community-built alternatives can be remixed without giving up ownership.</p></article><article class="item"><div class="yc-eyebrow">Open decision</div><h3>Device mesh</h3><p>Choose where work runs when more than one computer is available. Offline behavior and host selection need a decision before scheduling.</p><p class="muted">Source: Device mesh direction · Maya · 4 Oct 2026</p></article>',
+history:'<h2>Sources & history</h2><p class="muted">Pages foundation · private planning record</p><article class="item"><div class="row between"><h3>Folder approval flow ready for review</h3><span class="pill">Build report</span></div><p>6 Oct 2026, 09:40 · Maya · Pages foundation report</p><p>Read and write are separate choices. The review includes a changed-host case and revoking access.</p><button class="yc-button" data-action="doc">Read build report</button></article><article class="item"><h3>Added scoped folder access</h3><p>5 Oct 2026, 15:20 · Leo · Pages phasing plan</p><p>Updated the milestone and linked the approval-flow design.</p><button class="yc-button" data-action="doc">Open source plan</button></article><article class="item"><h3>Folder choice is hard to find</h3><p>4 Oct 2026, 11:10 · Nina · GitHub issue #42</p><p>Community report · Open. Discussion and open/closed state stay in GitHub Issues.</p><button class="yc-button" data-action="issue">Read issue</button></article><article class="item"><h3>Keep planning notes private</h3><p>3 Oct 2026, 16:05 · Maya · Private conversation</p><p>Only approved public summaries are shared. Requests never become public issues automatically.</p></article><p id="feedback" aria-live="polite"></p>',
+public:'<h2>Review public update</h2><p>Only these summary changes will appear in the read-only public view. Private notes and source documents stay private.</p><div class="row"><span class="pill">3 changes</span><span class="muted">Last approved 3 Oct · prepared by Maya, 6 Oct</span></div><div class="diff"><div><div class="yc-eyebrow">Published now</div><ul><li>Next: reusable agent tools</li><li>Community reports: 8 open</li><li>Milestone: planning overview</li></ul></div><div><div class="yc-eyebrow">Proposed update</div><ul><li>Next: Pages folder approval review</li><li>Community reports: 9 open</li><li>Milestone: scoped file access</li></ul></div></div><p class="muted">Every update needs your approval. Editing the private plan does not publish it.</p><div class="row"><button class="yc-button yc-button--primary" data-action="approve">Approve this update</button><button class="yc-button" data-action="reject">Keep current public view</button></div><p id="feedback" aria-live="polite"></p>',
+access:'<h2>Folder access</h2><p>Access is limited to this Page, this folder and this computer.</p><article class="item"><div class="row between"><h3>Documents / Planning</h3><span class="pill">Remembered</span></div><p>Host: Studio laptop · YouCoded</p><p>Read files: allowed · Write files: allowed</p><p class="muted">Granted by Maya · 5 Oct 2026. Other folders are not included.</p><button class="yc-button yc-button--danger" data-action="revoke">Revoke access</button></article><article class="item"><h3>Choose another folder</h3><p>Host: Studio laptop · YouCoded</p><div class="row"><label><input id="readGrant" type="checkbox" checked> Read files</label><label><input id="writeGrant" type="checkbox"> Write files</label></div><button class="yc-button" data-action="grant">Choose folder…</button></article><article class="item"><div class="yc-eyebrow">Network · separate permission</div><h3>api.github.com</h3><p>Read issue titles and status. No GitHub writes.</p><p class="muted">Not approved. Folder access does not allow network requests.</p><button class="yc-button" data-action="network">Review network access</button></article><p id="feedback" aria-live="polite"></p>',
+edit:'<h2>Edit work item</h2><p class="muted">Pages foundation · detailed plans remain linked documents</p><form id="itemForm" class="fields"><label class="wide">Title<input class="yc-input" name="title" value="Pages foundation" required></label><label>Status<select class="yc-select" name="status"><option>Building</option><option>In review</option><option>Planned</option><option>Merged</option><option>Released</option></select></label><label>Timing<select class="yc-select" name="timing"><option>Now</option><option>Next</option><option>Later</option></select></label><label>Owner<input class="yc-input" name="owner" value="Maya"></label><label>Source document<input class="yc-input" name="source" value="Pages phasing plan"></label><label class="wide">Next step<textarea class="yc-textarea" name="next">Review the folder approval flow.</textarea></label><div class="row wide"><button class="yc-button yc-button--primary" type="submit">Save draft</button><button class="yc-button" type="button" data-action="cancel">Cancel</button></div></form><p id="feedback" aria-live="polite"></p>',
+exceptions:'<h2>Changes need review</h2><article class="item"><h3>Host changed</h3><p>The folder grant belongs to Studio laptop, not Travel laptop. Review access on this computer before using the folder.</p><button class="yc-button" data-tab="access">Review this computer</button></article><article class="item"><h3>Source history unavailable</h3><p>The Pages report could not be loaded.</p><button class="yc-button" data-action="retry">Retry</button></article><article class="item"><h3>Draft changed elsewhere</h3><p>Saved next step: Check folder revocation. Your draft: Review the folder approval flow.</p><button class="yc-button" data-action="conflict">Compare versions</button></article><p id="feedback" aria-live="polite"></p>'};
+function paint(){c.innerHTML=sections[selected];document.querySelectorAll('.nav [data-tab]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.tab===selected)));}
+function openSection(tab){if(sections[tab]){selected=tab;paint();}}
+document.querySelectorAll('.nav button').forEach(b=>{b.classList.add('yc-button');b.onclick=()=>openSection(b.dataset.tab)});
+document.getElementById('editVision').classList.add('yc-button');
+document.getElementById('editVision').onclick=()=>{openSection('vision');c.innerHTML='<h2>Edit vision fields</h2><form id="visionForm" class="yc-stack"><label for="purpose">Purpose</label><textarea id="purpose" class="yc-textarea">Portable, user-owned tools with provider choice and community-built alternatives.</textarea><p class="muted">Detailed plans remain linked documents.</p><div class="row"><button class="yc-button yc-button--primary" type="submit">Save draft</button><button class="yc-button" type="button" data-action="cancel">Cancel</button></div></form><p id="feedback" aria-live="polite"></p>'};
+// WHY: edits and approval states live only in this frame. No save/fetch bridge,
+// file grant, publication or GitHub write is invoked by the design fixture.
+c.addEventListener('submit',e=>{e.preventDefault();if(e.target.id==='itemForm'){const data=new FormData(e.target);const temp=document.createElement('div');temp.innerHTML=sections.work;const item=temp.querySelector('.item');item.querySelector('h3').textContent=data.get('title');item.querySelector('.pill').textContent=data.get('status');item.querySelector('p.muted').textContent='Next: '+data.get('next');item.querySelector('.row.yc-small span').textContent='Owner: '+data.get('owner');sections.work=temp.innerHTML;const form=e.target;form.querySelectorAll('input').forEach(x=>x.setAttribute('value',x.value));form.querySelectorAll('textarea').forEach(x=>x.textContent=x.value);form.querySelectorAll('option').forEach(x=>{if(x.selected)x.setAttribute('selected','');else x.removeAttribute('selected');});sections.edit=c.innerHTML;openSection('work');const note=document.createElement('p');note.setAttribute('role','status');note.textContent='Draft saved. Public view unchanged.';c.prepend(note);}else{sections.vision='<h2>Vision</h2>';const p=document.createElement('p');p.textContent=document.getElementById('purpose').value;sections.vision+=p.outerHTML;openSection('vision');}});
+c.addEventListener('click',e=>{const tab=e.target.closest('[data-tab]');if(tab){openSection(tab.dataset.tab);return;}const b=e.target.closest('[data-action]');if(!b)return;const f=document.getElementById('feedback');const a=b.dataset.action;
+if(a==='edit-item'){openSection('edit');return;}
+if(a==='cancel'){openSection(selected==='edit'?'work':'vision');return;}
+if(a==='revoke'){b.closest('.item').innerHTML='<h3>Access revoked</h3><p>Documents / Planning is no longer available to this Page.</p>';sections.access=c.innerHTML;return;}
+if(!f)return;
+if(a==='approve')f.innerHTML='<p>Approve the 3 summary changes shown above? Private documents are excluded.</p><div class="row"><button class="yc-button" data-action="confirm-approval">Confirm approval</button><button class="yc-button" data-action="cancel-approval">Cancel</button></div>';
+else if(a==='confirm-approval'){f.textContent='Update approved.';c.querySelector('[data-action="approve"]').remove();sections.public=c.innerHTML;}
+else if(a==='cancel-approval'||a==='reject')f.textContent='Public view unchanged.';
+else if(a==='grant'){const read=document.getElementById('readGrant').checked,write=document.getElementById('writeGrant').checked;f.dataset.read=String(read);f.dataset.write=String(write);f.innerHTML='<h3>Grant Documents / Planning?</h3><p>Studio laptop · this Page only · Read: '+(read?'allowed':'not allowed')+' · Write: '+(write?'allowed':'not allowed')+'</p><p>No network access is included.</p><div class="row"><button class="yc-button" data-action="confirm-grant">Grant this folder</button><button class="yc-button" data-action="cancel-grant">Cancel</button></div>';}
+else if(a==='confirm-grant'){c.querySelector('.item').innerHTML='<h3>Documents / Planning</h3><p>Host: Studio laptop · YouCoded</p><p>Read files: '+(f.dataset.read==='true'?'allowed':'not allowed')+' · Write files: '+(f.dataset.write==='true'?'allowed':'not allowed')+'</p><p class="muted">Remembered for this Page only. Other folders are not included.</p><button class="yc-button yc-button--danger" data-action="revoke">Revoke access</button>';f.textContent='Folder access remembered for this Page on Studio laptop.';sections.access=c.innerHTML;}
+else if(a==='cancel-grant')f.textContent='No access granted.';
+else if(a==='network')f.innerHTML='<h3>Allow reads from api.github.com?</h3><p>Issue titles and status only. No GitHub writes or other hosts.</p><button class="yc-button" data-action="allow-network">Allow reads</button>';
+else if(a==='allow-network'){c.querySelector('[data-action="network"]').previousElementSibling.textContent='Approved for issue reads only. No file access or GitHub writes.';f.textContent='Network reads approved for api.github.com.';sections.access=c.innerHTML;}
+else if(a==='retry')f.textContent='Source history is still unavailable. Try again later.';
+else if(a==='conflict')f.innerHTML='<h3>Choose a next step</h3><p>Your draft: Review the folder approval flow.</p><p>Saved version: Check folder revocation.</p><button class="yc-button" data-action="keep-local">Keep my draft</button> <button class="yc-button" data-action="use-saved">Use saved version</button>';
+else if(a==='keep-local'||a==='use-saved')f.textContent=a==='keep-local'?'Your draft was kept.':'Saved next step selected.';
+else if(a==='doc'||a==='issue'){const source=b.closest('.item').cloneNode(true);source.querySelectorAll('button').forEach(x=>x.remove());f.replaceChildren(source);}});
+const initial=(window.youcoded&&window.youcoded.data&&window.youcoded.data.planView)||'work';openSection(initial);
+</script></main></body></html>`;
+
 export function seedPages(): PageDocument[] {
   return [
     ...connectedPages(),
+    { id: 'page-master-plan', name: 'YouCoded plan', icon: 'notes', home: { kind: 'personal' }, pinned: true,
+      description: 'Active work, vision and source-linked planning.', updatedAt: '2026-10-06T10:00:00.000Z', htmlStamp: 1791280800000, html: MASTER_PLAN_HTML,
+      // WHY: named photos select actual subviews through page data, without
+      // opening the sandbox or adding production navigation/testing hooks.
+      data: { planView: typeof location === 'undefined' ? 'work' : new URLSearchParams(location.search).get('planView') ?? 'work' } },
     {
       id: 'page-focus-timer',
       name: 'Focus timer',

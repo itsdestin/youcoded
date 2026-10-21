@@ -10,6 +10,11 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('pages', 'view'),
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
+  pg('pages/page/page-master-plan', 'view', 'mock-only'),
+  ...['vision', 'edit', 'history', 'public', 'access', 'exceptions'].map((view) => ({
+    ...pg(`pages/page/page-master-plan#${view}`, 'view', 'mock-only'),
+    params: { planView: view },
+  })),
   pg('pages/focus/page-focus-timer', 'view'),
   // Approval states, one fixture page each.
   pg('pages/page/page-weather', 'view', 'approval'),
