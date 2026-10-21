@@ -10,7 +10,8 @@ import { createMockShim, setLatency, getLatency } from '../src/renderer/dev/work
 import { CS_RESUMABLE } from '../src/renderer/dev/workbench/fixtures/chatsearch';
 import { validateTheme } from '../src/renderer/themes/theme-validator';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
-import type { ChatState } from '../src/renderer/state/chat-types';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import { createSessionChatState, type ChatState } from '../src/renderer/state/chat-types';
 import type { TranscriptEvent, TranscriptPageResult } from '../src/shared/types';
 
 // WHY read before zeroing: the proxy-semantics section asserts the real default.
@@ -158,6 +159,32 @@ describe('channels', () => {
         expect(transcript).toEqual([]);
         off();
       } finally { vi.unstubAllGlobals(); }
+    });
+
+    // WHY (2026-10-21, #79): a native send must record the typed message in the transcript first,
+    // like the real backend. That echo is what un-pends the bubble; without it the bubble stayed
+    // the timeline's tail and the scripted reply drew ABOVE the message it answered.
+    it('a native send echoes the typed message AFTER its ack, so the app\'s bubble is confirmed and sits above the reply', async () => {
+      vi.stubGlobal('location', { search: '?reply=theme-builder&replySpeed=50' });
+      vi.useFakeTimers();
+      try {
+        const c = shim();
+        const events: any[] = [];
+        let st: ChatState = new Map([['wb-2', createSessionChatState()]]);
+        const apply = (a: any) => { st = chatReducer(st, a); };
+        c.on.transcriptEvent((e: any) => { events.push(e); eventToAction(e, {} as any).forEach(apply); });
+        // The app's order (submit-outgoing.ts sendToNative): await the ack, THEN draw the bubble.
+        expect(await c.native.send('wb-2', 'build me a theme')).toEqual({ status: 'sent' });
+        expect(events).toEqual([]); // no echo yet: a bubble must exist before the echo can confirm it
+        apply({ type: 'USER_PROMPT', sessionId: 'wb-2', content: 'build me a theme', timestamp: Date.now() });
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(events[0]).toMatchObject({ type: 'user-message', data: { text: 'build me a theme' } });
+        const tl = st.get('wb-2')!.timeline as any[];
+        const users = tl.filter((t) => t.kind === 'user');
+        expect(users).toHaveLength(1); // not drawn twice
+        expect(users[0].pending).toBeFalsy(); // confirmed, so not pinned to the tail
+        expect(tl[0].kind).toBe('user'); // and above the assistant's reply
+      } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
     });
 
     it.each(['retry', 'continue'])('settles an exact failed startup %s without sending and replays the current state', async (action) => {
@@ -702,8 +729,10 @@ describe('proxy semantics', () => {
 
       await vi.advanceTimersByTimeAsync(15000);
       expect(transcript.length).toBeGreaterThan(0);
-      // No user-message echo — the app renders the user's bubble itself.
-      expect(transcript[0]).toMatchObject({ type: 'assistant-text' });
+      // The typed message is echoed first (2026-10-21, #79): the echo un-pends the app's bubble,
+      // so the reply that follows draws BELOW it. Then the assistant's own events.
+      expect(transcript[0]).toMatchObject({ type: 'user-message', data: { text: 'hello' } });
+      expect(transcript[1]).toMatchObject({ type: 'assistant-text' });
       expect(transcript.at(-1)).toMatchObject({ type: 'turn-complete' });
       vi.useRealTimers();
     });

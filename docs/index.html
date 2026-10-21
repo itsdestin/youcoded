@@ -13,7 +13,7 @@
      it opened (reported 2026-09-04). The favicon is the app icon (docs/brand/,
      brand identity 2026-10-04) so a tab, the header and the installed app
      read as one product; applyTheme() swaps it to the theme the visitor picks. -->
-<meta property="og:title" content="YouCoded Assistant — Agentic AI for Everyone">
+<meta property="og:title" content="YouCoded — Agentic AI for Everyone">
 <meta property="og:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://youcoded.ai/">
@@ -24,13 +24,13 @@
 <meta property="og:image" content="https://youcoded.ai/og-image.png?v=6">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
-<meta property="og:site_name" content="YouCoded Assistant">
+<meta property="og:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta property="og:site_name" content="YouCoded">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="YouCoded Assistant — Agentic AI for Everyone">
+<meta name="twitter:title" content="YouCoded — Agentic AI for Everyone">
 <meta name="twitter:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=6">
-<meta name="twitter:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta name="twitter:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/default-32.png" id="favicon">
 <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -193,7 +193,8 @@ h2{font-family:var(--font-ui);font-size:clamp(2rem,4vw,3rem);font-weight:800;let
 /* ---- story / accounts / faq / gallery ---- */
 .story p+p{margin-top:16px}
 .sign{display:inline-block;margin-top:22px;font-weight:700;color:var(--accent);text-decoration:none}
-.acctgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:26px}
+.acctgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:26px}
+@media (max-width:1100px){.acctgrid{grid-template-columns:repeat(2,1fr)}}
 .acct{padding:24px}
 .acct h3{font-size:1.02rem;font-weight:700;margin-bottom:9px}
 .acct p{font-size:.87rem;opacity:.78}
@@ -1152,11 +1153,11 @@ body.intro-mode > footer{transform:translateY(34px)}
 /* The delay lets "Yours." settle before the page fills in behind it. */
 .hero-flank ~ section,.hero-flank ~ footer,.hero-flank ~ .topcta,
 .hero-flank .kicker,.hero-flank .hero-sub,.hero-flank .dlrow,.hero-flank .hero-app{
-  transition:opacity .58s ease .1s, transform .62s cubic-bezier(.22,1,.36,1) .1s}
+  transition:opacity .55s cubic-bezier(.22,1,.36,1) .1s, transform .55s cubic-bezier(.22,1,.36,1) .1s}
 /* Same fade, same delay, so the pill arrives with the rest of the page. Its
    transform transition stays at the .34s the docked/hidden states use -- this
    sheet loads AFTER css_embed_fade.css, so whatever is written here wins. */
-.hero-flank .dlfloat{transition:opacity .58s ease .1s, transform .34s ease}
+.hero-flank .dlfloat{transition:opacity .55s cubic-bezier(.22,1,.36,1) .1s, transform .34s ease}
 @media (prefers-reduced-motion:reduce){
   body.intro-mode .kicker,body.intro-mode .hero-sub,body.intro-mode .dlrow,
   body.intro-mode .hero-app,body.intro-mode .dlfloat,
@@ -1384,7 +1385,9 @@ body.cycler-static .lead-hold{display:none}
 .deck-fade .step.buried{
   transform:scale(calc(1 - var(--d,0) * 0.03));
   opacity:calc(1 - var(--d,0) * 0.85);      /* gone a little past one card-length */
-  filter:saturate(.85);pointer-events:none}
+  /* WHY: was a flat saturate(.85) that appeared the instant d passed .002 -- a
+     visible pop. Now it follows --d like opacity and scale do. */
+  filter:saturate(max(.85, calc(1 - var(--d,0) * .15)));pointer-events:none}
 
 /* ---- T3 RAIL: no scroll driving anything. Pick a feature and it swaps in
    place; it advances on its own if you leave it alone. ---- */
@@ -1437,6 +1440,15 @@ body.cycler-static .lead-hold{display:none}
 /* Shrink from the top edge, so a block leaving under the top bar pulls away
    from the bar rather than toward the middle of the window. */
 body.motion-on .m-rise{transform-origin:50% 0}
+/* WHY (2026-10-21, "things popping in/disappearing"): a block is hidden ONLY until
+   it first arrives; the script then plays one time-based entrance (opacity,
+   translate, scale -- one curve, 0.55s, the same as the page's intro) and
+   removes this class. It never goes back: the old version recomputed opacity and
+   scale off scroll position in BOTH directions, so scrolling up un-revealed
+   things, anything leaving under the bar faded, and the heading and cards in
+   the about section were left at opacity 0 when the page was scrolled to the
+   end. */
+body.motion-on .m-rise.m-wait{opacity:0}
 
 
 /* ==========================================================================
@@ -1732,7 +1744,202 @@ html{-webkit-tap-highlight-color:transparent}
 .trypill:active,.embed-start:active{filter:brightness(.94)}
 </style>
 <script type="module" src="site-analytics-ui.mjs"></script>
-</head>
+
+<style id="repositioning-css">
+/* ---- 2026-10-21 repositioning: cards, device drawing, ideas wall, story fold, demo tips ---- */
+/* The about and story panels sat flush under their headings while every other section keeps
+   26px between heading and content (Destin, 2026-10-21: "this spacing doesn't match"). */
+#about>.wrap>.panel,#story>.wrap>.storyfold{margin-top:26px}
+.demo-deck .step .deckclip .devdemo{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;border-radius:11px}
+.step p a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.gal.ideas{align-items:flex-start}
+.idea{flex:none;width:420px;scroll-snap-align:center;margin:0}
+.idea img{width:100%;display:block;border-radius:var(--radius);border:1px solid var(--hair)}
+.idea figcaption{margin-top:10px;font-size:.95rem;line-height:1.35;opacity:.86;font-style:italic}
+/* The story folds behind one line on a phone (Destin, Q-14): two screens of text became one tap. */
+/* Every fold on the page (the FAQ cards, and the story on a phone) opens and closes with the
+   same motion: the answer's box grows from 0 to its height while it fades in, the + turns into
+   an x, and a press on the question dips the card (Destin, review R-10: "no expand animation or
+   press feel"). The <details> element stays open during the closing motion; is-open drives it. */
+.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .34s cubic-bezier(.2,.8,.2,1),opacity .22s ease}
+.faq details .a>.a-in,.storyfold .a>.a-in{overflow:hidden;min-height:0}
+.faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
+.faq details .a{padding:0}
+.faq details .a-in{padding:0 22px 20px}
+/* The row's own corners follow the card's, and the press is a tint only: a transform on a
+   row inside a blurred glass card made the browser paint a square dark block behind it
+   (Destin, 2026-10-21 screenshot). */
+.faq summary{border-radius:var(--radius);transition:background .18s}
+.faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
+.faq summary:hover{background:rgba(var(--fg-rgb),.04)}
+.faq summary:active,.storyfold>summary:active{transform:none;background:rgba(var(--fg-rgb),.08)}
+.storyfold>summary{transition:background .18s}
+.faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
+.faq details[open] summary::after{content:'+'}
+.faq details.is-open summary::after{transform:rotate(45deg)}
+.storyfold>summary{list-style:none;display:none}
+.storyfold>summary::-webkit-details-marker{display:none}
+@media (prefers-reduced-motion:reduce){.faq details .a,.storyfold .a,.faq summary,.faq summary::after{transition:none}}
+@media (max-width:760px){
+  .storyfold{padding:0}
+  .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius)}
+  .storyfold.is-open>summary{border-radius:var(--radius) var(--radius) 0 0}
+  .storyfold>summary::after{content:'+';margin-left:auto;color:var(--accent);font-size:1.3rem;line-height:1;transition:transform .34s cubic-bezier(.2,.8,.2,1)}
+  .storyfold.is-open>summary::after{transform:rotate(45deg)}
+  .storyfold .a-in{padding:0 17px 18px}
+}
+/* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
+   They exist only once the visitor has clicked into the demo (B-1 round 2). */
+.tips{position:absolute;inset:0;pointer-events:none;z-index:6;font-family:var(--font-ui);display:none}
+.embed.interactive .tips.on,.embed.interactive .tips.off{display:block}
+/* Hidden tips leave one small button to bring them back; nothing else is drawn. */
+.tips.off .tip,.tips.off .tips-lines{display:none}
+.tips-lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.tips-lines line{stroke:var(--accent);stroke-width:1.5;opacity:.55}
+.tip{position:absolute;pointer-events:auto;display:inline-flex;align-items:center;gap:6px;max-width:250px;
+  padding:5px 9px 5px 10px;border-radius:999px;font-size:.72rem;font-weight:600;line-height:1.25;white-space:nowrap;cursor:default;
+  color:rgba(var(--fg-rgb),.92);background:var(--glass-prose);border:1px solid var(--hair);
+  -webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);
+  box-shadow:0 10px 24px -14px rgba(0,0,0,.45);transition:border-radius .15s}
+ /* Motion (Destin, 2026-10-21: "smooth out the transition between chips"): a chip's width is
+   always explicit so it can animate open, its text unfolds (grid rows 0fr to 1fr), neighbours
+   glide, and a whole set cross-fades when the demo switches between chat and Settings. */
+.tip{transition:left .22s ease,top .22s ease,width .2s ease,opacity .18s ease,border-radius .15s;flex-wrap:wrap;row-gap:0;box-sizing:border-box}
+.tip.open{z-index:2;white-space:normal;border-radius:14px}
+.tip.enter,.tip.leaving{opacity:0}
+.tip .tip-text{display:grid;grid-template-rows:0fr;flex-basis:100%;opacity:0;white-space:normal;font-weight:500;
+  transition:grid-template-rows .2s ease,opacity .16s ease}
+.tip .tip-text>span{overflow:hidden;min-height:0;display:block}
+/* Closed, the text must not widen the chip: its flex basis is 0 and it has no width, so a closed
+   chip measures as its label alone (it measured 250px otherwise, and nothing animated). */
+.tip:not(.open) .tip-text{flex-basis:0;width:0;min-width:0}
+.tip.open .tip-text{grid-template-rows:1fr;opacity:.9;margin-top:2px}
+.tip.measure,.tip.measure *{transition:none !important}
+.tips-lines{transition:opacity .2s ease}
+.tips.swap .tip,.tips.swap .tips-lines{opacity:0}
+.tip .tip-x{font-style:normal;opacity:.55;font-size:.85rem;line-height:1;padding:2px 3px;cursor:pointer;margin-left:auto;display:none}
+.tip.open .tip-x{display:inline}
+.tip .tip-x:hover{opacity:1}
+.tips-hide{position:absolute;right:12px;top:44px;pointer-events:auto;font:600 .72rem var(--font-ui);padding:5px 11px;border-radius:999px;
+  border:1px solid var(--hair);background:var(--glass-prose);color:rgba(var(--fg-rgb),.85);cursor:pointer;
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+@media (max-width:760px){.tips{display:none !important}}
+</style>
+<style id="device-css">
+
+
+
+
+.devdemo{position:relative;width:100%;aspect-ratio:16/10;container-type:inline-size;overflow:hidden;box-sizing:border-box;
+  
+  --bg:#F7F0FB;--pn:#EFE3F6;--in:#DCC5EB;--wl:#FAF5FD;--accent:#8B47B8;--oa:#FFFFFF;--st:#21152C;--tx:#21152C;--mu:#50415C;--fa:#887695;--hr:#C9B0DB;--hl:#B597CCA0;
+  --gl:rgba(239,227,246,.8);--tk:#DCC5EB;--kf:#FAF5FD;--kn:#DCC5EB;--kb:#C9B0DB;--knob:#FFFFFF;--fn:rgba(33,21,44,.2);--sh:rgba(33,21,44,.14);
+  font-family:var(--font-ui);color:var(--tx);background:var(--bg);border:1px solid var(--hr);border-radius:var(--radius)}
+.devdemo.is-dark{--bg:#140B1E;--pn:#1F1329;--in:#2B1B39;--wl:#2B1B39;--accent:#C99BF0;--oa:#1A0F24;--st:#F3EAF9;--tx:#F3EAF9;--mu:#A397AC;--fa:#6B5D76;--hr:#45305A;--hl:#5A3F75A0;
+  --gl:rgba(31,19,41,.8);--tk:#2B1B39;--kf:#2B1B39;--kn:#352345;--kb:#45305A;--knob:#F3EAF9;--fn:rgba(243,234,249,.3);--sh:rgba(0,0,0,.45)}
+.devdemo *{box-sizing:border-box}
+.devdemo,.devdemo *{transition:background-color .5s,color .5s,border-color .5s,box-shadow .5s}
+.devdemo .abs{position:absolute}
+
+.devdemo .p1{left:0;top:0;width:42%;height:100%;overflow:hidden}
+.devdemo .p2{left:42%;top:0;width:58%;height:100%;border-left:1px solid var(--hr)}
+
+.devdemo .wall{inset:0;background:linear-gradient(155deg,#D7B3E7,#F7F0FB 58%,#E6D0F1)}
+
+.devdemo .dk{inset:0;opacity:0;transition:opacity .5s;background:linear-gradient(155deg,#542571,#140B1E 58%,#2A1240)}
+.devdemo.is-dark .dk{opacity:1}
+
+.devdemo .warm{inset:0;background:rgb(255,140,40);opacity:0;pointer-events:none;animation:dvWarm 7s infinite}
+.devdemo .shade{left:1.5cqw;top:2.5cqw;width:39cqw;padding:1.9cqw;display:flex;flex-direction:column;gap:1.6cqw;background:var(--gl);
+  border:1px solid var(--hr);border-radius:calc(var(--radius)*1.1);backdrop-filter:blur(1.5cqw);box-shadow:0 .8cqw 3cqw var(--sh)}
+.devdemo .time{font-size:5.4cqw;font-weight:300;line-height:1;letter-spacing:-.02em;color:var(--st)}
+.devdemo .date{font-size:1.7cqw;color:var(--mu);margin-top:.8cqw}
+.devdemo .sl{display:flex;align-items:center;gap:1.5cqw;height:3cqw;color:var(--mu)}
+.devdemo .trk{flex:1;height:1cqw;border-radius:99px;background:var(--tk);position:relative}
+.devdemo .trk i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--accent)}
+.devdemo .trk b{position:absolute;top:50%;width:2.4cqw;height:2.4cqw;margin:-1.2cqw 0 0 -1.2cqw;border-radius:50%;background:var(--knob);box-shadow:0 .2cqw .7cqw rgba(0,0,0,.3)}
+.devdemo .ic{width:2.6cqw;height:2.6cqw;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.devdemo .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:7cqw;gap:1cqw}
+.devdemo .tile{display:flex;align-items:center;gap:1cqw;padding:0 1.1cqw;border-radius:calc(var(--radius)*.7);overflow:hidden;
+  background:var(--wl);border:1px solid var(--hr);color:var(--tx);line-height:1.25;white-space:nowrap}
+.devdemo .tile.on{background:var(--accent);border-color:var(--accent);color:var(--oa)}
+.devdemo .tile small{display:flex;flex-direction:column;font-size:1.4cqw;min-width:0}
+.devdemo .tile small b{font-size:1.5cqw;font-weight:600}
+.devdemo .tile small span{opacity:.75}
+.devdemo .st{display:block;height:1.25em;overflow:hidden}.devdemo .st u{display:block;text-decoration:none}
+.devdemo .nl{animation:dvNL 7s infinite}
+.devdemo .nl u{animation:dvSw 7s infinite}
+.devdemo .btns{display:flex;gap:.9cqw}
+.devdemo .btns div{flex:1;height:4.6cqw;display:flex;align-items:center;justify-content:center;gap:.7cqw;font-size:1.4cqw;color:var(--tx);
+  background:var(--wl);border:1px solid var(--hr);border-radius:99px}
+.devdemo .btns .ic{width:2cqw;height:2cqw}
+.devdemo .pbar{left:0;right:0;bottom:0;height:5cqw;background:var(--gl);border-top:1px solid var(--hr);display:flex;align-items:center;justify-content:space-between;padding:0 2.5cqw;font-size:1.7cqw;color:var(--tx)}
+.devdemo .pbar i{display:inline-block;width:2cqw;height:2cqw;border-radius:.6cqw;background:var(--tk);margin-right:1cqw}
+
+.devdemo .tabs{left:0;right:0;top:0;height:9%;background:var(--pn);padding:1.2% 2% 0;display:flex}
+.devdemo .tab{width:38%;height:100%;background:var(--bg);border:1px solid var(--hr);border-bottom:0;border-radius:1cqw 1cqw 0 0;
+  font-size:1.5cqw;line-height:1;padding:0 1.4cqw;display:flex;align-items:center;gap:1cqw;color:var(--tx)}
+.devdemo .tab i{width:1.5cqw;height:1.5cqw;border-radius:50%;background:var(--tk)}
+.devdemo .bar{left:0;right:0;top:9%;height:10%;background:var(--bg);border-bottom:1px solid var(--hr);display:flex;align-items:center;gap:1.4cqw;padding:0 4%}
+.devdemo .bar b{width:1.7cqw;height:1.7cqw;border:.3cqw solid var(--tk);border-radius:50%}
+.devdemo .url{flex:1;height:62%;border-radius:99px;background:var(--in);padding:0 1.8cqw;font-size:1.9cqw;display:flex;align-items:center;color:var(--st);white-space:pre;overflow:hidden}
+
+.devdemo .typed{display:inline-block;overflow:hidden;max-width:0;opacity:0;animation:dvType 7s infinite}
+.devdemo .caret{display:inline-block;width:.3cqw;height:2.3cqw;margin-left:.2cqw;background:var(--accent);animation:dvBlink 1s steps(2) infinite}
+
+.devdemo .kb{left:0;right:0;bottom:0;height:34.4cqw;background:var(--pn);border-top:1px solid var(--hr);padding:.6cqw .8cqw 0}
+.devdemo .sug{height:4.4cqw;margin:0 -.8cqw .8cqw;display:flex;font-size:2.1cqw}
+.devdemo .sug div{flex:1;position:relative;display:grid;place-items:center}
+.devdemo .sug div+div:before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:1px;background:var(--hl)}
+.devdemo .sug span{grid-area:1/1;color:var(--fa)}
+.devdemo .sug .b{color:var(--tx);opacity:0;animation:dvGuess 7s infinite}
+.devdemo .sug .a{opacity:.6;animation:dvGen 7s infinite}
+.devdemo .sug .on{color:var(--accent);font-weight:700}
+.devdemo .kr{display:flex;gap:.6cqw;margin-bottom:1cqw}
+.devdemo .kr.ix{justify-content:center}
+
+.devdemo .k{width:5.1cqw;height:6.12cqw;flex:none;display:flex;align-items:center;justify-content:center;font-size:2.6cqw;line-height:1;color:var(--st);
+  background:var(--kf);border-radius:.8cqw;box-shadow:0 1px 0 var(--kb)}
+.devdemo .k.w{width:7.95cqw}
+.devdemo .k.f{background:var(--kn)}
+.devdemo .k.sp{flex:1;width:auto;font-size:1.3cqw;color:var(--fa)}
+.devdemo .k.q{font-size:1.8cqw}
+.devdemo .k.e{background:var(--accent);color:var(--oa)}
+.devdemo .k .ic{width:3cqw;height:3cqw}
+.devdemo .l{animation:dvLit 7s var(--d) infinite}
+.devdemo .tr{left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .7cqw var(--accent))}
+.devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
+.devdemo .trail{stroke-width:11;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
+.devdemo .dot{stroke-width:22;stroke-dasharray:.01 300;opacity:0;animation:dvDot 7s linear infinite}
+
+.devdemo .fin{left:0;top:0;width:3.6cqw;height:3.6cqw;border-radius:50%;background:var(--fn);border:1px solid var(--st);
+  box-shadow:0 .3cqw 1cqw var(--sh);opacity:0;--t:translate(10.3cqw,33.5cqw);animation:dvFin 7s infinite}
+@keyframes dvWarm{0%,12%{opacity:0}20%,90%{opacity:.05}97%,100%{opacity:0}}
+@keyframes dvNL{0%,9%{background:var(--wl);border-color:var(--hr);color:var(--tx);transform:scale(1)}11.4%{transform:scale(.94)}14%,91%{background:var(--accent);border-color:var(--accent);color:var(--oa);transform:scale(1)}96%,100%{background:var(--wl);border-color:var(--hr);color:var(--tx)}}
+@keyframes dvSw{0%,12%{transform:none}14%,91%{transform:translateY(-50%)}96%,100%{transform:none}}
+@keyframes dvFin{0%,3%{transform:translate(13.8cqw,40cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(72.05cqw,35.16cqw) scale(1);opacity:1}27%,100%{transform:translate(72.05cqw,35.16cqw) scale(1);opacity:0}}
+@keyframes dvTrail{0%,25.5%{stroke-dashoffset:100;opacity:0}25.7%{stroke-dashoffset:100;opacity:.75}49%,90%{stroke-dashoffset:0;opacity:.75}95%{stroke-dashoffset:0;opacity:0}95.1%,100%{stroke-dashoffset:100;opacity:0}}
+@keyframes dvDot{0%,25.5%{stroke-dashoffset:0;opacity:0}25.7%{stroke-dashoffset:0;opacity:1}49%{stroke-dashoffset:-100;opacity:1}51%{stroke-dashoffset:-100;opacity:0}51.1%,100%{stroke-dashoffset:0;opacity:0}}
+
+@keyframes dvLit{0%{background:var(--kf)}1%,4.6%{background:color-mix(in srgb,var(--accent) 30%,var(--kf))}8%,100%{background:var(--kf)}}
+@keyframes dvType{0%,49.9%{opacity:0;max-width:0}52%,91%{opacity:1;max-width:9cqw}95%,100%{opacity:0;max-width:0}}
+@keyframes dvGen{0%,49.9%{opacity:.6}52%,91%{opacity:0}95%,100%{opacity:.6}}
+@keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
+@keyframes dvBlink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){
+ .devdemo *{animation:none!important}
+ .devdemo .warm{opacity:.05}
+ .devdemo .nl{background:var(--accent);border-color:var(--accent);color:var(--oa)}
+ .devdemo .nl u{transform:translateY(-50%)}
+ .devdemo .trail{stroke-dashoffset:0;opacity:.75}
+ .devdemo .dot,.devdemo .fin{opacity:0}
+ .devdemo .typed{opacity:1;max-width:9cqw}
+ .devdemo .sug .b{opacity:1}.devdemo .sug .a{opacity:0}
+ .devdemo .l{background:color-mix(in srgb,var(--accent) 30%,var(--kf))}
+}
+
+</style></head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md">
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
@@ -2033,10 +2240,10 @@ Contract: mascots/README.md (from the repo root)
         <a data-dl="dl-ios" class="dlbtn" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>iOS<sup>*</sup></span></a>
     </div>
     <div class="hero-app"><div class="frame embed"><div class="embed-stage">
-      <img class="embed-poster" src="media/embed-desktop-youcoded.webp" alt="YouCoded Assistant chat window">
+      <img class="embed-poster" src="media/embed-desktop-youcoded.webp" alt="YouCoded chat window">
       <button class="embed-start" type="button">Try the demo &middot; Sample data &rarr;</button>
       <button class="embed-interact" type="button" hidden>Try it &middot; Sample data</button>
-      <iframe class="embed-iframe" title="YouCoded Assistant live demo" loading="lazy" data-src="site/index.html?mode=workbench&amp;child=1&amp;scenario=site&amp;latency=0&amp;reply=site"></iframe>
+      <iframe class="embed-iframe" title="YouCoded live demo" loading="lazy" data-src="site/index.html?mode=workbench&amp;child=1&amp;scenario=site&amp;latency=0&amp;reply=site"></iframe>
     </div></div></div>
     <div class="dlfloat">
         <div class="dlpill">
@@ -2074,76 +2281,141 @@ Contract: mascots/README.md (from the repo root)
   </div>
 </header>
 
+<!-- repositioning 2026-10-21 -->
 <section id="about"><div class="wrap">
-  <p class="eyebrow">What is this?</p><h2>More than a chatbot.</h2>
+  <p class="eyebrow">What is this?</p><h2>One app. Whatever you want it to be.</h2>
   <div class="panel prose">
-    <p class="big">YouCoded is a customizable AI assistant that works with your own files and data to autonomously accomplish tasks using your computer. Review and organize large spreadsheets, compile the latest medical or financial research, draft an email or slideshow, or build new features in large coding projects, all without needing to leave the app.</p>
+    <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. What exactly is YouCoded? That&rsquo;s for you to decide.</p>
     <div class="cols">
-      <p>YouCoded can utilize any AI model from any provider including Anthropic (Claude), OpenAI (ChatGPT), Alibaba (Qwen) and more. YouCoded also allows you to download and run open source AI models on your own device, if your hardware supports it.</p>
+      <p>It runs on whichever AI you choose: Anthropic (Claude), OpenAI (ChatGPT), Alibaba (Qwen) and hundreds more, or an open model running privately on your own computer.</p>
     </div>
-    <p class="permission">Nothing happens without your permission. YouCoded Assistant asks before taking actions</p>
+    <p class="permission">Nothing happens without your permission. YouCoded asks before taking actions.</p>
   </div>
 </div></section>
 
 <section id="demo" class="demo-deck deck-fade"><div class="wrap">
-  <p class="eyebrow">What you get</p><h2>Everything the app gives you.</h2>
+  <p class="eyebrow">Features</p><h2>Yours to shape. Yours to use.</h2>
   <div class="deck" id="deck">
-    <div class="decktext" id="steps"><div class="step" data-i="0">
-          <div class="step-label">Seamless integration</div>
-          <h3>Tools and conversations work across any model.</h3>
-          <p>Select from hundreds of models via OpenRouter, use Claude Code or OpenAI models with your subscription plan, or pick an offline, private model to run on your own computer. Switch models mid-conversation without interruption.</p>
+    <div class="decktext" id="steps"><div class="step" data-i="0" data-card="yours">
+          <div class="step-label">Make it yours</div>
+          <h3>Describe the look you want.</h3>
+          <p>Wallpapers, colors, mascots, fonts. Say what you are going for and the app changes to match. Not quite? Say so.</p>
         </div>
-        <div class="step" data-i="1">
+        <div class="step" data-i="1" data-card="home">
+          <div class="step-label">Your home, your way <span class="rmchip">Sample page, not included</span></div>
+          <h3>A smart-home panel, made by asking for one.</h3>
+          <p>Not a built-in feature: a page one person asked for, for his own house, and uses every day. Lights, thermostat, speakers and TVs on one screen, arranged the way he wanted. Ask for yours and it will be different. The demo house here is fictional.</p>
+        </div>
+        <div class="step" data-i="2" data-card="money">
+          <div class="step-label">Your money, your way <span class="rmchip">Sample page, not included</span></div>
+          <h3>Every account on one page, made by asking for it.</h3>
+          <p>Not a built-in feature either: a page built through the chat for one person’s real accounts, with the view he wished his bank had. Yours could track anything. The numbers here are invented.</p>
+        </div>
+        <div class="step" data-i="3" data-card="device">
+          <div class="step-label">Your whole device <span class="rmchip">Built on Linux</span></div>
+          <h3>Don’t just customize the app. Customize your whole device.</h3>
+          <p>Build a new control center or quick settings chip for your Linux device, rearrange your desktop or files, or build real utilities that change how you interact with your computer. <a href="https://github.com/itsdestin/swipe-keyboard#readme" target="_blank" rel="noopener">Swipe Keyboard for KDE Plasma</a> is just one example of what’s possible.</p>
+        </div>
+        <div class="step" data-i="4" data-card="any-ai">
+          <div class="step-label">Any model</div>
+          <h3>Use whichever AI you like. Switch mid-conversation.</h3>
+          <p>Hundreds of models through OpenRouter, Claude or OpenAI on your own subscription, or an offline model on your own computer. Your tools and conversations work the same with all of them.</p>
+        </div>
+        <div class="step" data-i="5" data-card="artifact">
           <div class="step-label">Real work, edited live</div>
-          <h3>Hand it a spreadsheet, get visualizations and data analysis.</h3>
-          <p>Attach a file and ask for what you want out of it. The assistant reads it, completes the task, and hands it back in the panel beside the conversation — where you can open it, change it yourself, and hand it back for further revisions.</p>
+          <h3>Hand it a spreadsheet, get charts and analysis.</h3>
+          <p>Attach a file and ask for what you want out of it. The assistant reads it, does the work, and hands it back in the panel beside the conversation, where you can open it, change it yourself, and hand it back for more.</p>
         </div>
-        <div class="step" data-i="2">
-          <div class="step-label">YOU'RE IN CONTROL</div>
-          <h3>Transparency and boundaries you can trust and shape.</h3>
-          <p>Importantly, the assistant only acts with your explicit permission. You can easily change the instructions for how your assistant works and interacts with you, and permission modes let you restrict the assistant's actions to match your comfort level. Additionally, unlike proprietary assistant applications, the app's source code is publicly available for anyone to review on GitHub.</p>
+        <div class="step" data-i="6" data-card="control">
+          <div class="step-label">You’re in control</div>
+          <h3>Nothing happens without your permission.</h3>
+          <p>It asks before it acts. Permission modes set how much it may do on its own, and every standing permission is listed on one screen where you can revoke it. The whole app is open source, so anyone can check what it does.</p>
         </div>
-        <div class="step" data-i="3">
-          <div class="step-label">Logical management</div>
-          <h3>Project view keeps your files, conversations, and assistant instructions organized.</h3>
-          <p>Open spreadsheets, documents, and images, revisit prior conversations, and see how your assistant is instructed to behave in each project in a single organized space.</p>
-        </div>
-        <div class="step" data-i="4">
+        <div class="step" data-i="7" data-card="organized">
           <div class="step-label">Stay organized</div>
-          <h3>Tags, notes, and shortcuts.</h3>
-          <p>Tag and annotate conversations, pin the ones that matter, and hide the ones you'll never go back to. Quick chips and the command drawer allow you to run the prompts you use every day and access your skills and workflows in one tap.</p>
+          <h3>Projects, tags, notes and shortcuts.</h3>
+          <p>Each project keeps its files, conversations and instructions together. Tag and annotate conversations, pin the ones that matter, hide the rest. Quick chips run the prompts you use every day in one tap.</p>
         </div>
-        <div class="step" data-i="5">
+        <div class="step" data-i="8" data-card="everywhere">
           <div class="step-label">Works everywhere</div>
           <h3>Start on your laptop. Finish on your phone.</h3>
-          <p>Use YouCoded with Windows, macOS, Linux, Android, or any web browser via remote access. Your conversations and files stay in sync through your own private GitHub, so you start on one device and resume on any other.</p>
+          <p>Windows, macOS, Linux, Android, or any web browser through remote access. Conversations and files stay in sync through your own private GitHub, so you start on one device and resume on any other.</p>
         </div>
-        <div class="step" data-i="6">
-          <div class="step-label">Make it yours</div>
-          <h3>Build themes, workflows, and plugins just by describing them.</h3>
-          <p>Customize wallpapers, app colors, mascots, and more. Build plugins, workflows, or integrations for external services, then share them with others in the marketplace.</p>
-        </div>
-        <div class="step" data-i="7">
+        <div class="step" data-i="9" data-card="play">
           <div class="step-label">Play while it works</div>
           <h3>Multiplayer games, right beside the conversation.</h3>
-          <p>Long tasks take a minute, so open the arcade in the side panel. Play Connect 4 or chess against a friend who's online, or Flappy or 2048 on your own, then go back to the answer when it's ready. More games coming soon.</p>
+          <p>Long tasks take a minute, so open the arcade in the side panel. Connect 4 or chess against a friend who is online, Flappy or 2048 on your own, then back to the answer when it is ready.</p>
         </div>
-        <div class="step" data-i="8">
-          <div class="step-label">Roadmap <span class="rmchip">Coming after 1.3</span></div>
+        <div class="step" data-i="10" data-card="roadmap">
+          <div class="step-label">On the roadmap <span class="rmchip">Roadmap</span></div>
           <h3>Hand it off.</h3>
-          <p>Set up a job once — what to do, which tools it may use, where to stop and check with you — then run it on a schedule or send it from your phone. Results and approvals land in an inbox. First: run now and scheduled runs. Later: kick off from an incoming email or a changed file.</p>
+          <p>Set up a job once: what to do, which tools it may use, where to stop and check with you. Then run it on a schedule or send it from your phone. Results and approvals land in an inbox.</p>
         </div></div>
-    <div class="deckmedia" id="stage"><video class="on" data-i="0" muted loop playsinline preload="none" poster="media/landing-row1-any-ai.webp"><source src="media/landing-row1-any-ai.webm" type="video/webm"></video>
-        <video data-i="1" muted loop playsinline preload="none" poster="media/landing-row2-artifact-edit.webp"><source src="media/landing-row2-artifact-edit.webm" type="video/webm"></video>
-        <video data-i="2" muted loop playsinline preload="none" poster="media/row2-does-things.webp"><source src="media/row2-does-things.webm" type="video/webm"></video>
-        <video data-i="3" muted loop playsinline preload="none" poster="media/row3-projects.webp"><source src="media/row3-projects.webm" type="video/webm"></video>
-        <video data-i="4" muted loop playsinline preload="none" poster="media/row4-organized.webp"><source src="media/row4-organized.webm" type="video/webm"></video>
-        <video data-i="5" muted loop playsinline preload="none" poster="media/landing-row5-follow.webp"><source src="media/landing-row5-follow.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="5"><video muted loop playsinline preload="none" width="390" height="844" poster="media/landing-row5-phone.webp" aria-label="The same conversation on a phone"><source src="media/landing-row5-phone.webm" type="video/webm"></video></div>
-        <video data-i="6" muted loop playsinline preload="none" poster="media/row6-yours.webp"><source src="media/row6-yours.webm" type="video/webm"></video>
-        <video data-i="7" muted loop playsinline preload="none" poster="media/landing-row7-play.webp"><source src="media/landing-row7-play.webm" type="video/webm"></video>
-        <div class="sketch" data-i="8">
-          <div><div class="k">Agents</div><div class="li on2">Weekly grocery list</div><div class="li">Inbox digest · 7am</div><div class="li">Receipts → spreadsheet</div></div>
-          <div><div class="k">Weekly grocery list</div><div class="li">1 · Read this week's plan</div><div class="li">2 · Draft the list</div><div class="li on2">3 · Check with me before ordering</div><div class="li">4 · Send to my phone</div><div class="k" style="margin-top:14px">Inbox</div><div class="li">Needs approval · Weekly grocery list · 2 min ago</div></div>
+    <div class="deckmedia" id="stage"><video data-i="0" data-clip="yours" muted loop playsinline preload="none" poster="media/yours--youcoded.webp"><source src="media/yours--youcoded.webm" type="video/webm"></video>
+        <video data-i="1" data-clip="home" muted loop playsinline preload="none" poster="media/home--youcoded.webp"><source src="media/home--youcoded.webm" type="video/webm"></video>
+        <video data-i="2" data-clip="money" muted loop playsinline preload="none" poster="media/money--youcoded.webp"><source src="media/money--youcoded.webm" type="video/webm"></video>
+        <div class="devdemo" data-i="3" aria-hidden="true">
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="d-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.8a10 10 0 0 1 13 0M9 16.5a5 5 0 0 1 6 0M12 20h.01"/></symbol>
+<symbol id="d-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+<symbol id="d-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+<symbol id="d-dnd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+<symbol id="d-air" viewBox="0 0 24 24"><path d="M21 15l-8-5V4.5a1.5 1.5 0 0 0-3 0V10l-8 5v2l8-2v4l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-4l8 2z"/></symbol>
+<symbol id="d-rot" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4"/></symbol>
+<symbol id="d-shot" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="d-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></symbol>
+<symbol id="d-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
+<symbol id="d-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+<symbol id="d-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9a4 4 0 0 1 0 6"/></symbol>
+<symbol id="d-sh" viewBox="0 0 24 24"><path d="M12 19V6M6 12l6-6 6 6"/></symbol>
+<symbol id="d-bk" viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5"/></symbol>
+<symbol id="d-rt" viewBox="0 0 24 24"><path d="M19 6v6H6M10 8l-4 4 4 4"/></symbol>
+</defs></svg>
+
+<div class="abs p1">
+<div class="abs wall"></div>
+<div class="abs dk"></div>
+<div class="abs shade">
+<div><div class="time">3:51 PM</div><div class="date">Wednesday, October 21</div></div>
+<div class="sl"><svg class="ic"><use href="#d-sun"/></svg><div class="trk"><i style="width:70%"></i><b style="left:70%"></b></div></div>
+<div class="sl"><svg class="ic"><use href="#d-vol"/></svg><div class="trk"><i style="width:45%"></i><b style="left:45%"></b></div></div>
+<div class="grid">
+<div class="tile on"><svg class="ic"><use href="#d-wifi"/></svg><small><b>Wi-Fi</b><span>On</span></small></div>
+<div class="tile on"><svg class="ic"><use href="#d-bt"/></svg><small><b>Bluetooth</b><span>On</span></small></div>
+<div class="tile nl"><svg class="ic"><use href="#d-moon"/></svg><small><b>Night Light</b><span class="st"><u>Off<br>On</u></span></small></div>
+<div class="tile"><svg class="ic"><use href="#d-dnd"/></svg><small><b>Focus</b><span>Off</span></small></div>
+<div class="tile"><svg class="ic"><use href="#d-air"/></svg><small><b>Airplane</b><span>Off</span></small></div>
+<div class="tile on"><svg class="ic"><use href="#d-rot"/></svg><small><b>Rotation</b><span>Locked</span></small></div>
+</div>
+<div class="btns"><div><svg class="ic"><use href="#d-shot"/></svg>Capture</div><div><svg class="ic"><use href="#d-rec"/></svg>Record</div><div><svg class="ic"><use href="#d-clip"/></svg>Paste</div></div>
+</div>
+<div class="abs pbar"><span><i></i><i></i><i></i></span><span>3:51 PM</span></div>
+</div>
+
+<div class="abs p2">
+<div class="abs tabs"><div class="tab"><i></i>New tab</div></div>
+<div class="abs bar"><b></b><div class="url"><span>make your technology</span><span class="typed"> yours</span><i class="caret"></i></div></div>
+<div class="abs kb">
+<div class="sug"><div><span class="a">the</span><span class="b">your</span></div><div><span class="a">I</span><span class="b on">yours</span></div><div><span class="a">and</span><span class="b">yolks</span></div></div>
+<div class="rows"></div>
+<svg class="abs tr" viewBox="0 0 580 344" preserveAspectRatio="none">
+<path class="trail" pathLength="100" d="M318 89Q400 50 489 89Q440 125 375 89Q290 55 204 89Q150 150 119 160"/>
+<path class="dot" pathLength="100" d="M318 89Q400 50 489 89Q440 125 375 89Q290 55 204 89Q150 150 119 160"/>
+</svg>
+</div>
+</div>
+<div class="abs warm"></div>
+<div class="abs fin"></div>
+</div>
+        <video data-i="4" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
+        <video data-i="5" data-clip="artifact-edit" muted loop playsinline preload="none" poster="media/artifact-edit--youcoded.webp"><source src="media/artifact-edit--youcoded.webm" type="video/webm"></video>
+        <video data-i="6" data-clip="does-things" muted loop playsinline preload="none" poster="media/does-things--youcoded.webp"><source src="media/does-things--youcoded.webm" type="video/webm"></video>
+        <video data-i="7" data-clip="organized" muted loop playsinline preload="none" poster="media/organized--youcoded.webp"><source src="media/organized--youcoded.webm" type="video/webm"></video>
+        <video data-i="8" data-clip="follow" muted loop playsinline preload="none" poster="media/follow--youcoded.webp"><source src="media/follow--youcoded.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="8"><video data-clip="phone" muted loop playsinline preload="none" width="390" height="844" poster="media/phone--youcoded.webp" aria-label="The same conversation on a phone"><source src="media/phone--youcoded.webm" type="video/webm"></video></div>
+        <video data-i="9" data-clip="play" muted loop playsinline preload="none" poster="media/play--youcoded.webp"><source src="media/play--youcoded.webm" type="video/webm"></video>
+        <div class="sketch" data-i="10">
+          <div><div class="k">Agents</div><div class="li on2">Weekly grocery list</div><div class="li">Inbox digest &middot; 7am</div><div class="li">Receipts &rarr; spreadsheet</div></div>
+          <div><div class="k">Weekly grocery list</div><div class="li">1 &middot; Read this week's plan</div><div class="li">2 &middot; Draft the list</div><div class="li on2">3 &middot; Check with me before ordering</div><div class="li">4 &middot; Send to my phone</div><div class="k" style="margin-top:14px">Inbox</div><div class="li">Needs approval &middot; Weekly grocery list &middot; 2 min ago</div></div>
         </div></div>
   </div>
 </div></section>
@@ -2151,7 +2423,8 @@ Contract: mascots/README.md (from the repo root)
 <!-- INTEGRATIONS — restored from the pre-1.3 page (commit 75b1ede6^). The
      tag list, every description, the icons and the note are the originals;
      only the styling is new. Sits after the feature tour, before the story. -->
-<section id="integrations"><div class="wrap">
+<!-- integrations grid hidden 2026-10-21 (Destin): kept for later, not deleted -->
+<section id="integrations" hidden><div class="wrap">
   <p class="eyebrow">Integrations</p><h2>Connect your services.</h2>
   <div class="panel integrations">
     <p class="integrations-intro">With skills from the YouCoded marketplace, YouCoded can link with all of the following services:</p>
@@ -2188,12 +2461,12 @@ Contract: mascots/README.md (from the repo root)
 
 <section id="story"><div class="wrap">
   <p class="eyebrow">Story</p><h2>How we got here.</h2>
-  <div class="panel prose story">
-    <p>Honestly, I initially just wanted a cooler and more efficient way to journal and track my own tasks/goals. The very first thing I developed is the Journaling and Life History system available in the marketplace, and I thought it would be cool to share it with some friends. However, the thought of installing and opening &ldquo;Claude Code&rdquo; in the terminal scared them away almost immediately. I realized that the idea of advanced agentic AI is still rather new to most people, and that persuading them to adopt my fancy new journaling system would require it to be much more accessible and user-friendly. Towards this end, I kind of just&hellip; kept adding things. And now we're here.</p>
+  <details class="panel prose story storyfold" open><summary>Read the story</summary><div class="a"><div class="a-in">
+    <p>I initially started building with AI because I wanted a cool and efficient way to journal and track my own tasks and goals. I eventually managed to develop a nifty journaling and life history system (now available in the YouCoded marketplace), and I felt compelled to share the new thing I had created. Unfortunately, the thought of installing and opening &ldquo;Claude Code&rdquo; in the terminal immediately scared away all of my friends. I realized that persuading others to adopt my fancy new journaling system and start building cool stuff themselves would require agentic intelligence to be much more accessible and user-friendly. Towards this end, I kind of just&hellip; kept adding things. And now we're here.</p>
     <p>Every line of YouCoded was written through conversation with frontier LLMs by <strong>someone who has never written code</strong>. Every feature, every platform port, every theme, every multiplayer game. The entire app was built, and is currently maintained, without a single line typed by hand.</p>
     <p>YouCoded is what AI looks like when it's built for everyone.</p>
     <a class="sign" href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin &rarr;</a>
-  </div>
+  </div></div></details>
 </div></section>
 
 <section id="get-started"><div class="wrap">
@@ -2201,6 +2474,7 @@ Contract: mascots/README.md (from the repo root)
   <div class="acctgrid">
         <a class="panel acct" href="https://github.com/signup" target="_blank" rel="noopener"><div class="badges"><span class="badge req">Required</span> <span class="badge">Free</span></div><h3>GitHub</h3><p>Keeps your conversations and files in sync across devices and delivers marketplace updates. Sign up with your Google or Apple account.</p><span class="acct-link">Create a GitHub account &rarr;</span></a>
         <a class="panel acct" href="https://claude.ai/upgrade" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Paid</span></div><h3>Anthropic</h3><p>A Claude Pro or Max plan lets you use Claude — the model YouCoded was built with.</p><span class="acct-link">See Claude plans &rarr;</span></a>
+        <a class="panel acct" href="https://openai.com/chatgpt/pricing/" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Paid</span></div><h3>OpenAI</h3><p>A ChatGPT plan lets you sign in and use OpenAI&rsquo;s models on your subscription.</p><span class="acct-link">See ChatGPT plans &rarr;</span></a>
         <a class="panel acct" href="https://openrouter.ai/" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Pay as you go</span></div><h3>OpenRouter</h3><p>One account provides access to hundreds of models from every AI company. Pay only for what you use.</p><span class="acct-link">Create an OpenRouter account &rarr;</span></a>
         <div class="panel acct" role="link" tabindex="0" data-href="https://accounts.google.com/signup"><div class="badges"><span class="badge">Optional</span> <span class="badge">Free</span></div><h3>Google or Apple</h3><p>An extra copy of your data in Google Drive or iCloud, on top of GitHub.</p><span class="acct-link">Create a Google account &rarr;</span><a class="acct-alt" href="https://account.apple.com/account" target="_blank" rel="noopener">or an Apple ID &rarr;</a></div>
   </div>
@@ -2210,28 +2484,19 @@ Contract: mascots/README.md (from the repo root)
 <section id="faq"><div class="wrap">
   <p class="eyebrow">Common questions</p><h2>FAQ</h2>
   <div class="faq">
-        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded Assistant is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></details>
-        <details class="panel"><summary>Do I have to pay for anything?</summary><div class="a">No, not really. The app is free and open source, and running AI models on your own computer costs nothing. If you want "best of the best" intelligence like Claude or ChatGPT, you can choose to pay an external AI inference provider of your choice from within the app.</div></details>
-        <details class="panel"><summary>Is my data private?</summary><div class="a">YouCoded does not receive the content you send to an AI model. If you choose a cloud model, the provider you choose — and, with OpenRouter, its underlying provider — receives that request under its own data-retention policy. A model running entirely on your computer does not send its inference request to a cloud model provider. That does not turn off other features you choose, such as sync, backups, web tools, or integrations. The app also sends one opt-out daily, privacy-preserving device heartbeat: a hashed device identifier, app version, platform, and rough region. It contains no message content or username. See Privacy for details.</div></details>
-        <details class="panel"><summary>What platforms does it run on?</summary><div class="a">Windows, macOS, Linux, and Android, plus any web browser by connecting to a computer running the app. Apple integrations (iMessage, Apple Notes, and so on) work on macOS only.</div></details>
-        <details class="panel"><summary>Do I need to know how to code?</summary><div class="a">No. The whole app was built by someone who has never written code, by talking to AI. If you can use ChatGPT, you can use this.</div></details>
-        <details class="panel"><summary>Is "agentic" AI safe?</summary><div class="a">The app asks before it changes anything, and every standing permission you grant is listed on one screen where you can revoke it. AI still makes mistakes, so keep an eye on what it's doing — and be careful with full-auto mode, which lets it act without asking.</div></details>
-        <details class="panel"><summary>Who built this?</summary><div class="a">So far, it's just me (Destin). However, my intention is for this open-source project to become something we all build together. I believe one of the greatest potential goods of AI comes from its ability to revolutionize the world of open-source software. This project is just one example of what AI can allow us to create: an app owned by nobody, improved by everybody — all without anyone needing to learn how to code or even understand what “open-source” means. There's no profit motive and no ulterior incentives, because anyone can create their own copy of the app for free! Just people making cool shit and sharing it with other people :)</div></details>
+        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a"><div class="a-in">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></div></details>
+        <details class="panel"><summary>Do I have to pay for anything?</summary><div class="a"><div class="a-in">No, not really. The app is free and open source, and running AI models on your own computer costs nothing. If you want "best of the best" intelligence like Claude or ChatGPT, you can choose to pay an external AI inference provider of your choice from within the app.</div></div></details>
+        <details class="panel"><summary>Is my data private?</summary><div class="a"><div class="a-in">YouCoded does not receive the content you send to an AI model. If you choose a cloud model, the provider you choose — and, with OpenRouter, its underlying provider — receives that request under its own data-retention policy. A model running entirely on your computer does not send its inference request to a cloud model provider. That does not turn off other features you choose, such as sync, backups, web tools, or integrations. The app also sends one opt-out daily, privacy-preserving device heartbeat: a hashed device identifier, app version, platform, and rough region. It contains no message content or username. See Privacy for details.</div></div></details>
+        <details class="panel"><summary>What platforms does it run on?</summary><div class="a"><div class="a-in">Windows, macOS, Linux, and Android, plus any web browser by connecting to a computer running the app. Apple integrations (iMessage, Apple Notes, and so on) work on macOS only.</div></div></details>
+        <details class="panel"><summary>Do I need to know how to code?</summary><div class="a"><div class="a-in">No. The whole app was built by someone who has never written code, by talking to AI. If you can use ChatGPT, you can use this.</div></div></details>
+        <details class="panel"><summary>Is "agentic" AI safe?</summary><div class="a"><div class="a-in">The app asks before it changes anything, and every standing permission you grant is listed on one screen where you can revoke it. AI still makes mistakes, so keep an eye on what it's doing — and be careful with full-auto mode, which lets it act without asking.</div></div></details>
+        <details class="panel"><summary>Who built this?</summary><div class="a"><div class="a-in">So far, it's just me (Destin). However, my intention is for this open-source project to become something we all build together. I believe one of the greatest potential goods of AI comes from its ability to revolutionize the world of open-source software. This project is just one example of what AI can allow us to create: an app owned by nobody, improved by everybody — all without anyone needing to learn how to code or even understand what “open-source” means. There's no profit motive and no ulterior incentives, because anyone can create their own copy of the app for free! Just people making cool shit and sharing it with other people :)</div></div></details>
   </div>
 </div></section>
 
 <section id="gallery"><div class="wrap">
-  <p class="eyebrow">Gallery</p><h2>See what people have built.</h2>
-</div><div class="galwrap"><div class="gal">
-      <img src="gallery/home-midnight.webp" alt="" loading="lazy">
-      <img src="gallery/marketplace-meadow-mist.webp" alt="" loading="lazy">
-      <img src="gallery/projects-light.webp" alt="" loading="lazy">
-      <img src="gallery/model-picker-creme.webp" alt="" loading="lazy">
-      <img src="gallery/connect4-halftone-dimension.webp" alt="" loading="lazy">
-      <img src="gallery/permissions-dark.webp" alt="" loading="lazy">
-      <img src="gallery/tags-midnight.webp" alt="" loading="lazy">
-      <img src="gallery/themes-creme.webp" alt="" loading="lazy">
-</div></div></section>
+  <p class="eyebrow">Ideas</p><h2>Every one of these started as a sentence in the chat.</h2>
+</div><div class="galwrap"><div class="gal ideas"><figure class="idea"><img src="gallery/idea-home.webp" alt="" loading="lazy"><figcaption>&ldquo;Give me a control panel for the lights, the thermostat and the TVs.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-money.webp" alt="" loading="lazy"><figcaption>&ldquo;Put every account, bill and loan on one page I can check at a glance.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-paint.webp" alt="" loading="lazy"><figcaption>&ldquo;I want a little paint program with brushes and an eraser.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-trip.webp" alt="" loading="lazy"><figcaption>&ldquo;Lisbon in October: the forecast for each day next to what’s booked.&rdquo;</figcaption></figure></div></div></section>
 
 <footer><div class="wrap"><div class="panel foot">
   <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
@@ -2354,8 +2619,22 @@ function applyTheme(slug){
   try { localStorage.setItem('youcoded-theme', slug); } catch(e){}
   syncEmbedTheme();
   setEmbedPoster();
+  rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
 }
+// --- Per-theme clips (2026-10-21): media/<name>--<theme>.webm for each of the four site themes.
+var CLIP_THEMES = ['youcoded', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
+function rethemeClips(slug){
+  var theme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  document.querySelectorAll('video[data-clip]').forEach(function(v){
+    var base = 'media/' + v.dataset.clip + '--' + theme;
+    var s = v.querySelector('source'); if (!s || s.getAttribute('src') === base + '.webm') return;
+    var running = !v.paused && !v.ended;
+    v.setAttribute('poster', base + '.webp'); s.setAttribute('src', base + '.webm');
+    v.load(); if (running) v.play().catch(function(){});
+  });
+}
+
 
 // The still in the demo window is a picture of the app IN THE THEME THE PAGE IS
 // CURRENTLY WEARING (Destin 2026-09-03: "the unstarted window should still be an
@@ -2937,6 +3216,17 @@ applyTheme("youcoded");
 // spelled the character out. Percent signs come from fromCharCode below;
 // wrap-around is written as a conditional instead of modulo.
 var PCT = String.fromCharCode(37);
+
+// --- Linux visitors: the device card moves up to second place (2026-10-21).
+(function(){
+  try {
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '', ua = navigator.userAgent || '';
+    if (/Android/.test(ua) || !/Linux|X11|CrOS/.test(plat + ua)) return;
+    var st = document.querySelector('.step[data-card="device"]'), first = document.querySelector('.step[data-i="0"]');
+    var sl = document.querySelector('#stage > .devdemo'), firstSl = document.querySelector('#stage > [data-i="0"]');
+    if (st && first && sl && firstSl) { first.after(st); firstSl.after(sl); }
+  } catch (e) {}
+})();
 var steps  = [].slice.call(document.querySelectorAll('.step'));
 // The phone overlay is a #stage child too but is NOT a slide -- counting it
 // would shift every card's clip by one.
@@ -2964,17 +3254,25 @@ var playing = [], deckDrivesVideo = false;
 //   * during a hand-off TWO cards are on screen and neither is faded yet, so a
 //     single running clip meant the one you were still reading froze the moment
 //     the next one arrived.
-function playSlides(list){
+function playSlides(list, hidden){
   if (list.length === playing.length && list.every(function(n, i){ return n === playing[i]; })) return;
   var was = playing; playing = list;
   slides.forEach(function(s, n){
     if (s.tagName !== 'VIDEO') return;
-    if (list.indexOf(n) < 0) { s.pause(); return; }
+    if (list.indexOf(n) < 0) {
+      s.pause();
+      // WHY: a clip paused mid-story and rewound later, while its card is on
+      // screen, jumps to frame 0 in view. Rewind it only once the card is out of
+      // sight (hidden), so the next start needs no visible seek.
+      if (was.indexOf(n) >= 0 && hidden && hidden.indexOf(n) >= 0) { try { s.currentTime = 0; } catch (e) {} }
+      return;
+    }
     if (was.indexOf(n) >= 0) return;   // already running -- do NOT restart it
     // Rewound on activation, not resumed. A clip that carries on from wherever
     // it was left shows a visitor the middle of a demo they have not seen the
     // start of, and it drifts out of step with the phone overlay beside it.
-    warm(s); try { s.currentTime = 0; } catch (e) {} s.play().catch(function(){});
+    // Seek only if it is not already at the start (a needless seek blanks a frame).
+    warm(s); if (s.currentTime > 0.05) { try { s.currentTime = 0; } catch (e) {} } s.play().catch(function(){});
   });
   // Nothing is fetched for a clip until it is asked to play (preload="none" keeps
   // the page light -- ten clips is about 3MB), so the one AFTER the last running
@@ -2991,7 +3289,7 @@ function playSlides(list){
     if (list.indexOf(n) < 0) { v.pause(); return; }
     if (was.indexOf(n) >= 0) return;
     warm(v); lockRate(v, slides[n]);
-    try { v.currentTime = 0; } catch (e) {}
+    if (v.currentTime > 0.05) { try { v.currentTime = 0; } catch (e) {} }
     v.play().catch(function(){});
   });
 }
@@ -3048,8 +3346,14 @@ var onShow = null;
 // The floating pill is a "back to the download buttons" control, and the
 // download buttons live in the hero -- so it pulls you to the top. Runs in
 // every style, which is why it is not inside any of the blocks below.
-var lastY = 0, ctaUp = false;
-addEventListener('scroll', function(){
+var lastY = 0, ctaUp = false, ctaQueued = false;
+// WHY: this ran on every scroll EVENT and read the footer's rect each time, forcing a
+// layout between the other handlers' style writes. Coalesced to one pass per frame.
+function onCtaScroll(){
+  if (ctaQueued) return; ctaQueued = true;
+  requestAnimationFrame(function(){ ctaQueued = false; ctaPass(); });
+}
+function ctaPass(){
   // Past the first screen, and NOT once the footer is on screen -- the footer
   // carries the page's own download links, and a floating copy of the same
   // call to action sitting on top of them reads as a bug. (Same rule the
@@ -3069,7 +3373,8 @@ addEventListener('scroll', function(){
   else if (y > lastY + 6) { ctaUp = false; lastY = y; }  // reading on down
   document.getElementById('topcta').classList.toggle('show',
     y > innerHeight * 0.9 && !nearFoot && ctaUp);
-}, { passive: true });
+}
+addEventListener('scroll', onCtaScroll, { passive: true });
 
 // --- THEATER (original): the step nearest the middle of the window wins.
 if (document.querySelector('.demo-theater')) {
@@ -3176,6 +3481,11 @@ if (document.querySelector('.demo-deck')) {
     playSlides(best >= 0 ? [best] : []);
   }
 
+  // WHY: onDeck was the raw scroll listener. It wrote --d on each card and THEN
+  // read the last card's and the column's rects, so every wheel tick forced a
+  // layout after the writes. Now: one pass per animation frame, all reads first.
+  var deckQueued = false;
+  function queueDeck(){ if (deckQueued) return; deckQueued = true; requestAnimationFrame(function(){ deckQueued = false; onDeck(); }); }
   var onDeck = function(){
     if (narrowMQ.matches) return narrowDeck();
     narrowStyled = false;
@@ -3195,6 +3505,10 @@ if (document.querySelector('.demo-deck')) {
     // off the top as an intact slab. Its distance travelled keeps rising like
     // everything else's, so it dissolves on its way out for free.
     var best = 0, head = scrollY + stick;
+    // ---- reads (all of them, before any write) ----
+    var lastTop = steps[steps.length - 1].getBoundingClientRect().top, lastH = steps[steps.length - 1].offsetHeight;
+    var fr = flow.getBoundingClientRect();
+    var writes = [], hiddenClips = [];
     // A SECOND line, for playback only: a card's clip starts once more than half
     // the card is on screen, which is roughly 600px of scrolling before it reaches
     // its rest line. -1 until the deck is actually approaching, so the first clip
@@ -3215,37 +3529,50 @@ if (document.querySelector('.demo-deck')) {
         // only thing on screen and supposed to be resting. Nothing can cover
         // it, so what marks its exit is rising ABOVE the line it rests on --
         // which only happens once the deck runs out underneath it.
-        d = (stick - s.getBoundingClientRect().top) / (s.offsetHeight * 0.55);
+        d = (stick - lastTop) / (lastH * 0.55);
       } else {
         d = (head - y) / stride;
       }
       d = Math.max(0, Math.min(2.2, d));
-      s.style.setProperty('--d', d.toFixed(3));
-      s.classList.toggle('buried', d > 0.002);
-      // Running if it has risen far enough AND has not yet dissolved away.
-      // opacity is 1 - d*0.85, so past 0.7 there is little left to watch.
-      if (vidHead >= y && d < 0.7) live.push(n);
+      writes.push(s, d);
+      // Running while it is visibly on screen. WHY 1: opacity is 1 - d*.85, so a
+      // clip stopped at d .7 froze while the card was still 40 percent visible.
+      if (vidHead >= y && d < 1) live.push(n);
+      // Out of sight (dissolved, or still below the window): safe to rewind.
+      if (d >= 1 || y - scrollY > innerHeight) hiddenClips.push(n);
+      // Warm two screens ahead so frame 0 is decoded before the clip starts and
+      // the poster-to-video swap happens off screen, not under the reader.
+      if (y - scrollY < innerHeight * 2 && slides[n]) warm(slides[n]);
     });
+    // ---- writes ----
+    for (var w = 0; w < writes.length; w += 2) {
+      writes[w].style.setProperty('--d', writes[w + 1].toFixed(3));
+      writes[w].classList.toggle('buried', writes[w + 1] > 0.002);
+    }
     show(best);
     // Once the whole deck is behind you, nothing should still be looping.
-    var fr = flow.getBoundingClientRect();
-    playSlides(fr.bottom < 0 || fr.top > innerHeight ? [] : live);
+    playSlides(fr.bottom < 0 || fr.top > innerHeight ? [] : live, hiddenClips);
   };
-  addEventListener('scroll', onDeck, { passive: true }); onDeck();
+  addEventListener('scroll', queueDeck, { passive: true }); onDeck();
 }
 
-// --- WHOLE-PAGE MOTION: rise and recede (see RISE AND RECEDE in the stylesheet).
-// Like the demo cards, every value is computed straight off scroll position
-// each frame -- no transitions -- so nothing lags behind the scroll. (No
-// literal percent sign in here: see the CORE_JS note above.)
+// --- WHOLE-PAGE MOTION: one-shot entrances (see RISE AND RECEDE in the stylesheet).
+// WHY rewritten 2026-10-21: it used to write opacity/scale/translate off scroll
+// position every frame in BOTH directions, including a fade-out as a block left
+// under the top bar. That made things pop in and out on every scroll direction
+// change, and left the top of the page partly or wholly faded when you reached
+// the bottom (measured: eyebrow, h2 and panel of the about section at opacity 0
+// at the end of the page). Now each block is revealed once, with ONE timed
+// entrance (0.55s, cubic-bezier(.22,1,.36,1) -- the intro's own curve), and then
+// left alone. Content already on screen at load, or scrolled past, just is.
+// (No literal percent sign in here: see the CORE_JS note above.)
 (function(){
   var reducedMQ = matchMedia('(prefers-reduced-motion: reduce)');
-  var TOP_LINE = 80;            // the line the demo cards park on (.deck-fade .step top:80px)
+  var EASE = 'cubic-bezier(.22,1,.36,1)', DUR = 550;
   var risers = [];
-  function clamp(v){ return v < 0 ? 0 : v > 1 ? 1 : v; }
 
   // ---- build: list the blocks that rise ----
-  function addRiser(el, col){ el.classList.add('m-rise'); risers.push({ el: el, col: col || 0, top: 0, h: 0 }); }
+  function addRiser(el, col){ el.classList.add('m-rise'); risers.push({ el: el, col: col || 0, done: false }); }
   [].slice.call(document.querySelectorAll('body > section')).forEach(function(sec){
     var wrap = sec.querySelector(':scope > .wrap');
     if (sec.id === 'demo') {
@@ -3265,53 +3592,65 @@ if (document.querySelector('.demo-deck')) {
   });
   addRiser(document.querySelector('footer .foot'));
 
-  // ---- measure: where each riser sits in the page, ignoring its own motion ----
-  function pageTop(el){ var y = 0; for (var e = el; e; e = e.offsetParent) y += e.offsetTop; return y; }
-  function remeasure(){
-    risers.forEach(function(b){ b.top = pageTop(b.el); b.h = b.el.offsetHeight; });
+  // Show a block. `animate` false = it was already in view (or behind us): no entrance.
+  function reveal(b, animate){
+    if (b.done) return; b.done = true;
+    b.el.classList.remove('m-wait');
+    if (animate && b.el.animate) {
+      // fill:'backwards' holds the hidden pose through the stagger delay, and
+      // nothing stays applied afterwards, so the block ends exactly as authored.
+      b.el.animate([{ opacity: 0, translate: '0 28px', scale: 0.97 }, { opacity: 1, translate: '0 0', scale: 1 }],
+        { duration: DUR, delay: b.col * 70, easing: EASE, fill: 'backwards' });
+    }
   }
-
-  function clear(){
-    risers.forEach(function(b){ b.el.style.translate = ''; b.el.style.scale = ''; b.el.style.opacity = ''; });
-  }
-
-  var queued = false;
-  function frame(){
-    queued = false;
-    if (!document.body.classList.contains('motion-on')) return;
-    var vh = innerHeight, sy = scrollY;
-    // RISE: arrive over the bottom 22 hundredths of the window, rising 56px
-    // faster than the page and growing from 94 hundredths; leave as the
-    // block's bottom climbs from 30 hundredths of the window to the top bar.
-    var enterSpan = vh * 0.22, exitLine = vh * 0.30;
-    risers.forEach(function(b){
-      var top = b.top - sy, bot = top + b.h;
-      var e = clamp((vh - top - b.col * 36) / enterSpan);
-      e = 1 - Math.pow(1 - e, 3);
-      var x = clamp((exitLine - bot) / (exitLine - TOP_LINE));
-      b.el.style.translate = '0 ' + ((1 - e) * 56).toFixed(1) + 'px';
-      b.el.style.scale = ((0.94 + 0.06 * e) * (1 - 0.04 * x)).toFixed(4);
-      b.el.style.opacity = Math.min(e, 1 - x).toFixed(3);
+  var io = null, armed = false;
+  function onIO(es){
+    es.forEach(function(e){
+      if (!e.isIntersecting) return;
+      var b = risers.filter(function(r){ return r.el === e.target; })[0];
+      if (b) { reveal(b, true); io.unobserve(e.target); }
     });
   }
-  function queue(){ if (!queued) { queued = true; requestAnimationFrame(frame); } }
+  // The only layout read: once per call, and calls are rAF-coalesced.
+  function sweep(){
+    var vh = innerHeight;
+    var atEnd = scrollY + vh >= document.documentElement.scrollHeight - 2;
+    risers.forEach(function(b){
+      if (b.done) return;
+      var r = b.el.getBoundingClientRect();
+      // Behind us (jumped past, or loaded mid-page) or the page is at its end:
+      // never leave it hidden -- that is the "faded at the bottom" bug.
+      if (r.bottom < 0 || atEnd) reveal(b, false);
+    });
+  }
+  var queued = false;
+  function queue(){ if (!queued) { queued = true; requestAnimationFrame(function(){ queued = false; if (armed) sweep(); }); } }
 
   function apply(){
     var on = !narrowMQ.matches && !reducedMQ.matches;
     document.body.classList.toggle('motion-on', on);
-    if (!on) { clear(); return; }
-    remeasure(); frame();
+    if (!on) {
+      armed = false; if (io) { io.disconnect(); io = null; }
+      risers.forEach(function(b){ b.el.classList.remove('m-wait'); b.done = false; });
+      return;
+    }
+    if (armed) return;                        // fonts/load/resize re-calls: nothing to redo
+    armed = true;
+    var vh = innerHeight;
+    io = new IntersectionObserver(onIO, { rootMargin: '0px 0px -8% 0px' });
+    risers.forEach(function(b){
+      if (b.done) return;
+      var r = b.el.getBoundingClientRect();
+      // Already on screen at load: no entrance (the intro is the entrance).
+      if (r.top < vh * 0.92) { reveal(b, false); return; }
+      b.el.classList.add('m-wait'); io.observe(b.el);
+    });
+    sweep();
   }
   addEventListener('scroll', queue, { passive: true });
   addEventListener('resize', apply);
   if (narrowMQ.addEventListener) narrowMQ.addEventListener('change', apply);
   if (reducedMQ.addEventListener) reducedMQ.addEventListener('change', apply);
-  // Same re-measure triggers the deck needed: fonts, the intro's end, load, and
-  // anything that changes the page's height (an FAQ opening, a clip's poster).
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(apply);
-  setTimeout(apply, 3200);
-  addEventListener('load', apply);
-  if (window.ResizeObserver) new ResizeObserver(function(){ if (document.body.classList.contains('motion-on')) { remeasure(); queue(); } }).observe(document.body);
   apply();
 })();
 
@@ -4111,6 +4450,263 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   }
 })();
 
+</script>
+<script>
+/* devdemo */
+/* Builds the keys (lit ones timed to the trail); flips dark mode at the Night Light tap. */
+(function(){var d=document.querySelector('.devdemo'),kb=d.querySelector('.rows'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4},
+ /* ^ shift, < backspace, # ?123, space, > enter; , and . are function keys */
+ R=['qwertyuiop','asdfghjkl','^zxcvbnm<','#, .>'];
+R.forEach(function(row,i){var r=document.createElement('div');r.className='kr'+(i==1?' ix':'');
+ row.split('').forEach(function(c){var k=document.createElement('div'),cl='k';
+  if('^<#>'.indexOf(c)>-1)cl+=' w f';if(c==','||c=='.'||c=='#')cl+=' f';if(c=='>')cl=cl.replace(' f',' e');if(c==' ')cl+=' sp';if(c=='#')cl+=' q';
+  if(lit[c]!=null){cl+=' l';k.style.setProperty('--d',lit[c]+'s')}
+  k.className=cl;
+  var g={'^':'d-sh','<':'d-bk','>':'d-rt'}[c];
+  if(g)k.innerHTML='<svg class="ic"><use href="#'+g+'"/></svg>';else k.textContent=c=='#'?'?123':c==' '?'space':c;
+  r.appendChild(k)});kb.appendChild(r)});
+/* WHY: one class on the root; CSS does the fade. On, at the tap (0.8s); off again as the loop fades out (6.4s). */
+if(matchMedia('(prefers-reduced-motion:reduce)').matches){d.classList.add('is-dark');return}
+var w=d.querySelector('.warm'),a,b;
+function go(){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark');
+ a=setTimeout(function(){d.classList.add('is-dark')},800);b=setTimeout(function(){d.classList.remove('is-dark')},6400)}
+w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go)})();
+</script>
+<script>
+// --- Tips over the live demo (2026-10-21). Chips hang under the demo's own toolbar buttons,
+// found in the iframe's DOM (same origin), on straight vertical stems; inside Settings they sit
+// beside the panel's rows on horizontal stems; while a page (Home, Finance) is open there are
+// none. A chip expands in place into its description on hover or tap, and the others move to
+// make room; x removes one, Hide tips removes them all (remembered). They appear only once the
+// visitor has clicked into the demo -- never over the still.
+(function(){
+  var embed = document.querySelector('.embed'); if (!embed) return;
+  var stage = embed.querySelector('.embed-stage'), frame = embed.querySelector('.embed-iframe');
+  var CHAT = [
+    { sel: 'button[aria-label="Settings"]',      label: 'Settings',  text: 'Every setting in one place: models, permissions, look, sync.' },
+    { sel: 'button[aria-label="Open pages"]',    label: 'Pages',     text: 'Screens you asked for, pinned here for one click.' },
+    { sel: 'button[aria-label="Open projects"]', label: 'Projects',  text: 'Files, conversations and instructions, kept together.' },
+    { sel: 'button[aria-label="Open Home"]',     label: 'Home',      text: 'A smart-home panel, made by asking. Click to open it.' },
+    { sel: 'button[aria-label="Open Finance"]',  label: 'Finance',   text: 'Every account on one page. Click to open it.' },
+    { sel: 'button[aria-label="Session files"]', label: 'Files',     text: 'What the assistant made or changed in this conversation.', right: true },
+    { sel: 'button[aria-label="Browser"]',       label: 'Browser',   text: 'The assistant’s own browser. Watch it work.', right: true },
+    { sel: 'button[aria-label="Games"]',         label: 'Games',     text: 'Connect 4, chess, Flappy and 2048 while it works.', right: true },
+    { sel: 'button[aria-label="Browse skills"]', label: 'Commands',  text: 'Your skills and workflows, one tap away.', above: true }
+  ];
+  var SETTINGS = [
+    { row: 'Account',            text: 'Optional. Sign in to like themes and rate plugins.' },
+    { row: 'Assistant settings', text: 'Which AI answers, what it may do without asking, and the defaults.' },
+    { row: 'Appearance',         text: 'Themes, wallpapers, mascots, fonts. The four at the top of this page live here.' },
+    { row: 'Buddy floater',      text: 'A small mascot that floats over your desktop and takes a screenshot straight into a prompt.' },
+    { row: 'Backup & sync',      text: 'Your conversations and files, kept in your own private GitHub.' },
+    { row: 'Remote access',      text: 'Open this app from your phone’s browser by scanning a code.' }
+  ];
+  var layer = document.createElement('div'); layer.className = 'tips';
+  layer.innerHTML = '<svg class="tips-lines"></svg><button class="tips-hide" type="button">Hide tips</button>';
+  stage.appendChild(layer);
+  var svg = layer.querySelector('svg'), hideBtn = layer.querySelector('.tips-hide');
+  var hidden = false; try { hidden = localStorage.getItem('yc-tips-hidden') === '1'; } catch (e) {}
+  var gone = {}, pinned = null, mode = '';
+  // WHY a toggle (Destin, 2026-10-21: "now they're just missing entirely"): Hide tips was
+  // remembered with no way back, so one press in testing made the tips vanish for good on this
+  // address. The same button now reads Show tips while they are hidden.
+  hideBtn.addEventListener('click', function(){ hidden = !hidden; try { localStorage.setItem('yc-tips-hidden', hidden ? '1' : '0'); } catch (e) {} render(true); });
+  function doc(){ try { return frame.contentDocument; } catch (e) { return null; } }
+  function rect(el){ var r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 }; }
+  // What the demo is showing: a page (no tips), the settings panel, or the chat.
+  function detect(d){
+    if (!d || !d.body) return '';
+    var back = [].slice.call(d.querySelectorAll('button')).some(function(b){ return /back to chat/i.test(b.textContent || '') && b.getBoundingClientRect().width; });
+    if (back) return 'page';
+    var close = d.querySelector('button[aria-label="Close settings"]');
+    if (close && close.getBoundingClientRect().left >= 0) return 'settings';
+    return 'chat';
+  }
+  function rowEl(d, label){
+    var all = d.querySelectorAll('button, div, span, p');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.children.length <= 1 && (el.textContent || '').trim() === label) {
+        var r = el.getBoundingClientRect(); if (r.width && r.left >= 0) return el.closest('button') || el;
+      }
+    }
+    return null;
+  }
+  var OPEN_W = 250, hoverIt = null;
+  function chip(t, key, it){
+    var el = document.createElement('div'); el.className = 'tip';
+    el.innerHTML = '<span class="tip-label"></span><span class="tip-text"><span></span></span><i class="tip-x" title="Dismiss">&times;</i>';
+    el.querySelector('.tip-label').textContent = t.label || t.row;
+    el.querySelector('.tip-text > span').textContent = t.text;
+    // Both sizes are measured once, so place() lays out against TARGET sizes while the chip
+    // is still animating towards them (reading offsetWidth mid-animation gave stale rows).
+    layer.appendChild(el); it.wc = el.offsetWidth; it.hc = el.offsetHeight;
+    var m = el.cloneNode(true); m.classList.add('open', 'measure'); m.style.cssText = 'position:absolute;visibility:hidden;width:' + OPEN_W + 'px';
+    layer.appendChild(m); it.wo = OPEN_W; it.ho = m.offsetHeight; m.remove();
+    el.style.width = it.wc + 'px';
+    if (pinned === key) el.classList.add('open');
+    // WHY the timer (Destin, 2026-10-21: "the hover effect is bugged"): opening re-lays the chips
+    // out, and a chip that moved even a pixel away from the pointer closed, moved back, opened
+    // again, forever. Now an open chip never moves (place() keeps its row and edge), and the
+    // close waits 140 ms so crossing a gap between label and text cannot flicker it.
+    var leaveT = null;
+    it.close = function(){ clearTimeout(leaveT); if (pinned !== key) el.classList.remove('open'); if (hoverIt === it) hoverIt = null; };
+    el.addEventListener('mouseenter', function(){
+      clearTimeout(leaveT);
+      // Moving straight from one chip to the next: the previous one closes NOW, so the layout
+      // changes once instead of twice (open B, then close A 140 ms later).
+      if (hoverIt && hoverIt !== it) hoverIt.close();
+      hoverIt = it;
+      if (!el.classList.contains('open')) { el.classList.add('open'); place(); }
+    });
+    el.addEventListener('mouseleave', function(){ if (pinned === key) return; clearTimeout(leaveT); leaveT = setTimeout(function(){ it.close(); place(); }, 140); });
+    el.addEventListener('click', function(e){
+      if (e.target.classList.contains('tip-x')) {
+        // Dismiss: this chip fades, the others glide into the space (no rebuild).
+        gone[key] = 1; items = items.filter(function(x){ return x !== it; }); if (hoverIt === it) hoverIt = null;
+        el.classList.add('leaving'); setTimeout(function(){ el.remove(); }, 200); place(); return;
+      }
+      pinned = pinned === key ? null : key; el.classList.toggle('open', pinned === key || hoverIt === it); place();
+    });
+    return el;
+  }
+  var items = [], built = '';
+  function render(force){
+    var d = doc(); mode = detect(d);
+    var live = mode && mode !== 'page' && embed.classList.contains('interactive'), show = live && !hidden;
+    layer.classList.toggle('on', show); layer.classList.toggle('off', live && hidden);
+    hideBtn.textContent = hidden ? 'Show tips' : 'Hide tips';
+    if (!show) { built = ''; return; }
+    // Chips are rebuilt only when the demo changes mode or one is dismissed; a mutation inside
+    // the demo (a reply arriving, a hover) just re-places them, so a chip under the pointer
+    // keeps its hover state instead of being replaced mid-hover.
+    if (!force && built === mode && items.length) { place(); return; }
+    // A change of set (chat <-> Settings) fades the old chips out, then the new ones in; the
+    // stems go with them. A forced rebuild (Show/Hide tips) is immediate.
+    if (built && built !== mode && !force && !swapping) {
+      swapping = true; layer.classList.add('swap');
+      setTimeout(function(){ swapping = false; layer.classList.remove('swap'); rebuild(d); }, 160);
+      return;
+    }
+    if (swapping) return;
+    rebuild(d);
+  }
+  var swapping = false;
+  function rebuild(d){
+    layer.querySelectorAll('.tip').forEach(function(n){ n.remove(); }); items = []; built = mode; hoverIt = null;
+    var list = mode === 'settings' ? SETTINGS : CHAT;
+    list.forEach(function(t, i){
+      var key = mode + ':' + i; if (gone[key]) return;
+      var anchor = t.sel ? d.querySelector(t.sel) : rowEl(d, t.row);
+      if (!anchor) return;
+      var it = { t: t, anchor: anchor }; it.el = chip(t, key, it); it.el.classList.add('enter');
+      items.push(it);
+    });
+    place();
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){ items.forEach(function(it){ it.el.classList.remove('enter'); }); }); });
+  }
+  // Lay the chips out against the anchors' current positions; nothing may overlap. An OPEN chip
+  // is laid out first and keeps the row and the edge it had while closed, so it only grows
+  // (never slides out from under the pointer); closed chips pack around it, and rows below an
+  // open chip move down by its extra height. Positions animate (CSS) except on the open chip.
+  function place(){
+    var d = doc(); if (!d) return;
+    var sw = stage.clientWidth, gap = 8, lines = '';
+    var groups = {};   // 'L' | 'R' (chat, below the toolbar) -> { rows: [[spans]], heights: [] }
+    function grp(g){ return groups[g] || (groups[g] = { rows: [], heights: [] }); }
+    function fits(g, i, l, r){ var rows = grp(g).rows; rows[i] = rows[i] || []; return !rows[i].some(function(s){ return l < s[1] + gap && r > s[0] - gap; }); }
+    function take(g, i, l, r, h){ var G = grp(g); G.rows[i] = G.rows[i] || []; G.rows[i].push([l, r]); G.heights[i] = Math.max(G.heights[i] || 0, h); }
+    var ordered = items.filter(function(it){ return it.el.classList.contains('open'); }).concat(items.filter(function(it){ return !it.el.classList.contains('open'); }));
+    var plan = [];
+    ordered.forEach(function(it){
+      var a = rect(it.anchor), el = it.el, open = el.classList.contains('open');
+      var w = open ? it.wo : it.wc, h = open ? it.ho : it.hc, hc = it.hc;   // target sizes, not mid-animation reads
+      el.style.width = w + 'px';
+      if (mode === 'settings') {
+        // beside the row: top edge fixed at the closed chip's centre line, grows downward
+        plan.push({ it: it, x: a.r + 14, y: a.cy - hc / 2, line: [a.r, a.cy, a.r + 14, a.cy] });
+      } else if (it.t.above) {
+        // above the message box: bottom edge fixed, grows upward
+        plan.push({ it: it, x: a.cx - 10, y: a.t - 10 - h, line: [a.cx, a.t - 10, a.cx, a.t] });
+      } else {
+        var g = it.t.right ? 'R' : 'L';
+        var x = it.t.right ? a.cx + 10 - w : a.cx - 10;
+        x = Math.max(4, Math.min(x, sw - w - 4));
+        var row;
+        if (open && it.row != null) row = it.row;
+        else { row = 0; while (!fits(g, row, x, x + w)) row++; it.row = row; }
+        take(g, row, x, x + w, open ? h : hc);   // an open chip's full height pushes the rows below it down
+        plan.push({ it: it, x: x, g: g, row: row, ab: a.b, cx: a.cx, hOpen: h, hc: hc });
+      }
+    });
+    plan.forEach(function(p){
+      var el = p.it.el, y;
+      if (p.g) {
+        // rows stack by the tallest chip in each row above
+        var G = groups[p.g]; y = p.ab + 10;
+        for (var i = 0; i < p.row; i++) y += (G.heights[i] || p.hc) + 6;
+        lines += '<line x1="' + p.cx + '" y1="' + (p.ab + 2) + '" x2="' + p.cx + '" y2="' + y + '"/>';
+      } else { y = p.y; lines += '<line x1="' + p.line[0] + '" y1="' + p.line[1] + '" x2="' + p.line[2] + '" y2="' + p.line[3] + '"/>'; }
+      el.style.left = p.x + 'px'; el.style.top = y + 'px';
+    });
+    svg.innerHTML = lines;
+  }
+  // Re-render when the demo changes (a page opens, settings slides in) or the window resizes.
+  var mo = null, queued = false, later = null;
+  // WHY the second pass (Destin, 2026-10-21: "expanding settings panel doesn't update the
+  // chips"): the panel slides in over ~300 ms with no DOM change after the first one, and
+  // detect() read its close button while it was still off-screen left, so the chips stayed
+  // on the chat set. Every change is now re-read once more after the slide, and the demo's
+  // transitionend/animationend events re-read it too.
+  function queue(){
+    if (!queued) { queued = true; requestAnimationFrame(function(){ queued = false; render(); }); }
+    clearTimeout(later); later = setTimeout(render, 320);
+  }
+  function watch(){
+    var d = doc(); if (!d || !d.body || mo) return;
+    mo = new MutationObserver(queue); mo.observe(d.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'aria-label'] });
+    d.defaultView.addEventListener('resize', queue);
+    d.addEventListener('transitionend', queue, true);
+    d.addEventListener('animationend', queue, true);
+  }
+  // The app draws its toolbar a beat after the iframe's load event, so keep looking until
+  // the first button exists (and give up after ten seconds).
+  function armed(){ var d = doc(); return !!(d && d.body && d.querySelector(CHAT[0].sel)); }
+  function arm(){ var tries = 0; (function tick(){ if (armed()) { watch(); render(true); return; } if (++tries < 34) setTimeout(tick, 300); })(); }
+  frame.addEventListener('load', function(){ mo = null; arm(); });
+  if (frame.src) arm();
+  new MutationObserver(function(){ watch(); queue(); }).observe(embed, { attributes: true, attributeFilter: ['class'] });
+  addEventListener('resize', queue);
+})();
+</script>
+
+<script>
+// The story opens folded on a phone, open everywhere else (Q-14).
+(function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
+// Animated folds: the FAQ cards and the story card. Opening sets `open` then, a frame later,
+// is-open so the box transitions from 0; closing removes is-open and waits for the motion to
+// end before the element actually closes. With reduced motion there is no wait.
+(function(){
+  var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
+    var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
+    if (d.open) d.classList.add('is-open');
+    s.addEventListener('click', function(e){
+      e.preventDefault();
+      if (d.classList.contains('is-open')) {
+        d.classList.remove('is-open');
+        if (reduced) { d.open = false; return; }
+        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; };
+        a.addEventListener('transitionend', function h(ev){ if (ev.propertyName === 'grid-template-rows') { a.removeEventListener('transitionend', h); finish(); } });
+        setTimeout(finish, 450);
+      } else {
+        d.open = true;
+        if (reduced) { d.classList.add('is-open'); return; }
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){ d.classList.add('is-open'); }); });
+      }
+    });
+  });
+})();
 </script>
 </body>
 </html>
