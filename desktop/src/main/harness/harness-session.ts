@@ -15,7 +15,7 @@ import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
-import { classifyFailure, abortableDelay, retryWaitMs, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
 import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
@@ -3369,7 +3369,7 @@ export class HarnessSession extends EventEmitter {
         this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
         // classifyProviderError keeps its sign-in/key codes; classifyFailure adds the rest.
-        const sorted = classifyFailure(failure); const errorCode = classifyProviderError(failure) ?? (sorted.code !== 'unknown' ? sorted.code : undefined);
+        const sorted = logTurnFailure(this.opts.sessionId, failure); const errorCode = classifyProviderError(failure) ?? (sorted.code !== 'unknown' ? sorted.code : undefined);
         this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), errorKind: sorted.kind, ...abandonedTurnUsage() });
       }
     } finally {

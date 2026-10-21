@@ -101,3 +101,17 @@ describe('retry-after and the wait before each retry', () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe('logTurnFailure leaves a content-free trace of a turn that ended in a provider error', () => {
+  it('logs the kind, code and status — never the provider message', async () => {
+    const logger = await import('../src/main/logger');
+    const spy = vi.spyOn(logger, 'log').mockImplementation(() => {});
+    try {
+      const { logTurnFailure } = await import('../src/main/providers/provider-failure');
+      const r = logTurnFailure('s-1', anthropic(529, 'overloaded_error', 'secret conversation text'));
+      expect(r).toMatchObject({ kind: 'temporary', code: 'overloaded' });
+      expect(spy).toHaveBeenCalledWith('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId: 's-1', kind: 'temporary', code: 'overloaded', status: 529 });
+      expect(JSON.stringify(spy.mock.calls)).not.toContain('secret conversation text');
+    } finally { spy.mockRestore(); }
+  });
+});

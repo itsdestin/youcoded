@@ -20,6 +20,8 @@
 // (@ai-sdk/provider-utils handleFetchError: "Cannot connect to API: …",
 // "Failed to process successful response").
 
+import { log } from '../logger';
+
 type FailureKind =
   /** Overload, rate limit, server error, network. Retried with backoff. */
   | 'temporary'
@@ -168,4 +170,16 @@ export function classifyFailure(error: unknown): ProviderFailure {
   if (e.message === 'Failed to process successful response') return temporary('garbled-response');
 
   return { kind: 'unknown', code: 'unknown' };
+}
+
+/** Sort a turn-ending failure and leave one line in ~/.claude/desktop.log.
+ *  WHY (2026-10-21): `session-error` is display-only — never written to the
+ *  transcript — so a reported "stuck conversation" left no trace to diagnose; the
+ *  session that fixed it found the conversation only by elimination. Kind, code
+ *  and HTTP status only: never the message, which can quote the conversation. */
+export function logTurnFailure(sessionId: string, error: unknown): ProviderFailure {
+  const failure = classifyFailure(error);
+  const e: any = (error as any)?.lastError ?? error;
+  log('WARN', 'HarnessSession', 'turn ended with a provider error', { sessionId, kind: failure.kind, code: failure.code, status: e?.statusCode ?? e?.status });
+  return failure;
 }
