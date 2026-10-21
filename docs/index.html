@@ -1742,9 +1742,32 @@ html{-webkit-tap-highlight-color:transparent}
 .idea img{width:100%;display:block;border-radius:var(--radius);border:1px solid var(--hair)}
 .idea figcaption{margin-top:10px;font-size:.95rem;line-height:1.35;opacity:.86;font-style:italic}
 /* The story folds behind one line on a phone (Destin, Q-14): two screens of text became one tap. */
-.storyfold>summary{list-style:none;cursor:pointer;font-weight:700;color:var(--accent);display:none}
+/* Every fold on the page (the FAQ cards, and the story on a phone) opens and closes with the
+   same motion: the answer's box grows from 0 to its height while it fades in, the + turns into
+   an x, and a press on the question dips the card (Destin, review R-10: "no expand animation or
+   press feel"). The <details> element stays open during the closing motion; is-open drives it. */
+.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0;
+  transition:grid-template-rows .34s cubic-bezier(.2,.8,.2,1),opacity .22s ease}
+.faq details .a>.a-in,.storyfold .a>.a-in{overflow:hidden;min-height:0}
+.faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
+.faq details .a{padding:0}
+.faq details .a-in{padding:0 22px 20px}
+.faq summary{transition:background .18s,transform .14s}
+.faq summary:hover{background:rgba(var(--fg-rgb),.045)}
+.faq summary:active,.storyfold>summary:active{transform:scale(.992);background:rgba(var(--fg-rgb),.07)}
+.faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
+.faq details[open] summary::after{content:'+'}
+.faq details.is-open summary::after{transform:rotate(45deg)}
+.storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
-@media (max-width:760px){.storyfold>summary{display:block}.storyfold:not([open])>summary::after{content:" \2193"}}
+@media (prefers-reduced-motion:reduce){.faq details .a,.storyfold .a,.faq summary,.faq summary::after{transition:none}}
+@media (max-width:760px){
+  .storyfold{padding:0}
+  .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius);transition:background .18s,transform .14s}
+  .storyfold>summary::after{content:'+';margin-left:auto;color:var(--accent);font-size:1.3rem;line-height:1;transition:transform .34s cubic-bezier(.2,.8,.2,1)}
+  .storyfold.is-open>summary::after{transform:rotate(45deg)}
+  .storyfold .a-in{padding:0 17px 18px}
+}
 /* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
    They exist only once the visitor has clicked into the demo (B-1 round 2). */
 .tips{position:absolute;inset:0;pointer-events:none;z-index:6;font-family:var(--font-ui);display:none}
@@ -2208,7 +2231,7 @@ Contract: mascots/README.md (from the repo root)
 <section id="about"><div class="wrap">
   <p class="eyebrow">What is this?</p><h2>One app. Whatever you want it to be.</h2>
   <div class="panel prose">
-    <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. So, what exactly is YouCoded? That&rsquo;s for you to decide.</p>
+    <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. What exactly is YouCoded? That&rsquo;s for you to decide.</p>
     <div class="cols">
       <p>It runs on whichever AI you choose: Anthropic (Claude), OpenAI (ChatGPT), Alibaba (Qwen) and hundreds more, or an open model running privately on your own computer.</p>
     </div>
@@ -2379,12 +2402,12 @@ Contract: mascots/README.md (from the repo root)
 
 <section id="story"><div class="wrap">
   <p class="eyebrow">Story</p><h2>How we got here.</h2>
-  <div class="panel prose story"><details class="storyfold" open><summary>Read the story</summary>
+  <details class="panel prose story storyfold" open><summary>Read the story</summary><div class="a"><div class="a-in">
     <p>Honestly, I initially just wanted a cooler and more efficient way to journal and track my own tasks/goals. The very first thing I developed is the Journaling and Life History system available in the marketplace, and I thought it would be cool to share it with some friends. However, the thought of installing and opening &ldquo;Claude Code&rdquo; in the terminal scared them away almost immediately. I realized that the idea of advanced agentic AI is still rather new to most people, and that persuading them to adopt my fancy new journaling system would require it to be much more accessible and user-friendly. Towards this end, I kind of just&hellip; kept adding things. And now we're here.</p>
     <p>Every line of YouCoded was written through conversation with frontier LLMs by <strong>someone who has never written code</strong>. Every feature, every platform port, every theme, every multiplayer game. The entire app was built, and is currently maintained, without a single line typed by hand.</p>
     <p>YouCoded is what AI looks like when it's built for everyone.</p>
     <a class="sign" href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin &rarr;</a>
-  </details></div>
+  </div></div></details>
 </div></section>
 
 <section id="get-started"><div class="wrap">
@@ -2401,13 +2424,13 @@ Contract: mascots/README.md (from the repo root)
 <section id="faq"><div class="wrap">
   <p class="eyebrow">Common questions</p><h2>FAQ</h2>
   <div class="faq">
-        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></details>
-        <details class="panel"><summary>Do I have to pay for anything?</summary><div class="a">No, not really. The app is free and open source, and running AI models on your own computer costs nothing. If you want "best of the best" intelligence like Claude or ChatGPT, you can choose to pay an external AI inference provider of your choice from within the app.</div></details>
-        <details class="panel"><summary>Is my data private?</summary><div class="a">YouCoded does not receive the content you send to an AI model. If you choose a cloud model, the provider you choose — and, with OpenRouter, its underlying provider — receives that request under its own data-retention policy. A model running entirely on your computer does not send its inference request to a cloud model provider. That does not turn off other features you choose, such as sync, backups, web tools, or integrations. The app also sends one opt-out daily, privacy-preserving device heartbeat: a hashed device identifier, app version, platform, and rough region. It contains no message content or username. See Privacy for details.</div></details>
-        <details class="panel"><summary>What platforms does it run on?</summary><div class="a">Windows, macOS, Linux, and Android, plus any web browser by connecting to a computer running the app. Apple integrations (iMessage, Apple Notes, and so on) work on macOS only.</div></details>
-        <details class="panel"><summary>Do I need to know how to code?</summary><div class="a">No. The whole app was built by someone who has never written code, by talking to AI. If you can use ChatGPT, you can use this.</div></details>
-        <details class="panel"><summary>Is "agentic" AI safe?</summary><div class="a">The app asks before it changes anything, and every standing permission you grant is listed on one screen where you can revoke it. AI still makes mistakes, so keep an eye on what it's doing — and be careful with full-auto mode, which lets it act without asking.</div></details>
-        <details class="panel"><summary>Who built this?</summary><div class="a">So far, it's just me (Destin). However, my intention is for this open-source project to become something we all build together. I believe one of the greatest potential goods of AI comes from its ability to revolutionize the world of open-source software. This project is just one example of what AI can allow us to create: an app owned by nobody, improved by everybody — all without anyone needing to learn how to code or even understand what “open-source” means. There's no profit motive and no ulterior incentives, because anyone can create their own copy of the app for free! Just people making cool shit and sharing it with other people :)</div></details>
+        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a"><div class="a-in">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></div></details>
+        <details class="panel"><summary>Do I have to pay for anything?</summary><div class="a"><div class="a-in">No, not really. The app is free and open source, and running AI models on your own computer costs nothing. If you want "best of the best" intelligence like Claude or ChatGPT, you can choose to pay an external AI inference provider of your choice from within the app.</div></div></details>
+        <details class="panel"><summary>Is my data private?</summary><div class="a"><div class="a-in">YouCoded does not receive the content you send to an AI model. If you choose a cloud model, the provider you choose — and, with OpenRouter, its underlying provider — receives that request under its own data-retention policy. A model running entirely on your computer does not send its inference request to a cloud model provider. That does not turn off other features you choose, such as sync, backups, web tools, or integrations. The app also sends one opt-out daily, privacy-preserving device heartbeat: a hashed device identifier, app version, platform, and rough region. It contains no message content or username. See Privacy for details.</div></div></details>
+        <details class="panel"><summary>What platforms does it run on?</summary><div class="a"><div class="a-in">Windows, macOS, Linux, and Android, plus any web browser by connecting to a computer running the app. Apple integrations (iMessage, Apple Notes, and so on) work on macOS only.</div></div></details>
+        <details class="panel"><summary>Do I need to know how to code?</summary><div class="a"><div class="a-in">No. The whole app was built by someone who has never written code, by talking to AI. If you can use ChatGPT, you can use this.</div></div></details>
+        <details class="panel"><summary>Is "agentic" AI safe?</summary><div class="a"><div class="a-in">The app asks before it changes anything, and every standing permission you grant is listed on one screen where you can revoke it. AI still makes mistakes, so keep an eye on what it's doing — and be careful with full-auto mode, which lets it act without asking.</div></div></details>
+        <details class="panel"><summary>Who built this?</summary><div class="a"><div class="a-in">So far, it's just me (Destin). However, my intention is for this open-source project to become something we all build together. I believe one of the greatest potential goods of AI comes from its ability to revolutionize the world of open-source software. This project is just one example of what AI can allow us to create: an app owned by nobody, improved by everybody — all without anyone needing to learn how to code or even understand what “open-source” means. There's no profit motive and no ulterior incentives, because anyone can create their own copy of the app for free! Just people making cool shit and sharing it with other people :)</div></div></details>
   </div>
 </div></section>
 
@@ -4466,6 +4489,30 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 <script>
 // The story opens folded on a phone, open everywhere else (Q-14).
 (function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
+// Animated folds: the FAQ cards and the story card. Opening sets `open` then, a frame later,
+// is-open so the box transitions from 0; closing removes is-open and waits for the motion to
+// end before the element actually closes. With reduced motion there is no wait.
+(function(){
+  var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
+    var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
+    if (d.open) d.classList.add('is-open');
+    s.addEventListener('click', function(e){
+      e.preventDefault();
+      if (d.classList.contains('is-open')) {
+        d.classList.remove('is-open');
+        if (reduced) { d.open = false; return; }
+        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; };
+        a.addEventListener('transitionend', function h(ev){ if (ev.propertyName === 'grid-template-rows') { a.removeEventListener('transitionend', h); finish(); } });
+        setTimeout(finish, 450);
+      } else {
+        d.open = true;
+        if (reduced) { d.classList.add('is-open'); return; }
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){ d.classList.add('is-open'); }); });
+      }
+    });
+  });
+})();
 </script>
 </body>
 </html>
