@@ -4,6 +4,45 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-10-21
+
+**Claude Code CLI baseline:** v2.1.306 (desktop review); Android bundles v2.1.300.
+
+Changes since 1.3.1: custom model providers, a durable message queue for Claude Code conversations, crash recovery that keeps unsent work, signed and notarized macOS downloads, and many reliability fixes.
+
+### Models and providers
+
+- Add your own OpenAI-compatible provider: YouCoded matches it against the public model list or asks the endpoint for its own models, and shows model counts on each provider card.
+- The last key check is remembered for every kind of API key.
+- A failed reply now says what happened in plain words and offers the way forward (switch model, open settings, try again or summarize and continue).
+- Recover from cut-off replies and from a custom endpoint's "conversation too long" error; per-provider output limits.
+- Conversations with many images no longer get permanently stuck after a provider rejects them.
+- New 500k context option for cloud models (the default for new installations).
+- ChatGPT accounts work on Android and from remote browsers, with sign-in guidance.
+
+### Claude Code conversations
+
+- Messages sent while Claude is busy wait in a durable queue that survives restarts, with Cancel and Send now for each one.
+- Stop, Clear and model changes go through Claude Code's own controls where available.
+- Summary ("compaction") dividers stay in the right place while a reply streams and after reopening.
+
+### Safety and permissions
+
+- The assistant prefers normal commands and asks before work that needs administrator rights; you can approve admin commands with a scope you choose.
+
+### Reliability
+
+- A crashed window recovers, and unsent messages and file edits are kept.
+- "Welcome back" reopens several conversations at once safely and waits until their tools are ready.
+- File previews, comparisons, indexing and session lists stay responsive on large folders; Windows file-watching no longer blocks.
+
+### Desktop
+
+- macOS downloads are signed with Developer ID and notarized by Apple.
+- Linux: the update button shows installer actions and progress; launcher icons ship in every size.
+- Windows: fixed the buddy and chat input.
+- Touch scrolling works in the active sessions list; file-comment popups and side panels have cleaner borders; Pages can use purpose-designed icons.
+
 ## [1.3.1] — 2026-10-18
 
 **Claude Code CLI baseline:** v2.1.302 (desktop review); Android bundles v2.1.300.
