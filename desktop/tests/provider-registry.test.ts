@@ -9,8 +9,9 @@ import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
 import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
+import { OpenRouterHealth } from '../src/main/providers/openrouter-health';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
-import { openRouterCostExtractor } from '../src/main/harness/pricing';
+import { openRouterCostExtractor, compatibleCacheExtractor } from '../src/main/harness/pricing';
 import type { LocalEngineHook } from '../src/main/engine/engine-manager';
 import type { ChatGptAuth } from '../src/main/providers/chatgpt-auth';
 import { limitError } from '../src/main/providers/chatgpt-oauth';
@@ -51,6 +52,14 @@ describe('ProviderRegistry', () => {
     await reg.init();
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('endpointKey answers the saved key, and undefined for a provider without one or an unknown id', async () => {
+    const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://x.example.com/v1', enabled: true });
+    expect(await reg.endpointKey(id)).toBeUndefined();
+    await reg.setKey(id, 'sk-123');
+    expect(await reg.endpointKey(id)).toBe('sk-123');
+    expect(await reg.endpointKey('nope')).toBeUndefined();
+  });
 
   it('seeds the two built-ins on first init and is idempotent', async () => {
     const list = await reg.list();
@@ -140,10 +149,18 @@ describe('ProviderRegistry', () => {
     expect((model as any).config.metadataExtractor).toBe(openRouterCostExtractor);
   });
 
+  // A custom endpoint DOES carry an extractor since 2026-10-20 — the one that
+  // counts DeepSeek-style cache hits (compatibleCacheExtractor) — so the guard is
+  // on what it produces: never a cost, even when the body carries a `usage.cost`.
   it('no other provider claims to report a cost', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true });
     const model = await reg.languageModel({ providerId: id, modelId: 'llama3' });
-    expect((model as any).config.metadataExtractor).toBeUndefined();
+    const x = (model as any).config.metadataExtractor;
+    expect(x).toBe(compatibleCacheExtractor);
+    expect(x).not.toBe(openRouterCostExtractor);
+    const s = x.createStreamExtractor();
+    s.processChunk({ usage: { cost: 0.5, prompt_cache_hit_tokens: 10 } });
+    expect(JSON.stringify(s.buildMetadata())).not.toContain('cost');
   });
 
   // The plan expected a `usage: { include: true }` request body alongside the
@@ -724,5 +741,58 @@ describe('ProviderRegistry', () => {
       // the user looking for a setting that isn't there.
       expect(await reg.testConnection('chatgpt')).toEqual({ ok: false, message: TURNED_OFF });
     });
+  });
+});
+
+describe('saved key checks for direct keys and custom endpoints', () => {
+  let root: string; let reg: ProviderRegistry; let health: OpenRouterHealth;
+  beforeEach(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-health-all-'));
+    health = new OpenRouterHealth({ dir: root });
+    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root, getSecretStorage()), null, null, health);
+    await reg.init();
+  });
+  afterEach(() => { vi.unstubAllGlobals(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
+  const answer = (status: number) => vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
+
+  it('a refused key stays refused after the list is read again', async () => {
+    const id = await reg.upsert({ type: 'openai', label: 'OpenAI', enabled: true });
+    await reg.setKey(id, 'sk-bad');
+    answer(401);
+    expect(await reg.testConnection(id)).toMatchObject({ ok: false, verdict: 'rejected' });
+    const row = (await reg.list()).find((p) => p.id === id)!;
+    expect(row.health?.verdict).toBe('rejected');
+    expect(row.ready).toBe(true);   // the words change, the user is not locked out
+  });
+  it('an unreachable check does not overwrite a real answer', async () => {
+    const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://x.example.com/v1', enabled: true });
+    await reg.setKey(id, 'sk-1');
+    answer(200);
+    await reg.testConnection(id);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
+    expect(await reg.testConnection(id)).toMatchObject({ ok: false, verdict: 'unchecked' });
+    expect((await reg.list()).find((p) => p.id === id)!.health?.verdict).toBe('verified');
+  });
+  it('a new key forgets the old key’s verdict', async () => {
+    const id = await reg.upsert({ type: 'anthropic', label: 'Anthropic', enabled: true });
+    await reg.setKey(id, 'sk-bad');
+    answer(401);
+    await reg.testConnection(id);
+    await reg.setKey(id, 'sk-good');
+    expect((await reg.list()).find((p) => p.id === id)!.health).toBeUndefined();
+  });
+  it('a server error is not a verdict about the key', async () => {
+    const id = await reg.upsert({ type: 'google', label: 'Google', enabled: true });
+    await reg.setKey(id, 'k');
+    answer(500);
+    const r = await reg.testConnection(id);
+    expect(r.verdict).toBeUndefined();
+    expect((await reg.list()).find((p) => p.id === id)!.health).toBeUndefined();
+  });
+  it('a keyless custom endpoint records nothing', async () => {
+    const id = await reg.upsert({ type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true });
+    answer(401);
+    await reg.testConnection(id);
+    expect((await reg.list()).find((p) => p.id === id)!.health).toBeUndefined();
   });
 });

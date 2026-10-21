@@ -57,7 +57,7 @@ describe('ModelCatalog', () => {
   // create / resume / model swap.
   describe('does not touch the network for a provider list no catalog source can serve', () => {
     const LOCAL = { id: 'local', type: 'local-engine', label: 'Local models', enabled: true, builtIn: true, hasKey: false, ready: true };
-    const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', enabled: true, builtIn: false, hasKey: false, ready: true };
+    const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true, builtIn: false, hasKey: false, ready: true };
 
     it('local-engine alone: zero fetches, and the local rows still come back', async () => {
       const local = new ModelCatalog(dir, fetchMock, {
@@ -70,9 +70,25 @@ describe('ModelCatalog', () => {
       expect(models.map((m) => m.id)).toEqual(['tiny-Q4_K_M']);
     });
 
-    it('openai-compatible alone: zero fetches (it has no catalog at all)', async () => {
+    it('a custom endpoint on this computer alone: no internet catalog fetch (only its own /models, on this computer)', async () => {
       expect(await cat.get([CUSTOM] as any)).toEqual([]);
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.map(([u]: [string]) => u)).toEqual(['http://localhost:11434/v1/models']);
+    });
+
+    it('a cloud custom endpoint DOES fetch (it can now be matched by address)', async () => {
+      const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+      await new ModelCatalog(dir, f as any).get([{ ...CUSTOM, baseUrl: 'https://api.example.com/v1' }] as any);
+      expect(f).toHaveBeenCalled();
+    });
+
+    it('cacheOnly never fetches and never reads the disk, even with nothing cached', async () => {
+      const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+      // A cache file on disk must be ignored too: reading it is a blocking read on a session path.
+      fs.writeFileSync(path.join(dir, 'provider-catalog-cache.json'), JSON.stringify({ fetchedAt: Date.now(), openrouter: null,
+        modelsdev: { x: { npm: '@ai-sdk/openai-compatible', api: 'https://api.example.com', models: { m: { name: 'M' } } } } }));
+      const rows = await new ModelCatalog(dir, f as any).get([{ ...CUSTOM, baseUrl: 'https://api.example.com/v1' }] as any, { cacheOnly: true });
+      expect(rows).toEqual([]);
+      expect(f).not.toHaveBeenCalled();
     });
 
     it('a DISABLED OpenRouter beside a local provider still costs nothing', async () => {
@@ -489,5 +505,256 @@ describe('catalog pricing', () => {
       .toEqual({ in: 3, out: 15 });
     expect(call({ stringy: { cost: { input: 3, output: 15, cache_read: '0.3', cache_write: '3.75' } } })[0].pricing)
       .toEqual({ in: 3, out: 15 });
+  });
+});
+
+describe('custom endpoints matched to models.dev by address', () => {
+  let dir: string;
+  const MD = {
+    inception: { npm: '@ai-sdk/openai-compatible', api: 'https://api.inceptionlabs.ai/v1/', models: {
+      'mercury-3': { name: 'Mercury 3', limit: { context: 1000000 }, tool_call: true, cost: { input: 0.1, output: 0.35, cache_read: 0.01 } },
+    } },
+    // Same address published twice: the larger list wins, whatever the key order.
+    'gw-small': { npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com', models: { a: { name: 'A' } } },
+    'gw-big': { npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com/v1', models: { a: { name: 'A' }, b: { name: 'B' } } },
+    // Not OpenAI-compatible: never matched even though the address is listed.
+    vendor: { npm: '@ai-sdk/anthropic', api: 'https://vendor.example.com', models: { x: { name: 'X' } } },
+  };
+  const custom = (baseUrl: string) => ({ id: 'c1', type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
+  const make = () => new ModelCatalog(dir, vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : MD })) as any);
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-addr-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+
+  it('a custom endpoint whose address matches gets that service’s models, prices and context', async () => {
+    const rows = await make().get([custom('https://API.inceptionlabs.ai')] as any);
+    expect(rows).toEqual([expect.objectContaining({ id: 'mercury-3', providerId: 'c1', contextLength: 1000000, supportsTools: true,
+      pricing: { in: 0.1, out: 0.35, cacheRead: 0.01 } })]);
+  });
+  it('two entries on one address: the one with more models wins', async () => {
+    const rows = await make().get([custom('https://gw.example.com/')] as any);
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b']);
+  });
+  it('an entry that is not OpenAI-compatible is never matched', async () => {
+    expect(await make().get([custom('https://vendor.example.com')] as any)).toEqual([]);
+  });
+  it('an unknown address gets no models.dev rows', async () => {
+    expect(await make().get([custom('https://nobody.example.com/v1')] as any)).toEqual([]);
+  });
+});
+
+describe("an unmatched custom endpoint is asked for its own /models", () => {
+  let dir: string;
+  const custom = (baseUrl: string, id = 'c1') => ({ id, type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-ep-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+
+  function rig(endpointBody: unknown, opts: { ok?: boolean; key?: string } = {}) {
+    const calls: { url: string; auth?: string }[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: any) => {
+      calls.push({ url, auth: init?.headers?.Authorization });
+      if (url.includes('openrouter') || url.includes('models.dev')) return { ok: true, json: async () => ({}) };
+      return { ok: opts.ok ?? true, json: async () => endpointBody };
+    });
+    const cat = new ModelCatalog(dir, fetchImpl as any, { endpointKey: async () => opts.key });
+    return { cat, calls };
+  }
+
+  it('reads an OpenRouter-shaped list: names, context and per-token prices', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'm3', name: 'Mercury 3', context_length: 1000000,
+      pricing: { prompt: '0.0000001', completion: '0.00000035' }, supported_parameters: ['tools'] }] }, { key: 'sk-1' });
+    const rows = await cat.get([custom('https://unknown.example.com/v1/')] as any);
+    expect(rows).toEqual([{ id: 'm3', providerId: 'c1', label: 'Mercury 3', contextLength: 1000000, supportsTools: true,
+      pricing: { in: expect.closeTo(0.1, 10), out: expect.closeTo(0.35, 10) } }]);
+    expect(calls.find((c) => c.url === 'https://unknown.example.com/v1/models')?.auth).toBe('Bearer sk-1');
+  });
+  it('reads an id-only list and leaves every other fact unset', async () => {
+    const { cat } = rig({ object: 'list', data: [{ id: 'kimi-k2.6', object: 'model' }] });
+    expect(await cat.get([custom('https://ollama.example.com/v1')] as any)).toEqual([{ id: 'kimi-k2.6', providerId: 'c1', label: 'kimi-k2.6' }]);
+  });
+  it('sends no Authorization header when no key is saved', async () => {
+    const { cat, calls } = rig({ data: [] });
+    await cat.get([custom('http://localhost:11434/v1')] as any);
+    expect(calls.find((c) => c.url === 'http://localhost:11434/v1/models')?.auth).toBeUndefined();
+  });
+  it('a local endpoint is asked, but no internet catalog is fetched', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'llama3' }] });
+    expect((await cat.get([custom('http://localhost:11434/v1')] as any)).map((r) => r.id)).toEqual(['llama3']);
+    expect(calls.some((c) => c.url.includes('openrouter') || c.url.includes('models.dev'))).toBe(false);
+  });
+  it('a failing endpoint gives no rows and never throws', async () => {
+    const { cat } = rig(null, { ok: false });
+    expect(await cat.get([custom('https://down.example.com')] as any)).toEqual([]);
+  });
+  it('asks once for two callers at the same time', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'a' }] });
+    await Promise.all([cat.get([custom('https://one.example.com')] as any), cat.get([custom('https://one.example.com')] as any)]);
+    expect(calls.filter((c) => c.url === 'https://one.example.com/models')).toHaveLength(1);
+  });
+  it('a failed re-ask keeps the previous list for the same key', async () => {
+    let up = true;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (!url.endsWith('/models')) return { ok: true, json: async () => ({}) };
+      return { ok: up, json: async () => ({ data: [{ id: 'kept' }] }) };
+    });
+    // ttlMs -1: every call is past its time, so the second call really asks again.
+    const cat = new ModelCatalog(dir, fetchImpl as any, { ttlMs: -1, endpointKey: async () => 'sk-1' });
+    await cat.get([custom('https://flaky.example.com')] as any);
+    up = false;
+    expect((await cat.get([custom('https://flaky.example.com')] as any)).map((r) => r.id)).toEqual(['kept']);
+    expect(fetchImpl.mock.calls.filter(([u]) => u === 'https://flaky.example.com/models')).toHaveLength(2);
+  });
+  it('a session-start lookup (cacheOnly) never asks the endpoint', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'a' }] });
+    expect(await cat.get([custom('https://quiet.example.com')] as any, { cacheOnly: true })).toEqual([]);
+    expect(calls).toHaveLength(0);
+    await cat.get([custom('https://quiet.example.com')] as any);
+    expect((await cat.get([custom('https://quiet.example.com')] as any, { cacheOnly: true })).map((r) => r.id)).toEqual(['a']);
+  });
+  it('a new key is never served the old key’s list', async () => {
+    let key = 'sk-old';
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: any) => {
+      if (!url.startsWith('https://k.example.com')) return { ok: true, json: async () => ({}) };
+      seen.push(init?.headers?.Authorization);
+      return { ok: true, json: async () => ({ data: [{ id: key }] }) };
+    });
+    const cat = new ModelCatalog(dir, fetchImpl as any, { endpointKey: async () => key });
+    await cat.get([custom('https://k.example.com')] as any);
+    key = 'sk-new';
+    expect((await cat.get([custom('https://k.example.com')] as any)).map((r) => r.id)).toEqual(['sk-new']);
+    expect(seen).toEqual(['Bearer sk-old', 'Bearer sk-new']);
+  });
+});
+
+describe('services() — the providers Add provider can search', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-svc-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  const MD = {
+    zeta: { name: 'Zeta', npm: '@ai-sdk/openai-compatible', api: 'https://zeta.example.com/v1/', models: {
+      small: { name: 'Small', limit: { context: 8000 } }, big: { name: 'Big', limit: { context: 1000000 }, tool_call: false, cost: { input: 1, output: 2 } } } },
+    alpha: { name: 'alpha', npm: '@ai-sdk/openai-compatible', api: 'https://alpha.example.com', models: { a: { name: 'A' } } },
+    lmstudio: { name: 'LMStudio', npm: '@ai-sdk/openai-compatible', api: 'http://127.0.0.1:1234/v1', models: { l: { name: 'L' } } },
+    empty: { name: 'Empty', npm: '@ai-sdk/openai-compatible', api: 'https://empty.example.com', models: {} },
+    other: { name: 'Other', npm: '@ai-sdk/anthropic', api: 'https://other.example.com', models: { o: { name: 'O' } } },
+    'gw-small': { name: 'GW small', npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com', models: { a: {} } },
+    'gw-big': { name: 'GW big', npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com/v1', models: { a: {}, b: {} } },
+  };
+  const make = () => new ModelCatalog(dir, vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : MD })) as any);
+
+  it('lists OpenAI-compatible, non-local services with models, sorted by name', async () => {
+    expect((await make().services()).map((s) => s.label)).toEqual(['alpha', 'GW big', 'Zeta']);
+  });
+  it('carries the address, the count and the models largest-window first, never inventing facts', async () => {
+    const zeta = (await make().services()).find((s) => s.id === 'zeta')!;
+    expect(zeta).toMatchObject({ baseUrl: 'https://zeta.example.com/v1', modelCount: 2 });
+    expect(zeta.models).toEqual([
+      { id: 'big', label: 'Big', contextLength: 1000000, priceIn: 1, priceOut: 2, tools: false },
+      { id: 'small', label: 'Small', contextLength: 8000 },
+    ]);
+  });
+  it('is empty offline with nothing cached', async () => {
+    const cat = new ModelCatalog(dir, vi.fn(async () => { throw new Error('offline'); }) as any);
+    expect(await cat.services()).toEqual([]);
+  });
+});
+
+describe('refresh() — "Check for new models"', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-refresh-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  const OR = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
+
+  it('skips the 24-hour cache and reports what is new', async () => {
+    let rows = [{ id: 'old' }];
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: rows } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await cat.get([OR] as any);
+    rows = [{ id: 'old' }, { id: 'inception/mercury-3' }];
+    expect(await cat.refresh([OR] as any)).toEqual({ added: 1, failed: [] });
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toContain('inception/mercury-3');
+  });
+  it('names a source that could not be reached and keeps its old list', async () => {
+    let down = false;
+    const f = vi.fn(async (url: string) => {
+      if (down && url.includes('openrouter')) throw new Error('offline');
+      return { ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'kept' }] } : {} };
+    });
+    const cat = new ModelCatalog(dir, f as any);
+    await cat.get([OR] as any);
+    down = true;
+    expect(await cat.refresh([OR] as any)).toEqual({ added: 0, failed: ['OpenRouter'] });
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toEqual(['kept']);
+  });
+  it('two presses at once share one fetch', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await Promise.all([cat.refresh([OR] as any), cat.refresh([OR] as any)]);
+    expect(f.mock.calls.filter(([u]) => String(u).includes('openrouter'))).toHaveLength(1);
+  });
+  it('a normal read during a refresh waits for it instead of starting a second fetch', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'x' }] } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await Promise.all([cat.refresh([OR] as any), cat.get([OR] as any)]);
+    expect(f.mock.calls.filter(([u]) => String(u).includes('openrouter'))).toHaveLength(1);
+  });
+  it('names a custom endpoint that could not be reached', async () => {
+    const C = { id: 'c1', type: 'openai-compatible', label: 'Home server', baseUrl: 'https://home.example.com/v1', enabled: true, builtIn: false, hasKey: false, ready: true };
+    const f = vi.fn(async (url: string) => url.startsWith('https://home.example.com')
+      ? { ok: false, json: async () => ({}) } : { ok: true, json: async () => ({}) });
+    expect(await new ModelCatalog(dir, f as any).refresh([C] as any)).toEqual({ added: 0, failed: ['Home server'] });
+  });
+  it('one source down: rows serve now, and the next ordinary read tries both again', async () => {
+    let mdUp = false;
+    const f = vi.fn(async (url: string) => {
+      if (url.includes('models.dev') && !mdUp) throw new Error('offline');
+      return { ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'x' }] } : {} };
+    });
+    const cat = new ModelCatalog(dir, f as any);
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toEqual(['x']);
+    const before = f.mock.calls.length;
+    mdUp = true;
+    await cat.get([OR] as any);
+    expect(f.mock.calls.length).toBe(before + 2);
+  });
+  it('asks the ChatGPT plan to refresh, and survives it throwing', async () => {
+    const refreshChatgpt = vi.fn(async () => { throw new Error('nope'); });
+    const cat = new ModelCatalog(dir, vi.fn(async () => ({ ok: true, json: async () => ({}) })) as any, { refreshChatgpt });
+    await expect(cat.refresh([OR] as any)).resolves.toMatchObject({ failed: [] });
+    expect(refreshChatgpt).toHaveBeenCalled();
+  });
+});
+
+describe('cachedCounts never fetches or reads the disk', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-counts-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  it('counts from what is already cached, and fetches nothing', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter')
+      ? { data: [{ id: 'x' }, { id: 'y' }] } : { anthropic: { models: { c: { name: 'C' } } } } }));
+    const cat = new ModelCatalog(dir, f as any);
+    const providers = [
+      { id: 'openrouter', type: 'openrouter', label: 'OR', enabled: true, builtIn: true, hasKey: true, ready: true },
+      { id: 'an', type: 'anthropic', label: 'A', enabled: true, builtIn: false, hasKey: true, ready: true },
+    ] as any;
+    await cat.get(providers);
+    f.mockClear();
+    const counts = cat.cachedCounts(providers);
+    expect(counts.get('openrouter')).toEqual({ count: 2, source: 'catalog' });
+    expect(counts.get('an')).toEqual({ count: 1, source: 'catalog' });
+    expect(f).not.toHaveBeenCalled();
+  });
+  it('with nothing in memory, every provider is unknown — a cache file on disk is not read', async () => {
+    const f = vi.fn();
+    fs.writeFileSync(path.join(dir, 'provider-catalog-cache.json'), JSON.stringify({ fetchedAt: Date.now(), openrouter: null, modelsdev: { anthropic: { models: { c: {} } } } }));
+    const counts = new ModelCatalog(dir, f as any).cachedCounts([{ id: 'an', type: 'anthropic', label: 'A', enabled: true, builtIn: false, hasKey: true, ready: true }] as any);
+    expect(counts.size).toBe(0);
+    expect(f).not.toHaveBeenCalled();
+  });
+  it('an endpoint’s own list counts as "listed by this service"', async () => {
+    const C = { id: 'c1', type: 'openai-compatible', label: 'Mine', baseUrl: 'http://localhost:11434/v1', enabled: true, builtIn: false, hasKey: false, ready: true } as any;
+    const cat = new ModelCatalog(dir, vi.fn(async () => ({ ok: true, json: async () => ({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }) })) as any);
+    await cat.get([C]);
+    expect(cat.cachedCounts([C]).get('c1')).toEqual({ count: 3, source: 'endpoint' });
   });
 });

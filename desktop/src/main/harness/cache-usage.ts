@@ -7,6 +7,8 @@
 // sees llama.cpp's `timings.cache_n`, which is the ONLY ground truth for local
 // KV reuse. Those two ride providerMetadata (pricing.ts extractors) and are
 // read here as fallbacks. The SDK's own number wins whenever it is non-zero.
+// A fourth (2026-10-20): DeepSeek-shaped custom endpoints report reads as
+// `usage.prompt_cache_hit_tokens`, carried by compatibleCacheExtractor.
 import type { LanguageModelUsage } from 'ai';
 
 export interface StepCacheTokens { cacheReadTokens: number; cacheCreationTokens: number }
@@ -20,7 +22,7 @@ export function cacheTokensForStep(
   const sdkRead = count(usage?.inputTokenDetails?.cacheReadTokens);
   const sdkWrite = count(usage?.inputTokenDetails?.cacheWriteTokens);
   return {
-    cacheReadTokens: sdkRead || count(meta?.local?.cacheReadTokens),
+    cacheReadTokens: sdkRead || count(meta?.local?.cacheReadTokens) || count(meta?.compatible?.cacheReadTokens),
     cacheCreationTokens: sdkWrite || count(meta?.openrouter?.cacheWriteTokens),
   };
 }

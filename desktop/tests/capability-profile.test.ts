@@ -454,8 +454,9 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
   it('is identical to the direct OpenAI-key profile for the same GPT model — same models, same wire', () => {
     for (const modelId of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini']) {
       for (const contextLength of [null, 272_000]) {
+        // providerType just echoes the input, so it is the one field allowed to differ.
         expect(resolveProfile({ providerType: 'chatgpt', modelId, contextLength }), `${modelId} @ ${contextLength}`)
-          .toEqual(resolveProfile({ providerType: 'openai', modelId, contextLength }));
+          .toEqual({ ...resolveProfile({ providerType: 'openai', modelId, contextLength }), providerType: 'chatgpt' });
       }
     }
   });
@@ -473,7 +474,7 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
     expect(viaPlan.injectionBudgetTokens).toBe(viaOpenRouter.injectionBudgetTokens);
     // WHY imageLimits differs: it is a provider-TYPE fact and the plan rides
     // OpenAI's wire (30,000-patch budget), while OpenRouter keeps the default.
-    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt', imageLimits: IMAGE_LIMITS_OPENAI });
+    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt', imageLimits: IMAGE_LIMITS_OPENAI, providerType: 'chatgpt' });
     // And without the catalog fact, OpenRouter alone falls to "no vision" — the
     // plan does not, because it is not a transport.
     expect(resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null }).supportsVision).toBe(false);
@@ -513,5 +514,27 @@ describe('resolveProfile — imageLimits is a provider-type fact', () => {
   });
   it('CLOUD_DEFAULT carries the conservative default, never the OpenAI budget', () => {
     expect(CLOUD_DEFAULT.imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+  });
+});
+
+describe('the assumed window for an unknown model', () => {
+  const d = (providerType: DiscoveredModel['providerType'], onThisComputer?: boolean, modelId = 'm'): DiscoveredModel =>
+    ({ providerType, modelId, contextLength: null, onThisComputer });
+  it('is 250k for cloud providers, including a custom endpoint elsewhere', () => {
+    for (const t of ['openrouter', 'anthropic', 'openai', 'google', 'chatgpt', 'openai-compatible'] as const) {
+      expect(resolveProfile(d(t, false)).assumedContextWindow, t).toBe(250_000);
+    }
+  });
+  it('is 32k for the local engine and for a custom endpoint on this computer', () => {
+    expect(resolveProfile(d('local-engine')).assumedContextWindow).toBe(32_768);
+    expect(resolveProfile(d('openai-compatible', true)).assumedContextWindow).toBe(32_768);
+  });
+  it('a known-model entry never changes it, local or hosted', () => {
+    const reg: KnownModelEntry[] = [{ match: '^known', label: 'Known', maxToolPresentation: 'full', maxContextWindow: 8192 } as KnownModelEntry];
+    expect(resolveProfile(d('local-engine', undefined, 'known-1'), reg).assumedContextWindow).toBe(32_768);
+    expect(resolveProfile(d('openrouter', undefined, 'known-1'), reg).assumedContextWindow).toBe(250_000);
+  });
+  it('the profile names the provider type it was resolved for', () => {
+    expect(resolveProfile(d('openai-compatible')).providerType).toBe('openai-compatible');
   });
 });

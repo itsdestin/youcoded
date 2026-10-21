@@ -30,6 +30,11 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
+  // Custom providers (2026-10-20): a search that finds nothing offers "Check for new
+  // models"; the first check finds Mercury 3, a failed one says which list it couldn't reach.
+  { ...chat('chat/model-picker#no-match', 'dialog'), newIn: 'after', session: 'wb-2', open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }] },
+  { ...chat('chat/model-picker#refreshed', 'dialog'), newIn: 'after', session: 'wb-2', waitMs: 1500, open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }, 'Check for new models'] },
+  { ...chat('chat/model-picker#refresh-failed', 'dialog', 'error-state'), newIn: 'after', session: 'wb-2', params: { refresh: 'fail' }, open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }, 'Check for new models'] },
   chat('chat/model-picker/fast-mode', 'dialog'),
   chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),

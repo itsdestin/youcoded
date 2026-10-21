@@ -1,6 +1,6 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
- "total": 277,
+ "total": 280,
  "open": [
   "account:signed-in",
   "account:user",
@@ -160,7 +160,9 @@
   "project:repo-info",
   "provider:catalog",
   "provider:list",
+  "provider:refresh-catalog",
   "provider:remove",
+  "provider:services",
   "provider:set-key",
   "provider:test",
   "provider:upsert",

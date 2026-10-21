@@ -62,9 +62,13 @@ describe('HarnessSession — multi-step turn driver', () => {
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 208000 tokens > 200000 maximum' } }, true],
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }, false],
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'The prompt is too long for this model, maybe' } }, false],
-  ])('classifies structured overflow only for %s adapter', (provider, body, expected) => {
-    expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(expected);
-    expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(false);
+    // A custom endpoint: matched by TYPE (its id is random), on the OpenAI envelope's exact code only.
+    ['01HRANDOMID', { error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }, true, 'openai-compatible'],
+    ['01HRANDOMID', { error: { type: 'invalid_request_error', code: 'invalid_value' } }, false, 'openai-compatible'],
+    ['01HRANDOMID', { error: { code: 'context_length_exceeded' } }, false, undefined],
+  ] as [string, unknown, boolean, string?][])('classifies structured overflow only for %s adapter', (provider, body, expected, type) => {
+    expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider, type)).toBe(expected);
+    expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider, type)).toBe(false);
   });
 
   it('recovers one structured overflow on a rejected request after completed tools without redoing them', async () => {
@@ -88,6 +92,27 @@ describe('HarnessSession — multi-step turn driver', () => {
     await session.send('continue');
     expect(prompts).toHaveLength(4);
     expect((read as any).calls).toHaveLength(1);
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+  });
+
+  it('a custom endpoint’s context-too-long error is recovered with one summary and a retry', async () => {
+    // The shape @ai-sdk/openai-compatible throws for an OpenAI-style 400 (captured 2026-10-21).
+    const overflow = Object.assign(new Error('Bad Request'), { statusCode: 400, url: 'https://x.example.com/v1/chat/completions',
+      responseBody: JSON.stringify({ error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }) });
+    const scripts = [
+      stream({ type: 'error', error: overflow }),
+      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('a', 'done'), finishChunk('stop')),
+    ];
+    let index = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }) });
+    const profile = resolveProfile({ providerType: 'openai-compatible', modelId: 'm', contextLength: null });
+    const session = new HarnessSession(makeOpts({ binding: { providerId: '01HRANDOMID', modelId: 'm' }, profile, contextLength: 8192 }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'original ' + 'x'.repeat(10000) }, { role: 'assistant', content: 'ack' }] as any);
+    const events = collect(session);
+    await session.send('continue');
+    expect(index).toBe(3);
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
     expect(events.some(e => e.type === 'turn-complete')).toBe(true);
   });

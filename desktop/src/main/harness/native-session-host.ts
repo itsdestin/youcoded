@@ -2177,7 +2177,10 @@ export class NativeSessionHost extends EventEmitter {
     // count, or read null instead of a real number — with no throw, just a
     // wrong cap. Collapsing to one return value removes the shared state
     // entirely: there is no ordering left to get wrong.
-    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null }>,
+    // `onThisComputer` (optional): a custom endpoint whose address is on this computer — its unknown
+    // window is then assumed small (capability-profile assumedContextWindow). Carried on this call,
+    // not a setter, so no session can be resolved before the fact is known.
+    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null; onThisComputer?: boolean }>,
     // Resolves a binding's provider TYPE (local-engine / openrouter / anthropic /
     // …) so the host can pick the right CapabilityProfile (Task 5). A binding
     // whose provider is unknown returns null → resolveContextAndProfile falls back
@@ -2608,7 +2611,7 @@ export class NativeSessionHost extends EventEmitter {
     // that used to share one /props reading through a variable at the
     // ipc-handlers.ts wiring site. There is nothing left to order: this is
     // the single await that produces both values for this binding.
-    const { contextLength: raw, totalSlots } = await this.contextAndSlotsFor(binding);
+    const { contextLength: raw, totalSlots, onThisComputer } = await this.contextAndSlotsFor(binding);
     const discoveredSlots = totalSlots ?? undefined;
     const type = (await this.providerTypeFor(binding)) ?? 'openrouter';     // unknown → cloud-safe default
     // The registry ceiling (effectiveContextForModel) is a LOCAL-model concern: it
@@ -2632,6 +2635,7 @@ export class NativeSessionHost extends EventEmitter {
       // for every non-local-engine binding — the ipc-handlers wiring never
       // queries the engine for those.
       totalSlots: discoveredSlots,
+      onThisComputer,
     });
     // Task 11 (spec §5): the price this binding runs at, and whether it costs
     // anything at all. Resolved here so create/resume/swap all get it from the

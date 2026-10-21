@@ -360,14 +360,15 @@ export const PAGES: PageDef[] = [
     needsNative: true,
     icon: <Icon><path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 8.5a3.5 3.5 0 0 1-.5 7H7z" /></Icon>,
     // The three cards stacked as the Model Providers popup stacked them (P-5
-    // note: "similar to the current page"), then your own API keys.
+    // note: "similar to the current page"), then your own API keys straight
+    // below, with no heading of their own (Destin, 2026-10-21).
     render: (ctx) => (
       // data-guide-anchor: the first-run tour's "models and providers" stop
       // rings the whole page — every way to be answered, not just API keys.
       <div className="space-y-2" data-guide-anchor="providers">
         <ClaudeCodeBlock onOpenClaudePreferences={ctx.onOpenClaudePreferences} onCloseParent={ctx.onClosePanel} />
         <ChatGptBlock />
-        <OpenRouterBlock keysHeading="Your own API keys" />
+        <OpenRouterBlock />
       </div>
     ),
   },

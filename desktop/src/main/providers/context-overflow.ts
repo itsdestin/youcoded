@@ -1,6 +1,6 @@
 // Intentionally narrow: never infer overflow from HTTP status or prose. The
 // adapters differ in which structured upstream details they retain.
-export function isContextOverflow(error: unknown, providerId: string): boolean {
+export function isContextOverflow(error: unknown, providerId: string, providerType?: string): boolean {
   const e = (error as any)?.lastError ?? error as any;
   if (!e || typeof e !== 'object') return false;
   if ([401, 402, 403, 429].includes(e.statusCode ?? e.status)) return false;
@@ -22,5 +22,11 @@ export function isContextOverflow(error: unknown, providerId: string): boolean {
   // structured response error and endpoint evidence.
   if (providerId === 'chatgpt') return body.error?.code === 'context_length_exceeded'
     && typeof e.url === 'string' && /\/responses(?:\?|$)/.test(e.url);
+  // A custom endpoint (OpenAI-compatible, user-chosen id): the standard OpenAI envelope only — a 400
+  // whose body is { error: { code: 'context_length_exceeded' } }. Captured 2026-10-21 through
+  // @ai-sdk/openai-compatible: an unwrapped APICallError with statusCode 400 and that JSON in
+  // responseBody. WHY gated on the TYPE: the id is random; WHY the exact code: this branch must never
+  // turn another 400 into a summary.
+  if (providerType === 'openai-compatible') return (e.statusCode ?? e.status) === 400 && body.error?.code === 'context_length_exceeded';
   return false;
 }

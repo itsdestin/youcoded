@@ -3,7 +3,8 @@
 // trim a request, and an infeasible summary leaves accepted history intact.
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
-import { contextBudget, planContextBudget, selectCompactionCut, summarizePrompt, validateCompactionCandidate } from '../src/main/harness/compaction';
+import { contextBudget, planContextBudget, selectCompactionCut, summarizePrompt, validateCompactionCandidate, UNKNOWN_CLOUD_WINDOW, UNKNOWN_LOCAL_WINDOW } from '../src/main/harness/compaction';
+import { resolveProfile } from '../src/main/harness/capability-profile';
 import { messagesTokens } from '../src/main/harness/message-size';
 import { makeSession, scriptModel, drainTurn, HARNESS, type ScriptStep } from './helpers/harness-fakes';
 
@@ -189,5 +190,49 @@ describe('driver: compaction happens before any request trimming', () => {
     expect(request.map(m => m.content[0].text)).toEqual([
       '[Earlier conversation summary]\nSUMMARY.', 'recap briefly', 'continue',
     ]);
+  });
+});
+
+describe('an unknown window uses the assumption it is given', () => {
+  const base = { contextLength: null, fixedCost: 2_000, summaryOverhead: 200, maxTokens: 4_096 };
+  it('defaults to the local assumption, as before', () => {
+    expect(planContextBudget(base).contextLength).toBe(UNKNOWN_LOCAL_WINDOW);
+    expect(contextBudget({ contextLength: null, maxTokens: 4_096 }).trimBudget).toBe(UNKNOWN_LOCAL_WINDOW - 4_096 - 1024);
+  });
+  it('a cloud assumption plans a 250k window and still reports it as estimated', () => {
+    const plan = planContextBudget({ ...base, assumedWindow: UNKNOWN_CLOUD_WINDOW });
+    expect(plan.contextLength).toBe(250_000);
+    expect(plan.estimatedWindow).toBe(true);
+    expect(contextBudget({ contextLength: null, maxTokens: 4_096, assumedWindow: UNKNOWN_CLOUD_WINDOW }).trimBudget).toBe(250_000 - 4_096 - 1024);
+  });
+  it('a known window always wins over the assumption', () => {
+    expect(planContextBudget({ ...base, contextLength: 128_000, assumedWindow: UNKNOWN_CLOUD_WINDOW }).contextLength).toBe(128_000);
+  });
+});
+
+describe('a session with an unknown window budgets with its profile’s assumption', () => {
+  // ~22k tokens of history: past a 32k window's trigger (with the 16k reply reserve), far inside 250k.
+  const run = async (onThisComputer: boolean) => {
+    const events: any[] = []; const prompts: any[][] = [];
+    const profile = resolveProfile({ providerType: 'openai-compatible', modelId: 'm', contextLength: null, onThisComputer });
+    const session = makeSession({ profile, seedBulkHistoryTokens: 22_000, harness: PRODUCTION_RESERVE,
+      onEvent: (e) => events.push(e), model: promptCapturingModel([{ text: 'SUMMARY.' }, { text: 'answer' }], prompts) });
+    await drainTurn(session, 'continue');
+    return { summaries: events.filter((e) => e.type === 'compact-summary').length, calls: prompts.length };
+  };
+  it('in the cloud (250k assumed): the conversation is sent as it is, with no summary first', async () => {
+    expect(await run(false)).toEqual({ summaries: 0, calls: 1 });
+  });
+  it('on this computer (32k assumed): the same conversation is summarised before it is sent', async () => {
+    expect(await run(true)).toEqual({ summaries: 1, calls: 2 });
+  });  it('in the cloud, the request keeps its full reply allowance (the pre-request plan uses 250k too)', async () => {
+    const opts: any[] = [];
+    const inner = scriptModel([{ text: 'answer' }]);
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { opts.push(o); return inner.doStream(o); } });
+    const profile = resolveProfile({ providerType: 'openai-compatible', modelId: 'm', contextLength: null, onThisComputer: false });
+    const session = makeSession({ profile, seedBulkHistoryTokens: 20_000, harness: PRODUCTION_RESERVE, model });
+    await drainTurn(session, 'continue');
+    // A 32k plan would leave well under 16k for the reply after ~20k of history.
+    expect(opts[0].maxOutputTokens).toBe(16_000);
   });
 });

@@ -899,3 +899,61 @@ describe('ModelPicker — pickers that choose for the computer keep native model
     expect(await screen.findByRole('button', { name: 'Model' })).toHaveTextContent(`${LABEL} · Cloud`);
   });
 });
+
+// ── Check for new models ─────────────────────────────────────────────────────
+// A model released today is not in the once-a-day list; an empty search offers a refresh.
+describe('ModelPicker — Check for new models on an empty search', () => {
+  const OR = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
+  function bridge(refreshCatalog?: ReturnType<typeof vi.fn>) {
+    (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
+      providers: {
+        list: vi.fn().mockResolvedValue([OR]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'a/one', providerId: 'openrouter', label: 'One' }]),
+        ...(refreshCatalog ? { refreshCatalog } : {}),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+  const searchNothing = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    fireEvent.change(await screen.findByPlaceholderText('Search all models…'), { target: { value: 'zzzz' } });
+  };
+  beforeEach(() => { (globalThis as any).window = (globalThis as any).window ?? {}; });
+  afterEach(() => { cleanup(); delete (globalThis as any).window.claude; });
+
+  it('refreshes and says the list is up to date when nothing new matches', async () => {
+    const refreshCatalog = vi.fn().mockResolvedValue({ added: 0, failed: [] });
+    bridge(refreshCatalog);
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    await searchNothing();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for new models' }));
+    expect(await screen.findByText('The model list is up to date. Nothing matches “zzzz”.')).toBeInTheDocument();
+    expect(refreshCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('names a source it could not reach', async () => {
+    bridge(vi.fn().mockResolvedValue({ added: 0, failed: ['OpenRouter'] }));
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    await searchNothing();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for new models' }));
+    expect(await screen.findByText(/Couldn't reach OpenRouter to check for new models/)).toBeInTheDocument();
+  });
+
+  it('no button where the bridge cannot refresh', async () => {
+    bridge(undefined);
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    await searchNothing();
+    expect(await screen.findByText(/No models match/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Check for new models' })).toBeNull();
+  });
+
+  it('a phone paired to an older computer: the button goes away, with no error', async () => {
+    bridge(vi.fn().mockRejectedValue(Object.assign(new Error('remote-unsupported: provider:refresh-catalog'), { code: 'REMOTE_UNSUPPORTED' })));
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    await searchNothing();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for new models' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Check for new models|Checking/ })).toBeNull());
+    expect(screen.queryByText(/Couldn't reach/)).toBeNull();
+  });
+});
