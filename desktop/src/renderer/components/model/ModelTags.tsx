@@ -58,12 +58,14 @@ function dollars(n: number): string {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }
 
+// WHY every hint is at most a few short lines (Destin, design review 2026-09-11, L-1
+// note: "the hover copy is too wordy/complex. simplify/concise/shorten"). The UX
+// tester's longer explanations were cut back to the figure and its source.
+
 /** The listed price, in and out (Destin, F-1 note: "hovering should show the real
- *  full listed in/out price"). WHY these words (UX tester U13): "$3 in · $15 out, per
- *  million" left a student asking per million WHAT, and what in and out are. Prices
- *  are listed per token; about 750,000 English words make a million tokens. */
-function priceLines(p: { in: number; out: number }): string {
-  return `${dollars(p.in)} for what you send · ${dollars(p.out)} for what it writes\nper million tokens (about 750,000 words)`;
+ *  full listed in/out price"). */
+function priceLine(p: { in: number; out: number }): string {
+  return `${dollars(p.in)} in · ${dollars(p.out)} out per 1M tokens`;
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -74,21 +76,12 @@ function ordinal(n: number): string {
   return `${n}${suffix}`;
 }
 
-// WHY comparisons instead of "Poor value among models scoring 50 to 79" (UX tester
-// U14: it needed a second read). Value is judged against models at the same
-// intelligence level, cheapest third great, priciest third poor (F-1), so "most
-// models this smart" is exactly what the level means.
+// Value is judged against models at the same intelligence level, cheapest third
+// great, priciest third poor (F-1) — "this smart" is exactly what the level means.
 const VALUE_LINE = {
   great: 'Cheaper than most models this smart',
-  fair: 'Priced like most models this smart',
-  poor: 'Costs more than most models this smart',
-} as const;
-
-// A price level is thirds of every priced model, with no score to judge value (F-3).
-const PRICE_LINE = {
-  low: 'Cheaper than most models',
-  mid: 'Priced like most models',
-  high: 'Costs more than most models',
+  fair: 'Average price for how smart it is',
+  poor: 'Pricier than most models this smart',
 } as const;
 
 const SPEED_WORD: Record<Band, string> = { good: 'Fast', middling: 'Medium', poor: 'Slow' };
@@ -111,21 +104,23 @@ export function tagsFor(
   const out: TagSpec[] = [];
 
   // ── Cost ──────────────────────────────────────────────────────────────────
+  // Sentence case (Destin, design review 2026-09-11, Q-1 "sentence"): his words,
+  // written the way every other tag is.
   if (f.billing === 'subscription') {
-    out.push({ kind: 'cost', tone: 'neutral', label: 'SUBSCRIPTION PLAN', short: 'Plan', hint: `Included in your ${planName} plan, no charge per use` });
+    out.push({ kind: 'cost', tone: 'neutral', label: 'Subscription plan', short: 'Plan', hint: `In your ${planName} plan` });
   } else if (f.billing === 'local') {
-    out.push({ kind: 'cost', tone: 'good', label: 'FREE - LOCAL', short: 'Free', hint: 'Runs on this computer, no charge per use' });
+    out.push({ kind: 'cost', tone: 'good', label: 'Free, local', short: 'Free', hint: 'Free, runs on this computer' });
   } else if (f.price && f.value && f.intelligence) {
     const word = { great: 'Great', fair: 'Fair', poor: 'Poor' }[f.value];
     out.push({
       kind: 'cost', tone: VALUE_BAND[f.value], label: `${word} value`, short: word,
-      hint: `${VALUE_LINE[f.value]}\n${priceLines(f.price)}`,
+      hint: `${VALUE_LINE[f.value]}\n${priceLine(f.price)}`,
     });
   } else if (f.price && f.priceLevel) {
     const word = { low: 'Low', mid: 'Mid', high: 'High' }[f.priceLevel];
     out.push({
       kind: 'cost', tone: 'neutral', label: `${word} price`, short: `${word} price`,
-      hint: `${PRICE_LINE[f.priceLevel]}; no intelligence score to judge value\n${priceLines(f.price)}`,
+      hint: `No score, so value can't be judged\n${priceLine(f.price)}`,
     });
   }
   // No price found and no billing: nothing. Never "Free" (S-1).
@@ -133,40 +128,34 @@ export function tagsFor(
   // ── Intelligence ──────────────────────────────────────────────────────────
   if (f.intelligence) {
     const { score, scoredAs, borrowed, benchmarks: b } = f.intelligence;
-    // WHY these lines (UX tester U11, U12): "100 is GPT-6 Astra" named a model that
-    // is not in the list, the bare percentages did not say percent of what, and a
-    // plan alias ("Sonnet") scored as a different name read as a second model.
-    const lines = [`Intelligence ${score} out of 100`, `100 is today's best model, ${snapshot.topModel}`];
-    if (scoredAs) {
-      lines.push(borrowed
-        ? `Score of the original ${scoredAs}; this downloaded copy may do a little worse`
-        : `Scores for ${scoredAs}, the model it runs today`);
-    }
+    // The model at 100 and the date stay: S-4 promises the hint names both. A plan
+    // alias or a downloaded copy says whose score it is (UX tester U11).
+    const lines = [`Intelligence ${score}/100 (100 = ${snapshot.topModel})`];
+    if (scoredAs) lines.push(borrowed ? `Original's score: ${scoredAs}` : `Scored as ${scoredAs}`);
     const results = [
-      b?.coding != null ? `coding ${pct(b.coding)}` : null,
-      b?.science != null ? `science ${pct(b.science)}` : null,
-      b?.facts != null ? `facts ${pct(b.facts)}` : null,
+      b?.coding != null ? `Coding ${pct(b.coding)}` : null,
+      b?.science != null ? `Science ${pct(b.science)}` : null,
+      b?.facts != null ? `Facts ${pct(b.facts)}` : null,
     ].filter(Boolean);
-    if (results.length) lines.push(`Tests passed: ${results.join(' · ')}`);
-    if (b?.instructions) lines.push(`${ordinal(b.instructions.rank)} of ${b.instructions.of} at following instructions`);
+    if (results.length) lines.push(results.join(' · '));
+    if (b?.instructions) lines.push(`Instructions: ${ordinal(b.instructions.rank)} of ${b.instructions.of}`);
     // The sources are named on purpose: both licences require credit (CC BY 4.0).
-    lines.push(`Sources: Epoch AI${b?.instructions ? ', LMArena' : ''} · ${niceDate(snapshot.asOf)}`);
+    lines.push(`Epoch AI${b?.instructions ? ', LMArena' : ''} · ${niceDate(snapshot.asOf)}`);
     out.push({ kind: 'intelligence', tone: intelligenceBand(score), label: `Intelligence ${score}`, short: String(score), hint: lines.join('\n') });
   } else {
-    out.push({ kind: 'intelligence', tone: 'dim', label: 'Not rated', short: 'Not rated', hint: 'No public intelligence score for this model yet' });
+    out.push({ kind: 'intelligence', tone: 'dim', label: 'Not rated', short: 'Not rated', hint: 'No public score yet' });
   }
 
   // ── Speed (this computer only, Q-9) ───────────────────────────────────────
   if (f.speed) {
     const word = SPEED_WORD[speedBand(f.speed.wordsPerSecond)];
-    // WHY no "~" (UX tester U15: "the tilde means nothing to most people"): an
-    // estimate is drawn with a dashed edge, and its hint says so in words.
+    // An estimate is drawn with a dashed edge (UX tester U15: a "~" meant nothing).
     out.push({
       kind: 'speed', tone: speedBand(f.speed.wordsPerSecond), label: word, short: word,
       estimated: f.speed.estimated,
       hint: f.speed.estimated
-        ? `About ${f.speed.wordsPerSecond} words a second on this computer\nAn estimate until its first reply`
-        : `${f.speed.wordsPerSecond} words a second on this computer, measured`,
+        ? `About ${f.speed.wordsPerSecond} words/sec (estimate)`
+        : `${f.speed.wordsPerSecond} words/sec on this computer`,
     });
   }
   return out;
