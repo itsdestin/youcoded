@@ -1752,9 +1752,14 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
 .faq details .a{padding:0}
 .faq details .a-in{padding:0 22px 20px}
-.faq summary{transition:background .18s,transform .14s}
-.faq summary:hover{background:rgba(var(--fg-rgb),.045)}
-.faq summary:active,.storyfold>summary:active{transform:scale(.992);background:rgba(var(--fg-rgb),.07)}
+/* The row's own corners follow the card's, and the press is a tint only: a transform on a
+   row inside a blurred glass card made the browser paint a square dark block behind it
+   (Destin, 2026-10-21 screenshot). */
+.faq summary{border-radius:var(--radius);transition:background .18s}
+.faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
+.faq summary:hover{background:rgba(var(--fg-rgb),.04)}
+.faq summary:active,.storyfold>summary:active{transform:none;background:rgba(var(--fg-rgb),.08)}
+.storyfold>summary{transition:background .18s}
 .faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
 .faq details[open] summary::after{content:'+'}
 .faq details.is-open summary::after{transform:rotate(45deg)}
@@ -1763,7 +1768,8 @@ html{-webkit-tap-highlight-color:transparent}
 @media (prefers-reduced-motion:reduce){.faq details .a,.storyfold .a,.faq summary,.faq summary::after{transition:none}}
 @media (max-width:760px){
   .storyfold{padding:0}
-  .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius);transition:background .18s,transform .14s}
+  .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius)}
+  .storyfold.is-open>summary{border-radius:var(--radius) var(--radius) 0 0}
   .storyfold>summary::after{content:'+';margin-left:auto;color:var(--accent);font-size:1.3rem;line-height:1;transition:transform .34s cubic-bezier(.2,.8,.2,1)}
   .storyfold.is-open>summary::after{transform:rotate(45deg)}
   .storyfold .a-in{padding:0 17px 18px}
