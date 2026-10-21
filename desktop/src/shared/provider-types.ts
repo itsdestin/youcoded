@@ -132,18 +132,6 @@ export interface ServiceEntry {
   models?: { id: string; label: string; contextLength?: number; priceIn?: number; priceOut?: number; tools?: boolean }[];
 }
 
-/** The two provider calls designed ahead of their backend (custom-providers,
- *  2026-10-20). Only the workbench serves them (dev/workbench/mock-only.ts), so
- *  they stay out of backend-contract.ts until providers:services and
- *  providers:refresh-catalog land on both doors — and every caller must handle
- *  them being absent. */
-export interface PendingProviderCalls {
-  services?: () => Promise<ServiceEntry[]>;
-  /** `added`: models new since the last list. `failed`: sources that could not
-   *  be reached, by plain name; their old lists are kept. */
-  refreshCatalog?: () => Promise<{ added: number; failed: string[] }>;
-}
-
 /** What a provider row can say about its model list (U5). Absent = unknown. */
 export interface ProviderModelInfo {
   count: number;

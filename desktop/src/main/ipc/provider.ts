@@ -70,6 +70,18 @@ export const providerChannels: MainChannelDef[] = [
     name: IPC.PROVIDER_CATALOG, kind: 'handle',
     handler: async (_p, ctx) => ctx.runtime ? ctx.runtime.modelCatalog.get(await ctx.runtime.providerRegistry.list()) : [],
   }),
+  // The providers Add provider can search (models.dev, cached). Empty before the runtime exists.
+  defineChannel({ name: IPC.PROVIDER_SERVICES, kind: 'handle', handler: (_p, ctx) => ctx.runtime ? ctx.runtime.modelCatalog.services() : [] }),
+  // "Check for new models": re-download every model list now, skipping the daily cache. Before the runtime
+  // exists this THROWS (a phone then sees an error, the computer's picker its error box) — an answer of
+  // "0 new" would claim a check that never happened.
+  defineChannel({
+    name: IPC.PROVIDER_REFRESH_CATALOG, kind: 'handle',
+    handler: async (_p, ctx) => {
+      if (!ctx.runtime) throw new Error('Providers are not ready yet. Try again.');
+      return ctx.runtime.modelCatalog.refresh(await ctx.runtime.providerRegistry.list());
+    },
+  }),
   // Looks for Ollama / LM Studio on THIS computer (the only place they can be).
   defineChannel({
     name: IPC.ENDPOINTS_DETECT, kind: 'handle',

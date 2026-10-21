@@ -800,6 +800,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'theme:list',
   'commands:list',
   'appearance:get-favorite-themes',
+  // "Check for new models" (custom providers): a failure must show the picker's error box, never
+  // resolve as "the model list is up to date".
+  'provider:refresh-catalog',
   // Installing Claude Code (first-run local models, F-5): open to a phone — the computer
   // runs the installer (table entry main/ipc/claude-code.ts, Node first). Listed here so a
   // refusal or failure `{ ok:false }` rejects instead of resolving as an install that finished.
@@ -3268,6 +3271,8 @@ export function installShim(): void {
       test: (id: string, key?: string) => invoke('provider:test', key === undefined ? { id } : { id, key }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
+      services: () => invoke('provider:services'),
+      refreshCatalog: () => invoke('provider:refresh-catalog'),
     },
     // WHY a host-derived getter: Android's own backend supports ChatGPT sign-in.
     // Visiting clients must still see the host account; openExternal separately

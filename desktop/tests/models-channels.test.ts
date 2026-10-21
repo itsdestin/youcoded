@@ -22,9 +22,9 @@ describe('what is in the table and who may call it', () => {
   it('every request name in the contract for these families has an entry; the pushes have none', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && v !== IPC.ENGINE_MODELS_CHANGED);
-    // 13 models + 9 engine + 6 provider + 4 search + 4 chatgpt + 3 openrouter + 2 claude-code + endpoints:detect;
+    // 13 models + 9 engine + 8 provider + 4 search + 4 chatgpt + 3 openrouter + 2 claude-code + endpoints:detect;
     // a new one must be decided here.
-    expect(names.length).toBe(42);
+    expect(names.length).toBe(44);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
     for (const p of PUSHES) expect(findChannel(p)).toBeUndefined();
   });
@@ -77,6 +77,9 @@ describe('a phone that arrives before the runtime exists gets the same answers a
     expect(await call('provider:upsert', { type: 'openai-compatible', label: 'x', enabled: true }, none)).toBeNull();
     expect(await call('provider:test', { id: 'p' }, none)).toEqual({ ok: false, message: 'Native runtime not available.' });
     expect(await call('provider:catalog', undefined, none)).toEqual([]);
+    expect(await call('provider:services', undefined, none)).toEqual([]);
+    // Never a made-up "0 new models": a refresh that could not run says so.
+    await expect(call('provider:refresh-catalog', undefined, none)).rejects.toThrow('not ready');
     expect(await call('search:test', { backend: 'exa', key: 'k' }, none)).toEqual({ ok: false, message: 'Native runtime not available.' });
     expect(await call('chatgpt:status', undefined, none)).toEqual({ state: 'signed-out' });
     expect(await call('openrouter:sign-in-status', undefined, none)).toEqual({ state: 'idle' });

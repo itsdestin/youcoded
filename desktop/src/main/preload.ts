@@ -341,6 +341,8 @@ const IPC = {
   PROVIDER_TEST: 'provider:test',
   PROVIDER_SET_KEY: 'provider:set-key',
   PROVIDER_CATALOG: 'provider:catalog',
+  PROVIDER_SERVICES: 'provider:services',
+  PROVIDER_REFRESH_CATALOG: 'provider:refresh-catalog',
   CHATGPT_STATUS: 'chatgpt:status',
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
@@ -2169,6 +2171,8 @@ contextBridge.exposeInMainWorld('claude', {
     test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, { id, key }),
     setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, { id, key }),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
+    services: () => ipcRenderer.invoke(IPC.PROVIDER_SERVICES),
+    refreshCatalog: () => ipcRenderer.invoke(IPC.PROVIDER_REFRESH_CATALOG),
   },
   // Sign in with ChatGPT (backend design 2026-09-05 §5, §6). The account state
   // machine the Settings card and the first-run wizard read, and its three verbs.

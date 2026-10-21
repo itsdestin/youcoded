@@ -9,7 +9,6 @@ import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import type { PortableModelRef } from '../../../shared/types';
-import type { PendingProviderCalls } from '../../../shared/provider-types';
 
 // ONE model list, used everywhere a model gets chosen. Replaces four shapes for
 // the same question: the alias button row in both new-session forms,
@@ -54,10 +53,6 @@ import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
-/** The provider calls designed ahead of their backend (PendingProviderCalls). */
-function pendingProviderCalls(): PendingProviderCalls {
-  return (window.claude?.providers ?? {}) as PendingProviderCalls;
-}
 import { getCapabilities } from '../../platform';
 
 export type ModelChoice =
@@ -507,15 +502,17 @@ export default function ModelPicker({
   const [reload, setReload] = useState(0);
   const everLoadedRef = useRef(false);
 
-  // "Check for new models" on an empty search (custom-providers, 2026-10-20). Absent
-  // until the backend ships providers:refresh-catalog, so the button never shows on a
-  // build that cannot do it (guide: never a button that does nothing).
-  const canRefresh = typeof pendingProviderCalls().refreshCatalog === 'function';
+  // "Check for new models" on an empty search (custom-providers, 2026-10-20). Hidden where
+  // the call cannot work (guide: never a button that does nothing): a bridge without it,
+  // or a phone paired to an older computer that answers "not supported" — learnt on the
+  // first press, then the button stays hidden for this panel.
+  const [refreshUnsupported, setRefreshUnsupported] = useState(false);
+  const canRefresh = !refreshUnsupported && typeof window.claude?.providers?.refreshCatalog === 'function';
   type RefreshState = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; added: number } | { kind: 'failed'; failed: string[] };
   const [refreshState, setRefreshState] = useState<RefreshState>({ kind: 'idle' });
   const refreshModelList = useCallback(async () => {
-    const run = pendingProviderCalls().refreshCatalog;
-    if (!run) return;
+    const run = window.claude?.providers?.refreshCatalog;
+    if (typeof run !== 'function') return;
     setRefreshState({ kind: 'running' });
     try {
       const res = await run();
@@ -523,7 +520,13 @@ export default function ModelPicker({
       // others is still worth showing — so re-read either way, then say what happened.
       setReload((n) => n + 1);
       setRefreshState(res.failed.length ? { kind: 'failed', failed: res.failed } : { kind: 'done', added: res.added });
-    } catch {
+    } catch (e) {
+      // An older paired computer has no such call: hide the button rather than show an error.
+      if ((e as { code?: unknown } | null)?.code === 'REMOTE_UNSUPPORTED') {
+        setRefreshUnsupported(true);
+        setRefreshState({ kind: 'idle' });
+        return;
+      }
       // Nothing said which source failed: never invent one (error standards).
       setRefreshState({ kind: 'failed', failed: ['the model lists'] });
     }

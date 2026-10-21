@@ -1439,7 +1439,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // The real catalog's address rule (shared/endpoint-address.ts), so the fake matches the same way.
   const sameAddress = sameEndpoint;
   let refreshes = 0;
-  const providers: Ns<'providers'> & import('../../../shared/provider-types').PendingProviderCalls = {
+  const providers: Ns<'providers'> = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
     list: async () => store.getState().providers.map((p) => {

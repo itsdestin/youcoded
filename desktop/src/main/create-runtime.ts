@@ -217,6 +217,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     ...(chatgptForUi ? { chatgptModels: () => chatgptForUi.models() } : {}),
     // A custom endpoint's own /models list is asked with its saved key (model-catalog endpointModels).
     endpointKey: (id) => providerRegistry.endpointKey(id),
+    // "Check for new models" also asks the ChatGPT plan for its current list.
+    ...(chatgptForUi ? { refreshChatgpt: () => chatgptForUi.refreshModels() } : {}),
   });
   // WebSearch stack (Phase 2 Plan B): keys live in SecretsStore, the ref map in
   // ~/.youcoded/search-providers.json (via NativeHome). SearchChain caches the

@@ -2,13 +2,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import React from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Chip, CloseButton, ErrorState, FieldError, FoldRow, SectionLabel, TextInput, Toggle, TypeableSelect } from './ui';
 import type { SelectOption } from './ui/Select';
-import { isLocalEndpoint, type PendingProviderCalls, type ProviderStatus, type ProviderConfig, type ServiceEntry } from '../../shared/provider-types';
+import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ServiceEntry } from '../../shared/provider-types';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
 
-/** The provider calls designed ahead of their backend (PendingProviderCalls). */
-function pendingProviderCalls(): PendingProviderCalls {
-  return (window.claude?.providers ?? {}) as PendingProviderCalls;
-}
 
 // WHY shared: the catalog (main) matches endpoints by the same rule, so the form and the picker agree.
 import { sameEndpoint } from '../../shared/endpoint-address';
@@ -468,8 +464,9 @@ function useServices(): ServiceEntry[] {
   const [list, setList] = useState<ServiceEntry[]>([]);
   useEffect(() => {
     let live = true;
-    const load = pendingProviderCalls().services;
-    if (!load) return;
+    // WHY the guard: an older paired computer's bridge may lack it; the form then keeps its direct choices.
+    const load = window.claude?.providers?.services;
+    if (typeof load !== 'function') return;
     load().then((rows) => { if (live && Array.isArray(rows)) setList(rows); }).catch(() => { /* the direct choices still work */ });
     return () => { live = false; };
   }, []);
