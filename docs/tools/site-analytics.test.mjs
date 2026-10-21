@@ -25,9 +25,14 @@ test('canonical top-level root only', () => {
   assert.equal(eligible({ location: new URL('https://youcoded.ai/'), top: 1, self: 2 }), false);
 });
 test('labels and referrer suppress arbitrary metadata', () => {
-  assert.deepEqual(metadata('https://youcoded.ai/?utm_source=%20Post%20&utm_campaign=A%2F%23%3F&email=secret', 'https://EXAMPLE.com/path?private'), { source: 'Post', campaign: 'A/#?', referrerDomain: 'example.com' });
+  assert.deepEqual(metadata('https://youcoded.ai/?utm_source=%20Post%20&utm_campaign=A%2F%23%3F&email=secret', 'https://EXAMPLE.com/path?private'), { source: 'Post', campaign: 'A/#?', code: null, referrerDomain: 'example.com' });
   for (const query of ['utm_source=a', 'utm_source=a&utm_source=b&utm_campaign=c', 'utm_source=%00&utm_campaign=c', 'utm_source=(untagged)&utm_campaign=c', `utm_source=${'x'.repeat(161)}&utm_campaign=c`, 'utm_source=%7F&utm_campaign=c']) assert.equal(metadata('https://youcoded.ai/?' + query, '').source, null);
   for (const ref of ['https://youcoded.ai/x', 'https://localhost/x', 'http://127.0.0.1/x', 'https://user:pass@example.com/x', 'https://example.com:8443/x']) assert.equal(metadata('https://youcoded.ai/', ref).referrerDomain, '');
+});
+test('short links carry one opaque code and nothing else', () => {
+  assert.deepEqual(metadata('https://youcoded.ai/?k7qm2x', ''), { source: null, campaign: null, code: 'k7qm2x', referrerDomain: '' });
+  assert.equal(metadata('https://youcoded.ai/?k7qm2x&fbclid=abc', '').code, 'k7qm2x');
+  for (const query of ['k7qm2x=1', 'K7QM2X', 'k7qm2', 'k7qm2xx', 'k7qm2o', 'k7qm2x&a2b3c4']) assert.equal(metadata('https://youcoded.ai/?' + query, '').code, null, query);
 });
 test('start is minimal, nonce independent per page, coalesced cumulative update', async () => {
   const a = rig(), b = rig(); await a.tick(0); await b.tick(0);
