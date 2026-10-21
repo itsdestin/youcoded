@@ -54,6 +54,23 @@ describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictu
     expect(fs.readFileSync(p)).toEqual(before);
   });
 
+  it('shrinkBytes: a 2160×1350 picture already in memory comes back as a real 1800×1125 PNG under a 2000 px cap', async () => {
+    const p = path.join(dir, 'wide.png');
+    writeRealPng(p, 2160, 1350);
+    const prep = new ImagePreparer(path.join(dir, 'cache'), async (req) => {
+      const reply = runResizeJob({ bytes: req.bytes, width: req.width, height: req.height, format: req.format });
+      return reply.ok ? { ok: true, bytes: Buffer.from(reply.bytes) } : reply;
+    });
+    const out = await prep.shrinkBytes(fs.readFileSync(p), { maxEdgePx: 2000, maxPatches: 16_384 });
+    expect(out?.mediaType).toBe('image/png');
+    expect(PNG.sync.read(out!.bytes)).toMatchObject({ width: 1800, height: 1125 });
+    // In memory only: nothing is written to the cache folder.
+    expect(fs.existsSync(path.join(dir, 'cache'))).toBe(false);
+    // A picture that already fits, and bytes it cannot measure, come back null.
+    expect(await prep.shrinkBytes(fs.readFileSync(p), IMAGE_LIMITS_DEFAULT)).toBeNull();
+    expect(await prep.shrinkBytes(Buffer.from('not an image'), { maxEdgePx: 2000, maxPatches: 16_384 })).toBeNull();
+  });
+
   it('JPEG in, JPEG out at the requested size', () => {
     const png = new PNG({ width: 64, height: 32 }); png.data.fill(90);
     const first = runResizeJob({ bytes: new Uint8Array(PNG.sync.write(png)), width: 64, height: 32, format: 'jpeg' });

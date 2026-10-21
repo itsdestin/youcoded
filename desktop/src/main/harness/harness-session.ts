@@ -14,7 +14,7 @@
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
-import { imageTooLarge } from '../providers/image-too-large';
+import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -42,8 +42,8 @@ import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
-import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from './image-support';
-import { collapseOversizedImageParts, collapseLargestImageParts, userAttachmentParts } from './image-history';
+import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, withEdgeCap } from './image-support';
+import { collapseOversizedImageParts, collapseLargestImageParts, fitHistoryToImageLimits, fitHistoryToImageLimitsSync, userAttachmentParts } from './image-history';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -178,7 +178,7 @@ export function rememberedRuleFor(
 import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
-import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
+import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls, unexpectedToolThrowResult } from './tool-group-finalization';
 import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageData, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
@@ -933,6 +933,11 @@ export class HarnessSession extends EventEmitter {
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
   get profileSnapshot(): Readonly<CapabilityProfile> { return this.profile; }
+  /** An edge cap the PROVIDER named (Anthropic's 2000 px past 20 pictures), kept so later
+   *  pictures shrink up front. Not persisted (a reopen relearns it); cleared on a model switch. */
+  private tightenedEdgePx: number | null = null;
+  /** The ONE picture-limit read (send, Read, attachments): profile ∩ named cap. */
+  get imageLimits(): ImageLimits { return withEdgeCap(this.profile.imageLimits, this.tightenedEdgePx); }
 
   // How full this session's context window is right now, in tokens — the SAME
   // number the turn-complete usage payload reports (see the emit site near the
@@ -1125,7 +1130,7 @@ export class HarnessSession extends EventEmitter {
       this.prefixMoved = true;
       this.activeSizingTools = null;
       this.usageAnchor = null;
-      this._contextUsedTokens = null;
+      this._contextUsedTokens = null; this.tightenedEdgePx = null;   // the new provider may not have that cap
     }
     this.continuationBinding = undefined;
     // WHY only when `changed` (fix pass, review finding 1, then this pass):
@@ -2009,9 +2014,8 @@ export class HarnessSession extends EventEmitter {
     this.servedReads.clear(); this.servedSkills.clear();
   }
 
-  /** The gate, re-applied to what is already in memory: the session's current
-   *  limits. Returns whether history changed. */
-  private enforceImageLimits(): boolean { return this.collapseOversizedImages(this.profile.imageLimits); }
+  /** The gate re-applied to history (size, then per-request count); true if it changed. */
+  private enforceImageLimits(): boolean { return this.adoptImageRewrite(fitHistoryToImageLimitsSync(this.history, this.imageLimits)); }
 
   /** Collapse every image part over `limits` to the shared oversized note
    *  (the rewrite itself: image-history.ts → collapseOversizedImageParts).
@@ -2020,6 +2024,9 @@ export class HarnessSession extends EventEmitter {
    *  history store describes it (`pruned.oversized`, `note`). shownImages is
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
+
+  /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
+  private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
 
   private adoptImageRewrite(next: ModelMessage[] | null): boolean {
     if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
@@ -2508,7 +2515,7 @@ export class HarnessSession extends EventEmitter {
    *  the model cannot see images / none were attached. */
   private imagePartsFor(entries: ModelAttachment[]): UserPart[] {
     if (!entries.length || !this.profile.supportsVision) return [];
-    return userAttachmentParts(entries, this.profile.imageLimits);
+    return userAttachmentParts(entries, this.imageLimits);
   }
 
   /** Resolve a tool's promised image paths into deliverable parts, charging the
@@ -2555,7 +2562,7 @@ export class HarnessSession extends EventEmitter {
       // WHY the session's limits: a picture over the provider's pixel budget is
       // refused HERE, before it enters history — once in, every later request
       // would resend it and the provider would reject the whole conversation.
-      const img = readImageFromDisk(p, this.profile.imageLimits);
+      const img = readImageFromDisk(p, this.imageLimits);
       if (!img.ok) {
         // Name the real cause (error-message-standards.md). The oversized note is
         // the shared basename form so reopen rebuilds the identical text.
@@ -2811,10 +2818,14 @@ export class HarnessSession extends EventEmitter {
             // is retried unchanged — collapse must report a change. This is the
             // safety net behind enforceImageLimits (a wrong-high placeholder limit). WHY the
             // second mode: our patch count may disagree with the provider's (image-history.ts).
+            // Third (2026-10-20): Anthropic's many-image edge cap — kept for the session,
+            // pictures SHRUNK to it (fitImagesToLimits); else every later send failed.
             const tooLarge = replayable && !imageRetried ? imageTooLarge(err) : null;
-            if (tooLarge && (this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
-              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })
-              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches)))) {
+            const edge = replayable && !imageRetried ? manyImageEdgeLimit(err) : null;
+            if (edge) this.tightenedEdgePx = Math.min(this.tightenedEdgePx ?? Infinity, edge);
+            if ((tooLarge && (this.collapseOversizedImages({ ...this.imageLimits, maxPatches: Math.min(this.imageLimits.maxPatches, tooLarge.limitPatches) })
+              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches))))
+              || (edge && await this.fitImagesToLimits())) {
               imageRetried = true;
               this.prefixMoved = true;
               turnUsage.expectedRebuild = true;
@@ -3097,7 +3108,11 @@ export class HarnessSession extends EventEmitter {
           try {
             payload = await this.runOneTool(call, recentCalls);
           } catch (err) {
-            if (!(err instanceof PermissionCallbackFailure)) throw err;
+            if (!(err instanceof PermissionCallbackFailure)) {
+              // Answer the call, never leave it dangling (unexpectedToolThrowResult's WHY).
+              payload = unexpectedToolThrowResult(err, call.toolName, this.interrupted || !!this.abort?.signal.aborted);
+              if (payload !== 'interrupted') log('ERROR', 'HarnessSession', 'a tool call threw outside its own error handling', { sessionId: this.opts.sessionId, toolName: call.toolName, error: String(err) });
+            } else {
             // WHY: the assistant already announced every call. A failed permission
             // lookup is neither approval nor a human refusal; complete the accepted
             // group before the outer error path settles the turn.
@@ -3112,6 +3127,7 @@ export class HarnessSession extends EventEmitter {
             this.history.push({ role: 'tool', content: resultParts });
             this.historyOrigins.push([...resultOrigins]);
             throw err;
+            }
           }
           if (payload === 'interrupted') {
             // WHY: uses were emitted up front; back-fill canceled results for
@@ -4196,7 +4212,7 @@ export class HarnessSession extends EventEmitter {
       supportsVision: this.profile.supportsVision,
       // WHY: Read prepares an over-limit picture against the SAME limits the
       // driver gates with, so its derivative is never refused downstream.
-      imageLimits: this.profile.imageLimits,
+      imageLimits: this.imageLimits,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
     });
   }

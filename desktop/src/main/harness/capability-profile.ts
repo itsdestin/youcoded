@@ -99,7 +99,11 @@ export interface CapabilityProfile {
  *  wrong-high fails the whole turn with a provider error, wrong-low only means
  *  a picture is downscaled further than needed. Raise a row only with a
  *  captured provider response. */
-export interface ImageLimits { maxEdgePx: number; maxPatches: number }
+/** `maxImagesPerRequest` (optional; absent = no cap): every picture in history
+ *  is resent with each request, so a long conversation can pass a provider's
+ *  per-request picture count and be refused on every send. Past it, the oldest
+ *  pictures are replaced by a note (image-history collapseExcessImageParts). */
+export interface ImageLimits { maxEdgePx: number; maxPatches: number; maxImagesPerRequest?: number }
 /** OpenAI's wire (direct key and Sign in with ChatGPT). maxPatches VERIFIED.
  *  maxEdgePx is NOT: no edge-length rejection was ever captured; 8192 is an
  *  explicit, conservative guess kept above 30,000 patches' natural reach
@@ -107,12 +111,24 @@ export interface ImageLimits { maxEdgePx: number; maxPatches: number }
  *  patch-bound first), so the one verified limit stays the binding one. */
 export const IMAGE_LIMITS_OPENAI: ImageLimits = { maxEdgePx: 8192, maxPatches: 30_000 };
 /** Everyone else. 4096² = 16,384 patches, below every published limit we know
- *  of (Anthropic documents 8000 px per side); unverified against a live reply. */
+ *  of (Anthropic documents 8000 px per side); unverified against a live reply.
+ *  NOT 2000 px, deliberately: Anthropic's stricter 2000 px applies only once a
+ *  request holds more than 20 pictures, and Gemini/local models never apply
+ *  it. Gating every picture at 2000 replaced older large screenshots with a
+ *  note in conversations that were never at risk. That case is handled where
+ *  it happens instead: the provider's rejection names the cap, and the session
+ *  shrinks its pictures to it (HarnessSession.tightenedEdgePx). */
 export const IMAGE_LIMITS_DEFAULT: ImageLimits = { maxEdgePx: 4096, maxPatches: 16_384 };
+/** Anthropic, and OpenRouter (which routes to Anthropic models): the default
+ *  sizes plus Anthropic's documented 100-pictures-per-request cap for models
+ *  with a 200k window (600 for larger ones — the lower number, since one row
+ *  serves every model). Not for Gemini or local models, which have no such cap. */
+const IMAGE_LIMITS_ANTHROPIC: ImageLimits = { ...IMAGE_LIMITS_DEFAULT, maxImagesPerRequest: 100 };
 // WHY not exported: resolveProfile (below) is its only caller; everything else reads
 // the resolved `profile.imageLimits`, so an export would only grow knip's ratchet.
 function imageLimitsFor(t: ProfileProviderType): ImageLimits {
-  return t === 'openai' || t === 'chatgpt' ? IMAGE_LIMITS_OPENAI : IMAGE_LIMITS_DEFAULT;
+  if (t === 'openai' || t === 'chatgpt') return IMAGE_LIMITS_OPENAI;
+  return t === 'anthropic' || t === 'openrouter' ? IMAGE_LIMITS_ANTHROPIC : IMAGE_LIMITS_DEFAULT;
 }
 
 export type ProfileProviderType =

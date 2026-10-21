@@ -504,12 +504,17 @@ describe('resolveProfile — imageLimits is a provider-type fact', () => {
       expect(resolveProfile({ providerType, modelId: 'x', contextLength: null }).imageLimits).toEqual({ maxEdgePx: 8192, maxPatches: 30_000 });
     }
   });
-  it('every other provider type gets the conservative default, local and registry-matched included', () => {
-    for (const providerType of ['anthropic', 'google', 'openrouter', 'openai-compatible'] as const) {
+  it('every other provider type gets the conservative default sizes, local and registry-matched included', () => {
+    for (const providerType of ['google', 'openai-compatible'] as const) {
       expect(resolveProfile({ providerType, modelId: 'x', contextLength: null }).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
     }
     expect(resolveProfile(local('mystery-3b', 8_192)).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
     expect(resolveProfile(local('qwen2.5-7b-instruct', 32_768)).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+  });
+  it('Anthropic and OpenRouter add the 100-pictures-per-request cap; nobody else does', () => {
+    for (const providerType of ['anthropic', 'openrouter'] as const) {
+      expect(resolveProfile({ providerType, modelId: 'x', contextLength: null }).imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384, maxImagesPerRequest: 100 });
+    }
   });
   it('CLOUD_DEFAULT carries the conservative default, never the OpenAI budget', () => {
     expect(CLOUD_DEFAULT.imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });

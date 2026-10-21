@@ -49,6 +49,13 @@ export interface ImagePreparerLike {
   /** Sync, IO-free: the derivative the LAST prepare() produced for `absPath`,
    *  if it produced one. The send path reads it; it must not await. */
   preparedPathFor(absPath: string): string | null;
+  /** Shrink a picture ALREADY in model memory (bytes, no path) to fit `limits`;
+   *  null when it fits, cannot be measured, or cannot be shrunk. Never throws.
+   *  WHY (2026-10-20): a provider can tighten its limit mid-conversation
+   *  (Anthropic's 2000 px once a request holds over 20 pictures); the pictures
+   *  already sent are shrunk in place rather than dropped. Optional so fakes and
+   *  older wiring keep working — absent means the caller drops to the note. */
+  shrinkBytes?(bytes: Buffer, limits: ImageLimits): Promise<{ bytes: Buffer; mediaType: 'image/png' | 'image/jpeg' } | null>;
 }
 
 /** null = fits (leave it alone) OR no size can meet the limits; the caller
@@ -102,6 +109,23 @@ export class ImagePreparer implements ImagePreparerLike {
   constructor(private readonly cacheDir: string, private readonly resize: ResizeFn) {}
 
   preparedPathFor(absPath: string): string | null { return this.prepared.get(absPath) ?? null; }
+
+  shrinkBytes(bytes: Buffer, limits: ImageLimits): Promise<{ bytes: Buffer; mediaType: 'image/png' | 'image/jpeg' } | null> {
+    const dims = imageDimensions(bytes);
+    if (!dims || dims.width * dims.height > MAX_DECODE_PIXELS) return Promise.resolve(null);
+    const target = prepareTarget(dims.width, dims.height, limits);
+    if (!target) return Promise.resolve(null);
+    // Same one-at-a-time chain and PNG-then-JPEG rule as prepare(); in memory only
+    // (no cache file) because nothing re-reads this copy by path.
+    const run = this.chain.then(async () => {
+      let res = await this.resize({ bytes, width: target.width, height: target.height, format: 'png' });
+      let mediaType: 'image/png' | 'image/jpeg' = 'image/png';
+      if (res.ok && res.bytes.length > MAX_ATTACHMENT_BYTES) { res = await this.resize({ bytes, width: target.width, height: target.height, format: 'jpeg' }); mediaType = 'image/jpeg'; }
+      return res.ok && res.bytes.length <= MAX_ATTACHMENT_BYTES ? { bytes: res.bytes, mediaType } : null;
+    }).catch(() => null);
+    this.chain = run;
+    return run;
+  }
 
   prepare(absPath: string, limits: ImageLimits): Promise<PreparedImage> {
     const key = `${absPath}|${limits.maxEdgePx}|${limits.maxPatches}`;

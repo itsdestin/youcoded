@@ -14,7 +14,7 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
-import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, readImageFromDisk } from '../src/main/harness/image-support';
+import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, imageDimensions, readImageFromDisk } from '../src/main/harness/image-support';
 import { rebuildHistory } from '../src/main/harness/history-rebuild';
 import * as crypto from 'crypto';
 import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
@@ -3248,6 +3248,81 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect(JSON.stringify(prompts[1].prompt)).toContain("above this model's image size limit");
   });
 
+  describe('Anthropic\'s many-image rejection', () => {
+    const EDGE_400 = () => Object.assign(new Error('rejected'), { statusCode: 400, responseBody: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error',
+      message: 'messages.21.content.91.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels' } }) });
+    const wide = () => Buffer.concat([pngHeader(2160, 1350), Buffer.alloc(40)]);
+    const anthropic = () => resolveProfile({ providerType: 'anthropic', modelId: 'claude-x', contextLength: null });
+    /** A model that rejects the first request with the many-image 400, then answers. */
+    const rejectOnce = (prompts: any[]) => {
+      const scripts = [stream({ type: 'error', error: EDGE_400() }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
+      let index = 0;
+      return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(...textChunks('b', 'again'), finishChunk('stop')) }) }; } });
+    };
+    const wideHistory = () => { const h = blockedHistory(); (h[2] as any).content[0].output.value[1].data.data = wide(); return h; };
+    /** A shrinker standing in for the image worker: returns a header claiming the requested fit. */
+    const fakeShrinker = (calls: Array<{ width: number; height: number }>) => ({
+      prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (bytes: Buffer, limits: any) => {
+        const d = imageDimensions(bytes)!; const s = (limits.maxEdgePx * 0.9) / Math.max(d.width, d.height);
+        const out = { width: Math.floor(d.width * s), height: Math.floor(d.height * s) };
+        calls.push(out);
+        return { bytes: Buffer.concat([pngHeader(out.width, out.height), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      },
+    });
+
+    it('a 2160 px picture is sent as-is until the provider objects — no picture is touched up front', async () => {
+      const prompts: any[] = [];
+      const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'done'), finishChunk('stop')) }) }; } });
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic() }), async () => model as any);
+      session.seedHistory(wideHistory());
+      await session.send('continue');
+      expect(prompts).toHaveLength(1);
+      expect(JSON.stringify(prompts[0].prompt)).not.toContain('image not attached');
+    });
+
+    it('shrinks the over-limit pictures to the named edge and retries ONCE — the model keeps every picture', async () => {
+      const prompts: any[] = []; const shrinks: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: fakeShrinker(shrinks) } as any }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      const events = collect(session);
+      await session.send('continue');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+      expect(shrinks).toEqual([{ width: 1800, height: 1125 }]);
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images');                                    // no note: nothing was lost
+      expect(out.value.slice(1).map((v: any) => v.filename)).toEqual(['contact.png', 'ok.png']);
+      expect(imageDimensions(out.value[1].data.data)).toEqual({ width: 1800, height: 1125 });
+    });
+
+    it('remembers the cap for the rest of the conversation: later pictures are judged against it up front', async () => {
+      const prompts: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: fakeShrinker([]) } as any }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      expect(session.imageLimits.maxEdgePx).toBe(4096);
+      await session.send('continue');
+      expect(session.imageLimits.maxEdgePx).toBe(2000);
+      await session.send('more');
+      expect(prompts).toHaveLength(3);                                                  // no second rejection
+    });
+
+    it('without an image service, falls back to the note for that picture and still recovers', async () => {
+      const prompts: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic() }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      const events = collect(session);
+      await session.send('continue');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2160, height: 1350 }));
+    });
+  });
+
   it('collapse output equals rebuildHistory output for the same persisted tool events (one label, one shape)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-collapse-'));
     const contact = path.join(dir, 'contact.png'); fs.writeFileSync(contact, huge);
@@ -3436,5 +3511,50 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect((session as any).history[0]).toBe(first);            // same message object, never rebuilt
     expect((session as any).history[0].content[1].data).toBe(fine);   // never re-encoded, never copied
     expect(prompts).toHaveLength(2);
+  });
+});
+
+describe('HarnessSession answers a tool call whose pre-execution checks throw', () => {
+  it('records the error as that call\'s result, keeps pairing, and the turn completes', async () => {
+    // A guard that throws (2026-10-20: an uncompilable regex in the secret-path
+    // check) used to escape the turn with the call unanswered, and every later
+    // request was refused with "Tool result is missing for tool call …".
+    const brittle = fakeTool('Read', { permissionSubject: () => { throw new Error('Range out of order in character class'); } });
+    const session = new HarnessSession(makeOpts({ tools: [brittle], decide: async () => ALLOW }),
+      async () => scriptModel([{ toolCalls: [{ name: 'Read', input: { file_path: '/tmp/x' } }] }, { text: 'carrying on' }]) as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    const result = events.find(e => e.type === 'tool-result');
+    expect(result?.data).toMatchObject({ isError: true });
+    expect(String(result?.data.toolResult)).toContain('Range out of order');
+    expect((brittle as any).calls).toHaveLength(0);
+    const history = session.acceptedHistory().messages as any[];
+    const callIdx = history.findIndex(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some((p: any) => p.type === 'tool-call'));
+    expect(history[callIdx + 1].role).toBe('tool');
+  });
+});
+
+describe('HarnessSession keeps the request under the provider\'s picture count', () => {
+  it('with 101 pictures in history, the first request sends 80 and notes the oldest 21', async () => {
+    const history: any[] = [];
+    for (let i = 0; i < 101; i++) {
+      history.push({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: `c${i}`, toolName: 'Read', input: { file_path: `/tmp/p${i}.png` } }] });
+      history.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: `c${i}`, toolName: 'Read', output: { type: 'content', value: [
+        { type: 'text', text: 'Read image' }, { type: 'file', mediaType: 'image/png', data: { type: 'data', data: pngHeader(100, 100) }, filename: `p${i}.png` },
+      ] } }] });
+    }
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 1_000_000,
+      profile: resolveProfile({ providerType: 'anthropic', modelId: 'claude-x', contextLength: null }) }), async () => model as any);
+    session.seedHistory(history);
+    await session.send('next');
+    const wire = JSON.stringify(prompts[0].prompt);
+    expect((wire.match(/"type":"file"/g) ?? []).length).toBe(80);
+    expect((wire.match(/no longer sent: this conversation holds more pictures/g) ?? []).length).toBe(21);
+    expect(wire).toContain('p0.png is no longer sent');
+    expect(wire).not.toContain('p100.png is no longer sent');
   });
 });

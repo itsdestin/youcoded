@@ -22,7 +22,7 @@ import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
-import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-rebuild';
+import { rebuildHistoryWithOrigins, restorePortableHistory, hasUnpairedToolCalls } from './history-rebuild';
 import { compactionSourceDigest, withLiveCompactionOperation } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
@@ -3231,7 +3231,13 @@ export class NativeSessionHost extends EventEmitter {
           imageLimits: session.profileSnapshot.imageLimits,
         });
         check();
-        if (restored.ok) {
+        // WHY (2026-10-20): a checkpoint published while a tool call was left
+        // unanswered (a throw mid-call) restored that dangling call verbatim on
+        // every resume, and the provider refused every request after it — the
+        // rebuild below repairs pairing, this path never did. Fall back to it.
+        if (restored.ok && hasUnpairedToolCalls(restored.messages)) {
+          this.logContinuation(sessionId, 'unpaired-tool-call', 'restore');
+        } else if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.
           // Their exact provider history may be used, but a portable cut needs
           // a matching, validated public record and event-backed suffix.
@@ -3251,7 +3257,7 @@ export class NativeSessionHost extends EventEmitter {
           });
           return;
         }
-        this.logContinuation(sessionId, restored.reason, 'restore');
+        if (!restored.ok) this.logContinuation(sessionId, restored.reason, 'restore');
       }
     }
     // WHY: the private exact snapshot is optional. The public checkpoint has
@@ -4085,7 +4091,7 @@ export class NativeSessionHost extends EventEmitter {
   /** The live session's picture limits, for the send handler's preparation step.
    *  A session still starting gets the conservative default. */
   imageLimitsFor(sessionId: string): ImageLimits {
-    return this.live.get(sessionId)?.session.profileSnapshot.imageLimits ?? IMAGE_LIMITS_DEFAULT;
+    return this.live.get(sessionId)?.session.imageLimits ?? IMAGE_LIMITS_DEFAULT;
   }
 
   /** Cancel/edit a queued-but-not-yet-sent message (Task 11). Sync findIndex +
