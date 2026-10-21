@@ -1802,13 +1802,24 @@ html{-webkit-tap-highlight-color:transparent}
   color:rgba(var(--fg-rgb),.92);background:var(--glass-prose);border:1px solid var(--hair);
   -webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);
   box-shadow:0 10px 24px -14px rgba(0,0,0,.45);transition:border-radius .15s}
-.tip{transition:left .22s ease,top .22s ease}
-.tip.open{transition:none;z-index:2}
-.tip .tip-text{display:none;font-weight:500;opacity:.9}
-.tip.open{white-space:normal;border-radius:14px;flex-wrap:wrap;row-gap:2px}
-.tip.open .tip-text{display:block;flex-basis:100%}
+ /* Motion (Destin, 2026-10-21: "smooth out the transition between chips"): a chip's width is
+   always explicit so it can animate open, its text unfolds (grid rows 0fr to 1fr), neighbours
+   glide, and a whole set cross-fades when the demo switches between chat and Settings. */
+.tip{transition:left .22s ease,top .22s ease,width .2s ease,opacity .18s ease,border-radius .15s;flex-wrap:wrap;row-gap:0;box-sizing:border-box}
+.tip.open{z-index:2;white-space:normal;border-radius:14px}
+.tip.enter,.tip.leaving{opacity:0}
+.tip .tip-text{display:grid;grid-template-rows:0fr;flex-basis:100%;opacity:0;white-space:normal;font-weight:500;
+  transition:grid-template-rows .2s ease,opacity .16s ease}
+.tip .tip-text>span{overflow:hidden;min-height:0;display:block}
+/* Closed, the text must not widen the chip: its flex basis is 0 and it has no width, so a closed
+   chip measures as its label alone (it measured 250px otherwise, and nothing animated). */
+.tip:not(.open) .tip-text{flex-basis:0;width:0;min-width:0}
+.tip.open .tip-text{grid-template-rows:1fr;opacity:.9;margin-top:2px}
+.tip.measure,.tip.measure *{transition:none !important}
+.tips-lines{transition:opacity .2s ease}
+.tips.swap .tip,.tips.swap .tips-lines{opacity:0}
 .tip .tip-x{font-style:normal;opacity:.55;font-size:.85rem;line-height:1;padding:2px 3px;cursor:pointer;margin-left:auto;display:none}
-.tip:hover .tip-x,.tip.open .tip-x{display:inline}
+.tip.open .tip-x{display:inline}
 .tip .tip-x:hover{opacity:1}
 .tips-hide{position:absolute;right:12px;top:44px;pointer-events:auto;font:600 .72rem var(--font-ui);padding:5px 11px;border-radius:999px;
   border:1px solid var(--hair);background:var(--glass-prose);color:rgba(var(--fg-rgb),.85);cursor:pointer;
@@ -4521,20 +4532,42 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     }
     return null;
   }
-  function chip(t, key){
-    var el = document.createElement('div'); el.className = 'tip' + (pinned === key ? ' open' : '');
-    el.innerHTML = '<span class="tip-label"></span><span class="tip-text"></span><i class="tip-x" title="Dismiss">&times;</i>';
+  var OPEN_W = 250, hoverIt = null;
+  function chip(t, key, it){
+    var el = document.createElement('div'); el.className = 'tip';
+    el.innerHTML = '<span class="tip-label"></span><span class="tip-text"><span></span></span><i class="tip-x" title="Dismiss">&times;</i>';
     el.querySelector('.tip-label').textContent = t.label || t.row;
-    el.querySelector('.tip-text').textContent = t.text;
+    el.querySelector('.tip-text > span').textContent = t.text;
+    // Both sizes are measured once, so place() lays out against TARGET sizes while the chip
+    // is still animating towards them (reading offsetWidth mid-animation gave stale rows).
+    layer.appendChild(el); it.wc = el.offsetWidth; it.hc = el.offsetHeight;
+    var m = el.cloneNode(true); m.classList.add('open', 'measure'); m.style.cssText = 'position:absolute;visibility:hidden;width:' + OPEN_W + 'px';
+    layer.appendChild(m); it.wo = OPEN_W; it.ho = m.offsetHeight; m.remove();
+    el.style.width = it.wc + 'px';
+    if (pinned === key) el.classList.add('open');
     // WHY the timer (Destin, 2026-10-21: "the hover effect is bugged"): opening re-lays the chips
     // out, and a chip that moved even a pixel away from the pointer closed, moved back, opened
     // again, forever. Now an open chip never moves (place() keeps its row and edge), and the
     // close waits 140 ms so crossing a gap between label and text cannot flicker it.
     var leaveT = null;
-    el.addEventListener('mouseenter', function(){ clearTimeout(leaveT); if (pinned !== key && !el.classList.contains('open')) { el.classList.add('open'); place(); } });
-    el.addEventListener('mouseleave', function(){ if (pinned === key) return; clearTimeout(leaveT); leaveT = setTimeout(function(){ el.classList.remove('open'); place(); }, 140); });
-    el.addEventListener('click', function(e){ if (e.target.classList.contains('tip-x')) { gone[key] = 1; render(true); return; }
-      pinned = pinned === key ? null : key; render(true); });
+    it.close = function(){ clearTimeout(leaveT); if (pinned !== key) el.classList.remove('open'); if (hoverIt === it) hoverIt = null; };
+    el.addEventListener('mouseenter', function(){
+      clearTimeout(leaveT);
+      // Moving straight from one chip to the next: the previous one closes NOW, so the layout
+      // changes once instead of twice (open B, then close A 140 ms later).
+      if (hoverIt && hoverIt !== it) hoverIt.close();
+      hoverIt = it;
+      if (!el.classList.contains('open')) { el.classList.add('open'); place(); }
+    });
+    el.addEventListener('mouseleave', function(){ if (pinned === key) return; clearTimeout(leaveT); leaveT = setTimeout(function(){ it.close(); place(); }, 140); });
+    el.addEventListener('click', function(e){
+      if (e.target.classList.contains('tip-x')) {
+        // Dismiss: this chip fades, the others glide into the space (no rebuild).
+        gone[key] = 1; items = items.filter(function(x){ return x !== it; }); if (hoverIt === it) hoverIt = null;
+        el.classList.add('leaving'); setTimeout(function(){ el.remove(); }, 200); place(); return;
+      }
+      pinned = pinned === key ? null : key; el.classList.toggle('open', pinned === key || hoverIt === it); place();
+    });
     return el;
   }
   var items = [], built = '';
@@ -4548,16 +4581,29 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     // the demo (a reply arriving, a hover) just re-places them, so a chip under the pointer
     // keeps its hover state instead of being replaced mid-hover.
     if (!force && built === mode && items.length) { place(); return; }
-    layer.querySelectorAll('.tip').forEach(function(n){ n.remove(); }); items = []; built = mode;
+    // A change of set (chat <-> Settings) fades the old chips out, then the new ones in; the
+    // stems go with them. A forced rebuild (Show/Hide tips) is immediate.
+    if (built && built !== mode && !force && !swapping) {
+      swapping = true; layer.classList.add('swap');
+      setTimeout(function(){ swapping = false; layer.classList.remove('swap'); rebuild(d); }, 160);
+      return;
+    }
+    if (swapping) return;
+    rebuild(d);
+  }
+  var swapping = false;
+  function rebuild(d){
+    layer.querySelectorAll('.tip').forEach(function(n){ n.remove(); }); items = []; built = mode; hoverIt = null;
     var list = mode === 'settings' ? SETTINGS : CHAT;
     list.forEach(function(t, i){
       var key = mode + ':' + i; if (gone[key]) return;
       var anchor = t.sel ? d.querySelector(t.sel) : rowEl(d, t.row);
       if (!anchor) return;
-      var el = chip(t, key); layer.appendChild(el);
-      items.push({ t: t, el: el, anchor: anchor });
+      var it = { t: t, anchor: anchor }; it.el = chip(t, key, it); it.el.classList.add('enter');
+      items.push(it);
     });
     place();
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){ items.forEach(function(it){ it.el.classList.remove('enter'); }); }); });
   }
   // Lay the chips out against the anchors' current positions; nothing may overlap. An OPEN chip
   // is laid out first and keeps the row and the edge it had while closed, so it only grows
@@ -4573,9 +4619,9 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     var ordered = items.filter(function(it){ return it.el.classList.contains('open'); }).concat(items.filter(function(it){ return !it.el.classList.contains('open'); }));
     var plan = [];
     ordered.forEach(function(it){
-      var a = rect(it.anchor), el = it.el, open = el.classList.contains('open'), w = el.offsetWidth, h = el.offsetHeight;
-      if (!open) it.hc = h;                       // the closed height, kept while open
-      var hc = it.hc || h;
+      var a = rect(it.anchor), el = it.el, open = el.classList.contains('open');
+      var w = open ? it.wo : it.wc, h = open ? it.ho : it.hc, hc = it.hc;   // target sizes, not mid-animation reads
+      el.style.width = w + 'px';
       if (mode === 'settings') {
         // beside the row: top edge fixed at the closed chip's centre line, grows downward
         plan.push({ it: it, x: a.r + 14, y: a.cy - hc / 2, line: [a.r, a.cy, a.r + 14, a.cy] });
@@ -4614,7 +4660,7 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
   // transitionend/animationend events re-read it too.
   function queue(){
     if (!queued) { queued = true; requestAnimationFrame(function(){ queued = false; render(); }); }
-    clearTimeout(later); later = setTimeout(render, 420);
+    clearTimeout(later); later = setTimeout(render, 320);
   }
   function watch(){
     var d = doc(); if (!d || !d.body || mo) return;
