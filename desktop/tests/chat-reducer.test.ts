@@ -313,6 +313,21 @@ describe('a reply shows the time it was last updated', () => {
     expect(turnTime(s, turnId)).toBe(62_000);
   });
 
+  it('a reopened reply that starts with a tool step shows that step\'s time, not the moment it was reopened', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 21, 22, 8));
+      const yesterday = Date.UTC(2026, 9, 21, 0, 14);
+      let s = dispatch(initState(), { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a1', toolUseId: 't1', toolName: 'Read', toolInput: {}, timestamp: yesterday });
+      const turnId = s.get(SESSION)!.currentTurnId!;
+      expect(turnTime(s, turnId)).toBe(yesterday);
+      s = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', result: 'ok', isError: false, timestamp: yesterday + 4_000 });
+      expect(turnTime(s, turnId)).toBe(yesterday + 4_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('never moves backward for a late or replayed event', () => {
     let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'Hi', timestamp: 5_000 });
     const turnId = s.get(SESSION)!.currentTurnId!;

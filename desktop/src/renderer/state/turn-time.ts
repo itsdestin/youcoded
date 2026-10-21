@@ -26,7 +26,13 @@ export function touchTurnTime(prev: ChatState, next: ChatState, id: string, acti
   // A turn-ending action has already cleared currentTurnId; the turn it ended is the one before.
   const turnId = session.currentTurnId ?? prev.get(id)?.currentTurnId;
   const turn = turnId ? session.assistantTurns.get(turnId) : undefined;
-  if (!turnId || !turn || (turn.timestamp ?? 0) >= at) return next;
+  if (!turnId || !turn || turn.timestamp === at) return next;
+  // WHY a reply THIS action created takes the action's time outright: some creation paths (a reply that
+  // opens with a tool step) stamp the screen's clock, so a reopened chat showed yesterday's replies at
+  // the moment it was reopened, and "only forward" could never pull that placeholder back (Destin's
+  // dev check, 2026-10-21). Only an already-existing reply is held to "only forward".
+  const created = !prev.get(id)?.assistantTurns.has(turnId);
+  if (!created && (turn.timestamp ?? 0) >= at) return next;
   // WHY reuse a map this action already copied (performance.md rule 4): streamed text copies
   // assistantTurns on every word anyway; a second whole-map copy per word would double that cost.
   const fresh = session.assistantTurns !== prev.get(id)?.assistantTurns;
