@@ -13,7 +13,7 @@
      it opened (reported 2026-09-04). The favicon is the app icon (docs/brand/,
      brand identity 2026-10-04) so a tab, the header and the installed app
      read as one product; applyTheme() swaps it to the theme the visitor picks. -->
-<meta property="og:title" content="YouCoded Assistant — Agentic AI for Everyone">
+<meta property="og:title" content="YouCoded — Agentic AI for Everyone">
 <meta property="og:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://youcoded.ai/">
@@ -24,13 +24,13 @@
 <meta property="og:image" content="https://youcoded.ai/og-image.png?v=6">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
-<meta property="og:site_name" content="YouCoded Assistant">
+<meta property="og:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta property="og:site_name" content="YouCoded">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="YouCoded Assistant — Agentic AI for Everyone">
+<meta name="twitter:title" content="YouCoded — Agentic AI for Everyone">
 <meta name="twitter:description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <meta name="twitter:image" content="https://youcoded.ai/og-image.png?v=6">
-<meta name="twitter:image:alt" content="The YouCoded Assistant website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
+<meta name="twitter:image:alt" content="The YouCoded website: the headline &quot;An Assistant That's Yours.&quot; between four theme mascots, above the app running a real conversation.">
 <link rel="icon" type="image/png" sizes="32x32" href="brand/default-32.png" id="favicon">
 <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1732,7 +1732,137 @@ html{-webkit-tap-highlight-color:transparent}
 .trypill:active,.embed-start:active{filter:brightness(.94)}
 </style>
 <script type="module" src="site-analytics-ui.mjs"></script>
-</head>
+
+<style id="repositioning-css">
+/* ---- 2026-10-21 repositioning: cards, device drawing, ideas wall, story fold, demo tips ---- */
+.demo-deck .step .deckclip .devdemo{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;border-radius:11px}
+.step p a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.gal.ideas{align-items:flex-start}
+.idea{flex:none;width:420px;scroll-snap-align:center;margin:0}
+.idea img{width:100%;display:block;border-radius:var(--radius);border:1px solid var(--hair)}
+.idea figcaption{margin-top:10px;font-size:.95rem;line-height:1.35;opacity:.86;font-style:italic}
+/* The story folds behind one line on a phone (Destin, Q-14): two screens of text became one tap. */
+.storyfold>summary{list-style:none;cursor:pointer;font-weight:700;color:var(--accent);display:none}
+.storyfold>summary::-webkit-details-marker{display:none}
+@media (max-width:760px){.storyfold>summary{display:block}.storyfold:not([open])>summary::after{content:" \2193"}}
+/* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
+   They exist only once the visitor has clicked into the demo (B-1 round 2). */
+.tips{position:absolute;inset:0;pointer-events:none;z-index:6;font-family:var(--font-ui);display:none}
+.embed.interactive .tips.on{display:block}
+.tips-lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.tips-lines line{stroke:var(--accent);stroke-width:1.5;opacity:.55}
+.tip{position:absolute;pointer-events:auto;display:inline-flex;align-items:center;gap:6px;max-width:250px;
+  padding:5px 9px 5px 10px;border-radius:999px;font-size:.72rem;font-weight:600;line-height:1.25;white-space:nowrap;cursor:default;
+  color:rgba(var(--fg-rgb),.92);background:var(--glass-prose);border:1px solid var(--hair);
+  -webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);
+  box-shadow:0 10px 24px -14px rgba(0,0,0,.45);transition:border-radius .15s}
+.tip .tip-text{display:none;font-weight:500;opacity:.9}
+.tip.open{white-space:normal;border-radius:14px;flex-wrap:wrap;row-gap:2px}
+.tip.open .tip-text{display:block;flex-basis:100%}
+.tip .tip-x{font-style:normal;opacity:.55;font-size:.85rem;line-height:1;padding:2px 3px;cursor:pointer;margin-left:auto;display:none}
+.tip:hover .tip-x,.tip.open .tip-x{display:inline}
+.tip .tip-x:hover{opacity:1}
+.tips-hide{position:absolute;right:12px;top:44px;pointer-events:auto;font:600 .72rem var(--font-ui);padding:5px 11px;border-radius:999px;
+  border:1px solid var(--hair);background:var(--glass-prose);color:rgba(var(--fg-rgb),.85);cursor:pointer;
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+@media (max-width:760px){.tips{display:none !important}}
+</style>
+<style id="device-css">
+
+
+
+
+.devdemo{position:relative;width:100%;aspect-ratio:16/10;container-type:inline-size;overflow:hidden;box-sizing:border-box;
+  font-family:var(--font-ui);color:rgba(var(--fg-rgb),.85);background:rgb(var(--canvas-rgb));
+  border:1px solid var(--hair);border-radius:var(--radius)}
+.devdemo *{box-sizing:border-box}
+.devdemo .abs{position:absolute}
+
+.devdemo .p1{left:0;top:0;width:42%;height:100%;overflow:hidden}
+.devdemo .p2{left:42%;top:0;width:58%;height:100%;border-left:1px solid var(--hair)}
+
+.devdemo .wall{inset:0;background:linear-gradient(155deg,color-mix(in srgb,var(--accent) 38%,rgb(var(--canvas-rgb))),rgb(var(--canvas-rgb)) 58%,color-mix(in srgb,var(--accent) 16%,rgb(var(--canvas-rgb))))}
+
+.devdemo .warm{inset:0;background:rgba(255,140,40,.9);opacity:0;animation:dvWarm 7s infinite}
+.devdemo .shade{left:1.5cqw;top:2.5cqw;width:39cqw;padding:1.7cqw;display:flex;flex-direction:column;gap:1.5cqw;background:var(--glass);
+  border:1px solid var(--hair);border-radius:calc(var(--radius)*1.1);backdrop-filter:blur(1.5cqw);box-shadow:0 .8cqw 3cqw rgba(var(--fg-rgb),.14)}
+.devdemo .time{font-size:4.6cqw;font-weight:600;line-height:1;color:rgb(var(--fg-rgb))}
+.devdemo .date{font-size:1.8cqw;opacity:.6;margin-top:.7cqw}
+.devdemo .sl{display:flex;align-items:center;gap:1.4cqw;height:3cqw}
+.devdemo .trk{flex:1;height:.9cqw;border-radius:99px;background:rgba(var(--fg-rgb),.15);position:relative}
+.devdemo .trk i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--accent)}
+.devdemo .trk b{position:absolute;top:50%;width:2.6cqw;height:2.6cqw;margin:-1.3cqw 0 0 -1.3cqw;border-radius:50%;background:rgb(var(--canvas-rgb));border:.3cqw solid var(--accent);box-shadow:0 .2cqw .6cqw rgba(var(--fg-rgb),.2)}
+.devdemo .ic{width:2.6cqw;height:2.6cqw;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.devdemo .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1cqw}
+.devdemo .tile{height:6.4cqw;display:flex;align-items:center;gap:.9cqw;padding:0 1cqw;border-radius:calc(var(--radius)*.7);overflow:hidden;
+  background:var(--glass);border:1px solid var(--hair);line-height:1.2;white-space:nowrap}
+.devdemo .tile.on{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb))}
+.devdemo .tile small{display:flex;flex-direction:column;font-size:1.4cqw}
+.devdemo .tile small b{font-size:1.5cqw}
+.devdemo .tile small span{opacity:.8}
+.devdemo .st{display:block;height:1.2em;overflow:hidden}.devdemo .st u{display:block;text-decoration:none}
+.devdemo .nl{animation:dvNL 7s infinite}
+.devdemo .nl u{animation:dvSw 7s infinite}
+.devdemo .btns{display:flex;gap:.9cqw}
+.devdemo .btns div{flex:1;height:5cqw;display:flex;align-items:center;justify-content:center;gap:.8cqw;font-size:1.6cqw;
+  background:var(--glass);border:1px solid var(--hair);border-radius:99px}
+.devdemo .btns .ic{width:2.3cqw;height:2.3cqw}
+.devdemo .pbar{left:0;right:0;bottom:0;height:5cqw;background:var(--glass);border-top:1px solid var(--hair);display:flex;align-items:center;justify-content:space-between;padding:0 2.5cqw;font-size:1.8cqw}
+.devdemo .pbar i{display:inline-block;width:2.2cqw;height:2.2cqw;border-radius:.7cqw;background:rgba(var(--fg-rgb),.2);margin-right:1cqw}
+
+.devdemo .tabs{left:0;right:0;top:0;height:9%;background:rgba(var(--fg-rgb),.06);padding:1.2% 2% 0;display:flex}
+.devdemo .tab{width:40%;height:100%;background:var(--glass);border:1px solid var(--hair);border-bottom:0;border-radius:1cqw 1cqw 0 0;
+  font-size:1.5cqw;line-height:1;padding:0 1.4cqw;display:flex;align-items:center;gap:1cqw}
+.devdemo .bar{left:0;right:0;top:9%;height:10%;background:var(--glass);border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:1.4cqw;padding:0 4%}
+.devdemo .bar b{width:1.7cqw;height:1.7cqw;border:.3cqw solid rgba(var(--fg-rgb),.3);border-radius:50%}
+.devdemo .url{flex:1;height:62%;border-radius:99px;background:rgba(var(--fg-rgb),.07);padding:0 1.8cqw;font-size:1.5cqw;display:flex;align-items:center;color:rgba(var(--fg-rgb),.45)}
+.devdemo .field{left:6%;right:6%;top:22%;height:11%;background:var(--glass);border:1px solid var(--hair);border-radius:99px;
+  padding:0 2.2cqw;display:flex;align-items:center;font-size:2.3cqw;white-space:pre;overflow:hidden;box-shadow:0 .3cqw 1.4cqw rgba(var(--fg-rgb),.08)}
+.devdemo .typed{opacity:0;animation:dvType 7s infinite}
+.devdemo .caret{display:inline-block;vertical-align:middle;width:.3cqw;height:2.7cqw;margin-left:.3cqw;background:var(--accent);animation:dvBlink 1s steps(2) infinite}
+.devdemo .guess{left:6%;right:6%;top:35%;height:5.4%;display:flex;border-bottom:1px solid var(--hair);font-size:1.8cqw;opacity:0;animation:dvGuess 7s infinite}
+.devdemo .guess span{flex:1;display:flex;align-items:center;justify-content:center;border-radius:99px 99px 0 0;position:relative}
+.devdemo .guess span+span:before{content:"";position:absolute;left:0;top:25%;bottom:25%;border-left:1px solid var(--hair)}
+.devdemo .guess .on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-weight:700}
+.devdemo .kb{left:3%;width:94%;top:41%;height:56%}
+.devdemo .r{height:25%;display:flex}
+.devdemo .r:nth-child(2){margin-left:5%}.devdemo .r:nth-child(3){margin-left:15%}.devdemo .r:nth-child(4){margin-left:25%}
+.devdemo .s{width:10%;padding:.4cqw}
+.devdemo .s.sp{width:50%}
+.devdemo .k{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2cqw;
+  background:var(--glass);border:1px solid var(--hair);border-radius:min(calc(var(--radius)*.45),1.1cqw);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 .2cqw .5cqw rgba(var(--fg-rgb),.07)}
+.devdemo .l{animation:dvLit 7s var(--d) infinite}
+
+.devdemo .tr{left:43.74cqw;width:54.52cqw;top:41%;height:56%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .9cqw var(--accent))}
+.devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
+.devdemo .trail{stroke-width:8;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
+.devdemo .dot{stroke-width:26;stroke-dasharray:.01 300;opacity:0;animation:dvDot 7s linear infinite}
+
+.devdemo .fin{left:0;top:0;width:3.6cqw;height:3.6cqw;border-radius:50%;background:rgba(var(--fg-rgb),.2);border:1px solid rgba(var(--fg-rgb),.45);
+  box-shadow:0 .3cqw 1cqw rgba(var(--fg-rgb),.25);opacity:0;--t:translate(10.2cqw,31.3cqw);animation:dvFin 7s infinite}
+@keyframes dvWarm{0%,12%{opacity:0}20%,90%{opacity:.25}97%,100%{opacity:0}}
+@keyframes dvNL{0%,9%{background:var(--glass);border-color:var(--hair);color:rgba(var(--fg-rgb),.85);transform:scale(1)}11.4%{transform:scale(.94)}14%,91%{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb));transform:scale(1)}96%,100%{background:var(--glass);border-color:var(--hair);color:rgba(var(--fg-rgb),.85)}}
+@keyframes dvSw{0%,12%{transform:none}14%,91%{transform:translateY(-50%)}96%,100%{transform:none}}
+@keyframes dvFin{0%,3%{transform:translate(13.8cqw,36cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:1}27%,100%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:0}}
+@keyframes dvTrail{0%,25.5%{stroke-dashoffset:100;opacity:0}25.7%{stroke-dashoffset:100;opacity:.85}49%,90%{stroke-dashoffset:0;opacity:.85}95%{stroke-dashoffset:0;opacity:0}95.1%,100%{stroke-dashoffset:100;opacity:0}}
+@keyframes dvDot{0%,25.5%{stroke-dashoffset:0;opacity:0}25.7%{stroke-dashoffset:0;opacity:1}49%{stroke-dashoffset:-100;opacity:1}51%{stroke-dashoffset:-100;opacity:0}51.1%,100%{stroke-dashoffset:0;opacity:0}}
+@keyframes dvLit{0%{background:var(--glass);border-color:var(--hair);color:inherit}3%{background:color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent);color:rgb(var(--fg-rgb))}14%,100%{background:var(--glass);border-color:var(--hair);color:inherit}}
+@keyframes dvType{0%,49.9%{opacity:0;transform:translateY(.5cqw)}52%,91%{opacity:1;transform:none}95%,100%{opacity:0}}
+@keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
+@keyframes dvBlink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){
+ .devdemo *{animation:none!important}
+ .devdemo .warm{opacity:.25}
+ .devdemo .nl{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb))}
+ .devdemo .nl u{transform:translateY(-50%)}
+ .devdemo .trail{stroke-dashoffset:0;opacity:.85}
+ .devdemo .dot,.devdemo .fin{opacity:0}
+ .devdemo .typed,.devdemo .guess{opacity:1}
+ .devdemo .l{background:color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent)}
+}
+
+</style></head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md">
 
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
@@ -2033,10 +2163,10 @@ Contract: mascots/README.md (from the repo root)
         <a data-dl="dl-ios" class="dlbtn" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>iOS<sup>*</sup></span></a>
     </div>
     <div class="hero-app"><div class="frame embed"><div class="embed-stage">
-      <img class="embed-poster" src="media/embed-desktop-youcoded.webp" alt="YouCoded Assistant chat window">
+      <img class="embed-poster" src="media/embed-desktop-youcoded.webp" alt="YouCoded chat window">
       <button class="embed-start" type="button">Try the demo &middot; Sample data &rarr;</button>
       <button class="embed-interact" type="button" hidden>Try it &middot; Sample data</button>
-      <iframe class="embed-iframe" title="YouCoded Assistant live demo" loading="lazy" data-src="site/index.html?mode=workbench&amp;child=1&amp;scenario=site&amp;latency=0&amp;reply=site"></iframe>
+      <iframe class="embed-iframe" title="YouCoded live demo" loading="lazy" data-src="site/index.html?mode=workbench&amp;child=1&amp;scenario=site&amp;latency=0&amp;reply=site"></iframe>
     </div></div></div>
     <div class="dlfloat">
         <div class="dlpill">
@@ -2074,76 +2204,136 @@ Contract: mascots/README.md (from the repo root)
   </div>
 </header>
 
+<!-- repositioning 2026-10-21 -->
 <section id="about"><div class="wrap">
-  <p class="eyebrow">What is this?</p><h2>More than a chatbot.</h2>
+  <p class="eyebrow">What is this?</p><h2>One app. Whatever you want it to be.</h2>
   <div class="panel prose">
-    <p class="big">YouCoded is a customizable AI assistant that works with your own files and data to autonomously accomplish tasks using your computer. Review and organize large spreadsheets, compile the latest medical or financial research, draft an email or slideshow, or build new features in large coding projects, all without needing to leave the app.</p>
+    <p class="big">YouCoded is an AI assistant that does what you want, the way you want, with the screens and features you want. Hand it your files, your research and your writing. Ask it for a control panel for your house, a page for your money, or a game for a slow afternoon. Ask it to change its own look, give itself new features, or handle your requests in different ways. So, what exactly is YouCoded? That&rsquo;s for you to decide.</p>
     <div class="cols">
-      <p>YouCoded can utilize any AI model from any provider including Anthropic (Claude), OpenAI (ChatGPT), Alibaba (Qwen) and more. YouCoded also allows you to download and run open source AI models on your own device, if your hardware supports it.</p>
+      <p>It runs on whichever AI you choose: Anthropic (Claude), OpenAI (ChatGPT), Alibaba (Qwen) and hundreds more, or an open model running privately on your own computer.</p>
     </div>
-    <p class="permission">Nothing happens without your permission. YouCoded Assistant asks before taking actions</p>
+    <p class="permission">Nothing happens without your permission. YouCoded asks before taking actions.</p>
   </div>
 </div></section>
 
 <section id="demo" class="demo-deck deck-fade"><div class="wrap">
-  <p class="eyebrow">What you get</p><h2>Everything the app gives you.</h2>
+  <p class="eyebrow">Features</p><h2>Yours to shape. Yours to use.</h2>
   <div class="deck" id="deck">
-    <div class="decktext" id="steps"><div class="step" data-i="0">
-          <div class="step-label">Seamless integration</div>
-          <h3>Tools and conversations work across any model.</h3>
-          <p>Select from hundreds of models via OpenRouter, use Claude Code or OpenAI models with your subscription plan, or pick an offline, private model to run on your own computer. Switch models mid-conversation without interruption.</p>
+    <div class="decktext" id="steps"><div class="step" data-i="0" data-card="yours">
+          <div class="step-label">Make it yours</div>
+          <h3>Describe the look you want.</h3>
+          <p>Wallpapers, colors, mascots, fonts. Say what you are going for and the app changes to match. Not quite? Say so.</p>
         </div>
-        <div class="step" data-i="1">
+        <div class="step" data-i="1" data-card="home">
+          <div class="step-label">Your home, your way <span class="rmchip">Sample page, not included</span></div>
+          <h3>A smart-home panel, made by asking for one.</h3>
+          <p>Not a built-in feature: a page one person asked for, for his own house, and uses every day. Lights, thermostat, speakers and TVs on one screen, arranged the way he wanted. Ask for yours and it will be different. The demo house here is fictional.</p>
+        </div>
+        <div class="step" data-i="2" data-card="money">
+          <div class="step-label">Your money, your way <span class="rmchip">Sample page, not included</span></div>
+          <h3>Every account on one page, made by asking for it.</h3>
+          <p>Not a built-in feature either: a page built through the chat for one person’s real accounts, with the view he wished his bank had. Yours could track anything. The numbers here are invented.</p>
+        </div>
+        <div class="step" data-i="3" data-card="device">
+          <div class="step-label">Your whole device <span class="rmchip">Built on Linux</span></div>
+          <h3>Don’t just customize the app. Customize your whole device.</h3>
+          <p>Build a new control center or quick settings chip for your Linux device, rearrange your desktop or files, or build real utilities that change how you interact with your computer. <a href="https://github.com/itsdestin/swipe-keyboard#readme" target="_blank" rel="noopener">Swipe Keyboard for KDE Plasma</a> is just one example of what’s possible.</p>
+        </div>
+        <div class="step" data-i="4" data-card="any-ai">
+          <div class="step-label">Any model</div>
+          <h3>Use whichever AI you like. Switch mid-conversation.</h3>
+          <p>Hundreds of models through OpenRouter, Claude or OpenAI on your own subscription, or an offline model on your own computer. Your tools and conversations work the same with all of them.</p>
+        </div>
+        <div class="step" data-i="5" data-card="artifact">
           <div class="step-label">Real work, edited live</div>
-          <h3>Hand it a spreadsheet, get visualizations and data analysis.</h3>
-          <p>Attach a file and ask for what you want out of it. The assistant reads it, completes the task, and hands it back in the panel beside the conversation — where you can open it, change it yourself, and hand it back for further revisions.</p>
+          <h3>Hand it a spreadsheet, get charts and analysis.</h3>
+          <p>Attach a file and ask for what you want out of it. The assistant reads it, does the work, and hands it back in the panel beside the conversation, where you can open it, change it yourself, and hand it back for more.</p>
         </div>
-        <div class="step" data-i="2">
-          <div class="step-label">YOU'RE IN CONTROL</div>
-          <h3>Transparency and boundaries you can trust and shape.</h3>
-          <p>Importantly, the assistant only acts with your explicit permission. You can easily change the instructions for how your assistant works and interacts with you, and permission modes let you restrict the assistant's actions to match your comfort level. Additionally, unlike proprietary assistant applications, the app's source code is publicly available for anyone to review on GitHub.</p>
+        <div class="step" data-i="6" data-card="control">
+          <div class="step-label">You’re in control</div>
+          <h3>Nothing happens without your permission.</h3>
+          <p>It asks before it acts. Permission modes set how much it may do on its own, and every standing permission is listed on one screen where you can revoke it. The whole app is open source, so anyone can check what it does.</p>
         </div>
-        <div class="step" data-i="3">
-          <div class="step-label">Logical management</div>
-          <h3>Project view keeps your files, conversations, and assistant instructions organized.</h3>
-          <p>Open spreadsheets, documents, and images, revisit prior conversations, and see how your assistant is instructed to behave in each project in a single organized space.</p>
-        </div>
-        <div class="step" data-i="4">
+        <div class="step" data-i="7" data-card="organized">
           <div class="step-label">Stay organized</div>
-          <h3>Tags, notes, and shortcuts.</h3>
-          <p>Tag and annotate conversations, pin the ones that matter, and hide the ones you'll never go back to. Quick chips and the command drawer allow you to run the prompts you use every day and access your skills and workflows in one tap.</p>
+          <h3>Projects, tags, notes and shortcuts.</h3>
+          <p>Each project keeps its files, conversations and instructions together. Tag and annotate conversations, pin the ones that matter, hide the rest. Quick chips run the prompts you use every day in one tap.</p>
         </div>
-        <div class="step" data-i="5">
+        <div class="step" data-i="8" data-card="everywhere">
           <div class="step-label">Works everywhere</div>
           <h3>Start on your laptop. Finish on your phone.</h3>
-          <p>Use YouCoded with Windows, macOS, Linux, Android, or any web browser via remote access. Your conversations and files stay in sync through your own private GitHub, so you start on one device and resume on any other.</p>
+          <p>Windows, macOS, Linux, Android, or any web browser through remote access. Conversations and files stay in sync through your own private GitHub, so you start on one device and resume on any other.</p>
         </div>
-        <div class="step" data-i="6">
-          <div class="step-label">Make it yours</div>
-          <h3>Build themes, workflows, and plugins just by describing them.</h3>
-          <p>Customize wallpapers, app colors, mascots, and more. Build plugins, workflows, or integrations for external services, then share them with others in the marketplace.</p>
-        </div>
-        <div class="step" data-i="7">
+        <div class="step" data-i="9" data-card="play">
           <div class="step-label">Play while it works</div>
           <h3>Multiplayer games, right beside the conversation.</h3>
-          <p>Long tasks take a minute, so open the arcade in the side panel. Play Connect 4 or chess against a friend who's online, or Flappy or 2048 on your own, then go back to the answer when it's ready. More games coming soon.</p>
+          <p>Long tasks take a minute, so open the arcade in the side panel. Connect 4 or chess against a friend who is online, Flappy or 2048 on your own, then back to the answer when it is ready.</p>
         </div>
-        <div class="step" data-i="8">
-          <div class="step-label">Roadmap <span class="rmchip">Coming after 1.3</span></div>
+        <div class="step" data-i="10" data-card="roadmap">
+          <div class="step-label">On the roadmap <span class="rmchip">Roadmap</span></div>
           <h3>Hand it off.</h3>
-          <p>Set up a job once — what to do, which tools it may use, where to stop and check with you — then run it on a schedule or send it from your phone. Results and approvals land in an inbox. First: run now and scheduled runs. Later: kick off from an incoming email or a changed file.</p>
+          <p>Set up a job once: what to do, which tools it may use, where to stop and check with you. Then run it on a schedule or send it from your phone. Results and approvals land in an inbox.</p>
         </div></div>
-    <div class="deckmedia" id="stage"><video class="on" data-i="0" muted loop playsinline preload="none" poster="media/landing-row1-any-ai.webp"><source src="media/landing-row1-any-ai.webm" type="video/webm"></video>
-        <video data-i="1" muted loop playsinline preload="none" poster="media/landing-row2-artifact-edit.webp"><source src="media/landing-row2-artifact-edit.webm" type="video/webm"></video>
-        <video data-i="2" muted loop playsinline preload="none" poster="media/row2-does-things.webp"><source src="media/row2-does-things.webm" type="video/webm"></video>
-        <video data-i="3" muted loop playsinline preload="none" poster="media/row3-projects.webp"><source src="media/row3-projects.webm" type="video/webm"></video>
-        <video data-i="4" muted loop playsinline preload="none" poster="media/row4-organized.webp"><source src="media/row4-organized.webm" type="video/webm"></video>
-        <video data-i="5" muted loop playsinline preload="none" poster="media/landing-row5-follow.webp"><source src="media/landing-row5-follow.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="5"><video muted loop playsinline preload="none" width="390" height="844" poster="media/landing-row5-phone.webp" aria-label="The same conversation on a phone"><source src="media/landing-row5-phone.webm" type="video/webm"></video></div>
-        <video data-i="6" muted loop playsinline preload="none" poster="media/row6-yours.webp"><source src="media/row6-yours.webm" type="video/webm"></video>
-        <video data-i="7" muted loop playsinline preload="none" poster="media/landing-row7-play.webp"><source src="media/landing-row7-play.webm" type="video/webm"></video>
-        <div class="sketch" data-i="8">
-          <div><div class="k">Agents</div><div class="li on2">Weekly grocery list</div><div class="li">Inbox digest · 7am</div><div class="li">Receipts → spreadsheet</div></div>
-          <div><div class="k">Weekly grocery list</div><div class="li">1 · Read this week's plan</div><div class="li">2 · Draft the list</div><div class="li on2">3 · Check with me before ordering</div><div class="li">4 · Send to my phone</div><div class="k" style="margin-top:14px">Inbox</div><div class="li">Needs approval · Weekly grocery list · 2 min ago</div></div>
+    <div class="deckmedia" id="stage"><video data-i="0" data-clip="yours" muted loop playsinline preload="none" poster="media/yours--youcoded.webp"><source src="media/yours--youcoded.webm" type="video/webm"></video>
+        <video data-i="1" data-clip="home" muted loop playsinline preload="none" poster="media/home--youcoded.webp"><source src="media/home--youcoded.webm" type="video/webm"></video>
+        <video data-i="2" data-clip="money" muted loop playsinline preload="none" poster="media/money--youcoded.webp"><source src="media/money--youcoded.webm" type="video/webm"></video>
+        <div class="devdemo" data-i="3" aria-hidden="true">
+ <svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="d-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.8a10 10 0 0 1 13 0M9 16.5a5 5 0 0 1 6 0M12 20h.01"/></symbol>
+  <symbol id="d-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+  <symbol id="d-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="d-dnd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+  <symbol id="d-air" viewBox="0 0 24 24"><path d="M21 15l-8-5V4.5a1.5 1.5 0 0 0-3 0V10l-8 5v2l8-2v4l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-4l8 2z"/></symbol>
+  <symbol id="d-rot" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4"/></symbol>
+  <symbol id="d-shot" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="d-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></symbol>
+  <symbol id="d-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
+  <symbol id="d-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+  <symbol id="d-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9a4 4 0 0 1 0 6"/></symbol>
+ </defs></svg>
+
+ <div class="abs p1">
+  <div class="abs wall"></div>
+  <div class="abs warm"></div>
+  <div class="abs shade">
+   <div><div class="time">3:51 PM</div><div class="date">Wednesday, October 21</div></div>
+   <div class="sl"><svg class="ic"><use href="#d-sun"/></svg><div class="trk"><i style="width:70%"></i><b style="left:70%"></b></div></div>
+   <div class="sl"><svg class="ic"><use href="#d-vol"/></svg><div class="trk"><i style="width:45%"></i><b style="left:45%"></b></div></div>
+   <div class="grid">
+    <div class="tile on"><svg class="ic"><use href="#d-wifi"/></svg><small><b>Wi-Fi</b><span>On</span></small></div>
+    <div class="tile on"><svg class="ic"><use href="#d-bt"/></svg><small><b>Bluetooth</b><span>On</span></small></div>
+    <div class="tile nl"><svg class="ic"><use href="#d-moon"/></svg><small><b>Night Light</b><span class="st"><u>Off<br>On</u></span></small></div>
+    <div class="tile"><svg class="ic"><use href="#d-dnd"/></svg><small><b>Do Not Disturb</b><span>Off</span></small></div>
+    <div class="tile"><svg class="ic"><use href="#d-air"/></svg><small><b>Airplane</b><span>Off</span></small></div>
+    <div class="tile on"><svg class="ic"><use href="#d-rot"/></svg><small><b>Rotate Lock</b><span>On</span></small></div>
+   </div>
+   <div class="btns"><div><svg class="ic"><use href="#d-shot"/></svg>Screenshot</div><div><svg class="ic"><use href="#d-rec"/></svg>Record</div><div><svg class="ic"><use href="#d-clip"/></svg>Clipboard</div></div>
+  </div>
+  <div class="abs pbar"><span><i></i><i></i><i></i></span><span>3:51 PM</span></div>
+ </div>
+
+ <div class="abs p2">
+  <div class="abs tabs"><div class="tab">New tab</div></div>
+  <div class="abs bar"><b></b><div class="url">Search or type a web address</div></div>
+  <div class="abs field"><span>make your technology </span><span class="typed">yours<i class="caret"></i></span></div>
+  <div class="abs guess"><span class="on">yours</span><span>your</span><span>yolks</span></div>
+  <div class="abs kb"></div>
+ </div>
+ <svg class="abs tr" viewBox="0 0 545 350" preserveAspectRatio="none">
+  <path class="trail" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
+  <path class="dot" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
+ </svg>
+ <div class="abs fin"></div>
+</div>
+        <video data-i="4" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
+        <video data-i="5" data-clip="artifact-edit" muted loop playsinline preload="none" poster="media/artifact-edit--youcoded.webp"><source src="media/artifact-edit--youcoded.webm" type="video/webm"></video>
+        <video data-i="6" data-clip="does-things" muted loop playsinline preload="none" poster="media/does-things--youcoded.webp"><source src="media/does-things--youcoded.webm" type="video/webm"></video>
+        <video data-i="7" data-clip="organized" muted loop playsinline preload="none" poster="media/organized--youcoded.webp"><source src="media/organized--youcoded.webm" type="video/webm"></video>
+        <video data-i="8" data-clip="follow" muted loop playsinline preload="none" poster="media/follow--youcoded.webp"><source src="media/follow--youcoded.webm" type="video/webm"></video><div class="deck-phone" data-phone-for="8"><video data-clip="phone" muted loop playsinline preload="none" width="390" height="844" poster="media/phone--youcoded.webp" aria-label="The same conversation on a phone"><source src="media/phone--youcoded.webm" type="video/webm"></video></div>
+        <video data-i="9" data-clip="play" muted loop playsinline preload="none" poster="media/play--youcoded.webp"><source src="media/play--youcoded.webm" type="video/webm"></video>
+        <div class="sketch" data-i="10">
+          <div><div class="k">Agents</div><div class="li on2">Weekly grocery list</div><div class="li">Inbox digest &middot; 7am</div><div class="li">Receipts &rarr; spreadsheet</div></div>
+          <div><div class="k">Weekly grocery list</div><div class="li">1 &middot; Read this week's plan</div><div class="li">2 &middot; Draft the list</div><div class="li on2">3 &middot; Check with me before ordering</div><div class="li">4 &middot; Send to my phone</div><div class="k" style="margin-top:14px">Inbox</div><div class="li">Needs approval &middot; Weekly grocery list &middot; 2 min ago</div></div>
         </div></div>
   </div>
 </div></section>
@@ -2151,7 +2341,8 @@ Contract: mascots/README.md (from the repo root)
 <!-- INTEGRATIONS — restored from the pre-1.3 page (commit 75b1ede6^). The
      tag list, every description, the icons and the note are the originals;
      only the styling is new. Sits after the feature tour, before the story. -->
-<section id="integrations"><div class="wrap">
+<!-- integrations grid hidden 2026-10-21 (Destin): kept for later, not deleted -->
+<section id="integrations" hidden><div class="wrap">
   <p class="eyebrow">Integrations</p><h2>Connect your services.</h2>
   <div class="panel integrations">
     <p class="integrations-intro">With skills from the YouCoded marketplace, YouCoded can link with all of the following services:</p>
@@ -2188,12 +2379,12 @@ Contract: mascots/README.md (from the repo root)
 
 <section id="story"><div class="wrap">
   <p class="eyebrow">Story</p><h2>How we got here.</h2>
-  <div class="panel prose story">
+  <div class="panel prose story"><details class="storyfold" open><summary>Read the story</summary>
     <p>Honestly, I initially just wanted a cooler and more efficient way to journal and track my own tasks/goals. The very first thing I developed is the Journaling and Life History system available in the marketplace, and I thought it would be cool to share it with some friends. However, the thought of installing and opening &ldquo;Claude Code&rdquo; in the terminal scared them away almost immediately. I realized that the idea of advanced agentic AI is still rather new to most people, and that persuading them to adopt my fancy new journaling system would require it to be much more accessible and user-friendly. Towards this end, I kind of just&hellip; kept adding things. And now we're here.</p>
     <p>Every line of YouCoded was written through conversation with frontier LLMs by <strong>someone who has never written code</strong>. Every feature, every platform port, every theme, every multiplayer game. The entire app was built, and is currently maintained, without a single line typed by hand.</p>
     <p>YouCoded is what AI looks like when it's built for everyone.</p>
     <a class="sign" href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin &rarr;</a>
-  </div>
+  </details></div>
 </div></section>
 
 <section id="get-started"><div class="wrap">
@@ -2210,7 +2401,7 @@ Contract: mascots/README.md (from the repo root)
 <section id="faq"><div class="wrap">
   <p class="eyebrow">Common questions</p><h2>FAQ</h2>
   <div class="faq">
-        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded Assistant is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></details>
+        <details class="panel" open><summary>How is this different from ChatGPT or claude.ai?</summary><div class="a">Those are proprietary platforms that force you to work the way Anthropic or OpenAI designed. YouCoded is an open-source app that lives on your computer and works however you want it to — anyone can help build new features or fix bugs. Additionally, YouCoded works with models from any provider, which should reduce costs and improve competitiveness in the long run. You control your agent and your data, not a private company.</div></details>
         <details class="panel"><summary>Do I have to pay for anything?</summary><div class="a">No, not really. The app is free and open source, and running AI models on your own computer costs nothing. If you want "best of the best" intelligence like Claude or ChatGPT, you can choose to pay an external AI inference provider of your choice from within the app.</div></details>
         <details class="panel"><summary>Is my data private?</summary><div class="a">YouCoded does not receive the content you send to an AI model. If you choose a cloud model, the provider you choose — and, with OpenRouter, its underlying provider — receives that request under its own data-retention policy. A model running entirely on your computer does not send its inference request to a cloud model provider. That does not turn off other features you choose, such as sync, backups, web tools, or integrations. The app also sends one opt-out daily, privacy-preserving device heartbeat: a hashed device identifier, app version, platform, and rough region. It contains no message content or username. See Privacy for details.</div></details>
         <details class="panel"><summary>What platforms does it run on?</summary><div class="a">Windows, macOS, Linux, and Android, plus any web browser by connecting to a computer running the app. Apple integrations (iMessage, Apple Notes, and so on) work on macOS only.</div></details>
@@ -2221,17 +2412,8 @@ Contract: mascots/README.md (from the repo root)
 </div></section>
 
 <section id="gallery"><div class="wrap">
-  <p class="eyebrow">Gallery</p><h2>See what people have built.</h2>
-</div><div class="galwrap"><div class="gal">
-      <img src="gallery/home-midnight.webp" alt="" loading="lazy">
-      <img src="gallery/marketplace-meadow-mist.webp" alt="" loading="lazy">
-      <img src="gallery/projects-light.webp" alt="" loading="lazy">
-      <img src="gallery/model-picker-creme.webp" alt="" loading="lazy">
-      <img src="gallery/connect4-halftone-dimension.webp" alt="" loading="lazy">
-      <img src="gallery/permissions-dark.webp" alt="" loading="lazy">
-      <img src="gallery/tags-midnight.webp" alt="" loading="lazy">
-      <img src="gallery/themes-creme.webp" alt="" loading="lazy">
-</div></div></section>
+  <p class="eyebrow">Ideas</p><h2>Every one of these started as a sentence in the chat.</h2>
+</div><div class="galwrap"><div class="gal ideas"><figure class="idea"><img src="gallery/idea-home.webp" alt="" loading="lazy"><figcaption>&ldquo;Give me a control panel for the lights, the thermostat and the TVs.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-money.webp" alt="" loading="lazy"><figcaption>&ldquo;Put every account, bill and loan on one page I can check at a glance.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-paint.webp" alt="" loading="lazy"><figcaption>&ldquo;I want a little paint program with brushes and an eraser.&rdquo;</figcaption></figure><figure class="idea"><img src="gallery/idea-trip.webp" alt="" loading="lazy"><figcaption>&ldquo;Lisbon in October: the forecast for each day next to what’s booked.&rdquo;</figcaption></figure></div></div></section>
 
 <footer><div class="wrap"><div class="panel foot">
   <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
@@ -2354,8 +2536,22 @@ function applyTheme(slug){
   try { localStorage.setItem('youcoded-theme', slug); } catch(e){}
   syncEmbedTheme();
   setEmbedPoster();
+  rethemeClips(slug);
   if (typeof maskEmbed === 'function') maskEmbed();
 }
+// --- Per-theme clips (2026-10-21): media/<name>--<theme>.webm for each of the four site themes.
+var CLIP_THEMES = ['youcoded', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
+function rethemeClips(slug){
+  var theme = CLIP_THEMES.indexOf(slug) >= 0 ? slug : CLIP_THEMES[0];
+  document.querySelectorAll('video[data-clip]').forEach(function(v){
+    var base = 'media/' + v.dataset.clip + '--' + theme;
+    var s = v.querySelector('source'); if (!s || s.getAttribute('src') === base + '.webm') return;
+    var running = !v.paused && !v.ended;
+    v.setAttribute('poster', base + '.webp'); s.setAttribute('src', base + '.webm');
+    v.load(); if (running) v.play().catch(function(){});
+  });
+}
+
 
 // The still in the demo window is a picture of the app IN THE THEME THE PAGE IS
 // CURRENTLY WEARING (Destin 2026-09-03: "the unstarted window should still be an
@@ -2937,6 +3133,17 @@ applyTheme("youcoded");
 // spelled the character out. Percent signs come from fromCharCode below;
 // wrap-around is written as a conditional instead of modulo.
 var PCT = String.fromCharCode(37);
+
+// --- Linux visitors: the device card moves up to second place (2026-10-21).
+(function(){
+  try {
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '', ua = navigator.userAgent || '';
+    if (/Android/.test(ua) || !/Linux|X11|CrOS/.test(plat + ua)) return;
+    var st = document.querySelector('.step[data-card="device"]'), first = document.querySelector('.step[data-i="0"]');
+    var sl = document.querySelector('#stage > .devdemo'), firstSl = document.querySelector('#stage > [data-i="0"]');
+    if (st && first && sl && firstSl) { first.after(st); firstSl.after(sl); }
+  } catch (e) {}
+})();
 var steps  = [].slice.call(document.querySelectorAll('.step'));
 // The phone overlay is a #stage child too but is NOT a slide -- counting it
 // would shift every card's clip by one.
@@ -4111,6 +4318,154 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   }
 })();
 
+</script>
+<script>
+/* Builds the keys; lit keys get a delay matching when the trail reaches them. */
+(function(){var kb=document.querySelector('.devdemo .kb'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4};
+['qwertyuiop','asdfghjkl','zxcvbnm',' '].forEach(function(row){var r=document.createElement('div');r.className='r';
+ row.split('').forEach(function(c){var s=document.createElement('div'),k=document.createElement('div');
+  s.className='s'+(c==' '?' sp':'');k.className='k'+(lit[c]!=null?' l':'');
+  if(lit[c]!=null)k.style.setProperty('--d',lit[c]+'s');
+  k.textContent=c==' '?'':c;s.appendChild(k);r.appendChild(s)});kb.appendChild(r)})})();
+</script>
+<script>
+// --- Tips over the live demo (2026-10-21). Chips hang under the demo's own toolbar buttons,
+// found in the iframe's DOM (same origin), on straight vertical stems; inside Settings they sit
+// beside the panel's rows on horizontal stems; while a page (Home, Finance) is open there are
+// none. A chip expands in place into its description on hover or tap, and the others move to
+// make room; x removes one, Hide tips removes them all (remembered). They appear only once the
+// visitor has clicked into the demo -- never over the still.
+(function(){
+  var embed = document.querySelector('.embed'); if (!embed) return;
+  var stage = embed.querySelector('.embed-stage'), frame = embed.querySelector('.embed-iframe');
+  var CHAT = [
+    { sel: 'button[aria-label="Settings"]',      label: 'Settings',  text: 'Every setting in one place: models, permissions, look, sync.' },
+    { sel: 'button[aria-label="Open pages"]',    label: 'Pages',     text: 'Screens you asked for, pinned here for one click.' },
+    { sel: 'button[aria-label="Open projects"]', label: 'Projects',  text: 'Files, conversations and instructions, kept together.' },
+    { sel: 'button[aria-label="Open Home"]',     label: 'Home',      text: 'A smart-home panel, made by asking. Click to open it.' },
+    { sel: 'button[aria-label="Open Finance"]',  label: 'Finance',   text: 'Every account on one page. Click to open it.' },
+    { sel: 'button[aria-label="Session files"]', label: 'Files',     text: 'What the assistant made or changed in this conversation.', right: true },
+    { sel: 'button[aria-label="Browser"]',       label: 'Browser',   text: 'The assistant’s own browser. Watch it work.', right: true },
+    { sel: 'button[aria-label="Games"]',         label: 'Games',     text: 'Connect 4, chess, Flappy and 2048 while it works.', right: true },
+    { sel: 'button[aria-label="Browse skills"]', label: 'Commands',  text: 'Your skills and workflows, one tap away.', above: true }
+  ];
+  var SETTINGS = [
+    { row: 'Account',            text: 'Optional. Sign in to like themes and rate plugins.' },
+    { row: 'Assistant settings', text: 'Which AI answers, what it may do without asking, and the defaults.' },
+    { row: 'Appearance',         text: 'Themes, wallpapers, mascots, fonts. The four at the top of this page live here.' },
+    { row: 'Buddy floater',      text: 'A small mascot that floats over your desktop and takes a screenshot straight into a prompt.' },
+    { row: 'Backup & sync',      text: 'Your conversations and files, kept in your own private GitHub.' },
+    { row: 'Remote access',      text: 'Open this app from your phone’s browser by scanning a code.' }
+  ];
+  var layer = document.createElement('div'); layer.className = 'tips';
+  layer.innerHTML = '<svg class="tips-lines"></svg><button class="tips-hide" type="button">Hide tips</button>';
+  stage.appendChild(layer);
+  var svg = layer.querySelector('svg'), hideBtn = layer.querySelector('.tips-hide');
+  var hidden = false; try { hidden = localStorage.getItem('yc-tips-hidden') === '1'; } catch (e) {}
+  var gone = {}, pinned = null, mode = '';
+  hideBtn.addEventListener('click', function(){ hidden = true; try { localStorage.setItem('yc-tips-hidden', '1'); } catch (e) {} render(true); });
+  function doc(){ try { return frame.contentDocument; } catch (e) { return null; } }
+  function rect(el){ var r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 }; }
+  // What the demo is showing: a page (no tips), the settings panel, or the chat.
+  function detect(d){
+    if (!d || !d.body) return '';
+    var back = [].slice.call(d.querySelectorAll('button')).some(function(b){ return /back to chat/i.test(b.textContent || '') && b.getBoundingClientRect().width; });
+    if (back) return 'page';
+    var close = d.querySelector('button[aria-label="Close settings"]');
+    if (close && close.getBoundingClientRect().left >= 0) return 'settings';
+    return 'chat';
+  }
+  function rowEl(d, label){
+    var all = d.querySelectorAll('button, div, span, p');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.children.length <= 1 && (el.textContent || '').trim() === label) {
+        var r = el.getBoundingClientRect(); if (r.width && r.left >= 0) return el.closest('button') || el;
+      }
+    }
+    return null;
+  }
+  function chip(t, key){
+    var el = document.createElement('div'); el.className = 'tip' + (pinned === key ? ' open' : '');
+    el.innerHTML = '<span class="tip-label"></span><span class="tip-text"></span><i class="tip-x" title="Dismiss">&times;</i>';
+    el.querySelector('.tip-label').textContent = t.label || t.row;
+    el.querySelector('.tip-text').textContent = t.text;
+    el.addEventListener('mouseenter', function(){ if (pinned !== key) { el.classList.add('open'); place(); } });
+    el.addEventListener('mouseleave', function(){ if (pinned !== key) { el.classList.remove('open'); place(); } });
+    el.addEventListener('click', function(e){ if (e.target.classList.contains('tip-x')) { gone[key] = 1; render(true); return; }
+      pinned = pinned === key ? null : key; render(true); });
+    return el;
+  }
+  var items = [], built = '';
+  function render(force){
+    var d = doc(); mode = detect(d);
+    var show = !hidden && mode && mode !== 'page' && embed.classList.contains('interactive');
+    layer.classList.toggle('on', show);
+    if (!show) { built = ''; return; }
+    // Chips are rebuilt only when the demo changes mode or one is dismissed; a mutation inside
+    // the demo (a reply arriving, a hover) just re-places them, so a chip under the pointer
+    // keeps its hover state instead of being replaced mid-hover.
+    if (!force && built === mode && items.length) { place(); return; }
+    layer.querySelectorAll('.tip').forEach(function(n){ n.remove(); }); items = []; built = mode;
+    var list = mode === 'settings' ? SETTINGS : CHAT;
+    list.forEach(function(t, i){
+      var key = mode + ':' + i; if (gone[key]) return;
+      var anchor = t.sel ? d.querySelector(t.sel) : rowEl(d, t.row);
+      if (!anchor) return;
+      var el = chip(t, key); layer.appendChild(el);
+      items.push({ t: t, el: el, anchor: anchor });
+    });
+    place();
+  }
+  // Lay the chips out against the anchors' current positions; nothing may overlap.
+  function place(){
+    var d = doc(); if (!d) return;
+    var sw = stage.clientWidth, gap = 8, lines = '';
+    // Each row keeps the spans it already holds; a chip goes on the first row where it
+    // overlaps nothing, so neighbours never touch however wide a chip grows.
+    var rows = [];
+    function freeRow(l, r){ for (var i = 0; ; i++) { rows[i] = rows[i] || []; if (!rows[i].some(function(s){ return l < s[1] + gap && r > s[0] - gap; })) { rows[i].push([l, r]); return i; } } }
+    items.forEach(function(it){
+      var a = rect(it.anchor), el = it.el, w = el.offsetWidth, h = el.offsetHeight, x, y;
+      if (mode === 'settings') {
+        x = a.r + 14; y = a.cy - h / 2;
+        lines += '<line x1="' + a.r + '" y1="' + a.cy + '" x2="' + x + '" y2="' + a.cy + '"/>';
+      } else if (it.t.above) {
+        x = a.cx - 10; y = a.t - 10 - h;
+        lines += '<line x1="' + a.cx + '" y1="' + (y + h) + '" x2="' + a.cx + '" y2="' + a.t + '"/>';
+      } else {
+        x = it.t.right ? a.cx + 10 - w : a.cx - 10;
+        x = Math.max(4, Math.min(x, sw - w - 4));
+        var row = freeRow(x, x + w); y = a.b + 10 + row * (h + 6);
+        lines += '<line x1="' + a.cx + '" y1="' + (a.b + 2) + '" x2="' + a.cx + '" y2="' + y + '"/>';
+      }
+      x = Math.max(4, Math.min(x, sw - w - 4));
+      el.style.left = x + 'px'; el.style.top = y + 'px';
+    });
+    svg.innerHTML = lines;
+  }
+  // Re-render when the demo changes (a page opens, settings slides in) or the window resizes.
+  var mo = null, queued = false;
+  function queue(){ if (queued) return; queued = true; requestAnimationFrame(function(){ queued = false; render(); }); }
+  function watch(){
+    var d = doc(); if (!d || !d.body || mo) return;
+    mo = new MutationObserver(queue); mo.observe(d.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'aria-label'] });
+    d.defaultView.addEventListener('resize', queue);
+  }
+  // The app draws its toolbar a beat after the iframe's load event, so keep looking until
+  // the first button exists (and give up after ten seconds).
+  function armed(){ var d = doc(); return !!(d && d.body && d.querySelector(CHAT[0].sel)); }
+  function arm(){ var tries = 0; (function tick(){ if (armed()) { watch(); render(true); return; } if (++tries < 34) setTimeout(tick, 300); })(); }
+  frame.addEventListener('load', function(){ mo = null; arm(); });
+  if (frame.src) arm();
+  new MutationObserver(function(){ watch(); queue(); }).observe(embed, { attributes: true, attributeFilter: ['class'] });
+  addEventListener('resize', queue);
+})();
+</script>
+
+<script>
+// The story opens folded on a phone, open everywhere else (Q-14).
+(function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
 </script>
 </body>
 </html>
