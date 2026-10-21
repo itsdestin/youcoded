@@ -724,3 +724,37 @@ describe('refresh() — "Check for new models"', () => {
     expect(refreshChatgpt).toHaveBeenCalled();
   });
 });
+
+describe('cachedCounts never fetches or reads the disk', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-counts-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  it('counts from what is already cached, and fetches nothing', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter')
+      ? { data: [{ id: 'x' }, { id: 'y' }] } : { anthropic: { models: { c: { name: 'C' } } } } }));
+    const cat = new ModelCatalog(dir, f as any);
+    const providers = [
+      { id: 'openrouter', type: 'openrouter', label: 'OR', enabled: true, builtIn: true, hasKey: true, ready: true },
+      { id: 'an', type: 'anthropic', label: 'A', enabled: true, builtIn: false, hasKey: true, ready: true },
+    ] as any;
+    await cat.get(providers);
+    f.mockClear();
+    const counts = cat.cachedCounts(providers);
+    expect(counts.get('openrouter')).toEqual({ count: 2, source: 'catalog' });
+    expect(counts.get('an')).toEqual({ count: 1, source: 'catalog' });
+    expect(f).not.toHaveBeenCalled();
+  });
+  it('with nothing in memory, every provider is unknown — a cache file on disk is not read', async () => {
+    const f = vi.fn();
+    fs.writeFileSync(path.join(dir, 'provider-catalog-cache.json'), JSON.stringify({ fetchedAt: Date.now(), openrouter: null, modelsdev: { anthropic: { models: { c: {} } } } }));
+    const counts = new ModelCatalog(dir, f as any).cachedCounts([{ id: 'an', type: 'anthropic', label: 'A', enabled: true, builtIn: false, hasKey: true, ready: true }] as any);
+    expect(counts.size).toBe(0);
+    expect(f).not.toHaveBeenCalled();
+  });
+  it('an endpoint’s own list counts as "listed by this service"', async () => {
+    const C = { id: 'c1', type: 'openai-compatible', label: 'Mine', baseUrl: 'http://localhost:11434/v1', enabled: true, builtIn: false, hasKey: false, ready: true } as any;
+    const cat = new ModelCatalog(dir, vi.fn(async () => ({ ok: true, json: async () => ({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }) })) as any);
+    await cat.get([C]);
+    expect(cat.cachedCounts([C]).get('c1')).toEqual({ count: 3, source: 'endpoint' });
+  });
+});

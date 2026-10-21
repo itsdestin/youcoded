@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import type { CatalogModel, ModelBinding, ProviderStatus, ServiceEntry } from '../../shared/provider-types';
+import type { CatalogModel, ModelBinding, ProviderModelInfo, ProviderStatus, ServiceEntry } from '../../shared/provider-types';
 import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
 import { cloudContextLength } from './cloud-context';
 import { normalizeEndpoint } from '../../shared/endpoint-address';
@@ -490,6 +490,38 @@ export class ModelCatalog {
     })().finally(() => { if (this.refreshing === run) this.refreshing = null; });
     this.refreshing = run;
     return run;
+  }
+
+  /** How many models each provider brings, from data ALREADY IN MEMORY — no disk read, no fetch, no
+   *  ask (WHY memory only: this runs on every Providers-screen open, and readCache is a blocking read
+   *  of a multi-MB file on the main process). For the Providers screen's cards only
+   *  (ipc/provider.ts providerListWithCounts). A provider with nothing cached is left out, so the
+   *  card shows no number rather than "0 models". Only key-based cloud types count: ChatGPT and the
+   *  local engine have their own cards. */
+  cachedCounts(providers: ProviderStatus[]): Map<string, ProviderModelInfo> {
+    const out = new Map<string, ProviderModelInfo>();
+    const cache = this.memo;
+    for (const p of providers) {
+      if (!p.enabled) continue;
+      let rows: CatalogModel[] = [];
+      let source: ProviderModelInfo['source'] = 'catalog';
+      if (p.type === 'openrouter') { if (cache) rows = this.openrouterModels(cache.openrouter, p.id); }
+      else if (MODELSDEV_KEY[p.type]) { if (cache) rows = this.modelsdevModels(cache.modelsdev, MODELSDEV_KEY[p.type], p.id); }
+      else if (p.type === 'openai-compatible') {
+        const key = cache ? this.modelsdevKeyForAddress(cache.modelsdev, p.baseUrl) : null;
+        if (key && cache) rows = this.modelsdevModels(cache.modelsdev, key, p.id);
+        else {
+          const base = p.baseUrl ? normalizeEndpoint(p.baseUrl) : null;
+          // Any cached list for this provider and address, whichever key fingerprint it was asked with
+          // — a count is not a secret, and the newest one is the best guess.
+          const hit = base ? [...this.endpointCache.entries()].filter(([k]) => k.startsWith(`${p.id}\0${base}\0`))
+            .sort((a, b) => b[1].at - a[1].at)[0]?.[1] : undefined;
+          if (hit) { rows = hit.rows; source = 'endpoint'; }
+        }
+      }
+      if (rows.length > 0) out.set(p.id, { count: rows.length, source });
+    }
+    return out;
   }
 
   /** HarnessSession asks this for context-window sizing. null when the model

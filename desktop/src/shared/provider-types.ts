@@ -145,7 +145,7 @@ export interface PendingProviderCalls {
 }
 
 /** What a provider row can say about its model list (U5). Absent = unknown. */
-interface ProviderModelInfo {
+export interface ProviderModelInfo {
   count: number;
   /** Where the list came from: the public catalog, or the endpoint itself. */
   source: 'catalog' | 'endpoint';
