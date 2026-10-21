@@ -308,13 +308,9 @@ describe('CODER_DEFAULT_BODY', () => {
 
   it('honors standing checkpoint authorization without authorizing unrelated Git actions', () => {
     const prompt = assembleSystemPrompt({ presetBody: CODER_DEFAULT_BODY, cwd: dir, appVersion: '1' });
-    expect(prompt).toContain('standing user or project instructions');
-    expect(prompt).toContain('checkpoint commits and backup pushes');
-    expect(prompt).toContain('your own approved work');
-    expect(prompt).toContain('Otherwise ask before committing or pushing');
-    expect(prompt).toContain('Scan all outgoing commits for secrets before every push');
-    expect(prompt).toContain('If the scan fails or cannot run, do not push');
-    expect(prompt).toContain('Merges, releases, amend/reset, force-pushes, destructive operations and other sessions\' work require explicit authorization');
+    expect(prompt).toContain('Commit or push only when authorized by the user or standing project instructions; scan for secrets before every push.');
+    expect(prompt).toContain('Amend, reset, merge or release only when explicitly asked.');
+    expect(prompt).not.toContain('do not wait for final verification or merge approval');
     expect(prompt).not.toContain('Commit, amend, reset or push only when the user asks');
   });
 });
