@@ -625,3 +625,102 @@ describe("an unmatched custom endpoint is asked for its own /models", () => {
     expect(seen).toEqual(['Bearer sk-old', 'Bearer sk-new']);
   });
 });
+
+describe('services() — the providers Add provider can search', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-svc-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  const MD = {
+    zeta: { name: 'Zeta', npm: '@ai-sdk/openai-compatible', api: 'https://zeta.example.com/v1/', models: {
+      small: { name: 'Small', limit: { context: 8000 } }, big: { name: 'Big', limit: { context: 1000000 }, tool_call: false, cost: { input: 1, output: 2 } } } },
+    alpha: { name: 'alpha', npm: '@ai-sdk/openai-compatible', api: 'https://alpha.example.com', models: { a: { name: 'A' } } },
+    lmstudio: { name: 'LMStudio', npm: '@ai-sdk/openai-compatible', api: 'http://127.0.0.1:1234/v1', models: { l: { name: 'L' } } },
+    empty: { name: 'Empty', npm: '@ai-sdk/openai-compatible', api: 'https://empty.example.com', models: {} },
+    other: { name: 'Other', npm: '@ai-sdk/anthropic', api: 'https://other.example.com', models: { o: { name: 'O' } } },
+    'gw-small': { name: 'GW small', npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com', models: { a: {} } },
+    'gw-big': { name: 'GW big', npm: '@ai-sdk/openai-compatible', api: 'https://gw.example.com/v1', models: { a: {}, b: {} } },
+  };
+  const make = () => new ModelCatalog(dir, vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : MD })) as any);
+
+  it('lists OpenAI-compatible, non-local services with models, sorted by name', async () => {
+    expect((await make().services()).map((s) => s.label)).toEqual(['alpha', 'GW big', 'Zeta']);
+  });
+  it('carries the address, the count and the models largest-window first, never inventing facts', async () => {
+    const zeta = (await make().services()).find((s) => s.id === 'zeta')!;
+    expect(zeta).toMatchObject({ baseUrl: 'https://zeta.example.com/v1', modelCount: 2 });
+    expect(zeta.models).toEqual([
+      { id: 'big', label: 'Big', contextLength: 1000000, priceIn: 1, priceOut: 2, tools: false },
+      { id: 'small', label: 'Small', contextLength: 8000 },
+    ]);
+  });
+  it('is empty offline with nothing cached', async () => {
+    const cat = new ModelCatalog(dir, vi.fn(async () => { throw new Error('offline'); }) as any);
+    expect(await cat.services()).toEqual([]);
+  });
+});
+
+describe('refresh() — "Check for new models"', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-refresh-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+  const OR = { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true };
+
+  it('skips the 24-hour cache and reports what is new', async () => {
+    let rows = [{ id: 'old' }];
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: rows } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await cat.get([OR] as any);
+    rows = [{ id: 'old' }, { id: 'inception/mercury-3' }];
+    expect(await cat.refresh([OR] as any)).toEqual({ added: 1, failed: [] });
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toContain('inception/mercury-3');
+  });
+  it('names a source that could not be reached and keeps its old list', async () => {
+    let down = false;
+    const f = vi.fn(async (url: string) => {
+      if (down && url.includes('openrouter')) throw new Error('offline');
+      return { ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'kept' }] } : {} };
+    });
+    const cat = new ModelCatalog(dir, f as any);
+    await cat.get([OR] as any);
+    down = true;
+    expect(await cat.refresh([OR] as any)).toEqual({ added: 0, failed: ['OpenRouter'] });
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toEqual(['kept']);
+  });
+  it('two presses at once share one fetch', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [] } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await Promise.all([cat.refresh([OR] as any), cat.refresh([OR] as any)]);
+    expect(f.mock.calls.filter(([u]) => String(u).includes('openrouter'))).toHaveLength(1);
+  });
+  it('a normal read during a refresh waits for it instead of starting a second fetch', async () => {
+    const f = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'x' }] } : {} }));
+    const cat = new ModelCatalog(dir, f as any);
+    await Promise.all([cat.refresh([OR] as any), cat.get([OR] as any)]);
+    expect(f.mock.calls.filter(([u]) => String(u).includes('openrouter'))).toHaveLength(1);
+  });
+  it('names a custom endpoint that could not be reached', async () => {
+    const C = { id: 'c1', type: 'openai-compatible', label: 'Home server', baseUrl: 'https://home.example.com/v1', enabled: true, builtIn: false, hasKey: false, ready: true };
+    const f = vi.fn(async (url: string) => url.startsWith('https://home.example.com')
+      ? { ok: false, json: async () => ({}) } : { ok: true, json: async () => ({}) });
+    expect(await new ModelCatalog(dir, f as any).refresh([C] as any)).toEqual({ added: 0, failed: ['Home server'] });
+  });
+  it('one source down: rows serve now, and the next ordinary read tries both again', async () => {
+    let mdUp = false;
+    const f = vi.fn(async (url: string) => {
+      if (url.includes('models.dev') && !mdUp) throw new Error('offline');
+      return { ok: true, json: async () => url.includes('openrouter') ? { data: [{ id: 'x' }] } : {} };
+    });
+    const cat = new ModelCatalog(dir, f as any);
+    expect((await cat.get([OR] as any)).map((m) => m.id)).toEqual(['x']);
+    const before = f.mock.calls.length;
+    mdUp = true;
+    await cat.get([OR] as any);
+    expect(f.mock.calls.length).toBe(before + 2);
+  });
+  it('asks the ChatGPT plan to refresh, and survives it throwing', async () => {
+    const refreshChatgpt = vi.fn(async () => { throw new Error('nope'); });
+    const cat = new ModelCatalog(dir, vi.fn(async () => ({ ok: true, json: async () => ({}) })) as any, { refreshChatgpt });
+    await expect(cat.refresh([OR] as any)).resolves.toMatchObject({ failed: [] });
+    expect(refreshChatgpt).toHaveBeenCalled();
+  });
+});

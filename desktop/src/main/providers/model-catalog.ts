@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import type { CatalogModel, ModelBinding, ProviderStatus } from '../../shared/provider-types';
+import type { CatalogModel, ModelBinding, ProviderStatus, ServiceEntry } from '../../shared/provider-types';
 import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
 import { cloudContextLength } from './cloud-context';
 import { normalizeEndpoint } from '../../shared/endpoint-address';
@@ -35,6 +35,15 @@ const EMPTY_CACHE: CacheShape = { fetchedAt: 0, openrouter: null, modelsdev: nul
  *  field access below goes through this gate first. */
 function isObj(x: unknown): x is Record<string, any> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+/** Whether any of these providers can use the internet catalogs (OpenRouter / models.dev). */
+function needsNetwork(providers: ProviderStatus[]): boolean {
+  return providers.some((p) => p.enabled && (
+    p.type === 'openrouter' || !!MODELSDEV_KEY[p.type]
+    // A custom endpoint elsewhere can be matched by address (models.dev). One on THIS computer
+    // (Ollama, LM Studio) never is, so a purely local user still pays nothing — see the WHY in get().
+    || (p.type === 'openai-compatible' && !!p.baseUrl && !isLocalEndpoint(p.baseUrl))));
 }
 
 /** One OpenRouter-shaped row → CatalogModel, or null when malformed. Shared with a custom
@@ -135,6 +144,13 @@ export class ModelCatalog {
   // until restart or TTL expiry, because the memo is consulted before disk.
   // No in-app "refresh models" control depends on file deletion today.
   private memo: CacheShape | null = null;
+  // The one upstream fetch in flight, shared by every caller (see ensureFresh).
+  private fetching: Promise<{ shape: CacheShape; failed: string[] }> | null = null;
+  // The one "Check for new models" run in flight; a second press joins it.
+  private refreshing: Promise<{ added: number; failed: string[] }> | null = null;
+  // services() answers, per models.dev payload object — the payload is replaced, never mutated.
+  private servicesMemo = new WeakMap<object, ServiceEntry[]>();
+  private readonly refreshChatgpt: (() => Promise<void>) | null;
   constructor(cacheDir: string, private fetchImpl: FetchLike = fetch as any,
               // opts.ttlMs is TEST-ONLY (same convention as SecretsStore's
               // maxRetries) — lets the stale-fallback tests force expiry
@@ -145,6 +161,7 @@ export class ModelCatalog {
                 chatgptModels?: () => Promise<CatalogModel[]>;
                 contextPreferences?: () => ContextPreferences;
                 endpointKey?: (providerId: string) => Promise<string | undefined>;
+                refreshChatgpt?: () => Promise<void>;
               }) {
     this.cachePath = path.join(cacheDir, CACHE_FILE);
     this.ttlMs = opts?.ttlMs ?? TTL_MS;
@@ -152,6 +169,7 @@ export class ModelCatalog {
     this.chatgptModels = opts?.chatgptModels ?? null;
     this.contextPreferences = opts?.contextPreferences ?? (() => DEFAULT_CONTEXT_PREFERENCES);
     this.endpointKey = opts?.endpointKey ?? null;
+    this.refreshChatgpt = opts?.refreshChatgpt ?? null;
   }
 
   /** null on missing/corrupt. Unlike providers.json (user data — read errors
@@ -171,20 +189,51 @@ export class ModelCatalog {
     }
   }
 
-  /** Fresh-or-refetched cache. NEVER throws — a dead network degrades to the
-   *  stale cache, or to an empty catalog when there is no cache at all. */
-  private async ensureFresh(): Promise<CacheShape> {
-    if (this.memo && Date.now() - this.memo.fetchedAt < this.ttlMs) return this.memo;
+  /** Fresh-or-refetched cache, plus which upstream sources failed on THIS call (empty when it was
+   *  served from cache). NEVER throws — a dead network degrades to the stale cache, or to an empty
+   *  catalog when there is no cache at all.
+   *  `force` (Check for new models) skips both freshness checks.
+   *  Single-flight: while a fetch runs, every caller — forced or not — shares it. WHY: a refresh click
+   *  and a picker read landing together must not double the upstream traffic, and an answer that
+   *  started after nothing was cached is as new as a forced one would be.
+   *  The cache-file write stays IN this function: the main-blocking allowlist names it. */
+  private async ensureFresh(opts?: { force?: boolean }): Promise<{ shape: CacheShape; failed: string[] }> {
+    if (!opts?.force && this.memo && Date.now() - this.memo.fetchedAt < this.ttlMs) return { shape: this.memo, failed: [] };
+    if (this.fetching) return this.fetching;
+    // A forced refresh with a memo already in hand need not read the disk: the memo is the newest copy.
+    const stale = opts?.force && this.memo ? this.memo : (this.readCache() ?? this.memo);
+    if (!opts?.force && stale && Date.now() - stale.fetchedAt < this.ttlMs) { this.memo = stale; return { shape: stale, failed: [] }; }
+    const run = this.fetchBoth(stale).then((r) => {
+      if (r.write) {
+        // Plain write, no tmp+rename: single consumer and fully rebuildable — a torn file just reads
+        // as corrupt → refetch on the next call. Write failures (read-only disk) are absorbed.
+        try {
+          fs.mkdirSync(path.dirname(this.cachePath), { recursive: true });
+          fs.writeFileSync(this.cachePath, JSON.stringify(r.shape));
+        } catch { /* cache write is best-effort */ }
+        // Memoize unconditionally — the serve-path TTL check above decides whether this shape is fresh
+        // enough to reuse (a partial refresh from cold carries an expired stamp and re-fetches next call).
+        this.memo = r.shape;
+      }
+      return { shape: r.shape, failed: r.failed };
+    }).finally(() => { if (this.fetching === run) this.fetching = null; });
+    this.fetching = run;
+    return run;
+  }
 
-    const stale = this.readCache();
-    if (stale && Date.now() - stale.fetchedAt < this.ttlMs) { this.memo = stale; return stale; }
-
+  /** Both upstream lists in parallel. Per-source failure keeps that source's stale data (one dead
+   *  upstream must not blank the other's models).
+   *  - both succeed → stamped now;
+   *  - exactly one succeeds → the good payload replaces its half and the OLD stamp is kept, so a
+   *    cold-start partial (stamp 0) retries both next call — otherwise one source being down on the very
+   *    first fetch would leave that provider's picker empty for a full TTL; `write: true`;
+   *  - both fail → the stale shape as-is (or empty), NOT re-stamped and not written (`write: false`).
+   *  `failed` names the sources that failed on this call. */
+  private async fetchBoth(stale: CacheShape | null): Promise<{ shape: CacheShape; write: boolean; failed: string[] }> {
     let openrouter: any | null = stale?.openrouter ?? null;
     let modelsdev: any | null = stale?.modelsdev ?? null;
     let orSuccess = false;
     let mdSuccess = false;
-    // Both sources in parallel; per-source failure keeps that source's stale
-    // data (allSettled — one dead upstream must not blank the other's models).
     const [orRes, mdRes] = await Promise.allSettled([
       this.fetchImpl(OPENROUTER_MODELS_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }),
       this.fetchImpl(MODELSDEV_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }),
@@ -196,33 +245,10 @@ export class ModelCatalog {
     if (mdRes.status === 'fulfilled' && mdRes.value.ok) {
       try { modelsdev = await mdRes.value.json(); mdSuccess = true; } catch { /* keep stale */ }
     }
-
-    if (!orSuccess && !mdSuccess) {
-      // Total failure: serve the stale cache entirely if we have one (don't
-      // re-stamp fetchedAt — the next call should retry the network), else
-      // an empty shape so get() yields [] rather than throwing.
-      return stale ?? EMPTY_CACHE;
-    }
-
-    // Only stamp "fresh" when BOTH sources succeeded. A partial success keeps
-    // the good source's new payload on disk but carries the OLD (expired)
-    // stamp, so the next call retries both — otherwise one source being down
-    // on the very first fetch would leave that provider's picker empty for a
-    // full TTL. Same principle as the total-failure branch above.
+    const failed = [...(orSuccess ? [] : ['OpenRouter']), ...(mdSuccess ? [] : ['models.dev'])];
+    if (!orSuccess && !mdSuccess) return { shape: stale ?? EMPTY_CACHE, write: false, failed };
     const fetchedAt = orSuccess && mdSuccess ? Date.now() : stale?.fetchedAt ?? 0;
-    const fresh: CacheShape = { fetchedAt, openrouter, modelsdev };
-    // Plain write, no tmp+rename: single consumer and fully rebuildable — a
-    // torn file just reads as corrupt → refetch on the next call. Write
-    // failures (read-only disk) are absorbed: the in-memory data still serves.
-    try {
-      fs.mkdirSync(path.dirname(this.cachePath), { recursive: true });
-      fs.writeFileSync(this.cachePath, JSON.stringify(fresh));
-    } catch { /* cache write is best-effort */ }
-    // Memoize unconditionally — the serve-path TTL check above is what decides
-    // whether this shape is fresh enough to reuse (a partial refresh carries an
-    // expired stamp and will be re-fetched next call regardless).
-    this.memo = fresh;
-    return fresh;
+    return { shape: { fetchedAt, openrouter, modelsdev }, write: true, failed };
   }
 
   /** OpenRouter /api/v1/models rows → CatalogModel. Schema coupling recorded
@@ -350,12 +376,7 @@ export class ModelCatalog {
     //
     // Reads `p.enabled` because the loop below does: a DISABLED OpenRouter row
     // contributes no models, so it must not drag the network in either.
-    const needsNetwork = providers.some((p) => p.enabled && (
-      p.type === 'openrouter' || MODELSDEV_KEY[p.type]
-      // A custom endpoint elsewhere can now be matched by address (models.dev). One on THIS computer
-      // (Ollama, LM Studio) never is, so a purely local user still pays nothing — see the WHY above.
-      || (p.type === 'openai-compatible' && !!p.baseUrl && !isLocalEndpoint(p.baseUrl))));
-    const cache = !needsNetwork ? EMPTY_CACHE : opts?.cacheOnly ? (this.memo ?? EMPTY_CACHE) : await this.ensureFresh();
+    const cache = !needsNetwork(providers) ? EMPTY_CACHE : opts?.cacheOnly ? (this.memo ?? EMPTY_CACHE) : (await this.ensureFresh()).shape;
     const out: CatalogModel[] = [];
     for (const p of providers) {
       if (!p.enabled) continue; // disabled providers contribute nothing
@@ -391,6 +412,84 @@ export class ModelCatalog {
       }
     }
     return out;
+  }
+
+  /** The services Add provider can search: every models.dev provider this app can reach at an
+   *  address (OpenAI-compatible), with at least one model, not on this computer. One entry per address
+   *  — the one get() would match. Offline with nothing cached → []. Never throws. */
+  async services(): Promise<ServiceEntry[]> {
+    const payload = (await this.ensureFresh()).shape.modelsdev;
+    if (!isObj(payload)) return [];
+    const memo = this.servicesMemo.get(payload);
+    if (memo) return memo;
+    const out: ServiceEntry[] = [];
+    for (const [key, entry] of Object.entries(payload)) {
+      if (!isObj(entry) || entry.npm !== '@ai-sdk/openai-compatible' || typeof entry.api !== 'string') continue;
+      if (!normalizeEndpoint(entry.api) || isLocalEndpoint(entry.api)) continue;
+      // Only the entry the catalog would match for this address (WHY: never list a service whose
+      // models the picker would then not show).
+      if (this.modelsdevKeyForAddress(payload, entry.api) !== key) continue;
+      const models = isObj(entry.models) ? Object.entries(entry.models).filter(([, r]) => isObj(r)) as [string, Record<string, any>][] : [];
+      if (models.length === 0) continue;
+      const rows = models.map(([id, r]) => {
+        const m: NonNullable<ServiceEntry['models']>[number] = { id, label: typeof r.name === 'string' && r.name ? r.name : id };
+        if (isObj(r.limit) && typeof r.limit.context === 'number') m.contextLength = r.limit.context;
+        if (isObj(r.cost) && typeof r.cost.input === 'number' && typeof r.cost.output === 'number') { m.priceIn = r.cost.input; m.priceOut = r.cost.output; }
+        if (typeof r.tool_call === 'boolean') m.tools = r.tool_call;
+        return m;
+      });
+      rows.sort((a, b) => (b.contextLength ?? -1) - (a.contextLength ?? -1));
+      out.push({
+        id: key,
+        label: typeof entry.name === 'string' && entry.name.trim() ? entry.name : key,
+        baseUrl: entry.api.replace(/\/+$/, ''),
+        modelCount: models.length,
+        // WHY at most 50: ~190 services × up to hundreds of models would send megabytes to a phone;
+        // the Models fold shows a handful.
+        models: rows.slice(0, 50),
+      });
+    }
+    out.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    this.servicesMemo.set(payload, out);
+    return out;
+  }
+
+  /** "Check for new models": re-download every model list now, skipping the daily cache.
+   *  `added` = models present after that were not before; `failed` = the sources and custom endpoints
+   *  that could not be reached (their previous lists are kept). A second press while one runs joins it.
+   *  Never throws. */
+  refresh(providers: ProviderStatus[]): Promise<{ added: number; failed: string[] }> {
+    if (this.refreshing) return this.refreshing;
+    const keys = (rows: CatalogModel[]) => new Set(rows.map((m) => `${m.providerId}\0${m.id}`));
+    const run = (async () => {
+      try {
+        // "Before" = what is already in memory, so measuring it never starts a fetch of its own.
+        const before = keys(await this.get(providers, { cacheOnly: true }));
+        const failed: string[] = [];
+        let modelsdev: any = this.memo?.modelsdev ?? null;
+        if (needsNetwork(providers)) {
+          const r = await this.ensureFresh({ force: true });
+          failed.push(...r.failed);
+          modelsdev = r.shape.modelsdev;
+        }
+        for (const p of providers) {
+          if (!p.enabled || p.type !== 'openai-compatible') continue;
+          if (this.modelsdevKeyForAddress(modelsdev, p.baseUrl)) continue;
+          const r = await this.endpointModels(p, { force: true });
+          if (!r.ok) failed.push(p.label);
+        }
+        // The plan's own manifest; its retry spacing may make this a no-op, which is fine.
+        try { await this.refreshChatgpt?.(); } catch { /* reported nowhere: the plan keeps its list */ }
+        const after = keys(await this.get(providers, { cacheOnly: true }));
+        let added = 0;
+        for (const k of after) if (!before.has(k)) added++;
+        return { added, failed: [...new Set(failed)] };
+      } catch {
+        return { added: 0, failed: [] };
+      }
+    })().finally(() => { if (this.refreshing === run) this.refreshing = null; });
+    this.refreshing = run;
+    return run;
   }
 
   /** HarnessSession asks this for context-window sizing. null when the model
