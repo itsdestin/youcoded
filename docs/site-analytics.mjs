@@ -12,10 +12,15 @@ function label(value) {
   return value && value.length <= 160 && new TextEncoder().encode(value).length <= 640 && !['(untagged)', 'Direct / unknown', 'Other referring sites'].includes(value) ? value : null;
 }
 export function metadata(href, referrer) {
-  let source = null, campaign = null, referrerDomain = '';
+  let source = null, campaign = null, code = null, referrerDomain = '';
   try {
     const params = new URL(href).searchParams;
-    if (params.getAll('utm_source').length === 1 && params.getAll('utm_campaign').length === 1) {
+    // WHY a bare key (youcoded.ai/?k7qm2x): short links carry an opaque code instead of
+    // readable utm labels. Apps may append their own params (fbclid…), so only exactly one
+    // valueless code-shaped key counts. Older utm links still work below.
+    const codes = [...params].filter(([key, value]) => value === '' && /^[a-hjkmnp-z2-9]{6}$/.test(key));
+    if (codes.length === 1) code = codes[0][0];
+    else if (params.getAll('utm_source').length === 1 && params.getAll('utm_campaign').length === 1) {
       source = label(params.get('utm_source')); campaign = label(params.get('utm_campaign'));
       if (!source || !campaign) source = campaign = null;
     }
@@ -24,7 +29,7 @@ export function metadata(href, referrer) {
     const url = new URL(referrer), host = url.hostname.toLowerCase().replace(/\.$/, '');
     if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.port && host !== 'youcoded.ai' && !host.endsWith('.youcoded.ai') && host.length <= 253 && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host) && !/\.(local|localhost|internal|lan|home|test|invalid)$/.test(host)) referrerDomain = host;
   } catch { /* Never submit the full referrer. */ }
-  return { source, campaign, referrerDomain };
+  return { source, campaign, code, referrerDomain };
 }
 export function installerTarget(key, href) {
   const keys = { 'dl-windows': 'Windows', 'dl-macos': 'macOS', 'dl-macos-arm64': 'macOS', 'dl-macos-intel': 'macOS', 'dl-linux': 'Linux', 'dl-linux-deb': 'Linux', 'dl-linux-rpm': 'Linux', 'dl-linux-pacman': 'Linux', 'dl-android': 'Android' };
