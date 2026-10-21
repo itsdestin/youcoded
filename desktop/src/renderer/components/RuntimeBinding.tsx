@@ -238,8 +238,8 @@ export function useNativeBinding({ active, runtime, binding, setBinding }: {
     : (readyProviders.some((p) => p.id === binding.providerId) ? binding.providerId : '');
   const selectedProvider = readyProviders.find((p) => p.id === selectedProviderId);
   const providerModels = modelCatalog.filter((m) => m.providerId === selectedProviderId);
-  // openai-compatible endpoints (Ollama, LM Studio, custom) may expose no catalog
-  // rows — let the user type the model id directly.
+  // A custom endpoint can still have no rows (models.dev does not list it and its own
+  // /models was empty or unreachable) — let the user type the model id directly.
   const needsFreeformModel = selectedProvider?.type === 'openai-compatible' && providerModels.length === 0;
   // Validate the stored/selected modelId against the catalog (mirrors the
   // providerId guard) so a stale id on a still-ready provider whose catalog no

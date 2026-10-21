@@ -213,7 +213,8 @@ export interface HarnessSessionOpts {
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
   /** Host admission backstop; must run before accepting any model/history mutation. */
   assertReady?: () => void;
-  /** Model context window (from the catalog); null → conservative 32k default. */
+  /** Model context window (from the catalog); null = unknown — the budget math then uses
+   *  profile.assumedContextWindow (250k cloud, 32k on this computer), never stored here. */
   contextLength?: number | null;
   /** Host-only durable commit. Its resolved event has already been appended;
    *  a rejection must leave this history unchanged and emit no summary marker. */
@@ -2135,8 +2136,8 @@ export class HarnessSession extends EventEmitter {
    *  could not help. Measured with THIS session's prompt and tools; the ordinary
    *  pre-request check still guards the first request on the new model. */
   fitForWindow(contextLength: number | null | undefined): 'fits' | 'needs-summary' | 'too-small' {
-    // WHY: an unknown window would be planned as 32k and block chats that most
-    // likely fit. Don't block on a guess; the pre-request check still applies.
+    // WHY: an unknown window is only an assumption (250k cloud / 32k on this computer); don't
+    // block a switch on a guess. The pre-request check still applies.
     if (contextLength == null) return 'fits';
     const base = { contextLength, assumedWindow: this.profile.assumedContextWindow, fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),

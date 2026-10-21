@@ -61,9 +61,9 @@ export function nativeChoiceNeedsApiKey(choice: ModelChoice | null | undefined, 
   return !!p && !p.ready && providerReason(p) === 'Add an API key';
 }
 
-/** A provider with no catalog of its own (Ollama, LM Studio, a custom endpoint):
- *  any model id the user types is legitimate, so a missing catalog row is not a
- *  missing model. */
+/** A custom endpoint whose model list is empty (not matched on models.dev, and its own
+ *  /models gave nothing or was not reachable): any model id the user types is legitimate,
+ *  so a missing catalog row is not a missing model. */
 function isFreeform(p: ProviderRow, catalog: CatalogRow[]): boolean {
   return p.type === 'openai-compatible' && !catalog.some((c) => c.providerId === p.id);
 }
