@@ -4,6 +4,7 @@
 import { outputCapFor } from '../providers/output-cap';
 import { KNOWN_MODELS, matchKnownModel, type KnownModelEntry } from './known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from './specialists/limits';
+import { UNKNOWN_CLOUD_WINDOW, UNKNOWN_LOCAL_WINDOW } from './compaction';
 // Type-only: the app-wide list of provider kinds, used below ONLY to check that
 // this file's own copy of that list has not fallen behind it.
 import type { ProviderType } from '../../shared/provider-types';
@@ -92,6 +93,14 @@ export interface CapabilityProfile {
    *  below excludes it: provider-registry documents that type as the Ollama /
    *  LM Studio shape, i.e. a local model in disguise. */
   announcePrefill: boolean;
+  /** The window the budget math assumes when no source knows this model's real one
+   *  (compaction.ts UNKNOWN_CLOUD_WINDOW / UNKNOWN_LOCAL_WINDOW). PROVIDER-TYPE fact: 32k for the local
+   *  engine and a custom endpoint on this computer, 250k for everything hosted. Never stored or shown
+   *  as the model's window — that stays null ("Unknown"). */
+  assumedContextWindow: number;
+  /** The provider type this profile was resolved for (context-overflow recovery needs it for a custom
+   *  endpoint, whose id is random). Optional so hand-built test profiles still compile. */
+  providerType?: ProfileProviderType;
 }
 
 /** How big a picture this provider type accepts in ONE request. Patches are
@@ -207,6 +216,9 @@ export interface DiscoveredModel {
    *  reaches the same fallback in the known-model overlay below:
    *  conservative 1, never "one slot confirmed". */
   totalSlots?: number | null;
+  /** A custom endpoint whose address is on this computer (Ollama, LM Studio) — its unknown window is
+   *  assumed small like the local engine's. Filled by the host from the context closure. */
+  onThisComputer?: boolean;
 }
 
 const SMALL_LOCAL_CONTEXT = 32_768;
@@ -242,6 +254,7 @@ export const CLOUD_DEFAULT: CapabilityProfile = {
   // spreads the real provider-type answer over this. False is also the honest
   // value for a session that genuinely IS this default — a hosted model.
   announcePrefill: false,
+  assumedContextWindow: UNKNOWN_CLOUD_WINDOW,
 };
 
 function cloudVariant(t: ProfileProviderType): PromptVariant {
@@ -365,7 +378,7 @@ function mcpBudgetSizing(d: DiscoveredModel, registry: KnownModelEntry[]): numbe
 // it depends on the window rather than on which layer won. Typing that
 // honestly keeps tsc able to catch a missing field at every construction site
 // instead of letting a spread paper over it.
-type BehavioralProfile = Omit<CapabilityProfile, 'exposeSkillCatalog' | 'injectionBudgetTokens' | 'mcpToolBudgetTokens' | 'supportsVision'>;
+type BehavioralProfile = Omit<CapabilityProfile, 'exposeSkillCatalog' | 'injectionBudgetTokens' | 'mcpToolBudgetTokens' | 'supportsVision' | 'assumedContextWindow'>;
 
 // Task 13 — the local engine's REAL parallel-slot ceiling this app trusts,
 // per the 2026-08-12 probe recorded in docs/engine-dependencies.md
@@ -508,15 +521,19 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
   // WHY: provider-type fact like the two above, spread onto every return so a
   // registry entry can never override a picture-size limit.
   const imageLimits = imageLimitsFor(d.providerType);
+  // PROVIDER-TYPE facts too, spread LAST on every return so no base or registry entry overrides them.
+  const assumedContextWindow = d.providerType === 'local-engine' || (d.providerType === 'openai-compatible' && d.onThisComputer === true)
+    ? UNKNOWN_LOCAL_WINDOW : UNKNOWN_CLOUD_WINDOW;
+  const providerType = d.providerType;
   if (d.providerType !== 'local-engine') {
     // Per-step output cap: a provider-type policy over the catalog's published maximum
     // (output-cap.ts). Cloud only — a local model stays bounded by its context window.
     const outputCap = outputCapFor(d.providerType, d.maxOutputTokens);
-    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, ...(outputCap !== undefined ? { outputCap } : {}) };
+    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, assumedContextWindow, providerType, ...(outputCap !== undefined ? { outputCap } : {}) };
   }
   const base = localFallback(d.contextLength);
   const known = matchKnownModel(d.modelId, registry);   // LAYER 2 overlay
-  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
+  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, assumedContextWindow, providerType };
   return {
     maxToolPresentation: known.maxToolPresentation ?? base.maxToolPresentation,
     promptVariant: known.promptVariant ?? base.promptVariant,
@@ -546,5 +563,7 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
     nativeImageToolResults,
     imageLimits,
     announcePrefill,
+    assumedContextWindow,
+    providerType,
   };
 }

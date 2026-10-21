@@ -52,6 +52,7 @@ import { useScrollFade } from '../../hooks/useScrollFade';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
+
 import { getCapabilities } from '../../platform';
 
 export type ModelChoice =
@@ -500,6 +501,36 @@ export default function ModelPicker({
    */
   const [reload, setReload] = useState(0);
   const everLoadedRef = useRef(false);
+
+  // "Check for new models" on an empty search (custom-providers, 2026-10-20). Hidden where
+  // the call cannot work (guide: never a button that does nothing): a bridge without it,
+  // or a phone paired to an older computer that answers "not supported" — learnt on the
+  // first press, then the button stays hidden for this panel.
+  const [refreshUnsupported, setRefreshUnsupported] = useState(false);
+  const canRefresh = !refreshUnsupported && typeof window.claude?.providers?.refreshCatalog === 'function';
+  type RefreshState = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; added: number } | { kind: 'failed'; failed: string[] };
+  const [refreshState, setRefreshState] = useState<RefreshState>({ kind: 'idle' });
+  const refreshModelList = useCallback(async () => {
+    const run = window.claude?.providers?.refreshCatalog;
+    if (typeof run !== 'function') return;
+    setRefreshState({ kind: 'running' });
+    try {
+      const res = await run();
+      // A source that failed keeps its old list (backend), and anything new from the
+      // others is still worth showing — so re-read either way, then say what happened.
+      setReload((n) => n + 1);
+      setRefreshState(res.failed.length ? { kind: 'failed', failed: res.failed } : { kind: 'done', added: res.added });
+    } catch (e) {
+      // An older paired computer has no such call: hide the button rather than show an error.
+      if ((e as { code?: unknown } | null)?.code === 'REMOTE_UNSUPPORTED') {
+        setRefreshUnsupported(true);
+        setRefreshState({ kind: 'idle' });
+        return;
+      }
+      // Nothing said which source failed: never invent one (error standards).
+      setRefreshState({ kind: 'failed', failed: ['the model lists'] });
+    }
+  }, []);
   // Why the last provider/catalog load failed, in plain words; null once one works.
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -576,6 +607,11 @@ export default function ModelPicker({
       setRecommendedHidden(readRecommendedHidden());
     }
   }, [open]);
+  // A finished check speaks for the search it ran on; a new search offers it again.
+  // (A running one is left alone — its answer still re-reads the list.)
+  useEffect(() => {
+    setRefreshState((s) => (s.kind === 'done' || s.kind === 'failed' ? { kind: 'idle' } : s));
+  }, [search, open]);
 
   // Layered ESC: close the filter popover first, then the panel. In 'inline'
   // layout the list IS the dialog's content, with no closed state (see the
@@ -1122,13 +1158,40 @@ export default function ModelPicker({
                       </div>
                     ))}
 
-                  {rows.length === 0 && anyPickable && (
+                  {rows.length === 0 && anyPickable && (searching && !hideSearch && canRefresh ? (
+                    // WHY a way forward here (custom-providers, questions#Q-3: picker only):
+                    // model lists are fetched once a day, so a model released this morning
+                    // read as "No models match" with nothing to do. The search stays as typed
+                    // and re-runs against the refreshed list.
+                    // Round 2 (custom-providers-review-1#R-7, Destin: "no models match should be
+                    // bigger/longer, and the button should be smaller and centered below it"):
+                    // the sentence leads at body size, the button follows it, small and centred.
+                    <div className="px-3 py-4 flex flex-col items-center gap-2.5 text-center">
+                      <p className="text-sm text-fg leading-relaxed">
+                        {refreshState.kind === 'done'
+                          ? (refreshState.added > 0
+                            ? `The model list is updated, but nothing matches “${search.trim()}”.`
+                            : `The model list is up to date. Nothing matches “${search.trim()}”.`)
+                          : `No models match “${search.trim()}”.`}
+                      </p>
+                      {refreshState.kind === 'failed' ? (
+                        <ErrorState variant="inline"
+                          message={`Couldn't reach ${refreshState.failed.join(' and ')} to check for new models. Your current list is unchanged.`}
+                          onRetry={() => void refreshModelList()} />
+                      ) : refreshState.kind !== 'done' && (
+                        <Button variant="secondary" size="sm" disabled={refreshState.kind === 'running'}
+                          onClick={() => void refreshModelList()}>
+                          {refreshState.kind === 'running' ? 'Checking for new models…' : 'Check for new models'}
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
                     <p className="text-xs text-fg-muted text-center py-4 px-4 leading-relaxed">
                       {searching
                         ? 'No models match.'
                         : 'No favorites yet. Search for a model, then star it to keep it here.'}
                     </p>
-                  )}
+                  ))}
                 </>
               )}
             </div>
@@ -1150,7 +1213,8 @@ export default function ModelPicker({
                 className="w-full text-left text-xs rounded-md px-2 py-2 flex items-center gap-2 text-fg-muted hover:bg-inset hover:text-fg transition-colors"
               >
                 <span className="w-3.25 shrink-0 inline-flex items-center justify-center"><ModelIcon className="w-3 h-3" /></span>
-                Manage models…
+                {/* review-1#R-7: it opens providers too, so it says so. */}
+                Manage models and providers…
               </button>
             )}
             {onManageModels && !flat && (
@@ -1160,7 +1224,7 @@ export default function ModelPicker({
                   onClick={() => { setOpen(false); onManageModels(); }}
                   className="w-full px-2.5 py-2 text-xs text-fg-dim hover:bg-inset hover:text-fg transition-colors flex items-center justify-center gap-1.5"
                 >
-                  Manage models…
+                  Manage models and providers…
                 </button>
               </div>
             )}

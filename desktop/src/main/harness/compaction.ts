@@ -4,8 +4,18 @@ import type { ModelMessage } from 'ai';
 import { messageTokens, messagesTokens } from './message-size';
 import { COMPACTION_PROMPT } from './prompts/compaction';
 
+/** The window assumed when no source knows a model's real one (custom-providers spec, Q-2).
+ *  WHY two numbers: a cloud model is almost never as small as 32k, so assuming 32k summarised long
+ *  chats ~8× too early; a server on this computer (Ollama, LM Studio) often IS that small. Only the
+ *  budget math uses these — a stored/shown window stays null ("Unknown"). */
+export const UNKNOWN_CLOUD_WINDOW = 250_000;
+export const UNKNOWN_LOCAL_WINDOW = 32_768;
+
 export interface ContextBudgetInput {
   contextLength: number | null;
+  /** The window to plan with when contextLength is null (the profile's assumedContextWindow).
+   *  Omitted → UNKNOWN_LOCAL_WINDOW, the old behaviour. */
+  assumedWindow?: number;
   providerInputLimit?: number | null;
   fixedCost: number;
   summaryOverhead: number;
@@ -36,9 +46,10 @@ export interface ContextBudgetPlan {
  * integration, while later tasks can adopt the richer plan incrementally.
  */
 export function planContextBudget(input: ContextBudgetInput): ContextBudgetPlan {
-  // WHY: unknown model windows use a 32k assumption, but a known provider
-  // input cap can still be smaller. Never plan above that cap.
-  const assumedWindow = input.contextLength ?? 32_768;
+  // WHY: an unknown model window plans with the caller's assumption (250k cloud / 32k on this
+  // computer — capability-profile's assumedContextWindow), but a known provider input cap can still be
+  // smaller. Never plan above that cap. `estimatedWindow` below still reports the guess as a guess.
+  const assumedWindow = input.contextLength ?? input.assumedWindow ?? UNKNOWN_LOCAL_WINDOW;
   const effective = Math.min(assumedWindow, input.providerInputLimit ?? assumedWindow);
   const R = Math.min(16_000, Math.floor(effective / 4));
   const M = Math.max(Math.min(1_024, Math.floor(effective / 32)), Math.floor(effective / 100));
@@ -233,9 +244,9 @@ export interface CompactionConfig {
  *  - triggerTokens: min(0.75 × window, 0.9 × trimBudget). Compaction must win
  *    the race with the trimmer on every window; the 0.75 cap keeps cloud
  *    behaviour exactly what it was on windows where it already did.
- *  An unknown window is assumed 32k for the budget math, as it always was. */
-export function contextBudget(o: { contextLength: number | null; maxTokens: number }): { replyReserve: number; trimBudget: number; triggerTokens: number } {
-  const ctx = o.contextLength ?? 32_768;
+ *  An unknown window uses `assumedWindow` (the profile's assumption) for the budget math, else 32k. */
+export function contextBudget(o: { contextLength: number | null; maxTokens: number; assumedWindow?: number }): { replyReserve: number; trimBudget: number; triggerTokens: number } {
+  const ctx = o.contextLength ?? o.assumedWindow ?? UNKNOWN_LOCAL_WINDOW;
   const replyReserve = o.contextLength == null ? o.maxTokens : Math.min(o.maxTokens, Math.floor(ctx / 4));
   const trimBudget = ctx - replyReserve - 1024;
   const triggerTokens = Math.min(Math.floor(ctx * 0.75), Math.floor(trimBudget * 0.9));

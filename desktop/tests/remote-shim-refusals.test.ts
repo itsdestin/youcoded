@@ -100,6 +100,9 @@ describe('remote-shim — rejecting failures', () => {
     if (read('../src/main/ipc/appearance.ts').includes('name: IPC.THEME_LIST')) out.add('theme:list');
     if (read('../src/main/ipc/appearance.ts').includes('name: IPC.APPEARANCE_GET_FAVORITE_THEMES')) out.add('appearance:get-favorite-themes');
     if (read('../src/main/ipc/ui.ts').includes('name: IPC.COMMANDS_LIST')) out.add('commands:list');
+    // Check for new models (custom providers, 2026-10-21): its table handler throws before the runtime exists,
+    // and a throwing table handler answers { ok:false, error } for any channel.
+    if (/name: IPC\.PROVIDER_REFRESH_CATALOG[\s\S]*?throw new Error/.test(read('../src/main/ipc/provider.ts'))) out.add('provider:refresh-catalog');
     return out;
   }
 
@@ -148,6 +151,9 @@ describe('remote-shim — rejecting failures', () => {
         'native:get-step-guard',
         'native:set-context-preferences',
         'native:set-step-guard',
+        // Check for new models (custom providers, 2026-10-21): success is { added, failed }, so a failure must
+        // reject to the picker's error box — never resolve as "the model list is up to date".
+        'provider:refresh-catalog',
         // Joined after a review found Unpair showing a false success on a phone: the host
         // refuses both, and without an entry the refusal resolved as an ordinary value.
         'remote:devices:rename',

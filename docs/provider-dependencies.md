@@ -122,7 +122,13 @@ Guards: `cloud-context.test.ts`, `chatgpt-oauth.test.ts`, and
   1M tokens — no scaling), `cost.cache_read` / `cost.cache_write` (numbers,
   same per-1M convention — the prompt-cache rates; omitted unless the row
   publishes them as numbers, never coerced to 0). Provider keys used:
-  `anthropic`, `openai`, `google`. Parsed DEFENSIVELY in `src/main/providers/model-catalog.ts` —
+  `anthropic`, `openai`, `google`. Custom endpoints also read each provider's top-level
+  `npm` (only `'@ai-sdk/openai-compatible'` is matched) and `api` (its
+  published address, compared after `normalizeEndpoint` —
+  `src/shared/endpoint-address.ts`); two keys sharing an address resolve to the
+  one with more models, then the lower key name. The same fields build the Add
+  provider service list (`ModelCatalog.services`: addresses on this computer
+  excluded, at most 50 models per service sent to the screen). Parsed DEFENSIVELY in `src/main/providers/model-catalog.ts` —
   malformed rows are skipped, absent fields omitted (never guessed), and a
   failed fetch falls back to the 24h disk cache
   (`provider-catalog-cache.json` in Electron userData — per-profile, so the
@@ -142,6 +148,25 @@ Guards: `cloud-context.test.ts`, `chatgpt-oauth.test.ts`, and
   null, empty or whitespace-only is omitted rather than read as $0).
   Same defensive-parse + stale-cache-fallback posture as models.dev; consumer
   is `src/main/providers/model-catalog.ts`. (model-catalog)
+- **A custom endpoint's own `GET <base>/models`** — asked by
+  `ModelCatalog.endpointModels` only when models.dev has no provider at that
+  address. Accepts `{ data: [...] }` or a bare array; per row reads `id`
+  (required) and, when present, the OpenRouter-shaped `name`,
+  `context_length`, `pricing.prompt`/`completion` (per-token strings) and
+  `supported_parameters` (same parser as the OpenRouter entry above). Sent with
+  `Authorization: Bearer <key>` only when a key is saved; 8 s timeout; cached in
+  memory per provider + address + key fingerprint for 24 h; a failed ask keeps
+  the previous list. Session start reads only what is already cached (never
+  asks). Verified 2026-10-20: Inception answers OpenRouter-shaped rows without a
+  key; Ollama cloud answers ids only. (model-catalog)
+- **OpenAI-compatible context-overflow envelope** — a custom endpoint's
+  "too long" error is recognised only as HTTP 400 with
+  `{ error: { code: 'context_length_exceeded' } }` (the OpenAI shape). Captured
+  2026-10-21 through `@ai-sdk/openai-compatible`: an unwrapped `APICallError`
+  with `statusCode` 400 and that JSON in `responseBody`. Consumer:
+  `src/main/providers/context-overflow.ts`, gated on provider type. A server
+  that reports overflow differently gets no automatic summary-and-retry.
+  (context-overflow)
 - **AI SDK local-model serial-only constraint** — `@ai-sdk/openai-compatible`
   `3.0.7`'s `createOpenAICompatible({ …, transformRequestBody })` config hook
   rewrites the request body before send. The LOCAL-engine branch of

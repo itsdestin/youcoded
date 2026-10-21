@@ -24,6 +24,12 @@ const ANTHROPIC_REPLY = {
   content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
   usage: { input_tokens: 1, output_tokens: 1 },
 };
+// The Responses API reply @ai-sdk/openai expects from a direct OpenAI key.
+const RESPONSES_REPLY = {
+  id: 'resp_1', object: 'response', created_at: 0, status: 'completed', model: 'gpt-5.5',
+  output: [{ type: 'message', id: 'msg_1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok', annotations: [] }] }],
+  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+};
 const OPENAI_REPLY = {
   id: 'cmpl_1', object: 'chat.completion', created: 0, model: 'x',
   choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -31,7 +37,7 @@ const OPENAI_REPLY = {
 };
 
 describe('prompt-cache request shaping', () => {
-  let root: string; let reg: ProviderRegistry; let anthropicId: string;
+  let root: string; let reg: ProviderRegistry; let anthropicId: string; let openaiId: string;
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-pcache-'));
     reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root, getSecretStorage()));
@@ -39,6 +45,8 @@ describe('prompt-cache request shaping', () => {
     await reg.setKey('openrouter', 'sk-or-abc');
     anthropicId = await reg.upsert({ type: 'anthropic', label: 'Anthropic', enabled: true });
     await reg.setKey(anthropicId, 'sk-ant-abc');
+    openaiId = await reg.upsert({ type: 'openai', label: 'OpenAI', enabled: true });
+    await reg.setKey(openaiId, 'sk-abc');
   });
   afterEach(() => { vi.unstubAllGlobals(); fs.rmSync(root, { recursive: true, force: true }); });
 
@@ -55,6 +63,7 @@ describe('prompt-cache request shaping', () => {
   }
   const anthropic = (opts?: { cacheKey?: string }) => reg.languageModel({ providerId: anthropicId, modelId: 'claude-opus-5' }, opts);
   const openrouter = (modelId: string, opts?: { cacheKey?: string }) => reg.languageModel({ providerId: 'openrouter', modelId }, opts);
+  const openai = (opts?: { cacheKey?: string }) => reg.languageModel({ providerId: openaiId, modelId: 'gpt-5.5' }, opts);
   const asSummary = (fn: () => Promise<unknown>) => withChatGptRequest('s1', 'summary', fn);
 
   describe('Anthropic direct', () => {
@@ -109,6 +118,20 @@ describe('prompt-cache request shaping', () => {
       expect((await sent(await openrouter('openai/gpt-4o', { cacheKey: 's1' }), OPENAI_REPLY)).session_id).toBe('s1');
       expect((await sent(await openrouter('openai/gpt-4o', { cacheKey: 's2' }), OPENAI_REPLY)).session_id).toBe('s2');
       expect((await sent(await openrouter('openai/gpt-4o'), OPENAI_REPLY)).session_id).toBeUndefined();
+    });
+  });
+
+  // OpenAI caches automatically; `prompt_cache_key` routes a session's requests
+  // to the machine already holding its prefix — the key the ChatGPT plan sends.
+  describe('OpenAI direct key', () => {
+    it('a harness request carries the session as prompt_cache_key', async () => {
+      expect((await sent(await openai({ cacheKey: 's1' }), RESPONSES_REPLY)).prompt_cache_key).toBe('s1');
+    });
+    it('a summary keeps the key (no marker exists, so nothing is written at a premium)', async () => {
+      expect((await sent(await openai({ cacheKey: 's1' }), RESPONSES_REPLY, asSummary)).prompt_cache_key).toBe('s1');
+    });
+    it('a request without a cacheKey (session naming) sends none', async () => {
+      expect((await sent(await openai(), RESPONSES_REPLY)).prompt_cache_key).toBeUndefined();
     });
   });
 });

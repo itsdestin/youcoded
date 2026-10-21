@@ -61,6 +61,14 @@ describe('remote-shim — host administration', () => {
   });
 });
 
+describe('remote-shim — Check for new models', () => {
+  it('a failed refresh reaches the caller as a failure, never as "up to date"', () => {
+    expect(REJECT_ON_NOT_OK.has('provider:refresh-catalog')).toBe(true);
+    expect(responseOutcome('provider:refresh-catalog', { ok: false, error: 'x' })).toBe('failure');
+    expect(responseOutcome('provider:refresh-catalog', { added: 0, failed: [] })).toBe('value');
+  });
+});
+
 describe('remote-shim — message kinds', () => {
   isolateGlobals();
 

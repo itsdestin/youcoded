@@ -772,7 +772,7 @@ describe('native:*/provider:* channel parity', () => {
     'native:queue-remove',
     // M3 item 2 — user-initiated /compact for a native session.
     'native:compact', 'native:clear',
-    'provider:list', 'provider:upsert', 'provider:remove', 'provider:test', 'provider:set-key', 'provider:catalog',
+    'provider:list', 'provider:upsert', 'provider:remove', 'provider:test', 'provider:set-key', 'provider:catalog', 'provider:services', 'provider:refresh-catalog',
   ];
   const CHANNEL_TO_CONST: Record<string, string> = {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
@@ -791,6 +791,7 @@ describe('native:*/provider:* channel parity', () => {
     'provider:list': 'IPC.PROVIDER_LIST', 'provider:upsert': 'IPC.PROVIDER_UPSERT',
     'provider:remove': 'IPC.PROVIDER_REMOVE', 'provider:test': 'IPC.PROVIDER_TEST',
     'provider:set-key': 'IPC.PROVIDER_SET_KEY', 'provider:catalog': 'IPC.PROVIDER_CATALOG',
+    'provider:services': 'IPC.PROVIDER_SERVICES', 'provider:refresh-catalog': 'IPC.PROVIDER_REFRESH_CATALOG',
   };
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
