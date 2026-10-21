@@ -86,10 +86,19 @@ export class ClaudeQueueRuntime {
    if (b.conversationId === conversationId) return;
    b.transitioning = true;
    const c = await s.queue.freezeForClear(b.queueId, b.incarnation); await s.transport.revoke(id);
-   if (source !== 'clear' || !b.clearId || b.clearId !== c.clearId) return; // external/resume stays frozen; observation is not authorization
-   await s.queue.rebindAfterClear(b.queueId, b.clearId, { provider: 'claude', conversationId }, b.incarnation);
+   // WHY rebind on an outside change too (plan "Yes, clear context", /clear or /resume typed in
+   // the terminal): staying frozen refused EVERY later send in the session with "Conversation
+   // identity changed" until it was reopened. The hook gate upstream already refuses foreign
+   // remaps, and rebindAfterClear leaves retained messages paused — they never auto-deliver into
+   // the new conversation; only new sends (pauseBypass) and a deliberate Send now go through.
+   const ours = source === 'clear' && !!b.clearId && b.clearId === c.clearId;
+   if (!ours) {
+    if (b.clearId) return; // our own Clear is mid-flight: its receipt rebinds
+    await s.queue.beginClear(b.queueId, c.clearId); // throws (stays frozen) only while a delivery is unresolved
+   }
+   await s.queue.rebindAfterClear(b.queueId, c.clearId, { provider: 'claude', conversationId }, b.incarnation);
    s.transport.rebind(id, { queueId: b.queueId, incarnation: b.incarnation, alias: { provider: 'claude', conversationId }, cwd: this.options.manager.getSession(id)?.cwd ?? '' });
-   b.conversationId = conversationId; b.transitioning = false;
+   b.conversationId = conversationId; b.transitioning = false; b.clearId = undefined;
   });
   b.ready = transition.catch(() => { b.transitioning = true; });
   await transition;

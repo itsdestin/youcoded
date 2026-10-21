@@ -58,13 +58,17 @@ export function errorCardCopy(kind: string | null | undefined, code: string | nu
   // ChatGPT plan limits): leave them alone.
   if (code && (code.startsWith('openrouter-') || code.startsWith('chatgpt-'))) return null;
   const who = providerName(providerType);
+  // WHY: a custom provider's generic name is "The provider" — read mid-sentence it must be
+  // lowercase, and "Your The provider key" must read "Your provider key".
+  const whoMid = who === 'The provider' ? 'the provider' : who;
+  const yours = who === 'The provider' ? 'Your provider' : `Your ${who}`;
   const words = message.trim();
   const plain = (line: string, actions: ErrorCardAction[]): ErrorCardCopy => ({ line, details: words && words !== line ? words : null, actions });
   switch (kind) {
     case 'temporary': {
       const line = code === 'overloaded' ? `${who} is overloaded right now.`
         : code === 'rate-limited' ? `${who} is limiting how fast requests can be sent right now.`
-        : code === 'network' ? `Couldn't reach ${who}. Check your internet connection.`
+        : code === 'network' ? `Couldn't reach ${whoMid}. Check your internet connection.`
         : code === 'provider-timeout' || code === 'upstream-error' ? `${who} didn't finish answering.`
         : code === 'garbled-response' ? `${who} sent back a reply the app couldn't read.`
         : `${who} had a problem on its side.`;
@@ -72,18 +76,18 @@ export function errorCardCopy(kind: string | null | undefined, code: string | nu
     }
     case 'account': {
       if (code === 'key-rejected') return plain(`${who} didn't accept your API key.`, ['open-settings']);
-      if (code === 'no-access') return plain(`Your ${who} key doesn't have access to this model.`, ['switch-model', 'open-settings']);
+      if (code === 'no-access') return plain(`${yours} key doesn't have access to this model.`, ['switch-model', 'open-settings']);
       if (code === 'model-unavailable') return plain(`${who} doesn't offer this model, or no longer does.`, ['switch-model']);
       const fix: ErrorCardAction = billingUrl(providerType) ? 'billing' : 'open-settings';
       if (code === 'spend-limit') return plain(`${who} stopped this reply: your spending limit has been reached.`, ['switch-model', fix]);
-      if (code === 'quota-exhausted') return plain(`Your ${who} account has used up its quota.`, ['switch-model', fix]);
-      if (code === 'out-of-credits') return plain(`Your ${who} account is out of credit.`, ['switch-model', fix]);
+      if (code === 'quota-exhausted') return plain(`${yours} account has used up its quota.`, ['switch-model', fix]);
+      if (code === 'out-of-credits') return plain(`${yours} account is out of credit.`, ['switch-model', fix]);
       return plain(`${who} refused this request because of your account.`, ['switch-model', 'open-settings']);
     }
     case 'too-long':
       // Q-3: Summarise and continue only.
       return plain(code === 'request-too-large'
-        ? `This conversation's request is too large for ${who} to accept.`
+        ? `This conversation's request is too large for ${whoMid} to accept.`
         : 'This conversation is too long for this model.', ['summarise']);
     case 'blocked':
       // No Try again: an unchanged request is refused again. Rephrasing is the fix.
@@ -100,7 +104,7 @@ export function retryWaitLine(code: string | null | undefined, providerType: str
   const who = providerName(providerType);
   const reason = code === 'overloaded' ? `${who} is overloaded`
     : code === 'rate-limited' ? `${who} is limiting requests`
-    : code === 'network' ? `Can't reach ${who}`
+    : code === 'network' ? `Can't reach ${who === 'The provider' ? 'the provider' : who}`
     : code ? `${who} had a problem` : null;
   if (!reason) return null;
   return secondsLeft > 0 ? `${reason} — trying again in ${secondsLeft}s…` : `${reason} — trying again…`;
