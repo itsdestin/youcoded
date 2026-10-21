@@ -1802,93 +1802,105 @@ html{-webkit-tap-highlight-color:transparent}
 
 
 .devdemo{position:relative;width:100%;aspect-ratio:16/10;container-type:inline-size;overflow:hidden;box-sizing:border-box;
-  font-family:var(--font-ui);color:rgba(var(--fg-rgb),.85);background:rgb(var(--canvas-rgb));
-  border:1px solid var(--hair);border-radius:var(--radius)}
+  
+  --bg:rgb(var(--canvas-rgb));--st:rgb(var(--fg-rgb));--tx:rgba(var(--fg-rgb),.85);--mu:rgba(var(--fg-rgb),.5);--gl:var(--glass);--hr:var(--hair);
+  --fl:rgba(var(--fg-rgb),.07);--tk:rgba(var(--fg-rgb),.15);--kf:rgba(255,255,255,.72);--kh:rgba(255,255,255,.95);--kb:rgba(var(--fg-rgb),.17);
+  --tray:rgba(var(--fg-rgb),.05);--knob:rgb(var(--canvas-rgb));--fn:rgba(var(--fg-rgb),.2);--sh:rgba(var(--fg-rgb),.14);
+  font-family:var(--font-ui);color:var(--tx);background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius)}
+.devdemo.is-dark{--bg:color-mix(in srgb,rgb(var(--fg-rgb)) 28%,#000);--st:rgba(255,255,255,.96);--tx:rgba(255,255,255,.82);--mu:rgba(255,255,255,.5);--gl:rgba(255,255,255,.07);--hr:rgba(255,255,255,.12);
+  --fl:rgba(255,255,255,.08);--tk:rgba(255,255,255,.2);--kf:rgba(255,255,255,.13);--kh:rgba(255,255,255,.17);--kb:rgba(0,0,0,.55);
+  --tray:rgba(255,255,255,.035);--knob:#fff;--fn:rgba(255,255,255,.3);--sh:rgba(0,0,0,.45)}
 .devdemo *{box-sizing:border-box}
+.devdemo,.devdemo *{transition:background-color .5s,color .5s,border-color .5s,box-shadow .5s}
 .devdemo .abs{position:absolute}
 
 .devdemo .p1{left:0;top:0;width:42%;height:100%;overflow:hidden}
-.devdemo .p2{left:42%;top:0;width:58%;height:100%;border-left:1px solid var(--hair)}
+.devdemo .p2{left:42%;top:0;width:58%;height:100%;border-left:1px solid var(--hr)}
 
 .devdemo .wall{inset:0;background:linear-gradient(155deg,color-mix(in srgb,var(--accent) 38%,rgb(var(--canvas-rgb))),rgb(var(--canvas-rgb)) 58%,color-mix(in srgb,var(--accent) 16%,rgb(var(--canvas-rgb))))}
 
-.devdemo .warm{inset:0;background:rgba(255,140,40,.9);opacity:0;animation:dvWarm 7s infinite}
-.devdemo .shade{left:1.5cqw;top:2.5cqw;width:39cqw;padding:1.7cqw;display:flex;flex-direction:column;gap:1.5cqw;background:var(--glass);
-  border:1px solid var(--hair);border-radius:calc(var(--radius)*1.1);backdrop-filter:blur(1.5cqw);box-shadow:0 .8cqw 3cqw rgba(var(--fg-rgb),.14)}
-.devdemo .time{font-size:4.6cqw;font-weight:600;line-height:1;color:rgb(var(--fg-rgb))}
-.devdemo .date{font-size:1.8cqw;opacity:.6;margin-top:.7cqw}
-.devdemo .sl{display:flex;align-items:center;gap:1.4cqw;height:3cqw}
-.devdemo .trk{flex:1;height:.9cqw;border-radius:99px;background:rgba(var(--fg-rgb),.15);position:relative}
+.devdemo .dk{inset:0;opacity:0;transition:opacity .5s;background:radial-gradient(circle at 20% 12%,color-mix(in srgb,var(--accent) 30%,transparent),transparent 65%),color-mix(in srgb,rgb(var(--fg-rgb)) 28%,#000)}
+.devdemo.is-dark .dk{opacity:1}
+
+.devdemo .warm{inset:0;background:rgb(255,140,40);opacity:0;pointer-events:none;animation:dvWarm 7s infinite}
+.devdemo .shade{left:1.5cqw;top:2.5cqw;width:39cqw;padding:1.9cqw;display:flex;flex-direction:column;gap:1.6cqw;background:var(--gl);
+  border:1px solid var(--hr);border-radius:calc(var(--radius)*1.1);backdrop-filter:blur(1.5cqw);box-shadow:0 .8cqw 3cqw var(--sh)}
+.devdemo .time{font-size:5.4cqw;font-weight:300;line-height:1;letter-spacing:-.02em;color:var(--st)}
+.devdemo .date{font-size:1.7cqw;color:var(--mu);margin-top:.8cqw}
+.devdemo .sl{display:flex;align-items:center;gap:1.5cqw;height:3cqw;color:var(--mu)}
+.devdemo .trk{flex:1;height:1cqw;border-radius:99px;background:var(--tk);position:relative}
 .devdemo .trk i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--accent)}
-.devdemo .trk b{position:absolute;top:50%;width:2.6cqw;height:2.6cqw;margin:-1.3cqw 0 0 -1.3cqw;border-radius:50%;background:rgb(var(--canvas-rgb));border:.3cqw solid var(--accent);box-shadow:0 .2cqw .6cqw rgba(var(--fg-rgb),.2)}
+.devdemo .trk b{position:absolute;top:50%;width:2.4cqw;height:2.4cqw;margin:-1.2cqw 0 0 -1.2cqw;border-radius:50%;background:var(--knob);box-shadow:0 .2cqw .7cqw rgba(0,0,0,.3)}
 .devdemo .ic{width:2.6cqw;height:2.6cqw;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.devdemo .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1cqw}
-.devdemo .tile{height:6.4cqw;display:flex;align-items:center;gap:.9cqw;padding:0 1cqw;border-radius:calc(var(--radius)*.7);overflow:hidden;
-  background:var(--glass);border:1px solid var(--hair);line-height:1.2;white-space:nowrap}
+.devdemo .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:7cqw;gap:1cqw}
+.devdemo .tile{display:flex;align-items:center;gap:1cqw;padding:0 1.1cqw;border-radius:calc(var(--radius)*.7);overflow:hidden;
+  background:var(--gl);border:1px solid var(--hr);color:var(--tx);line-height:1.25;white-space:nowrap}
 .devdemo .tile.on{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb))}
-.devdemo .tile small{display:flex;flex-direction:column;font-size:1.4cqw}
-.devdemo .tile small b{font-size:1.5cqw}
-.devdemo .tile small span{opacity:.8}
-.devdemo .st{display:block;height:1.2em;overflow:hidden}.devdemo .st u{display:block;text-decoration:none}
+.devdemo .tile small{display:flex;flex-direction:column;font-size:1.4cqw;min-width:0}
+.devdemo .tile small b{font-size:1.5cqw;font-weight:600}
+.devdemo .tile small span{opacity:.75}
+.devdemo .st{display:block;height:1.25em;overflow:hidden}.devdemo .st u{display:block;text-decoration:none}
 .devdemo .nl{animation:dvNL 7s infinite}
 .devdemo .nl u{animation:dvSw 7s infinite}
 .devdemo .btns{display:flex;gap:.9cqw}
-.devdemo .btns div{flex:1;height:5cqw;display:flex;align-items:center;justify-content:center;gap:.8cqw;font-size:1.6cqw;
-  background:var(--glass);border:1px solid var(--hair);border-radius:99px}
-.devdemo .btns .ic{width:2.3cqw;height:2.3cqw}
-.devdemo .pbar{left:0;right:0;bottom:0;height:5cqw;background:var(--glass);border-top:1px solid var(--hair);display:flex;align-items:center;justify-content:space-between;padding:0 2.5cqw;font-size:1.8cqw}
-.devdemo .pbar i{display:inline-block;width:2.2cqw;height:2.2cqw;border-radius:.7cqw;background:rgba(var(--fg-rgb),.2);margin-right:1cqw}
+.devdemo .btns div{flex:1;height:4.6cqw;display:flex;align-items:center;justify-content:center;gap:.7cqw;font-size:1.4cqw;color:var(--tx);
+  background:var(--gl);border:1px solid var(--hr);border-radius:99px}
+.devdemo .btns .ic{width:2cqw;height:2cqw}
+.devdemo .pbar{left:0;right:0;bottom:0;height:5cqw;background:var(--gl);border-top:1px solid var(--hr);display:flex;align-items:center;justify-content:space-between;padding:0 2.5cqw;font-size:1.7cqw;color:var(--tx)}
+.devdemo .pbar i{display:inline-block;width:2cqw;height:2cqw;border-radius:.6cqw;background:var(--tk);margin-right:1cqw}
 
-.devdemo .tabs{left:0;right:0;top:0;height:9%;background:rgba(var(--fg-rgb),.06);padding:1.2% 2% 0;display:flex}
-.devdemo .tab{width:40%;height:100%;background:var(--glass);border:1px solid var(--hair);border-bottom:0;border-radius:1cqw 1cqw 0 0;
-  font-size:1.5cqw;line-height:1;padding:0 1.4cqw;display:flex;align-items:center;gap:1cqw}
-.devdemo .bar{left:0;right:0;top:9%;height:10%;background:var(--glass);border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:1.4cqw;padding:0 4%}
-.devdemo .bar b{width:1.7cqw;height:1.7cqw;border:.3cqw solid rgba(var(--fg-rgb),.3);border-radius:50%}
-.devdemo .url{flex:1;height:62%;border-radius:99px;background:rgba(var(--fg-rgb),.07);padding:0 1.8cqw;font-size:1.5cqw;display:flex;align-items:center;color:rgba(var(--fg-rgb),.45)}
-.devdemo .field{left:6%;right:6%;top:22%;height:11%;background:var(--glass);border:1px solid var(--hair);border-radius:99px;
-  padding:0 2.2cqw;display:flex;align-items:center;font-size:2.3cqw;white-space:pre;overflow:hidden;box-shadow:0 .3cqw 1.4cqw rgba(var(--fg-rgb),.08)}
+.devdemo .tabs{left:0;right:0;top:0;height:9%;background:var(--fl);padding:1.2% 2% 0;display:flex}
+.devdemo .tab{width:38%;height:100%;background:var(--bg);border:1px solid var(--hr);border-bottom:0;border-radius:1cqw 1cqw 0 0;
+  font-size:1.5cqw;line-height:1;padding:0 1.4cqw;display:flex;align-items:center;gap:1cqw;color:var(--tx)}
+.devdemo .tab i{width:1.5cqw;height:1.5cqw;border-radius:50%;background:var(--tk)}
+.devdemo .bar{left:0;right:0;top:9%;height:10%;background:var(--bg);border-bottom:1px solid var(--hr);display:flex;align-items:center;gap:1.4cqw;padding:0 4%}
+.devdemo .bar b{width:1.7cqw;height:1.7cqw;border:.3cqw solid var(--tk);border-radius:50%}
+.devdemo .url{flex:1;height:62%;border-radius:99px;background:var(--fl);padding:0 1.8cqw;font-size:1.5cqw;display:flex;align-items:center;color:var(--mu)}
+.devdemo .field{left:6%;right:6%;top:22%;height:11%;background:var(--gl);border:1px solid var(--hr);border-radius:99px;color:var(--st);
+  padding:0 2.2cqw;display:flex;align-items:center;font-size:2.3cqw;white-space:pre;overflow:hidden;box-shadow:0 .3cqw 1.4cqw var(--sh)}
 .devdemo .typed{opacity:0;animation:dvType 7s infinite}
 .devdemo .caret{display:inline-block;vertical-align:middle;width:.3cqw;height:2.7cqw;margin-left:.3cqw;background:var(--accent);animation:dvBlink 1s steps(2) infinite}
-.devdemo .guess{left:6%;right:6%;top:35%;height:5.4%;display:flex;border-bottom:1px solid var(--hair);font-size:1.8cqw;opacity:0;animation:dvGuess 7s infinite}
-.devdemo .guess span{flex:1;display:flex;align-items:center;justify-content:center;border-radius:99px 99px 0 0;position:relative}
-.devdemo .guess span+span:before{content:"";position:absolute;left:0;top:25%;bottom:25%;border-left:1px solid var(--hair)}
-.devdemo .guess .on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-weight:700}
+.devdemo .guess{left:6%;right:6%;top:34.6%;height:5.6%;display:flex;gap:1.2cqw;justify-content:center;align-items:center;font-size:1.8cqw;opacity:0;animation:dvGuess 7s infinite}
+.devdemo .guess span{height:100%;padding:0 2.4cqw;display:flex;align-items:center;border-radius:99px;background:var(--fl);color:var(--mu)}
+.devdemo .guess .on{background:var(--accent);color:rgb(var(--canvas-rgb));font-weight:600}
+.devdemo .tray{left:0;right:0;top:41%;bottom:0;background:var(--tray);border-top:1px solid var(--hr)}
 .devdemo .kb{left:3%;width:94%;top:41%;height:56%}
 .devdemo .r{height:25%;display:flex}
 .devdemo .r:nth-child(2){margin-left:5%}.devdemo .r:nth-child(3){margin-left:15%}.devdemo .r:nth-child(4){margin-left:25%}
 .devdemo .s{width:10%;padding:.4cqw}
 .devdemo .s.sp{width:50%}
-.devdemo .k{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2cqw;
-  background:var(--glass);border:1px solid var(--hair);border-radius:min(calc(var(--radius)*.45),1.1cqw);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 .2cqw .5cqw rgba(var(--fg-rgb),.07)}
+
+.devdemo .k{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2.6cqw;font-weight:500;color:var(--st);
+  background:var(--kf);border-radius:.9cqw;box-shadow:inset 0 .15cqw 0 var(--kh),0 .3cqw 0 var(--kb)}
+.devdemo .k.sp{font-size:1.3cqw;letter-spacing:.08em;color:var(--mu);font-weight:400}
 .devdemo .l{animation:dvLit 7s var(--d) infinite}
 
-.devdemo .tr{left:43.74cqw;width:54.52cqw;top:41%;height:56%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .9cqw var(--accent))}
+.devdemo .tr{left:43.74cqw;width:54.52cqw;top:41%;height:56%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .6cqw var(--accent))}
 .devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
-.devdemo .trail{stroke-width:8;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
+.devdemo .trail{stroke-width:12;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
 .devdemo .dot{stroke-width:26;stroke-dasharray:.01 300;opacity:0;animation:dvDot 7s linear infinite}
 
-.devdemo .fin{left:0;top:0;width:3.6cqw;height:3.6cqw;border-radius:50%;background:rgba(var(--fg-rgb),.2);border:1px solid rgba(var(--fg-rgb),.45);
-  box-shadow:0 .3cqw 1cqw rgba(var(--fg-rgb),.25);opacity:0;--t:translate(10.2cqw,31.3cqw);animation:dvFin 7s infinite}
-@keyframes dvWarm{0%,12%{opacity:0}20%,90%{opacity:.25}97%,100%{opacity:0}}
-@keyframes dvNL{0%,9%{background:var(--glass);border-color:var(--hair);color:rgba(var(--fg-rgb),.85);transform:scale(1)}11.4%{transform:scale(.94)}14%,91%{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb));transform:scale(1)}96%,100%{background:var(--glass);border-color:var(--hair);color:rgba(var(--fg-rgb),.85)}}
+.devdemo .fin{left:0;top:0;width:3.6cqw;height:3.6cqw;border-radius:50%;background:var(--fn);border:1px solid var(--st);
+  box-shadow:0 .3cqw 1cqw var(--sh);opacity:0;--t:translate(10.3cqw,33.5cqw);animation:dvFin 7s infinite}
+@keyframes dvWarm{0%,12%{opacity:0}20%,90%{opacity:.12}97%,100%{opacity:0}}
+@keyframes dvNL{0%,9%{background:var(--gl);border-color:var(--hr);color:var(--tx);transform:scale(1)}11.4%{transform:scale(.94)}14%,91%{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb));transform:scale(1)}96%,100%{background:var(--gl);border-color:var(--hr);color:var(--tx)}}
 @keyframes dvSw{0%,12%{transform:none}14%,91%{transform:translateY(-50%)}96%,100%{transform:none}}
-@keyframes dvFin{0%,3%{transform:translate(13.8cqw,36cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:1}27%,100%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:0}}
-@keyframes dvTrail{0%,25.5%{stroke-dashoffset:100;opacity:0}25.7%{stroke-dashoffset:100;opacity:.85}49%,90%{stroke-dashoffset:0;opacity:.85}95%{stroke-dashoffset:0;opacity:0}95.1%,100%{stroke-dashoffset:100;opacity:0}}
+@keyframes dvFin{0%,3%{transform:translate(13.8cqw,40cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:1}27%,100%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:0}}
+@keyframes dvTrail{0%,25.5%{stroke-dashoffset:100;opacity:0}25.7%{stroke-dashoffset:100;opacity:.75}49%,90%{stroke-dashoffset:0;opacity:.75}95%{stroke-dashoffset:0;opacity:0}95.1%,100%{stroke-dashoffset:100;opacity:0}}
 @keyframes dvDot{0%,25.5%{stroke-dashoffset:0;opacity:0}25.7%{stroke-dashoffset:0;opacity:1}49%{stroke-dashoffset:-100;opacity:1}51%{stroke-dashoffset:-100;opacity:0}51.1%,100%{stroke-dashoffset:0;opacity:0}}
-@keyframes dvLit{0%{background:var(--glass);border-color:var(--hair);color:inherit}3%{background:color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent);color:rgb(var(--fg-rgb))}14%,100%{background:var(--glass);border-color:var(--hair);color:inherit}}
+@keyframes dvLit{0%{background:var(--kf)}3%{background:color-mix(in srgb,var(--accent) 55%,transparent)}14%,100%{background:var(--kf)}}
 @keyframes dvType{0%,49.9%{opacity:0;transform:translateY(.5cqw)}52%,91%{opacity:1;transform:none}95%,100%{opacity:0}}
 @keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
 @keyframes dvBlink{50%{opacity:0}}
 @media (prefers-reduced-motion:reduce){
  .devdemo *{animation:none!important}
- .devdemo .warm{opacity:.25}
+ .devdemo .warm{opacity:.12}
  .devdemo .nl{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb))}
  .devdemo .nl u{transform:translateY(-50%)}
- .devdemo .trail{stroke-dashoffset:0;opacity:.85}
+ .devdemo .trail{stroke-dashoffset:0;opacity:.75}
  .devdemo .dot,.devdemo .fin{opacity:0}
  .devdemo .typed,.devdemo .guess{opacity:1}
- .devdemo .l{background:color-mix(in srgb,var(--accent) 45%,transparent);border-color:var(--accent)}
+ .devdemo .l{background:color-mix(in srgb,var(--accent) 55%,transparent)}
 }
 
 </style></head>
@@ -2307,52 +2319,54 @@ Contract: mascots/README.md (from the repo root)
         <video data-i="1" data-clip="home" muted loop playsinline preload="none" poster="media/home--youcoded.webp"><source src="media/home--youcoded.webm" type="video/webm"></video>
         <video data-i="2" data-clip="money" muted loop playsinline preload="none" poster="media/money--youcoded.webp"><source src="media/money--youcoded.webm" type="video/webm"></video>
         <div class="devdemo" data-i="3" aria-hidden="true">
- <svg width="0" height="0" style="position:absolute"><defs>
-  <symbol id="d-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.8a10 10 0 0 1 13 0M9 16.5a5 5 0 0 1 6 0M12 20h.01"/></symbol>
-  <symbol id="d-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
-  <symbol id="d-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
-  <symbol id="d-dnd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
-  <symbol id="d-air" viewBox="0 0 24 24"><path d="M21 15l-8-5V4.5a1.5 1.5 0 0 0-3 0V10l-8 5v2l8-2v4l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-4l8 2z"/></symbol>
-  <symbol id="d-rot" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4"/></symbol>
-  <symbol id="d-shot" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></symbol>
-  <symbol id="d-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></symbol>
-  <symbol id="d-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
-  <symbol id="d-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
-  <symbol id="d-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9a4 4 0 0 1 0 6"/></symbol>
- </defs></svg>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="d-wifi" viewBox="0 0 24 24"><path d="M2 9a15 15 0 0 1 20 0M5.5 12.8a10 10 0 0 1 13 0M9 16.5a5 5 0 0 1 6 0M12 20h.01"/></symbol>
+<symbol id="d-bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+<symbol id="d-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+<symbol id="d-dnd" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+<symbol id="d-air" viewBox="0 0 24 24"><path d="M21 15l-8-5V4.5a1.5 1.5 0 0 0-3 0V10l-8 5v2l8-2v4l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-4l8 2z"/></symbol>
+<symbol id="d-rot" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4"/></symbol>
+<symbol id="d-shot" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="d-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></symbol>
+<symbol id="d-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
+<symbol id="d-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+<symbol id="d-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9a4 4 0 0 1 0 6"/></symbol>
+</defs></svg>
 
- <div class="abs p1">
-  <div class="abs wall"></div>
-  <div class="abs warm"></div>
-  <div class="abs shade">
-   <div><div class="time">3:51 PM</div><div class="date">Wednesday, October 21</div></div>
-   <div class="sl"><svg class="ic"><use href="#d-sun"/></svg><div class="trk"><i style="width:70%"></i><b style="left:70%"></b></div></div>
-   <div class="sl"><svg class="ic"><use href="#d-vol"/></svg><div class="trk"><i style="width:45%"></i><b style="left:45%"></b></div></div>
-   <div class="grid">
-    <div class="tile on"><svg class="ic"><use href="#d-wifi"/></svg><small><b>Wi-Fi</b><span>On</span></small></div>
-    <div class="tile on"><svg class="ic"><use href="#d-bt"/></svg><small><b>Bluetooth</b><span>On</span></small></div>
-    <div class="tile nl"><svg class="ic"><use href="#d-moon"/></svg><small><b>Night Light</b><span class="st"><u>Off<br>On</u></span></small></div>
-    <div class="tile"><svg class="ic"><use href="#d-dnd"/></svg><small><b>Do Not Disturb</b><span>Off</span></small></div>
-    <div class="tile"><svg class="ic"><use href="#d-air"/></svg><small><b>Airplane</b><span>Off</span></small></div>
-    <div class="tile on"><svg class="ic"><use href="#d-rot"/></svg><small><b>Rotate Lock</b><span>On</span></small></div>
-   </div>
-   <div class="btns"><div><svg class="ic"><use href="#d-shot"/></svg>Screenshot</div><div><svg class="ic"><use href="#d-rec"/></svg>Record</div><div><svg class="ic"><use href="#d-clip"/></svg>Clipboard</div></div>
-  </div>
-  <div class="abs pbar"><span><i></i><i></i><i></i></span><span>3:51 PM</span></div>
- </div>
+<div class="abs p1">
+<div class="abs wall"></div>
+<div class="abs dk"></div>
+<div class="abs shade">
+<div><div class="time">3:51 PM</div><div class="date">Wednesday, October 21</div></div>
+<div class="sl"><svg class="ic"><use href="#d-sun"/></svg><div class="trk"><i style="width:70%"></i><b style="left:70%"></b></div></div>
+<div class="sl"><svg class="ic"><use href="#d-vol"/></svg><div class="trk"><i style="width:45%"></i><b style="left:45%"></b></div></div>
+<div class="grid">
+<div class="tile on"><svg class="ic"><use href="#d-wifi"/></svg><small><b>Wi-Fi</b><span>On</span></small></div>
+<div class="tile on"><svg class="ic"><use href="#d-bt"/></svg><small><b>Bluetooth</b><span>On</span></small></div>
+<div class="tile nl"><svg class="ic"><use href="#d-moon"/></svg><small><b>Night Light</b><span class="st"><u>Off<br>On</u></span></small></div>
+<div class="tile"><svg class="ic"><use href="#d-dnd"/></svg><small><b>Focus</b><span>Off</span></small></div>
+<div class="tile"><svg class="ic"><use href="#d-air"/></svg><small><b>Airplane</b><span>Off</span></small></div>
+<div class="tile on"><svg class="ic"><use href="#d-rot"/></svg><small><b>Rotation</b><span>Locked</span></small></div>
+</div>
+<div class="btns"><div><svg class="ic"><use href="#d-shot"/></svg>Capture</div><div><svg class="ic"><use href="#d-rec"/></svg>Record</div><div><svg class="ic"><use href="#d-clip"/></svg>Paste</div></div>
+</div>
+<div class="abs pbar"><span><i></i><i></i><i></i></span><span>3:51 PM</span></div>
+</div>
 
- <div class="abs p2">
-  <div class="abs tabs"><div class="tab">New tab</div></div>
-  <div class="abs bar"><b></b><div class="url">Search or type a web address</div></div>
-  <div class="abs field"><span>make your technology </span><span class="typed">yours<i class="caret"></i></span></div>
-  <div class="abs guess"><span class="on">yours</span><span>your</span><span>yolks</span></div>
-  <div class="abs kb"></div>
- </div>
- <svg class="abs tr" viewBox="0 0 545 350" preserveAspectRatio="none">
-  <path class="trail" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
-  <path class="dot" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
- </svg>
- <div class="abs fin"></div>
+<div class="abs p2">
+<div class="abs tabs"><div class="tab"><i></i>New tab</div></div>
+<div class="abs bar"><b></b><div class="url">Search or type a web address</div></div>
+<div class="abs field"><span>make your technology </span><span class="typed">yours<i class="caret"></i></span></div>
+<div class="abs guess"><span>your</span><span class="on">yours</span><span>yolks</span></div>
+<div class="abs tray"></div>
+<div class="abs kb"></div>
+</div>
+<div class="abs warm"></div>
+<svg class="abs tr" viewBox="0 0 545 350" preserveAspectRatio="none">
+<path class="trail" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
+<path class="dot" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
+</svg>
+<div class="abs fin"></div>
 </div>
         <video data-i="4" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
         <video data-i="5" data-clip="artifact-edit" muted loop playsinline preload="none" poster="media/artifact-edit--youcoded.webp"><source src="media/artifact-edit--youcoded.webm" type="video/webm"></video>
@@ -4349,13 +4363,20 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 
 </script>
 <script>
-/* Builds the keys; lit keys get a delay matching when the trail reaches them. */
-(function(){var kb=document.querySelector('.devdemo .kb'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4};
+/* devdemo */
+/* Builds the keys (lit ones timed to the trail); flips dark mode at the Night Light tap. */
+(function(){var d=document.querySelector('.devdemo'),kb=d.querySelector('.kb'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4};
 ['qwertyuiop','asdfghjkl','zxcvbnm',' '].forEach(function(row){var r=document.createElement('div');r.className='r';
  row.split('').forEach(function(c){var s=document.createElement('div'),k=document.createElement('div');
-  s.className='s'+(c==' '?' sp':'');k.className='k'+(lit[c]!=null?' l':'');
+  s.className='s'+(c==' '?' sp':'');k.className='k'+(c==' '?' sp':'')+(lit[c]!=null?' l':'');
   if(lit[c]!=null)k.style.setProperty('--d',lit[c]+'s');
-  k.textContent=c==' '?'':c;s.appendChild(k);r.appendChild(s)});kb.appendChild(r)})})();
+  k.textContent=c==' '?'space':c;s.appendChild(k);r.appendChild(s)});kb.appendChild(r)});
+/* WHY: one class on the root; CSS does the fade. On, at the tap (0.8s); off again as the loop fades out (6.4s). */
+if(matchMedia('(prefers-reduced-motion:reduce)').matches){d.classList.add('is-dark');return}
+var w=d.querySelector('.warm'),a,b;
+function go(){clearTimeout(a);clearTimeout(b);d.classList.remove('is-dark');
+ a=setTimeout(function(){d.classList.add('is-dark')},800);b=setTimeout(function(){d.classList.remove('is-dark')},6400)}
+w.addEventListener('animationstart',go);w.addEventListener('animationiteration',go)})();
 </script>
 <script>
 // --- Tips over the live demo (2026-10-21). Chips hang under the demo's own toolbar buttons,
