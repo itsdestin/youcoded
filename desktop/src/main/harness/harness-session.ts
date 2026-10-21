@@ -1865,7 +1865,7 @@ export class HarnessSession extends EventEmitter {
    *  Accepted — one degraded turn beats a hard 400 — but documented so it isn't
    *  mistaken for a bug. */
   private compactionConfig(): CompactionConfig {
-    const ctx = this.opts.contextLength ?? 32_768;
+    const ctx = this.opts.contextLength ?? this.profile.assumedContextWindow;
     const big = ctx >= 100_000;
     return { contextLength: ctx, triggerTokens: this.budget().triggerTokens, protectedTokens: big ? 40_000 : Math.floor(ctx * 0.4), minPruneSavings: big ? 20_000 : Math.floor(ctx * 0.1), pruneToChars: 2000 };
   }
@@ -1874,7 +1874,10 @@ export class HarnessSession extends EventEmitter {
    *  trim floor and compaction trigger all come from here, so the trigger can
    *  never sit above the floor again. */
   private budget() {
-    return contextBudget({ contextLength: this.opts.contextLength ?? null, maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+    // WHY assumedWindow: an unknown window budgets with the profile's assumption (250k cloud, 32k on
+    // this computer), never a flat 32k that summarised cloud chats far too early.
+    return contextBudget({ contextLength: this.opts.contextLength ?? null, assumedWindow: this.profile.assumedContextWindow,
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
   }
 
   /** Automatic selection retires complete groups into one summary. A failed
@@ -1884,7 +1887,7 @@ export class HarnessSession extends EventEmitter {
     this.enforceImageLimits();
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
-    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096, estimatedInput });
     if (!force && plan.status === 'fits') return false;
@@ -2135,7 +2138,7 @@ export class HarnessSession extends EventEmitter {
     // WHY: an unknown window would be planned as 32k and block chats that most
     // likely fit. Don't block on a guess; the pre-request check still applies.
     if (contextLength == null) return 'fits';
-    const base = { contextLength, fixedCost: this.requestFixedCost(),
+    const base = { contextLength, assumedWindow: this.profile.assumedContextWindow, fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 };
     if (planContextBudget(base).status === 'cannot-fit') return 'too-small';
@@ -2270,7 +2273,7 @@ export class HarnessSession extends EventEmitter {
   }
 
   private compactionCandidateFits(summary: string, keep: ModelMessage[], focus?: string, contextLength?: number): boolean {
-    const plan = planContextBudget({ contextLength: contextLength ?? this.opts.contextLength ?? null,
+    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: contextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
@@ -2284,7 +2287,7 @@ export class HarnessSession extends EventEmitter {
   }
 
   private compactionCut(manual = false, focus?: string, targetContextLength?: number): number {
-    const plan = planContextBudget({ contextLength: targetContextLength ?? this.opts.contextLength ?? null,
+    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: targetContextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
     // Explicit manual compact may retire history below the automatic threshold;
@@ -2306,7 +2309,7 @@ export class HarnessSession extends EventEmitter {
     // byte-identical to what the provider cached (see summaryProvenanceNote).
     const instruction = summarizePrompt(focus) + summaryProvenanceNote(span);
     const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
-    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+    const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
     // WHY: the summary has its own output allowance. An oversized tool result
@@ -3396,7 +3399,7 @@ export class HarnessSession extends EventEmitter {
     // summary failed. Normal requests preserve the accepted prefix intact.
     let fittedHistory = this.legacyReopenFit && this.summaryInputCannotFit && this.failedCompactionRevision === this.capture.revision
       ? this.fitToContext(this.history) : this.history;
-    const requestPlan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+    const requestPlan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096,
       // WHY: the pre-request gate uses the provider's measured prefix when it

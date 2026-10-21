@@ -14,7 +14,7 @@ import os from 'os';
 import { generateText } from 'ai';
 import { hasRealTitle } from '../shared/session-title';
 import type { SessionProvider } from '../shared/types';
-import type { ModelBinding } from '../shared/provider-types';
+import { isLocalEndpoint, type ModelBinding } from '../shared/provider-types';
 import { ENGINE_PORT } from '../shared/ports';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
@@ -303,7 +303,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // a session start must never wait on either — an unknown window falls back to the profile's
       // assumption until the picker or Providers screen has loaded the list (custom-providers plan C-1).
       const cacheOnly = p?.type === 'openai-compatible';
-      return { contextLength: await modelCatalog.contextLengthFor(binding, providers, { cacheOnly }), totalSlots: null };
+      const contextLength = await modelCatalog.contextLengthFor(binding, providers, { cacheOnly });
+      // A custom endpoint on this computer (Ollama, LM Studio): its unknown window is assumed 32k, not 250k.
+      if (p?.type === 'openai-compatible' && p.baseUrl) return { contextLength, totalSlots: null, onThisComputer: isLocalEndpoint(p.baseUrl) };
+      return { contextLength, totalSlots: null };
     },
     // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
     // this. Unknown provider → null, so the host falls back to a cloud-safe

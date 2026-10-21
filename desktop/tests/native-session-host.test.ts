@@ -1328,6 +1328,19 @@ describe('NativeSessionHost', () => {
   // session's real ceiling can be smaller than hosted's. The fallback constant
   // above still applies whenever no live session backs the parent id (the
   // 'never created' cases in the describe block above). ----
+  describe('the assumed window for an unknown custom endpoint', () => {
+    const providerTypeFor = async () => 'openai-compatible';
+    it('follows whether the context lookup says the address is on this computer', async () => {
+      const ctx = async (b: any) => ({ contextLength: null, totalSlots: null, onThisComputer: b.modelId === 'here' });
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, ctx as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'here', cwd: root, binding: { providerId: 'c1', modelId: 'here' } });
+      await h.create({ sessionId: 'away', cwd: root, binding: { providerId: 'c1', modelId: 'away' } });
+      expect((h as any).live.get('here').session.profileSnapshot.assumedContextWindow).toBe(32_768);
+      expect((h as any).live.get('away').session.profileSnapshot.assumedContextWindow).toBe(250_000);
+      await h.destroyAll();
+    });
+  });
+
   describe('specialist concurrency cap follows the profile', () => {
     const providerTypeFor = async (b: any) => (b.providerId === 'local' ? 'local-engine' : 'openrouter');
     // Fix pass 2: contextLengthFor collapsed into contextAndSlotsFor — this
