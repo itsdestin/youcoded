@@ -1805,12 +1805,13 @@ html{-webkit-tap-highlight-color:transparent}
 .devdemo{position:relative;width:100%;aspect-ratio:16/10;container-type:inline-size;overflow:hidden;box-sizing:border-box;
   
   --bg:rgb(var(--canvas-rgb));--st:rgb(var(--fg-rgb));--tx:rgba(var(--fg-rgb),.85);--mu:rgba(var(--fg-rgb),.5);--gl:var(--glass);--hr:var(--hair);
-  --fl:rgba(var(--fg-rgb),.07);--tk:rgba(var(--fg-rgb),.15);--kf:rgba(255,255,255,.72);--kh:rgba(255,255,255,.95);--kb:rgba(var(--fg-rgb),.17);
-  --tray:rgba(var(--fg-rgb),.05);--knob:rgb(var(--canvas-rgb));--fn:rgba(var(--fg-rgb),.2);--sh:rgba(var(--fg-rgb),.14);
+  --fl:rgba(var(--fg-rgb),.07);--tk:rgba(var(--fg-rgb),.15);--kb:rgba(var(--fg-rgb),.17);
+  
+  --kf:rgb(var(--canvas-rgb));--kn:color-mix(in srgb,rgb(var(--fg-rgb)) 9%,rgb(var(--canvas-rgb)));--pn:color-mix(in srgb,rgb(var(--fg-rgb)) 6%,rgb(var(--canvas-rgb)));--knob:rgb(var(--canvas-rgb));--fn:rgba(var(--fg-rgb),.2);--sh:rgba(var(--fg-rgb),.14);
   font-family:var(--font-ui);color:var(--tx);background:var(--bg);border:1px solid var(--hair);border-radius:var(--radius)}
 .devdemo.is-dark{--bg:color-mix(in srgb,rgb(var(--fg-rgb)) 28%,#000);--st:rgba(255,255,255,.96);--tx:rgba(255,255,255,.82);--mu:rgba(255,255,255,.5);--gl:rgba(255,255,255,.07);--hr:rgba(255,255,255,.12);
-  --fl:rgba(255,255,255,.08);--tk:rgba(255,255,255,.2);--kf:rgba(255,255,255,.13);--kh:rgba(255,255,255,.17);--kb:rgba(0,0,0,.55);
-  --tray:rgba(255,255,255,.035);--knob:#fff;--fn:rgba(255,255,255,.3);--sh:rgba(0,0,0,.45)}
+  --fl:rgba(255,255,255,.08);--tk:rgba(255,255,255,.2);--kf:rgba(255,255,255,.16);--kn:rgba(255,255,255,.08);--pn:color-mix(in srgb,#000 30%,var(--bg));--kb:rgba(0,0,0,.55);
+  --knob:#fff;--fn:rgba(255,255,255,.3);--sh:rgba(0,0,0,.45)}
 .devdemo *{box-sizing:border-box}
 .devdemo,.devdemo *{transition:background-color .5s,color .5s,border-color .5s,box-shadow .5s}
 .devdemo .abs{position:absolute}
@@ -1856,41 +1857,48 @@ html{-webkit-tap-highlight-color:transparent}
 .devdemo .tab i{width:1.5cqw;height:1.5cqw;border-radius:50%;background:var(--tk)}
 .devdemo .bar{left:0;right:0;top:9%;height:10%;background:var(--bg);border-bottom:1px solid var(--hr);display:flex;align-items:center;gap:1.4cqw;padding:0 4%}
 .devdemo .bar b{width:1.7cqw;height:1.7cqw;border:.3cqw solid var(--tk);border-radius:50%}
-.devdemo .url{flex:1;height:62%;border-radius:99px;background:var(--fl);padding:0 1.8cqw;font-size:1.5cqw;display:flex;align-items:center;color:var(--mu)}
-.devdemo .field{left:6%;right:6%;top:22%;height:11%;background:var(--gl);border:1px solid var(--hr);border-radius:99px;color:var(--st);
-  padding:0 2.2cqw;display:flex;align-items:center;font-size:2.3cqw;white-space:pre;overflow:hidden;box-shadow:0 .3cqw 1.4cqw var(--sh)}
-.devdemo .typed{opacity:0;animation:dvType 7s infinite}
-.devdemo .caret{display:inline-block;vertical-align:middle;width:.3cqw;height:2.7cqw;margin-left:.3cqw;background:var(--accent);animation:dvBlink 1s steps(2) infinite}
-.devdemo .guess{left:6%;right:6%;top:34.6%;height:5.6%;display:flex;gap:1.2cqw;justify-content:center;align-items:center;font-size:1.8cqw;opacity:0;animation:dvGuess 7s infinite}
-.devdemo .guess span{height:100%;padding:0 2.4cqw;display:flex;align-items:center;border-radius:99px;background:var(--fl);color:var(--mu)}
-.devdemo .guess .on{background:var(--accent);color:rgb(var(--canvas-rgb));font-weight:600}
-.devdemo .tray{left:0;right:0;top:41%;bottom:0;background:var(--tray);border-top:1px solid var(--hr)}
-.devdemo .kb{left:3%;width:94%;top:41%;height:56%}
-.devdemo .r{height:25%;display:flex}
-.devdemo .r:nth-child(2){margin-left:5%}.devdemo .r:nth-child(3){margin-left:15%}.devdemo .r:nth-child(4){margin-left:25%}
-.devdemo .s{width:10%;padding:.4cqw}
-.devdemo .s.sp{width:50%}
+.devdemo .url{flex:1;height:62%;border-radius:99px;background:var(--fl);padding:0 1.8cqw;font-size:1.9cqw;display:flex;align-items:center;color:var(--st);white-space:pre;overflow:hidden}
 
-.devdemo .k{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2.6cqw;font-weight:500;color:var(--st);
-  background:var(--kf);border-radius:.9cqw;box-shadow:inset 0 .15cqw 0 var(--kh),0 .3cqw 0 var(--kb)}
-.devdemo .k.sp{font-size:1.3cqw;letter-spacing:.08em;color:var(--mu);font-weight:400}
+.devdemo .typed{display:inline-block;overflow:hidden;max-width:0;opacity:0;animation:dvType 7s infinite}
+.devdemo .caret{display:inline-block;width:.3cqw;height:2.3cqw;margin-left:.2cqw;background:var(--accent);animation:dvBlink 1s steps(2) infinite}
+
+.devdemo .kb{left:0;right:0;bottom:0;height:34.4cqw;background:var(--pn);border-top:1px solid var(--hr);padding:.6cqw .8cqw 0}
+.devdemo .sug{height:4.4cqw;margin:0 -.8cqw .8cqw;display:flex;font-size:2.1cqw}
+.devdemo .sug div{flex:1;position:relative;display:grid;place-items:center}
+.devdemo .sug div+div:before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:1px;background:var(--hr)}
+.devdemo .sug span{grid-area:1/1;color:var(--mu)}
+.devdemo .sug .b{color:var(--tx);opacity:0;animation:dvGuess 7s infinite}
+.devdemo .sug .a{opacity:.6;animation:dvGen 7s infinite}
+.devdemo .sug .on{color:var(--accent);font-weight:700}
+.devdemo .kr{display:flex;gap:.6cqw;margin-bottom:1cqw}
+.devdemo .kr.ix{justify-content:center}
+
+.devdemo .k{width:5.1cqw;height:6.12cqw;flex:none;display:flex;align-items:center;justify-content:center;font-size:2.6cqw;line-height:1;color:var(--st);
+  background:var(--kf);border-radius:.8cqw;box-shadow:0 1px 0 var(--kb)}
+.devdemo .k.w{width:7.95cqw}
+.devdemo .k.f{background:var(--kn)}
+.devdemo .k.sp{flex:1;width:auto;font-size:1.3cqw;color:var(--mu);opacity:.8}
+.devdemo .k.q{font-size:1.8cqw}
+.devdemo .k.e{background:var(--accent);color:rgb(var(--canvas-rgb))}
+.devdemo .k .ic{width:3cqw;height:3cqw}
 .devdemo .l{animation:dvLit 7s var(--d) infinite}
-
-.devdemo .tr{left:43.74cqw;width:54.52cqw;top:41%;height:56%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .6cqw var(--accent))}
+.devdemo .tr{left:0;top:0;width:100%;height:100%;overflow:visible;pointer-events:none;filter:drop-shadow(0 0 .7cqw var(--accent))}
 .devdemo .tr path{fill:none;stroke:var(--accent);stroke-linecap:round;stroke-linejoin:round}
-.devdemo .trail{stroke-width:12;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
-.devdemo .dot{stroke-width:26;stroke-dasharray:.01 300;opacity:0;animation:dvDot 7s linear infinite}
+.devdemo .trail{stroke-width:11;stroke-dasharray:100 100;stroke-dashoffset:100;opacity:0;animation:dvTrail 7s linear infinite}
+.devdemo .dot{stroke-width:22;stroke-dasharray:.01 300;opacity:0;animation:dvDot 7s linear infinite}
 
 .devdemo .fin{left:0;top:0;width:3.6cqw;height:3.6cqw;border-radius:50%;background:var(--fn);border:1px solid var(--st);
   box-shadow:0 .3cqw 1cqw var(--sh);opacity:0;--t:translate(10.3cqw,33.5cqw);animation:dvFin 7s infinite}
 @keyframes dvWarm{0%,12%{opacity:0}20%,90%{opacity:.12}97%,100%{opacity:0}}
 @keyframes dvNL{0%,9%{background:var(--gl);border-color:var(--hr);color:var(--tx);transform:scale(1)}11.4%{transform:scale(.94)}14%,91%{background:var(--accent);border-color:var(--accent);color:rgb(var(--canvas-rgb));transform:scale(1)}96%,100%{background:var(--gl);border-color:var(--hr);color:var(--tx)}}
 @keyframes dvSw{0%,12%{transform:none}14%,91%{transform:translateY(-50%)}96%,100%{transform:none}}
-@keyframes dvFin{0%,3%{transform:translate(13.8cqw,40cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:1}27%,100%{transform:translate(71.9cqw,28.6cqw) scale(1);opacity:0}}
+@keyframes dvFin{0%,3%{transform:translate(13.8cqw,40cqw) scale(1);opacity:0}6%,10%{transform:var(--t) scale(1);opacity:1}11.4%{transform:var(--t) scale(.8)}14.3%,17%{transform:var(--t) scale(1);opacity:1}25.5%{transform:translate(72.05cqw,35.16cqw) scale(1);opacity:1}27%,100%{transform:translate(72.05cqw,35.16cqw) scale(1);opacity:0}}
 @keyframes dvTrail{0%,25.5%{stroke-dashoffset:100;opacity:0}25.7%{stroke-dashoffset:100;opacity:.75}49%,90%{stroke-dashoffset:0;opacity:.75}95%{stroke-dashoffset:0;opacity:0}95.1%,100%{stroke-dashoffset:100;opacity:0}}
 @keyframes dvDot{0%,25.5%{stroke-dashoffset:0;opacity:0}25.7%{stroke-dashoffset:0;opacity:1}49%{stroke-dashoffset:-100;opacity:1}51%{stroke-dashoffset:-100;opacity:0}51.1%,100%{stroke-dashoffset:0;opacity:0}}
-@keyframes dvLit{0%{background:var(--kf)}3%{background:color-mix(in srgb,var(--accent) 55%,transparent)}14%,100%{background:var(--kf)}}
-@keyframes dvType{0%,49.9%{opacity:0;transform:translateY(.5cqw)}52%,91%{opacity:1;transform:none}95%,100%{opacity:0}}
+
+@keyframes dvLit{0%{background:var(--kf)}1%,4.6%{background:color-mix(in srgb,var(--accent) 30%,var(--kf))}8%,100%{background:var(--kf)}}
+@keyframes dvType{0%,49.9%{opacity:0;max-width:0}52%,91%{opacity:1;max-width:9cqw}95%,100%{opacity:0;max-width:0}}
+@keyframes dvGen{0%,49.9%{opacity:.6}52%,91%{opacity:0}95%,100%{opacity:.6}}
 @keyframes dvGuess{0%,49.9%{opacity:0}52%,91%{opacity:1}95%,100%{opacity:0}}
 @keyframes dvBlink{50%{opacity:0}}
 @media (prefers-reduced-motion:reduce){
@@ -1900,8 +1908,9 @@ html{-webkit-tap-highlight-color:transparent}
  .devdemo .nl u{transform:translateY(-50%)}
  .devdemo .trail{stroke-dashoffset:0;opacity:.75}
  .devdemo .dot,.devdemo .fin{opacity:0}
- .devdemo .typed,.devdemo .guess{opacity:1}
- .devdemo .l{background:color-mix(in srgb,var(--accent) 55%,transparent)}
+ .devdemo .typed{opacity:1;max-width:9cqw}
+ .devdemo .sug .b{opacity:1}.devdemo .sug .a{opacity:0}
+ .devdemo .l{background:color-mix(in srgb,var(--accent) 30%,var(--kf))}
 }
 
 </style></head>
@@ -2332,6 +2341,9 @@ Contract: mascots/README.md (from the repo root)
 <symbol id="d-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/></symbol>
 <symbol id="d-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
 <symbol id="d-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM17 9a4 4 0 0 1 0 6"/></symbol>
+<symbol id="d-sh" viewBox="0 0 24 24"><path d="M12 19V6M6 12l6-6 6 6"/></symbol>
+<symbol id="d-bk" viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12zM12 9.5l5 5M17 9.5l-5 5"/></symbol>
+<symbol id="d-rt" viewBox="0 0 24 24"><path d="M19 6v6H6M10 8l-4 4 4 4"/></symbol>
 </defs></svg>
 
 <div class="abs p1">
@@ -2356,17 +2368,17 @@ Contract: mascots/README.md (from the repo root)
 
 <div class="abs p2">
 <div class="abs tabs"><div class="tab"><i></i>New tab</div></div>
-<div class="abs bar"><b></b><div class="url">Search or type a web address</div></div>
-<div class="abs field"><span>make your technology </span><span class="typed">yours<i class="caret"></i></span></div>
-<div class="abs guess"><span>your</span><span class="on">yours</span><span>yolks</span></div>
-<div class="abs tray"></div>
-<div class="abs kb"></div>
+<div class="abs bar"><b></b><div class="url"><span>make your technology</span><span class="typed"> yours</span><i class="caret"></i></div></div>
+<div class="abs kb">
+<div class="sug"><div><span class="a">the</span><span class="b">your</span></div><div><span class="a">I</span><span class="b on">yours</span></div><div><span class="a">and</span><span class="b">yolks</span></div></div>
+<div class="rows"></div>
+<svg class="abs tr" viewBox="0 0 580 344" preserveAspectRatio="none">
+<path class="trail" pathLength="100" d="M318 89Q400 50 489 89Q440 125 375 89Q290 55 204 89Q150 150 119 160"/>
+<path class="dot" pathLength="100" d="M318 89Q400 50 489 89Q440 125 375 89Q290 55 204 89Q150 150 119 160"/>
+</svg>
+</div>
 </div>
 <div class="abs warm"></div>
-<svg class="abs tr" viewBox="0 0 545 350" preserveAspectRatio="none">
-<path class="trail" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
-<path class="dot" pathLength="100" d="M300 50Q383 8 463 44Q406 78 354 44Q272 8 191 44Q136 120 109 131"/>
-</svg>
 <div class="abs fin"></div>
 </div>
         <video data-i="4" data-clip="any-ai" muted loop playsinline preload="none" poster="media/any-ai--youcoded.webp"><source src="media/any-ai--youcoded.webm" type="video/webm"></video>
@@ -4367,12 +4379,17 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
 <script>
 /* devdemo */
 /* Builds the keys (lit ones timed to the trail); flips dark mode at the Night Light tap. */
-(function(){var d=document.querySelector('.devdemo'),kb=d.querySelector('.kb'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4};
-['qwertyuiop','asdfghjkl','zxcvbnm',' '].forEach(function(row){var r=document.createElement('div');r.className='r';
- row.split('').forEach(function(c){var s=document.createElement('div'),k=document.createElement('div');
-  s.className='s'+(c==' '?' sp':'');k.className='k'+(c==' '?' sp':'')+(lit[c]!=null?' l':'');
-  if(lit[c]!=null)k.style.setProperty('--d',lit[c]+'s');
-  k.textContent=c==' '?'space':c;s.appendChild(k);r.appendChild(s)});kb.appendChild(r)});
+(function(){var d=document.querySelector('.devdemo'),kb=d.querySelector('.rows'),lit={y:1.8,o:2.3,u:2.6,r:3.1,s:3.4},
+ /* ^ shift, < backspace, # ?123, space, > enter; , and . are function keys */
+ R=['qwertyuiop','asdfghjkl','^zxcvbnm<','#, .>'];
+R.forEach(function(row,i){var r=document.createElement('div');r.className='kr'+(i==1?' ix':'');
+ row.split('').forEach(function(c){var k=document.createElement('div'),cl='k';
+  if('^<#>'.indexOf(c)>-1)cl+=' w f';if(c==','||c=='.'||c=='#')cl+=' f';if(c=='>')cl=cl.replace(' f',' e');if(c==' ')cl+=' sp';if(c=='#')cl+=' q';
+  if(lit[c]!=null){cl+=' l';k.style.setProperty('--d',lit[c]+'s')}
+  k.className=cl;
+  var g={'^':'d-sh','<':'d-bk','>':'d-rt'}[c];
+  if(g)k.innerHTML='<svg class="ic"><use href="#'+g+'"/></svg>';else k.textContent=c=='#'?'?123':c==' '?'space':c;
+  r.appendChild(k)});kb.appendChild(r)});
 /* WHY: one class on the root; CSS does the fade. On, at the tap (0.8s); off again as the loop fades out (6.4s). */
 if(matchMedia('(prefers-reduced-motion:reduce)').matches){d.classList.add('is-dark');return}
 var w=d.querySelector('.warm'),a,b;
