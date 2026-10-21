@@ -200,7 +200,11 @@ describe('every scroll area fades (the one scroll fade)', { timeout: CPU_BOUND_W
     const painted = /(?<![\w-])scroll-fade(?:-x)?(?![\w-])/;
     const users: string[] = [];
     for (const f of files) {
-      const sf = ts.createSourceFile(f, readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const source = readFileSync(f, 'utf8');
+      // WHY: parsing every renderer file again times out under suite load. A literal's
+      // getText is a source substring, so files without the token cannot contain a hit.
+      if (!painted.test(source)) continue;
+      const sf = ts.createSourceFile(f, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
       const visit = (n: ts.Node) => {
         if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) && painted.test(n.getText(sf))) users.push(`${rel(f)}: ${n.getText(sf)}`);
         ts.forEachChild(n, visit);

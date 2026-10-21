@@ -16,6 +16,8 @@
 // Byte-stable per session by construction: every flag comes from the session's
 // capability profile or its role, both fixed at session start.
 
+import { ADMIN_WORK_GUIDANCE } from './admin-work-guidance';
+
 export interface DoctrineOpts {
   /** 'user' — the root session, whose reader is the person. 'parent' — a
    *  specialist, whose reader is the parent model; the writing-for-the-user
@@ -65,12 +67,9 @@ const WORK_FULL = (o: DoctrineOpts) => [
   // Keeps the literal "Prefer dedicated tools over shell" that the assembly test
   // and the Bash description both point at.
   'Prefer dedicated tools over shell: Read/Glob/Grep instead of cat/find/grep, Edit instead of sed. Use absolute paths.',
-  // WHY (Destin's draft kept a "confirm scope before executing" line; this is the
-  // version that does not double-ask): the permission engine ALREADY raises a
-  // card for anything that needs approval, in every mode. A prompt that also
-  // says "confirm with the user first" makes the model ask in chat AND the app
-  // ask on a card — and in Full Auto it makes the model ask at all.
-  'Approval is the app\'s job. When an action needs the user\'s permission, the app shows them a card; do not also ask in chat. If they decline, take a different approach or ask what they would prefer.',
+  ADMIN_WORK_GUIDANCE,
+  // WHY: admin-work scope approval is deliberately separate from per-command cards.
+  'Except for admin work as described above, approval is the app\'s job. When an action needs the user\'s permission, the app shows them a card; do not also ask in chat. If they decline, take a different approach or ask what they would prefer.',
 ];
 
 const FINISH_FULL = [
@@ -102,7 +101,8 @@ const WORK_COMPACT = (o: DoctrineOpts) => [
   'Assume you can do what the user asks until something proves you cannot. If you have no tool for it, work out how you could get one — a script, a command already on this machine — before saying no.',
   'Change nothing unless the user clearly expects it. A question ends in an answer, not an edit.',
   'Prefer dedicated tools over shell: Read/Glob/Grep instead of cat/find/grep, Edit instead of sed. Use absolute paths.',
-  'Approval is the app\'s job: it shows the user a card when needed. Do not also ask in chat.',
+  ADMIN_WORK_GUIDANCE,
+  'Except for admin work as described above, approval is the app\'s job: it shows the user a card when needed. Do not also ask in chat.',
   'For visual output (images, HTML pages), look at the result as the user will see it and fix what is wrong. After two rounds without clear progress, show it and ask whether to continue.',
 ];
 const FINISH_COMPACT = [
