@@ -21,17 +21,25 @@ import type { ProviderStatus } from '../../shared/provider-types';
 
 /** Types whose cards show a model count (ChatGPT and the local engine have their own cards). */
 const COUNTED = new Set(['openrouter', 'anthropic', 'openai', 'google', 'openai-compatible']);
+/** At most one background warm per this long. WHY (branch review 2026-10-21): a failed fetch is not memoized, so
+ *  while offline every Providers-screen open would otherwise start two 15 s upstream requests (and an endpoint ask)
+ *  again. A user who wants it now has "Check for new models". */
+const WARM_SPACING_MS = 5 * 60_000;
+let lastWarmAt = -Infinity;
+/** Test-only: forget the last warm. */
+export function resetCountWarmingForTests(): void { lastWarmAt = -Infinity; }
 
 /** The Providers screen's list: each row plus how many models it brings, from IN-MEMORY catalog data
  *  only. WHY not in ProviderRegistry.list(): that has many callers, including every session start, and
  *  a catalog read there would put network fetches in front of all of them. When a counted provider
- *  has no number yet, the catalog is warmed in the background (never awaited), so the next read of
- *  this list carries it. Never throws. */
+ *  has no number yet, the catalog is warmed in the background (never awaited, at most once per
+ *  WARM_SPACING_MS), so a later read of this list carries it. Never throws. */
 export async function providerListWithCounts(rt: Pick<NativeRuntime, 'providerRegistry' | 'modelCatalog'>): Promise<ProviderStatus[]> {
   const list = await rt.providerRegistry.list();
   try {
     const counts = rt.modelCatalog.cachedCounts(list);
-    if (list.some((p) => p.enabled && COUNTED.has(p.type) && !counts.has(p.id))) {
+    if (list.some((p) => p.enabled && COUNTED.has(p.type) && !counts.has(p.id)) && Date.now() - lastWarmAt >= WARM_SPACING_MS) {
+      lastWarmAt = Date.now();
       void rt.modelCatalog.get(list.filter((p) => COUNTED.has(p.type))).catch(() => { /* get() never throws */ });
     }
     return list.map((p) => { const c = counts.get(p.id); return c ? { ...p, models: c } : p; });

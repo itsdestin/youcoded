@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { providerListWithCounts } from '../src/main/ipc/provider';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { providerListWithCounts, resetCountWarmingForTests } from '../src/main/ipc/provider';
 
 const row = (id: string, type: string) => ({ id, type, label: id, enabled: true, builtIn: false, hasKey: true, ready: true });
 
 describe('the Providers screen list carries model counts from cached data', () => {
+  beforeEach(() => resetCountWarmingForTests());
   it('adds a count where the catalog has one and leaves the rest unknown', async () => {
     const rt = {
       providerRegistry: { list: async () => [row('a', 'openai'), row('b', 'openai-compatible')] },
@@ -24,6 +25,13 @@ describe('the Providers screen list carries model counts from cached data', () =
     expect(await providerListWithCounts(rt as any)).toHaveLength(2);
     expect(get).toHaveBeenCalledWith([row('b', 'openai-compatible')]);
     finish();
+  });
+  it('reopening the screen soon after does not warm again (offline would repeat the full timeout)', async () => {
+    const get = vi.fn(async () => []);
+    const rt = { providerRegistry: { list: async () => [row('b', 'openai-compatible')] }, modelCatalog: { cachedCounts: () => new Map(), get } };
+    await providerListWithCounts(rt as any);
+    await providerListWithCounts(rt as any);
+    expect(get).toHaveBeenCalledTimes(1);
   });
   it('does not warm anything when every counted provider already has a number', async () => {
     const get = vi.fn(async () => []);
