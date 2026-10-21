@@ -32,7 +32,11 @@ export function touchTurnTime(prev: ChatState, next: ChatState, id: string, acti
   // the moment it was reopened, and "only forward" could never pull that placeholder back (Destin's
   // dev check, 2026-10-21). Only an already-existing reply is held to "only forward".
   const created = !prev.get(id)?.assistantTurns.has(turnId);
-  if (!created && (turn.timestamp ?? 0) >= at) return next;
+  // WHY whole minutes (independent review, 2026-10-21): a tool step or result leaves assistantTurns
+  // untouched, so moving the time there copies the session's whole reply map — a burst of parallel tool
+  // results in a long chat paid that per result. The bubble shows minutes, never seconds, so a move
+  // within the same minute changes nothing on screen and is skipped (a new day is always a new minute).
+  if (!created && Math.floor(at / 60_000) <= Math.floor((turn.timestamp ?? 0) / 60_000)) return next;
   // WHY reuse a map this action already copied (performance.md rule 4): streamed text copies
   // assistantTurns on every word anyway; a second whole-map copy per word would double that cost.
   const fresh = session.assistantTurns !== prev.get(id)?.assistantTurns;
