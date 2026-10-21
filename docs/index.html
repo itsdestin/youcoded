@@ -1789,7 +1789,9 @@ html{-webkit-tap-highlight-color:transparent}
 /* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
    They exist only once the visitor has clicked into the demo (B-1 round 2). */
 .tips{position:absolute;inset:0;pointer-events:none;z-index:6;font-family:var(--font-ui);display:none}
-.embed.interactive .tips.on{display:block}
+.embed.interactive .tips.on,.embed.interactive .tips.off{display:block}
+/* Hidden tips leave one small button to bring them back; nothing else is drawn. */
+.tips.off .tip,.tips.off .tips-lines{display:none}
 .tips-lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .tips-lines line{stroke:var(--accent);stroke-width:1.5;opacity:.55}
 .tip{position:absolute;pointer-events:auto;display:inline-flex;align-items:center;gap:6px;max-width:250px;
@@ -4491,7 +4493,10 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
   var svg = layer.querySelector('svg'), hideBtn = layer.querySelector('.tips-hide');
   var hidden = false; try { hidden = localStorage.getItem('yc-tips-hidden') === '1'; } catch (e) {}
   var gone = {}, pinned = null, mode = '';
-  hideBtn.addEventListener('click', function(){ hidden = true; try { localStorage.setItem('yc-tips-hidden', '1'); } catch (e) {} render(true); });
+  // WHY a toggle (Destin, 2026-10-21: "now they're just missing entirely"): Hide tips was
+  // remembered with no way back, so one press in testing made the tips vanish for good on this
+  // address. The same button now reads Show tips while they are hidden.
+  hideBtn.addEventListener('click', function(){ hidden = !hidden; try { localStorage.setItem('yc-tips-hidden', hidden ? '1' : '0'); } catch (e) {} render(true); });
   function doc(){ try { return frame.contentDocument; } catch (e) { return null; } }
   function rect(el){ var r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, cx: (r.left + r.right) / 2, cy: (r.top + r.bottom) / 2 }; }
   // What the demo is showing: a page (no tips), the settings panel, or the chat.
@@ -4532,8 +4537,9 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
   var items = [], built = '';
   function render(force){
     var d = doc(); mode = detect(d);
-    var show = !hidden && mode && mode !== 'page' && embed.classList.contains('interactive');
-    layer.classList.toggle('on', show);
+    var live = mode && mode !== 'page' && embed.classList.contains('interactive'), show = live && !hidden;
+    layer.classList.toggle('on', show); layer.classList.toggle('off', live && hidden);
+    hideBtn.textContent = hidden ? 'Show tips' : 'Hide tips';
     if (!show) { built = ''; return; }
     // Chips are rebuilt only when the demo changes mode or one is dismissed; a mutation inside
     // the demo (a reply arriving, a hover) just re-places them, so a chip under the pointer
