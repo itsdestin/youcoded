@@ -195,6 +195,9 @@ interface Rec {
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
   queueSnapshot?: import('../shared/session-live-types').SessionLiveBody & {kind:'queue'};
+  /** The "Started with …" record as last published (native:session-context). WHY: a Claude Code session has no host to ask, so a fill
+   *  (whose SESSION_FILL_RESET clears the screen's copy) could only get it back from here — without this the banner vanished on open. */
+  sessionContext?: unknown;
   /** A native model reached 'loaded' at some point. WHY (sync-fix3 review): the screen's Reload button needs it, and a screen that opens late never saw that state. */
   modelEverLoaded: boolean;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
@@ -663,6 +666,7 @@ export class SessionRecords {
     const rec = this.records.get(sessionId);
     if (!rec) return [];
     const out: Array<{ type: string; payload: unknown }> = [];
+    if (rec.sessionContext) out.push({ type: 'native:session-context', payload: { sessionId, context: rec.sessionContext } });
     if (rec.facts.model) out.push({ type: 'session:live', payload: { sessionId, kind: 'model', model: rec.facts.model } });
     if (rec.nativeStartup) out.push({ type: 'session:live', payload: { sessionId, kind: 'native-startup', state: rec.nativeStartup } });
     if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
@@ -761,6 +765,7 @@ export class SessionRecords {
 
   private fold(rec: Rec, type: string, payload: unknown): void {
     const f = rec.facts;
+    if (type === 'native:session-context') { rec.sessionContext = asObject(payload).context ?? null; return; }
     if (type === 'native:permission-mode') {
       const mode = asObject(payload).mode;
       if (typeof mode === 'string') f.permissionMode = mode;
