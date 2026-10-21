@@ -4,7 +4,7 @@
 // useArtifactContent, and the conflict check that guards every save. Each section
 // keeps its own window.claude bridge fake and hooks, so they stay inside it.
 import React from 'react';
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
 import { EditorView } from '@codemirror/view';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
@@ -12,6 +12,21 @@ import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 import { addComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
 import { flushRecoveryDrafts, readRecoveryDraft, writeRecoveryDraft } from '../src/renderer/state/draft-recovery';
+
+// WHY: CodeMirror schedules range measurements, but jsdom supplies no range
+// geometry. Keep real editor behavior without asynchronous measurement errors.
+const rangeRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects');
+const rangeBounds = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect');
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: () => [] });
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: () => new DOMRect() });
+});
+afterAll(() => {
+  for (const [key, descriptor] of [['getClientRects', rangeRects], ['getBoundingClientRect', rangeBounds]] as const) {
+    if (descriptor) Object.defineProperty(Range.prototype, key, descriptor);
+    else Reflect.deleteProperty(Range.prototype, key);
+  }
+});
 
 beforeEach(() => { flushRecoveryDrafts(); sessionStorage.clear(); });
 
@@ -363,9 +378,11 @@ describe('read lifecycle through useArtifactContent', () => {
 
   // Minimal real host: the same wiring SessionDrawer and FilesTab use —
   // useArtifactContent owns the read, ActiveArtifactView renders the phases.
-  function Host({ artifact }: { artifact: any }) {
-    const { content, setContent, contentInfo, contentState, retryRead } =
-      useArtifactContent('/proj', artifact.id, artifact.path);
+  function Host({ artifact, root = '/proj', viewerRef, onSnapshot, onDelivery }: { artifact: any; root?: string; viewerRef?: React.Ref<ActiveArtifactHandle>; onSnapshot?: (value: unknown) => void; onDelivery?: (res: any) => void }) {
+    const { content, setContent, contentInfo, contentState, retryRead, applyDiskRead } =
+      useArtifactContent(root, artifact.id, artifact.path);
+    React.useLayoutEffect(() => { onSnapshot?.({ content, contentInfo, contentState, retryRead }); });
+    const deliver = React.useCallback((res: any) => { onDelivery?.(res); applyDiskRead(res); }, [applyDiskRead, onDelivery]);
     return (
       <ActiveArtifactView
         artifact={artifact}
@@ -373,7 +390,9 @@ describe('read lifecycle through useArtifactContent', () => {
         contentInfo={contentInfo}
         contentState={contentState}
         onRetryRead={retryRead}
-        projectRoot="/proj"
+        ref={viewerRef}
+        onDiskRead={deliver}
+        projectRoot={root}
         projectId="p1"
         projectName="Proj"
         sessionId="s1"
@@ -414,6 +433,285 @@ describe('read lifecycle through useArtifactContent', () => {
   }
 
   describe('artifact pane read lifecycle', () => {
+    it.each([['before event', false], ['while pending', false], ['while pending', true]] as const)('keeps typed edits and the original token when a watcher resolves after typing %s with truncated=%s', async (timing, truncated) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const snapshot = vi.fn();
+      const artifact = { ...mdArtifact, id: `dirty-watch-${timing}-${truncated}` };
+      const view = render(<Host artifact={artifact} viewerRef={ref} onSnapshot={snapshot} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'original', sizeBytes: 8 }));
+      await settle(() => ref.current!.startEdit());
+      await settle(() => pending[1].resolve({ ok: true, content: 'original', mtimeMs: 42 }));
+      const type = () => fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'my unsaved typing' } });
+      if (timing === 'before event') type();
+      await settle(() => changedCb!({ projectRoot: '/proj', artifactId: artifact.id, kind: 'change' }));
+      if (timing === 'while pending') type();
+      const sizeBytes = truncated ? 9_000_000 : 13;
+      await settle(() => pending[2].resolve({ ok: true, content: 'external edit', sizeBytes, truncated, mtimeMs: 99 }));
+      expect(view.container.querySelector('textarea')!.value).toBe('my unsaved typing');
+      expect(view.getByRole('button', { name: 'Use disk version' })).toBeTruthy();
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'original', contentInfo: { sizeBytes, truncated } });
+      await act(async () => { expect(await ref.current!.saveEdit()).toBe(false); });
+      expect(save).not.toHaveBeenCalled();
+      view.unmount();
+      flushRecoveryDrafts();
+      expect(readRecoveryDraft(`file:/proj|${artifact.id}`)).toMatchObject({ text: 'my unsaved typing', mtimeMs: 42 });
+    });
+
+    it.each(['full', 'disk'] as const)('rejects obsolete %s action reads across selection, return, retry and unmount', async (source) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const snapshot = vi.fn();
+      const delivery = vi.fn();
+      const a = { ...mdArtifact, id: `action-${source}` };
+      const props = { artifact: a, viewerRef: ref, onSnapshot: snapshot, onDelivery: delivery };
+      const view = render(<Host {...props} />);
+      const ready = { ok: true, content: 'original', mtimeMs: 42, truncated: source === 'full', sizeBytes: source === 'full' ? 9_000_000 : 8 };
+      await settle(() => pending[0].resolve(ready));
+      const startAction = async () => {
+        if (source === 'disk') {
+          await settle(() => ref.current!.startEdit());
+          await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'original', mtimeMs: 42 }));
+          fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'my edit' } });
+          await settle(() => changedCb!({ projectRoot: '/proj', artifactId: a.id, kind: 'change' }));
+          await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'external edit', mtimeMs: 99 }));
+          fireEvent.click(view.getByRole('button', { name: 'Use disk version' }));
+        } else fireEvent.click(view.getByRole('button', { name: /Load the whole file/i }));
+        return pending.at(-1)!;
+      };
+      for (const field of ['id', 'root', 'path', 'return', 'retry', 'unmount'] as const) {
+        const old = await startAction();
+        if (field === 'retry') await settle(() => snapshot.mock.calls.at(-1)![0].retryRead());
+        else if (field === 'unmount') view.unmount();
+        else {
+          view.rerender(<Host {...props} artifact={field === 'id' || field === 'return' ? { ...a, id: `${a.id}-b` } : field === 'path' ? { ...a, path: 'b.md' } : a} root={field === 'root' ? '/other' : '/proj'} />);
+          if (field === 'return') view.rerender(<Host {...props} />);
+        }
+        if (field !== 'unmount') await settle(() => pending.at(-1)!.resolve({ ...ready, content: 'current' }));
+        const deliveries = delivery.mock.calls.length;
+        const commits = snapshot.mock.calls.length;
+        await settle(() => old.resolve({ ok: true, content: 'STALE ACTION', truncated: true, resolvedPath: '/old/path' }));
+        expect(delivery).toHaveBeenCalledTimes(deliveries);
+        expect(snapshot).toHaveBeenCalledTimes(commits);
+        if (field !== 'unmount') {
+          expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'current' });
+          // Reopen A to prepare the next independently invalidated action.
+          view.rerender(<Host {...props} />);
+          if (pending.at(-1) !== old) await settle(() => pending.at(-1)!.resolve(ready));
+        }
+      }
+    });
+
+    it.each(['id', 'root', 'path'] as const)('recovers an edited draft after an unguarded selection %s switch', async (field) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const a = { id: `draft-${field}`, kind: 'internal', path: 'draft.md' };
+      const b = field === 'id' ? { ...a, id: `${a.id}-b`, path: 'b.md' }
+        : field === 'path' ? { ...a, path: 'renamed.md' } : a;
+      const view = render(<Host artifact={a} viewerRef={ref} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'A original' }));
+      await settle(() => ref.current!.startEdit());
+      await settle(() => pending[1].resolve({ ok: true, content: 'A original', mtimeMs: 42 }));
+      fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'A unsaved' } });
+      expect(ref.current!.dirty).toBe(true);
+      view.rerender(<Host artifact={b} root={field === 'root' ? '/other' : '/proj'} viewerRef={ref} />);
+      await settle(() => pending[2].resolve({ ok: true, content: field === 'path' ? 'A original' : 'B original', resolvedPath: field === 'path' ? '/proj/renamed.md' : '/other/b.md' }));
+      if (field === 'path') {
+        // Same record, renamed: recover at the new path without discarding the draft.
+        expect(view.container.querySelector('textarea')!.value).toBe('A unsaved');
+      } else {
+        expect(ref.current!.editing).toBe(false);
+        expect(view.container.querySelector('textarea')).toBeNull();
+      }
+      view.rerender(<Host artifact={a} viewerRef={ref} />);
+      await settle(() => pending[3].resolve({ ok: true, content: 'A original' }));
+      expect(ref.current!.editing).toBe(true);
+      expect(view.container.querySelector('textarea')!.value).toBe('A unsaved');
+      await settle(() => { void ref.current!.saveEdit(); });
+      expect(save.mock.calls.at(-1)![6]).toMatchObject({ baseMtimeMs: 42 });
+    });
+
+    it.each(['rejected', 'error', 'missing', 'binary', 'truncated'] as const)('keeps a renamed draft recoverable after a %s read', async (failure) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const a = { id: `rename-${failure}`, kind: 'internal', path: 'original.md' };
+      const renamed = { ...a, path: 'renamed.md' };
+      const snapshot = vi.fn();
+      const view = render(<Host artifact={a} viewerRef={ref} onSnapshot={snapshot} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'original text', resolvedPath: '/proj/original.md' }));
+      await settle(() => ref.current!.startEdit());
+      await settle(() => pending[1].resolve({ ok: true, content: 'original text', mtimeMs: 42 }));
+      fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'unsaved rename draft' } });
+      view.rerender(<Host artifact={renamed} viewerRef={ref} onSnapshot={snapshot} />);
+      expect(ref.current!.editing).toBe(false);
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: null, contentInfo: null });
+      await settle(() => {
+        if (failure === 'rejected') pending[2].reject(new Error('read denied'));
+        else pending[2].resolve(failure === 'error' ? { ok: false, error: 'read denied' }
+          : failure === 'missing' ? { ok: true, orphan: true, content: null }
+          : failure === 'binary' ? { ok: true, binary: true, content: null }
+          : { ok: true, content: 'prefix', truncated: true, sizeBytes: 9_000_000 });
+      });
+      expect(ref.current!.editing).toBe(false);
+      expect(view.container.querySelector('textarea')).toBeNull();
+      // A failed read must not claim deletion; a genuine orphan still does.
+      if (failure === 'missing') expect(view.queryByText(MISSING_MSG)).not.toBeNull();
+      else expect(view.queryByText(MISSING_MSG)).toBeNull();
+      if (failure === 'rejected' || failure === 'error' || failure === 'missing') {
+        await settle(() => snapshot.mock.calls.at(-1)![0].retryRead());
+      } else {
+        // Non-editable content leaves the draft parked, recoverable on reopening.
+        view.unmount();
+        render(<Host artifact={renamed} viewerRef={ref} onSnapshot={snapshot} />);
+      }
+      await settle(() => pending[3].resolve({ ok: true, content: 'original text', resolvedPath: '/proj/renamed.md' }));
+      expect(ref.current!.editing).toBe(true);
+      expect(document.querySelector('textarea')!.value).toBe('unsaved rename draft');
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'original text', contentInfo: { resolvedPath: '/proj/renamed.md' } });
+      await act(async () => { await ref.current!.saveEdit(); });
+      expect(save.mock.calls.at(-1)![3]).toBe(a.id);
+      expect(save.mock.calls.at(-1)![4]).toBe('unsaved rename draft');
+      expect(save.mock.calls.at(-1)![6]).toMatchObject({ baseMtimeMs: 42 });
+    });
+
+    it.each([
+      ['watcher', 'root'], ['watcher', 'path'], ['edit', 'root'], ['edit', 'path'],
+    ] as const)('ignores a pending %s read after switching selection %s', async (source, field) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const a = { id: `late-${source}-${field}`, kind: 'internal', path: 'a.md' };
+      const view = render(<Host artifact={a} viewerRef={ref} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'A original' }));
+      await settle(() => {
+        if (source === 'edit') ref.current!.startEdit();
+        else changedCb!({ projectRoot: '/proj', artifactId: a.id, kind: 'change' });
+      });
+      // Same id: independently changing either root or path invalidates A.
+      const b = field === 'path' ? { ...a, path: 'b.md' } : a;
+      const snapshot = vi.fn();
+      view.rerender(<Host artifact={b} root={field === 'root' ? '/other' : '/proj'} viewerRef={ref} onSnapshot={snapshot} />);
+      await settle(() => pending[2].resolve({ ok: true, content: 'B original', resolvedPath: '/other/b.md' }));
+      await settle(() => ref.current!.startEdit());
+      await settle(() => pending[3].resolve({ ok: true, content: 'B original', mtimeMs: 77, resolvedPath: '/other/b.md' }));
+      await settle(() => pending[1].resolve({ ok: true, content: 'LATE A', mtimeMs: 999, resolvedPath: '/proj/a.md', truncated: true }));
+      expect(ref.current!.editing).toBe(true);
+      expect(view.container.querySelector('textarea')!.value).toBe('B original');
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'B original', contentInfo: { resolvedPath: '/other/b.md' } });
+      await act(async () => { await ref.current!.saveEdit(); });
+      expect(save.mock.calls.at(-1)![6]).toMatchObject({ baseMtimeMs: 77 });
+    });
+    it.each(['watcher', 'edit'] as const)('invalidates a pending %s read on return, retry, and unmount', async (source) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const a = { id: `scope-${source}`, kind: 'internal', path: 'a.md' };
+      const snapshot = vi.fn();
+      const delivery = vi.fn();
+      const view = render(<Host artifact={a} viewerRef={ref} onSnapshot={snapshot} onDelivery={delivery} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'A current' }));
+      const startRead = () => source === 'edit' ? ref.current!.startEdit()
+        : changedCb!({ projectRoot: '/proj', artifactId: a.id, kind: 'change' });
+      await settle(startRead); // pending[1] belongs to the first visit to A
+      view.rerender(<Host artifact={{ ...a, id: `${a.id}-b` }} viewerRef={ref} onSnapshot={snapshot} />);
+      view.rerender(<Host artifact={a} viewerRef={ref} onSnapshot={snapshot} onDelivery={delivery} />);
+      await settle(() => pending[3].resolve({ ok: true, content: 'A returned' }));
+      await settle(() => pending[1].resolve({ ok: true, content: 'STALE first visit', truncated: true, mtimeMs: 999 }));
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'A returned' });
+      await settle(startRead); // pending[4]
+      await settle(() => snapshot.mock.calls.at(-1)![0].retryRead());
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: null, contentInfo: null, contentState: { phase: 'loading' } });
+      await settle(() => pending[5].resolve({ ok: true, content: 'A retried' }));
+      await settle(() => pending[4].resolve({ ok: true, content: 'STALE before retry', mtimeMs: 999 }));
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'A retried' });
+      await settle(startRead); // pending[6]
+      view.unmount();
+      const commits = snapshot.mock.calls.length;
+      const deliveries = delivery.mock.calls.length;
+      await settle(() => pending[6].resolve({ ok: true, content: 'STALE after unmount' }));
+      expect(snapshot).toHaveBeenCalledTimes(commits);
+      expect(delivery).toHaveBeenCalledTimes(deliveries);
+    });
+
+    it.each(['id', 'root', 'path', 'return', 'retry', 'unmount'] as const)('rejects a captured raw disk delivery after %s', async (change) => {
+      const initial = { root: '/proj', id: `raw-${change}`, path: 'a.md' };
+      const hook = renderHook(({ root, id, path }) => useArtifactContent(root, id, path), { initialProps: initial });
+      await settle(() => pending[0].resolve({ ok: true, content: 'initial' }));
+      const stale = hook.result.current.applyDiskRead;
+      if (change === 'retry') await settle(hook.result.current.retryRead);
+      else if (change === 'unmount') hook.unmount();
+      else {
+        hook.rerender({ ...initial, ...(change === 'root' ? { root: '/other' } : change === 'path' ? { path: 'b.md' } : { id: 'other' }) });
+        if (change === 'return') hook.rerender(initial);
+      }
+      if (change !== 'unmount') await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'current' }));
+      await settle(() => stale({ ok: true, content: 'STALE RAW', resolvedPath: '/old', truncated: true }));
+      if (change !== 'unmount') {
+        expect(hook.result.current.content).toBe('current');
+        await settle(() => hook.result.current.applyDiskRead({ ok: true, content: 'explicit current', sizeBytes: 16 }));
+        expect(hook.result.current.content).toBe('explicit current');
+      }
+    });
+
+    it.each(['full', 'disk'] as const)('applies a current explicit %s action read', async (source) => {
+      const ref = React.createRef<ActiveArtifactHandle>();
+      const snapshot = vi.fn();
+      const artifact = { ...mdArtifact, id: `current-action-${source}` };
+      const view = render(<Host artifact={artifact} viewerRef={ref} onSnapshot={snapshot} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'original', truncated: source === 'full', sizeBytes: source === 'full' ? 9_000_000 : 8 }));
+      if (source === 'disk') {
+        await settle(() => ref.current!.startEdit());
+        await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'original', mtimeMs: 42 }));
+        fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'my edit' } });
+        await settle(() => changedCb!({ projectRoot: '/proj', artifactId: artifact.id, kind: 'change' }));
+        await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'external', mtimeMs: 99 }));
+        fireEvent.click(view.getByRole('button', { name: 'Use disk version' }));
+      } else fireEvent.click(view.getByRole('button', { name: /Load the whole file/i }));
+      await settle(() => pending.at(-1)!.resolve({ ok: true, content: 'explicit disk', truncated: false, sizeBytes: 13 }));
+      expect(snapshot.mock.calls.at(-1)![0]).toMatchObject({ content: 'explicit disk', contentInfo: { truncated: false, sizeBytes: 13 } });
+    });
+
+    it('commits loading with cleared metadata on retry from an error', async () => {
+      const commits: Array<{ content: string | null; info: unknown; phase: string }> = [];
+      let retry!: () => void;
+      function Probe() {
+        const r = useArtifactContent('/proj', 'retry-error', 'a.md');
+        retry = r.retryRead;
+        React.useLayoutEffect(() => { commits.push({ content: r.content, info: r.contentInfo, phase: r.contentState.phase }); });
+        return null;
+      }
+      render(<Probe />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'read-failed', resolvedPath: '/proj/a.md' }));
+      expect(commits.at(-1)!.phase).toBe('error');
+      commits.length = 0;
+      await settle(retry);
+      expect(commits.length).toBeGreaterThan(0);
+      expect(commits.every((r) => r.content === null && r.info === null && r.phase === 'loading')).toBe(true);
+    });
+
+    it('never commits the previous missing state when switching to an image', async () => {
+      const commits: string[] = [];
+      function Probe({ id, path }: { id: string; path: string }) {
+        const r = useArtifactContent('/proj', id, path);
+        React.useLayoutEffect(() => { commits.push(r.contentState.phase); });
+        return null;
+      }
+      const view = render(<Probe id="missing" path="missing.md" />);
+      await settle(() => pending[0].resolve({ ok: true, orphan: true, content: null }));
+      expect(commits.at(-1)).toBe('missing');
+      commits.length = 0;
+      view.rerender(<Probe id="image" path="wealth-game.jpg" />);
+      expect(commits).not.toContain('missing');
+      expect(commits.at(-1)).toBe('ready');
+    });
+
+    it.each(['id', 'root', 'path'] as const)('never commits stale content when the selection %s changes', async (field) => {
+      const commits: Array<{ content: string | null; info: unknown; phase: string }> = [];
+      function Probe({ root, id, path }: { root: string; id: string; path: string }) {
+        const r = useArtifactContent(root, id, path);
+        React.useLayoutEffect(() => { commits.push({ content: r.content, info: r.contentInfo, phase: r.contentState.phase }); });
+        return null;
+      }
+      const initial = { root: '/proj', id: 'a1', path: 'a.md' };
+      const view = render(<Probe {...initial} />);
+      await settle(() => pending[0].resolve({ ok: true, content: 'previous file', sizeBytes: 13, resolvedPath: '/proj/a.md' }));
+      commits.length = 0;
+      view.rerender(<Probe {...initial} {...{ [field]: field === 'root' ? '/other' : 'b.md' }} />);
+      expect(commits.length).toBeGreaterThan(0);
+      expect(commits.every((r) => r.content === null && r.info === null && r.phase === 'loading')).toBe(true);
+    });
     it('shows a loading placeholder, NOT the missing-file message, while the read is pending', () => {
       const utils = render(<Host artifact={mdArtifact} />);
       expect(get).toHaveBeenCalledTimes(1);

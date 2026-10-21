@@ -5,7 +5,7 @@
 // "read failed" all collapsed into content === null, and every artifact open
 // flashed "This file is no longer on disk." for the read's duration.
 // This hook keeps them apart via ArtifactContentState (see ActiveArtifactView).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { ArtifactContentInfo, ArtifactContentState } from './ActiveArtifactView';
 import { rendersFromBytesOnly } from './RendererRegistry';
 // The handler's error codes → specific, accurate words. Shared with the tapped-
@@ -61,6 +61,27 @@ export function useArtifactContent(
   const [contentState, setContentState] = useState<ArtifactContentState>({ phase: 'loading' });
   // Bumping the token re-runs the effect below — the Retry action.
   const [retryToken, setRetryToken] = useState(0);
+  const [selection, setSelection] = useState({ projectRoot, artifactId, artifactPath, retryToken });
+  // WHY: a passive effect is too late to clear the previous file's result.
+  // React retries this component before committing its children, so a new file
+  // never paints an old missing warning, mounts an iframe with stale text, or
+  // reads binary bytes from the previous record's resolvedPath.
+  if (selection.projectRoot !== projectRoot || selection.artifactId !== artifactId
+      || selection.artifactPath !== artifactPath || selection.retryToken !== retryToken) {
+    setSelection({ projectRoot, artifactId, artifactPath, retryToken });
+    setContent(null);
+    setContentInfo(null);
+    setContentState({ phase: 'loading' });
+  }
+
+  // WHY callback identity alone does not revoke a captured callback. Every
+  // delivery must still prove its selection/read generation is mounted, even
+  // after A→B→A or Retry. Layout cleanup closes the passive-effect gap too.
+  const deliveryScope = useMemo(() => ({ active: false }), [selection]);
+  useLayoutEffect(() => {
+    deliveryScope.active = true;
+    return () => { deliveryScope.active = false; };
+  }, [deliveryScope]);
 
   useEffect(() => {
     // No selection: park in loading (nothing renders the pane in this state).
@@ -94,7 +115,7 @@ export function useArtifactContent(
     setContentInfo(null);
     setContentState({ phase: 'loading' });
     (window.claude as any).artifacts.get(projectRoot, artifactId).then((res: any) => {
-      if (cancelled) return;
+      if (cancelled || !deliveryScope.active) return;
       if (res && res.ok) {
         setContent(res.content ?? null);
         setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, ...(typeof res.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
@@ -110,12 +131,12 @@ export function useArtifactContent(
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read
       // FAILURE, not a deleted file — surface the real error.
-      if (!cancelled) {
+      if (!cancelled && deliveryScope.active) {
         setContentState({ phase: 'error', message: describeReadError(e?.message ?? e) });
       }
     });
     return () => { cancelled = true; };
-  }, [projectRoot, artifactId, artifactPath, retryToken]);
+  }, [projectRoot, artifactId, artifactPath, retryToken, deliveryScope]);
 
   const retryRead = useCallback(() => setRetryToken((t) => t + 1), []);
 
@@ -130,24 +151,27 @@ export function useArtifactContent(
   // gone" via onContentChange (deletion is only ever detected by the get()
   // orphan response), so treating null as missing here would guess a cause.
   const reconciledSetContent = useCallback((next: string | null) => {
+    if (!deliveryScope.active) return;
     setContent(next);
     if (next !== null) {
       setContentState((prev) =>
         prev.phase === 'missing' || prev.phase === 'error' ? { phase: 'ready' } : prev);
     }
-  }, []);
+  }, [deliveryScope]);
 
   // Content and its metadata, always together. Callers used to hand back only
   // `res.content`, leaving contentInfo frozen at whatever the FIRST read said —
   // so a file that grew past the cap while open kept its Edit button, and saving
   // would have written the prefix over the whole file (spec §4.4). Editability
   // is derived from sizeBytes, so a stale size is a data-loss bug, not cosmetics.
+  // WHY: viewers use this callback's identity to invalidate pending deliveries
+  // on selection changes and Retry, without resubscribing while the user types.
   const applyDiskRead = useCallback((res: any) => {
-    if (!res || !res.ok || res.orphan) return;
+    if (!deliveryScope.active || !res || !res.ok || res.orphan) return;
     setContent(res.content ?? null);
     setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, ...(typeof res.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
     setContentState({ phase: 'ready' });
-  }, []);
+  }, [deliveryScope]);
 
   return { content, setContent: reconciledSetContent, contentInfo, contentState, retryRead, applyDiskRead };
 }
