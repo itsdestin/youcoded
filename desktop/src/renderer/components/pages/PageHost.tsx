@@ -216,6 +216,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }, [openPageMissing, dispatch]);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
+  // WHY (Destin, 2026-10-20 draft): the page list can fold down to a slim rail of glyphs so a
+  // page gets the width. Session-local for the draft; persistence waits on his sign-off.
+  const [railCollapsed, setRailCollapsed] = useState(false);
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   // The first-run card is about the person's OWN pages — Office alone does not count.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && ownPages.length === 0;
@@ -594,7 +597,29 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
             effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
-        <aside className={`screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
+        <aside className={`screen-pane screen-pane--panel ${railCollapsed ? 'w-12' : 'w-60'} shrink-0 relative flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
+          {/* WHY absolute when unfolded (Destin, 2026-10-20: "eliminate this empty space above Built in"):
+              the toggle sits in the first group label's row instead of costing the list a row of its own. */}
+          <div className={railCollapsed ? 'flex items-center justify-center px-2 pt-2' : 'absolute top-3 right-3 z-10'}>
+            <Tooltip text={railCollapsed ? 'Show the page list' : 'Hide the page list'} placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={railCollapsed ? 'Show the page list' : 'Hide the page list'}
+                aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((c) => !c)} className="w-7 h-7">
+                <RailToggleGlyph collapsed={railCollapsed} />
+              </Button>
+            </Tooltip>
+          </div>
+          {railCollapsed ? (
+            <div className="scroll-mask flex-1 overflow-y-auto flex flex-col items-center gap-1 py-1">
+              {[...builtin, ...personal, ...[...byProject.values()].flat()].map((p) => (
+                <Tooltip key={p.id} text={p.name} placement="bottom">
+                  <Button size="icon-sm" variant="ghost" aria-label={`Open ${p.name}`} aria-current={p.id === pageId ? 'page' : undefined}
+                    onClick={() => openFromRail(p.id)} className={`w-8 h-8 ${p.id === pageId ? 'bg-inset' : ''}`}>
+                    <PageGlyph icon={p.icon} customIcon={p.customIcon} className="w-4 h-4" />
+                  </Button>
+                </Tooltip>
+              ))}
+            </div>
+          ) : (<>
           <div className="scroll-mask flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
               <RailGroup label="Built in">
@@ -632,6 +657,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               Manage pages
             </Button>
           </div>
+          </>)}
         </aside>
         )}
         {/* WHY panel-glass while see-through (owner, 2026-10-05: "a glass effect kinda like marketplace or terminal"): it is the
@@ -747,6 +773,18 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
   );
 }
 
+
+/** Sidebar glyph for the page-list fold: a panel outline with its left column, plus a chevron
+ *  pointing the way the list will move. */
+function RailToggleGlyph({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M9 4v16" />
+      <path d={collapsed ? 'M13.5 10l2 2-2 2' : 'M16 10l-2 2 2 2'} />
+    </svg>
+  );
+}
 
 function PlusGlyph() {
   return (

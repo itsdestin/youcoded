@@ -314,6 +314,15 @@ while (i < lines) {
 }
 fs.writeSync(1, 'DONE-MARKER\\n');
 `;
+// The same flood, but the program stays open after its marker until it is sent a key. WHY (CI
+// 2026-10-20, ubuntu: the last 80 lines lost): once released, the brake re-arms as normal, and if it
+// is on at the moment the program exits, the system may discard the unread remainder — the
+// exit-while-braked limit the two exit cases below are sized for. A test about the brake HOLDING and
+// RELEASING keeps the program alive so it measures only that.
+const PRODUCER_STAYS_OPEN = PRODUCER + `
+process.stdin.setRawMode(true);
+process.stdin.once('data', () => process.exit(0));
+`;
 // The same lines in small pieces a few milliseconds apart, as a real program prints: the worker
 // reads the first pieces, the brake goes on, and the rest waits UNREAD in the kernel when it exits.
 const PRODUCER_IN_PIECES = `
@@ -502,9 +511,11 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
 
   it('delivers a large flood byte for byte, including the final line, with bounded memory in flight', async () => {
     const lines = 250_000;                                         // ~11 MB
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000' });
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000' }, PRODUCER_STAYS_OPEN);
     kids.push(r);
-    expect(await r.until(() => r.state.exited, 60000)).toBe(true);
+    expect(await r.until(() => r.state.out.includes('DONE-MARKER'), 60000)).toBe(true);
+    r.child.send({ type: 'input', data: 'q' });
+    expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     expect(received(r).length).toBe(expected(lines).length);
     expect(received(r)).toBe(expected(lines));
     // Never more than the high mark plus the reads already in flight when the brake went on.
@@ -513,7 +524,7 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
 
   it('with no acknowledgements the program is actually blocked: output stops at the high mark', async () => {
     const lines = 250_000;
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '200000', YOUCODED_PTY_FLOW_LOW: '50000', YOUCODED_PTY_FLOW_STALL_MS: '600000' }, PRODUCER_STAYS_OPEN);
     kids.push(r);
     r.state.auto = false;
     // WHY a signal first (final review F55): "more than 100 000 sent" was a fixed 2.5 s guess,
@@ -530,7 +541,10 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     // Releasing it lets the rest through, complete.
     r.state.auto = true;
     r.ack(frozenAt);
-    expect(await r.until(() => r.state.exited, 60000)).toBe(true);
+    // Every line arrives while the program is still open; only then is it told to exit.
+    expect(await r.until(() => r.state.out.includes('DONE-MARKER'), 60000)).toBe(true);
+    r.child.send({ type: 'input', data: 'q' });
+    expect(await r.until(() => r.state.exited, 30000)).toBe(true);
     expect(received(r)).toBe(expected(lines));
   }, 90000);
 

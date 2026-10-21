@@ -305,6 +305,14 @@ describe('CODER_DEFAULT_BODY', () => {
     expect(CODER_DEFAULT_BODY.length).toBeGreaterThan(100);
     expect(CODER_DEFAULT_BODY).toContain('software project');
   });
+
+  it('honors standing checkpoint authorization without authorizing unrelated Git actions', () => {
+    const prompt = assembleSystemPrompt({ presetBody: CODER_DEFAULT_BODY, cwd: dir, appVersion: '1' });
+    expect(prompt).toContain('Commit or push only when authorized by the user or standing project instructions; scan for secrets before every push.');
+    expect(prompt).toContain('Amend, reset, merge or release only when explicitly asked.');
+    expect(prompt).not.toContain('do not wait for final verification or merge approval');
+    expect(prompt).not.toContain('Commit, amend, reset or push only when the user asks');
+  });
 });
 
 // WHY cwd '/tmp', not process.cwd(): these byte-identity checks assemble the prompt
