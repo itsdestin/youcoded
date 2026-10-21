@@ -60,3 +60,12 @@ describe('retryWaitLine — the thinking line names why it is waiting (Q-5)', ()
     expect(retryWaitLine(undefined, 'anthropic', 5)).toBeNull();
   });
 });
+
+describe('a custom provider reads naturally mid-sentence', () => {
+  it('never says "Your The provider" or "reach The provider"', () => {
+    expect(errorCardCopy('account', 'no-access', '', 'openai-compatible')?.line).toBe("Your provider key doesn't have access to this model.");
+    expect(errorCardCopy('account', 'out-of-credits', '', 'openai-compatible')?.line).toBe('Your provider account is out of credit.');
+    expect(errorCardCopy('temporary', 'network', '', 'openai-compatible')?.line).toMatch(/^Couldn't reach the provider\./);
+    expect(retryWaitLine('network', 'openai-compatible', 0)).toBe("Can't reach the provider — trying again…");
+  });
+});
