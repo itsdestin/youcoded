@@ -1797,6 +1797,8 @@ html{-webkit-tap-highlight-color:transparent}
   color:rgba(var(--fg-rgb),.92);background:var(--glass-prose);border:1px solid var(--hair);
   -webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);
   box-shadow:0 10px 24px -14px rgba(0,0,0,.45);transition:border-radius .15s}
+.tip{transition:left .22s ease,top .22s ease}
+.tip.open{transition:none;z-index:2}
 .tip .tip-text{display:none;font-weight:500;opacity:.9}
 .tip.open{white-space:normal;border-radius:14px;flex-wrap:wrap;row-gap:2px}
 .tip.open .tip-text{display:block;flex-basis:100%}
@@ -4516,8 +4518,13 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     el.innerHTML = '<span class="tip-label"></span><span class="tip-text"></span><i class="tip-x" title="Dismiss">&times;</i>';
     el.querySelector('.tip-label').textContent = t.label || t.row;
     el.querySelector('.tip-text').textContent = t.text;
-    el.addEventListener('mouseenter', function(){ if (pinned !== key) { el.classList.add('open'); place(); } });
-    el.addEventListener('mouseleave', function(){ if (pinned !== key) { el.classList.remove('open'); place(); } });
+    // WHY the timer (Destin, 2026-10-21: "the hover effect is bugged"): opening re-lays the chips
+    // out, and a chip that moved even a pixel away from the pointer closed, moved back, opened
+    // again, forever. Now an open chip never moves (place() keeps its row and edge), and the
+    // close waits 140 ms so crossing a gap between label and text cannot flicker it.
+    var leaveT = null;
+    el.addEventListener('mouseenter', function(){ clearTimeout(leaveT); if (pinned !== key && !el.classList.contains('open')) { el.classList.add('open'); place(); } });
+    el.addEventListener('mouseleave', function(){ if (pinned === key) return; clearTimeout(leaveT); leaveT = setTimeout(function(){ el.classList.remove('open'); place(); }, 140); });
     el.addEventListener('click', function(e){ if (e.target.classList.contains('tip-x')) { gone[key] = 1; render(true); return; }
       pinned = pinned === key ? null : key; render(true); });
     return el;
@@ -4543,30 +4550,49 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     });
     place();
   }
-  // Lay the chips out against the anchors' current positions; nothing may overlap.
+  // Lay the chips out against the anchors' current positions; nothing may overlap. An OPEN chip
+  // is laid out first and keeps the row and the edge it had while closed, so it only grows
+  // (never slides out from under the pointer); closed chips pack around it, and rows below an
+  // open chip move down by its extra height. Positions animate (CSS) except on the open chip.
   function place(){
     var d = doc(); if (!d) return;
     var sw = stage.clientWidth, gap = 8, lines = '';
-    // Each row keeps the spans it already holds; a chip goes on the first row where it
-    // overlaps nothing, so neighbours never touch however wide a chip grows.
-    var rows = [];
-    function freeRow(l, r){ for (var i = 0; ; i++) { rows[i] = rows[i] || []; if (!rows[i].some(function(s){ return l < s[1] + gap && r > s[0] - gap; })) { rows[i].push([l, r]); return i; } } }
-    items.forEach(function(it){
-      var a = rect(it.anchor), el = it.el, w = el.offsetWidth, h = el.offsetHeight, x, y;
+    var groups = {};   // 'L' | 'R' (chat, below the toolbar) -> { rows: [[spans]], heights: [] }
+    function grp(g){ return groups[g] || (groups[g] = { rows: [], heights: [] }); }
+    function fits(g, i, l, r){ var rows = grp(g).rows; rows[i] = rows[i] || []; return !rows[i].some(function(s){ return l < s[1] + gap && r > s[0] - gap; }); }
+    function take(g, i, l, r, h){ var G = grp(g); G.rows[i] = G.rows[i] || []; G.rows[i].push([l, r]); G.heights[i] = Math.max(G.heights[i] || 0, h); }
+    var ordered = items.filter(function(it){ return it.el.classList.contains('open'); }).concat(items.filter(function(it){ return !it.el.classList.contains('open'); }));
+    var plan = [];
+    ordered.forEach(function(it){
+      var a = rect(it.anchor), el = it.el, open = el.classList.contains('open'), w = el.offsetWidth, h = el.offsetHeight;
+      if (!open) it.hc = h;                       // the closed height, kept while open
+      var hc = it.hc || h;
       if (mode === 'settings') {
-        x = a.r + 14; y = a.cy - h / 2;
-        lines += '<line x1="' + a.r + '" y1="' + a.cy + '" x2="' + x + '" y2="' + a.cy + '"/>';
+        // beside the row: top edge fixed at the closed chip's centre line, grows downward
+        plan.push({ it: it, x: a.r + 14, y: a.cy - hc / 2, line: [a.r, a.cy, a.r + 14, a.cy] });
       } else if (it.t.above) {
-        x = a.cx - 10; y = a.t - 10 - h;
-        lines += '<line x1="' + a.cx + '" y1="' + (y + h) + '" x2="' + a.cx + '" y2="' + a.t + '"/>';
+        // above the message box: bottom edge fixed, grows upward
+        plan.push({ it: it, x: a.cx - 10, y: a.t - 10 - h, line: [a.cx, a.t - 10, a.cx, a.t] });
       } else {
-        x = it.t.right ? a.cx + 10 - w : a.cx - 10;
+        var g = it.t.right ? 'R' : 'L';
+        var x = it.t.right ? a.cx + 10 - w : a.cx - 10;
         x = Math.max(4, Math.min(x, sw - w - 4));
-        var row = freeRow(x, x + w); y = a.b + 10 + row * (h + 6);
-        lines += '<line x1="' + a.cx + '" y1="' + (a.b + 2) + '" x2="' + a.cx + '" y2="' + y + '"/>';
+        var row;
+        if (open && it.row != null) row = it.row;
+        else { row = 0; while (!fits(g, row, x, x + w)) row++; it.row = row; }
+        take(g, row, x, x + w, open ? h : hc);   // an open chip's full height pushes the rows below it down
+        plan.push({ it: it, x: x, g: g, row: row, ab: a.b, cx: a.cx, hOpen: h, hc: hc });
       }
-      x = Math.max(4, Math.min(x, sw - w - 4));
-      el.style.left = x + 'px'; el.style.top = y + 'px';
+    });
+    plan.forEach(function(p){
+      var el = p.it.el, y;
+      if (p.g) {
+        // rows stack by the tallest chip in each row above
+        var G = groups[p.g]; y = p.ab + 10;
+        for (var i = 0; i < p.row; i++) y += (G.heights[i] || p.hc) + 6;
+        lines += '<line x1="' + p.cx + '" y1="' + (p.ab + 2) + '" x2="' + p.cx + '" y2="' + y + '"/>';
+      } else { y = p.y; lines += '<line x1="' + p.line[0] + '" y1="' + p.line[1] + '" x2="' + p.line[2] + '" y2="' + p.line[3] + '"/>'; }
+      el.style.left = p.x + 'px'; el.style.top = y + 'px';
     });
     svg.innerHTML = lines;
   }
