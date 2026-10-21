@@ -1,0 +1,11 @@
+{"type": "user_message", "text": "Before I cut the release, review everything that changed in the auth module and give me a ranked list of what needs fixing."}
+{"type": "assistant_text", "text": "Six files changed. I'll split the review across three specialists, have each review checked, then combine the findings."}
+{"type": "tool_use", "id": "toolu_01PlanBad", "name": "propose_plan", "input": {"goal": "Review the auth module before the release"}}
+{"tool_use_id": "toolu_01PlanBad", "type": "tool_result", "content": "Plan validation failed:\n- steps[1].specialist: unknown specialist", "is_error": true}
+{"type": "plan", "plan": {"planId": "writing:toolu_01PlanBad", "toolUseId": "toolu_01PlanBad", "title": "", "status": "failed", "steps": [], "ceilingTokens": 0, "ceilingUsd": null, "model": {"label": "Claude Sonnet 4.6"}, "seq": 1, "failure": {"detail": "The assistant's plan wasn't in a form the app can use."}}}
+{"type": "tool_use", "id": "toolu_01PlanBad2", "name": "propose_plan", "input": {"goal": "Review the auth module before the release"}}
+{"tool_use_id": "toolu_01PlanBad2", "type": "tool_result", "content": "Plan validation failed:\n- steps[1].specialist: unknown specialist", "is_error": true}
+{"type": "plan", "plan": {"planId": "writing:toolu_01PlanBad2", "toolUseId": "toolu_01PlanBad2", "title": "", "status": "failed", "steps": [], "ceilingTokens": 0, "ceilingUsd": null, "model": {"label": "Claude Sonnet 4.6"}, "seq": 1, "failure": {"detail": "The assistant's plan wasn't in a form the app can use."}}}
+{"type": "turn_complete"}
+{"type": "assistant_text", "text": "I couldn't get the plan into a shape the app accepts. Tell me to try again and I'll rewrite it from scratch."}
+{"type": "turn_complete"}
