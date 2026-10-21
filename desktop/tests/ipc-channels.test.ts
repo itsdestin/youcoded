@@ -380,6 +380,23 @@ describe('native:retry channel parity', () => {
   });
 });
 
+// native:continue-turn (2026-10-21) — the error card's Try again and the step
+// limit's Keep going. Same five surfaces as native:retry: drift would leave the
+// button dead on one platform.
+describe('native:continue-turn channel parity', () => {
+  const CHANNEL = 'native:continue-turn';
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+  it('is declared in shared/backend-contract.ts and preload.ts', () => {
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`'${CHANNEL}'`);
+    expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
+  });
+  it('is served by one channel-table entry (main/ipc/native.ts) and referenced in remote-shim.ts', () => {
+    expect(read('src', 'main', 'ipc', 'native.ts')).toContain('IPC.NATIVE_CONTINUE_TURN');
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`'${CHANNEL}'`);
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
+  });
+});
+
 // session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
 // menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
 // pinned here (2026-09-24): the constant check above only compares preload with

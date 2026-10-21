@@ -32,8 +32,8 @@ describe('what is in the table and who may call it', () => {
   it('every native, permission(s), specialists, model and handoff request name in the contract has an entry', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !NOT_ENTRIES.has(v));
-    // 21 native + permission:respond + 3 permissions + 5 specialists + 3 model + 8 handoff; a new one must be decided here.
-    expect(names.length).toBe(41);
+    // 22 native (continue-turn: the error card's Try again, 2026-10-21) + permission:respond + 3 permissions + 5 specialists + 3 model + 8 handoff; a new one must be decided here.
+    expect(names.length).toBe(42);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 

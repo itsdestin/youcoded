@@ -297,6 +297,7 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         timestamp,
         message: ev.data.text ?? 'The model request failed.',
         errorCode: ev.data.errorCode,
+        errorKind: ev.data.errorKind,
         // A turn that died mid-flight still spent what its completed steps spent;
         // the uuid lets the reducer count that once.
         uuid,

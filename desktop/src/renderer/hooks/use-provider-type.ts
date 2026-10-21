@@ -147,12 +147,17 @@ function isMiss(modelId: string | null | undefined): boolean {
 export function useModelProviderType(
   modelId: string | null | undefined,
   providerType?: string | null,
+  paused = false,
 ): string | null {
   const [type, setType] = useState<string | null>(() => resolveProviderType(modelId, providerType));
   useEffect(() => {
     // The session told us who it belongs to: nothing to look up, and no
     // listener to register (a stamped session can never be re-answered).
     if (providerType) { setType(providerType); return; }
+    // A paused caller (a hidden chat tab — performance.md rule 2) holds its last
+    // answer and neither reads nor listens; showing it re-runs this effect. No id
+    // (a Claude Code session) has nothing to resolve either.
+    if (paused || !modelId) { if (!modelId) setType(null); return; }
     hookReconnectOnce();
     let alive = true;
     const read = () => {
@@ -176,6 +181,6 @@ export function useModelProviderType(
     // calls, so a long session of opening and closing chats makes each
     // sign-in do more and more pointless work.
     return () => { alive = false; listeners.delete(read); };
-  }, [modelId, providerType]);
+  }, [modelId, providerType, paused]);
   return providerType ?? type;
 }

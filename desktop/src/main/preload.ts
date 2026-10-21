@@ -317,6 +317,7 @@ const IPC = {
   NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
   NATIVE_RETRY: 'native:retry',
+  NATIVE_CONTINUE_TURN: 'native:continue-turn',
   NATIVE_STARTUP_ACTION: 'native:startup-action',
   NATIVE_COMPACT: 'native:compact',
   NATIVE_CLEAR: 'native:clear',
@@ -2103,6 +2104,7 @@ contextBridge.exposeInMainWorld('claude', {
     // the step re-runs (the card clears itself) or nothing was parked (the card
     // is already gone).
     retry: (sessionId: string) => ipcRenderer.send(IPC.NATIVE_RETRY, { sessionId }),
+    continueTurn: (sessionId: string) => ipcRenderer.send(IPC.NATIVE_CONTINUE_TURN, { sessionId }),
     // User-initiated /compact. Request-response, NOT fire-and-forget: the caller
     // needs the {ok, reason} result to tell the user why nothing happened when a
     // compaction is refused (turn in flight, nothing to compact, summary failed).

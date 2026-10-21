@@ -27,6 +27,14 @@
 // runnable call.
 const MAX_TRUNCATION_RECOVERIES = 2;
 
+/** Try again / Keep going (HarnessSession.continueTurn, 2026-10-21) runs the model
+ *  again on the history as it stands — after a provider error or a step limit —
+ *  with NO new person message, so the conversation does not grow a "continue"
+ *  bubble and work the turn already did stays done. When the history ends on the
+ *  assistant (a failed turn's kept partial), this history-only note — like a steer,
+ *  no transcript event — is added so the request never ends on the assistant. */
+export const CONTINUE_TURN_TEXT = 'Continue from where you left off.';
+
 type TruncationAction = { kind: 'continue-text' | 'split-tool-call'; message: string } | { kind: 'stop' };
 
 export function truncationRecovery(opts: { recoveriesSoFar: number; cutOffToolNames: string[]; maxTokens: number; wroteText: boolean }): TruncationAction {

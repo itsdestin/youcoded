@@ -4090,6 +4090,21 @@ export class NativeSessionHost extends EventEmitter {
     return { status: 'sent' };
   }
 
+  /** Try again / Keep going on an ENDED turn (2026-10-21): the model runs again on
+   *  the history as it stands, with no new message. Refused (false) unless the
+   *  session is live, ready and idle — a press while a turn runs is a no-op, never
+   *  a queued second run. Goes through runTurns like any send, so queued messages
+   *  and notices still drain after it. */
+  continueTurn(sessionId: string): boolean {
+    const entry = this.live.get(sessionId);
+    if (!entry || !this.entryReady(entry) || entry.inFlight || entry.quiescing || entry.compacting) return false;
+    entry.inFlight = true;
+    entry.running = new Promise<void>((resolve) => {
+      setImmediate(() => { void this.runTurns(sessionId, entry, () => entry.session.continueTurn()).then(resolve, resolve); });
+    });
+    return true;
+  }
+
   /** The live session's picture limits, for the send handler's preparation step.
    *  A session still starting gets the conservative default. */
   imageLimitsFor(sessionId: string): ImageLimits {

@@ -160,11 +160,18 @@ describe('a miss refetches exactly once', () => {
     expect(catalogFn).toHaveBeenCalledTimes(2);
   });
 
-  it('does not refetch for a null id (a Claude Code session)', async () => {
+  it('reads nothing at all for a null id (a Claude Code session)', async () => {
     renderHook(() => useModelProviderType(null));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });   // settle
+    expect(catalogFn).not.toHaveBeenCalled();
+  });
+
+  it('a paused caller (a hidden chat tab) reads nothing until it is shown', async () => {
+    const hook = renderHook(({ paused }) => useModelProviderType('m1', null, paused), { initialProps: { paused: true } });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });   // settle
+    expect(catalogFn).not.toHaveBeenCalled();
+    hook.rerender({ paused: false });
     await waitFor(() => expect(catalogFn).toHaveBeenCalledTimes(1));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(catalogFn).toHaveBeenCalledTimes(1);
   });
 });
 

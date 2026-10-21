@@ -3691,3 +3691,37 @@ describe('HarnessSession sorts a provider failure before deciding to retry', () 
     expect(data.text).toContain('text content blocks must be non-empty');
   });
 });
+
+describe('HarnessSession.continueTurn — Try again / Keep going without a new message', () => {
+  it('after a provider error, re-runs on the same history: no new user-message event, and the turn completes', async () => {
+    const prompts: any[] = []; let i = 0;
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o);
+      return { stream: simulateReadableStream({ chunks: i++ === 0
+        ? stream({ type: 'error', error: Object.assign(new Error('bad'), { statusCode: 400, responseBody: JSON.stringify({ error: { message: 'unrecognised' } }) }) })
+        : stream(...textChunks('a', 'Here it is.'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [] }), async () => model as any);
+    const events = collect(session);
+    await session.send('write the plan');
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+    const before = events.filter(e => e.type === 'user-message').length;
+    await session.continueTurn();
+    expect(events.filter(e => e.type === 'user-message')).toHaveLength(before);
+    expect(prompts).toHaveLength(2);
+    // The second request is the same conversation: it still ends on the person's message.
+    expect(JSON.stringify(prompts[1].prompt.at(-1))).toContain('write the plan');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('when history ends on the assistant (a kept partial), adds a history-only "continue" so the request never ends on it', async () => {
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'more'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'go' }, { role: 'assistant', content: 'half a pla' }] as any);
+    const events = collect(session);
+    await session.continueTurn();
+    const last = prompts[0].prompt.at(-1);
+    expect(last.role).toBe('user');
+    expect(JSON.stringify(last)).toContain('Continue from where you left off');
+    expect(events.some(e => e.type === 'user-message')).toBe(false);
+  });
+});

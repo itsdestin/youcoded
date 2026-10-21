@@ -111,6 +111,7 @@
   "modes:set",
   "native:clear",
   "native:compact",
+  "native:continue-turn",
   "native:get-context-preferences",
   "native:get-permission-mode",
   "native:get-step-guard",

@@ -4,6 +4,9 @@ import BrailleSpinner from './BrailleSpinner';
 import { Button } from './ui';
 import { isChatGptAppLimitMessage, isChatGptLimitMessage } from '../../shared/chatgpt-types';
 import { useSecondsTick } from '../hooks/useSecondsTick';
+import { FoldRow } from './ui/FoldRow';
+import { errorCardCopy, billingUrl, type ErrorCardAction } from './error-card-copy';
+import { BugReportPopup } from './development/BugReportPopup';
 
 // Banner shown in place of ThinkingIndicator when the classifier (or a
 // process-exit event) concludes chat view is out of sync with what the user
@@ -45,6 +48,14 @@ interface Props {
   onManageUsage?: () => void;
   /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
   onAddCredit?: () => void;
+  /** What KIND of failure the native error was (provider-failure.ts). With it the
+   *  card says one plain sentence and offers that kind's way forward
+   *  (error-card-copy.ts); without it (an older host) it renders as before. */
+  errorKind?: string | null;
+  /** The session's provider type, for the provider's name and billing page. */
+  providerType?: string | null;
+  /** Too-long card: summarise older messages, then try the reply again. */
+  onSummarise?: () => void;
   /** Which runtime the session runs. Only 'native' changes anything: the
    *  'stuck' line drops its "check Terminal view" pointer, because a native
    *  session has no Terminal view. Anything else keeps the pointer. */
@@ -109,12 +120,20 @@ function elapsedLabel(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export default function AttentionBanner({ state, anthropicRequestId, errorMessage, errorCode, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, provider }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId, errorMessage, errorCode, errorKind, providerType, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onSummarise, provider }: Props) {
   // Rides the shared seconds clock while parked. `stalledSince` IS serialized
   // to the host (chat-types.ts) so a reconnecting phone can still see the card
   // — see that field's own comment for why the elapsed number is only
   // approximate there.
   const now = useSecondsTick(state === 'stalled' && stalledSince != null);
+
+  // The sorted error card (error-card.questions Q-1…Q-4): when main says what kind
+  // of failure this was, one plain sentence, the provider's words under Details,
+  // and that kind's buttons. Cards that already had their own (OpenRouter key and
+  // credit, ChatGPT sign-in and plan limits) return null here and render below as before.
+  const sorted = state === 'error' ? errorCardCopy(errorKind, errorCode, errorMessage ?? '', providerType) : null;
+  if (sorted) return <SortedErrorCard copy={sorted} providerType={providerType ?? null} anthropicRequestId={anthropicRequestId}
+    rawError={errorMessage ?? ''} handlers={{ onRetry, onOpenProviderSettings, onSwitchProviders, onSummarise }} />;
 
   const destructive = DESTRUCTIVE.includes(state);
   const bubbleBase = 'flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5';
@@ -254,6 +273,64 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
           Request ID: {anthropicRequestId}
         </div>
       )}
+    </div>
+  );
+}
+
+const ACTION_LABEL: Record<ErrorCardAction, string> = {
+  'open-settings': 'Open settings', 'add-credit': 'Add credit', 'billing': 'Open billing',
+  'switch-model': 'Switch model', 'summarise': 'Summarise and continue', 'report-bug': 'Report bug', 'try-again': 'Try again',
+};
+
+/** The red card for a native error with a known kind. Same bubble and ring as the
+ *  card above (it replaces the reply in the same spot); buttons sit at the right,
+ *  the last one filled — the card's main action (guide: Status and notices). */
+function SortedErrorCard({ copy, providerType, anthropicRequestId, rawError, handlers }: {
+  copy: ReturnType<typeof errorCardCopy> & object; providerType: string | null; anthropicRequestId?: string | null; rawError: string;
+  handlers: { onRetry?: () => void; onOpenProviderSettings?: () => void; onSwitchProviders?: () => void; onSummarise?: () => void };
+}) {
+  const billing = billingUrl(providerType);
+  // The card opens its own bug report, carrying the provider's exact words (as
+  // EngineCard does) — so App, held at its line budget, wires nothing new.
+  const [reporting, setReporting] = React.useState(false);
+  const press: Partial<Record<ErrorCardAction, (() => void) | undefined>> = {
+    'try-again': handlers.onRetry, 'open-settings': handlers.onOpenProviderSettings, 'switch-model': handlers.onSwitchProviders,
+    'summarise': handlers.onSummarise, 'report-bug': () => setReporting(true),
+    'billing': billing ? () => { void window.claude.shell.openExternal(billing); } : undefined,
+  };
+  // An action whose handler this screen lacks (a phone without the picker, say) is left out, never a dead button.
+  const actions = copy.actions.filter((a) => press[a]);
+  const buttons = actions.length > 0 && (
+    <div className="ml-auto flex items-center justify-end gap-2 shrink-0">
+      {actions.map((a, i) => (
+        <Button key={a} size="sm" variant={i === actions.length - 1 ? 'primary' : 'secondary'} onClick={press[a]}>
+          {ACTION_LABEL[a]}
+        </Button>
+      ))}
+    </div>
+  );
+  return (
+    <div className="flex flex-col items-start gap-1 px-4 py-1.5 in-view">
+      <div className="flex flex-col gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5 ring-1 ring-[var(--destructive)] max-w-full">
+        {/* Guide (Status and notices, gt-r1#E-2/#E-3): the box reads top to bottom —
+            what happened, the provider's own words if you want them, then what you can
+            do. So with a Details fold the buttons sit BELOW it, at the right; without
+            one they sit beside the sentence. */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-fg-2 min-w-0">{copy.line}</span>
+          {!copy.details && buttons}
+        </div>
+        {copy.details && (
+          <FoldRow title="Details" flush>
+            <p className="text-2xs text-fg-2 font-mono break-all select-text">{copy.details}</p>
+          </FoldRow>
+        )}
+        {copy.details && buttons}
+      </div>
+      {anthropicRequestId && (
+        <div className="text-3xs text-fg-muted font-mono mt-1 select-text">Request ID: {anthropicRequestId}</div>
+      )}
+      <BugReportPopup open={reporting} onClose={() => setReporting(false)} context={{ surface: 'Chat', error: rawError }} />
     </div>
   );
 }

@@ -1313,15 +1313,41 @@ and one way a long task could never finish.
 - **A conversation whose pictures were shrunk stops publishing its private
   checkpoint** (the checkpoint cites pictures by the digest of their file, and
   the shrunk copy is in memory only); reopening uses the ordinary rebuild.
-- **The error card does not yet act on `errorKind`.** A Retry button for
-  temporary and unknown errors, settings for account errors, "summarise and
-  continue" for too-long, and plain wording for each code are renderer work
-  awaiting a review deck.
+- **The step-limit footer cannot name the step count** ("Stopped after 150
+  steps"): the count is not on the turn-complete event, so the footer says
+  "Stopped after reaching the step limit for one reply." 
 - **Gemini's SAFETY / RECITATION finishes** arrive as the SDK's
   `content-filter` and end the turn with "declined to respond", as before.
   MALFORMED_FUNCTION_CALL (SDK `error`) now joins the empty-step retry.
 
-Guards: `provider-failure.test.ts`, `image-history.test.ts`, the output-cap
+### The error card (decks `docs/active/design/2026-10-21-error-card/`, approved 2026-10-21)
+- **`errorKind` reaches the screen** (`session-error` → `NATIVE_SESSION_ERROR` →
+  `SessionChatState.errorKind`, serialized for phones). `AttentionBanner` asks
+  `renderer/components/error-card-copy.ts` for one plain sentence naming the
+  provider, the provider's words under Details, and the kind's buttons:
+  temporary → Switch model + Try again; account → Open settings (bad key) or
+  Open billing (spend cap / quota / credit, where a billing page is known) +
+  Switch model, never Try again; too-long → Summarise and continue
+  (`native.compact`, then continue); blocked → Switch model; unknown → the
+  provider's words as the line + Report bug + Try again. OpenRouter's and
+  ChatGPT's own cards (codes `openrouter-*`, `chatgpt-*`) and an older host's
+  error (no kind) render exactly as before. A button whose handler a screen
+  lacks is left out.
+- **Try again / Keep going = `native:continue-turn`** (five surfaces, phone
+  open — Destin's sign-off owed on the phone list): `NativeSessionHost.continueTurn`
+  (refused unless idle) → `HarnessSession.continueTurn` runs the model again on
+  the history as it stands, with NO new message; a history ending on the
+  assistant gets the history-only `CONTINUE_TURN_TEXT` note. Keep going shows
+  under the newest turn when it stopped at `max_steps` (`KeepGoingRow`).
+- **The retry wait names its reason**: `StallWarning.reason` (the classifier's
+  code) → `retryWaitLine` ("Anthropic is overloaded — trying again in 8s…").
+  The stream watchdog's warning carries no reason and keeps its own line.
+- **A hidden chat tab never looks up its provider** (`useModelProviderType`'s
+  `paused`, ChatView passes `!visible`).
+
+Guards: `provider-failure.test.ts`, `image-history.test.ts`, `error-card-copy.test.ts`,
+the sorted-card cases in `attention-banner.test.tsx`, `native:continue-turn` parity in
+`ipc-channels.test.ts`, the paused case in `use-provider-type.test.tsx`, the output-cap
 cases in `capability-profile.test.ts`, and in `harness-session-loop.test.ts`
 the suites "recovers from a reply cut off at the output limit", "sorts a
 provider failure before deciding to retry", "Anthropic's many-image

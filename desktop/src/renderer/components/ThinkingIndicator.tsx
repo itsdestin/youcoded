@@ -1,3 +1,4 @@
+import { retryWaitLine } from './error-card-copy';
 import { useState, useEffect, useRef } from 'react';
 import BrailleSpinner from './BrailleSpinner';
 import { useOnScreen } from '../state/on-screen-context';
@@ -142,15 +143,17 @@ interface ThinkingIndicatorProps {
    * warning. `willRetry` controls whether we promise an auto-retry countdown
    * (true) or stay non-committal because the stall will end in an error (false).
    */
-  stallWarning?: { retryInMs: number; willRetry: boolean } | null;
+  stallWarning?: { retryInMs: number; willRetry: boolean; reason?: string } | null;
   /** Native prefill: the model is reading a long prompt, not hanging. */
   promptProcessing?: { promptTokens: number; budgetMs: number; source?: 'prompt' | 'tool-output'; processed?: number; cached?: number; etaMs?: number | null; timeMs?: number } | null;
   /** When visible output last arrived. While this is fresh the indicator renders
    *  NOTHING — the filling bubble is already the proof of life. */
   lastOutputAt?: number | null;
+  /** The session's provider type, so a provider-error retry wait can name it (Q-5). */
+  providerType?: string | null;
 }
 
-export default function ThinkingIndicator({ stallWarning, promptProcessing, lastOutputAt }: ThinkingIndicatorProps = {}) {
+export default function ThinkingIndicator({ stallWarning, promptProcessing, lastOutputAt, providerType }: ThinkingIndicatorProps = {}) {
   // ── EVERY hook runs unconditionally, before any early return ──────────────
   // The suppression branch below used to sit ABOVE the prefill hooks, so a
   // render that returned early ran fewer hooks than the previous one and React
@@ -287,7 +290,11 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
 
   // Prefill copy is deliberately NOT alarming: nothing is wrong, the model is
   // simply reading. A real stall warning still outranks it.
-  const label = stallWarning
+  // A provider-error retry names its reason (error-card.questions#Q-5): "Anthropic is
+  // overloaded — trying again in 8s…". The stream watchdog's warning carries no
+  // reason and keeps its non-committal line — it cannot tell why the stream went quiet.
+  const retryLine = stallWarning?.reason ? retryWaitLine(stallWarning.reason, providerType, secondsLeft) : null;
+  const label = retryLine ?? (stallWarning
     ? `This is taking a while, something may be wrong...${
         stallWarning.willRetry
           ? secondsLeft > 0 ? ` Trying again in ${secondsLeft}s...` : ' Trying again...'
@@ -295,7 +302,7 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
       }`
     : smoothedPrefill
       ? prefillLabel(smoothedPrefill)
-      : THINKING_LINES[lineIndex];
+      : THINKING_LINES[lineIndex]);
 
   return (
     // in-view: opts the inner bg-inset bubble into wallpaper-driven bubble

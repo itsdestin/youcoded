@@ -16,7 +16,7 @@ import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
 import { classifyFailure, abortableDelay, retryWaitMs, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
-import { truncationRecovery } from './truncation-recovery';
+import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -2460,6 +2460,7 @@ export class HarnessSession extends EventEmitter {
     }), [], true);
   }
 
+  continueTurn(): Promise<void> { return this.beginTurn(null, () => ''); }   // Try again / Keep going: CONTINUE_TURN_TEXT's WHY
   /** WHY: keep composer text byte-identical for optimistic bubble dedup;
    * image parts ride alongside it, and paths persist for replay. */
   async send(text: string, attachments: string[] = [], modelAttachments?: ModelAttachment[]): Promise<void> {
@@ -2622,7 +2623,7 @@ export class HarnessSession extends EventEmitter {
 
   /** `emit` distinguishes user sends from skill invocation; the driver is shared.
    *  `attachments` is what the MODEL reads (prepared copies where they exist). */
-  private async beginTurn(text: string, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
+  private async beginTurn(text: string | null, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
     this.opts.assertReady?.();
     // Never overwrite the active turn's single-slot state.
     if (this.abort) {
@@ -2631,7 +2632,8 @@ export class HarnessSession extends EventEmitter {
     this.interrupted = false;
     this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
-    this.acceptUserMessage(text, attachments, emit, appGenerated);
+    if (text !== null) this.acceptUserMessage(text, attachments, emit, appGenerated);
+    else if (this.history.at(-1)?.role === 'assistant') { this.history.push(markAppGenerated({ role: 'user', content: CONTINUE_TURN_TEXT })); this.historyOrigins.push(null); this.capture.mutated(); }
     this.abort = new AbortController();
     this.turnEverParked = false;   // cleared at the start of every turn — see field WHY
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill
@@ -4250,7 +4252,7 @@ export class HarnessSession extends EventEmitter {
         // previously a late provider error left streamed text on disk and screen.
         retractAttempt?.();
         // Root only: a specialist child shows no thinking card (SUBAGENT_DISPLAY_TYPES).
-        if (!this.opts.isSpecialistChild && waitMs >= 1000) this.emitEvent('assistant-thinking', { stallWarning: { retryInMs: waitMs, willRetry: true } });
+        if (!this.opts.isSpecialistChild && waitMs >= 1000) this.emitEvent('assistant-thinking', { stallWarning: { retryInMs: waitMs, willRetry: true, reason: classifyFailure(err).code } });
         await abortableDelay(waitMs, this.abort?.signal);
         if (this.abort?.signal.aborted) throw err;
       }

@@ -11,3 +11,9 @@
 {"type": "session_error", "optIn": "providerError", "case": "key-expired", "text": "Your OpenRouter key has expired.", "errorCode": "openrouter-key-expired"}
 {"type": "session_error", "optIn": "providerError", "case": "credit-short", "text": "There isn't enough OpenRouter credit left for this reply.", "errorCode": "openrouter-credit-short"}
 {"type": "session_error", "optIn": "providerError", "case": "request-refused", "text": "OpenRouter refused this request. OpenRouter said: “Your input was flagged for \"violence\". No credits were charged.”", "errorCode": "openrouter-request-refused"}
+{"type": "session_error", "optIn": "providerError", "case": "anthropic-overloaded", "text": "Overloaded (provider error 529)", "errorCode": "overloaded", "errorKind": "temporary"}
+{"type": "session_error", "optIn": "providerError", "case": "anthropic-spend-limit", "text": "You have reached your monthly spend cap. (provider error 429)", "errorCode": "spend-limit", "errorKind": "account"}
+{"type": "session_error", "optIn": "providerError", "case": "anthropic-key-rejected", "text": "invalid x-api-key (provider error 401)", "errorCode": "key-rejected", "errorKind": "account"}
+{"type": "session_error", "optIn": "providerError", "case": "anthropic-too-long", "text": "prompt is too long: 1048213 tokens > 1000000 maximum (provider error 400)", "errorCode": "context-too-long", "errorKind": "too-long"}
+{"type": "session_error", "optIn": "providerError", "case": "anthropic-unknown", "text": "messages.42: tool_use ids were found without tool_result blocks immediately after (provider error 400)", "errorKind": "unknown"}
+{"type": "turn_complete", "optIn": "stepLimit", "stopReason": "max_steps"}

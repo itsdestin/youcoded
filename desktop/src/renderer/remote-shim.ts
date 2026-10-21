@@ -491,6 +491,7 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
   'native:retry': 'user-action',
+  'native:continue-turn': 'user-action',
   'ui:action': 'user-action',
   'system:notify-stack-state': 'transport',
   // Batch 2: the readiness handshake is the connection talking about itself. Sent only
@@ -3214,6 +3215,7 @@ export function installShim(): void {
       interrupt: (sessionId: string) => fire('native:interrupt', { sessionId }),
       // Fire-and-forget like interrupt above — the stalled card needs no answer.
       retry: (sessionId: string) => fire('native:retry', { sessionId }),
+      continueTurn: (sessionId: string) => fire('native:continue-turn', { sessionId }),
       // Request/response (mirrors preload.ts) — the remote UI needs the same
       // {ok, reason} so a refused compaction explains itself over remote too.
       compact: (sessionId: string, focus?: string) => invoke('native:compact', { sessionId, focus }),

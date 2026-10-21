@@ -61,6 +61,9 @@ function stopReasonCopy(reason: string, provider: SessionProvider | undefined): 
     // Deliberately provider-neutral ("The model") — the failure belongs to
     // the model, not the assistant persona.
     empty_response: 'The model returned an empty response twice. Trying again may help.',
+    // error-card.questions#Q-6: plain words, never the raw code. The Keep going
+    // button lives under the newest turn (ChatView KeepGoingRow), not on every footer.
+    max_steps: 'Stopped after reaching the step limit for one reply.',
   };
   return map[reason] ?? `Response ended: ${reason}.`;
 }
