@@ -993,8 +993,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // is switched, Grok answers, the user reacts) — replaying one fixed answer
   // to every message could not film it. One-turn fixtures behave as before.
   const replyCursor = new Map<string, number>();
-  // `echoUser`: Claude Code sessions only (session.sendInput) — Claude Code records the typed
-  // message in its transcript; a native session's app draws the user's bubble itself.
+  // `echoUser`: record the typed message in the transcript, as both Claude Code and the native
+  // backend do; the app draws the bubble optimistically and only this echo confirms it.
   const startReply = (sessionId: string, text: string, echoUser = false) => {
     const raw = REPLY_SCRIPTS[`./fixtures/replies/${replyScriptName()}.jsonl`];
     if (!raw) { console.warn(`[workbench] no reply script "${replyScriptName()}"`); return; }
@@ -2029,7 +2029,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('queueSends') === '1') {
         return { status: 'queued', queueId: `wb-queued-${++queuedSends}` };
       }
-      startReply(sessionId, text);
+      // WHY echoUser + the delay (2026-10-21, #79): the real native backend records the typed message
+      // in its transcript, and that echo is what clears the bubble's `pending` flag. But the app draws
+      // its bubble only AFTER this send's answer arrives (submit-outgoing.ts sendToNative), and the
+      // answer itself is held back by the workbench's `?latency=`. An echo fired right now landed
+      // BEFORE the bubble existed, so it was drawn as its own (fixed-clock, 7:40 AM) message and the
+      // bubble drawn after it stayed pending at the tail: every reply sat ABOVE the user's message it
+      // answered, and the message showed twice. So the echo (and the reply after it) starts once the
+      // answer has been delivered, like a real file watcher noticing the line a moment later.
+      setTimeout(() => startReply(sessionId, text, true), getLatency() + 50);
       return { status: 'sent' };
     },
     // Pretend the waiting message was found; the real host decides in main.
