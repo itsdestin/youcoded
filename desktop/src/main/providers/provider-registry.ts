@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
 import { ChatGptRequestDiagnostics } from './chatgpt-request-diagnostics';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { openRouterCostExtractor, localTimingsExtractor } from '../harness/pricing';
+import { openRouterCostExtractor, localTimingsExtractor, compatibleCacheExtractor } from '../harness/pricing';
 import { withPrefillProgress, type PrefillProgress } from './prefill-progress';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -264,10 +264,10 @@ export class ProviderRegistry {
   /** THE factory (spec §2.2). Throws plain-language errors — they surface in the UI error banner.
    *  `opts.serialToolCalls` (spec §4.2) is honored ONLY on the local-engine branch —
    *  cloud providers handle parallel tool calls fine and ignore it.
-   *  `opts.cacheKey` (the harness session id) is honored on three branches:
+   *  `opts.cacheKey` (the harness session id) is honored on four branches:
    *  chatgpt (the endpoint's prompt_cache_key), anthropic (cache_control
-   *  markers) and openrouter (session_id pin + cache_control for Claude
-   *  models) — see prompt-cache.ts. A caller without one gets none of them. */
+   *  markers), openrouter (session_id pin + cache_control for Claude
+   *  models) and openai (prompt_cache_key) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
     opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
@@ -421,7 +421,10 @@ export class ProviderRegistry {
         // includeUsage: same reason as the local-engine branch. A server that
         // doesn't understand stream_options ignores it (it's standard OpenAI), so
         // this degrades to the previous no-usage behavior rather than failing.
-        return createOpenAICompatible({ name: p.label, baseURL: p.baseUrl, apiKey, includeUsage: true })(binding.modelId);
+        // metadataExtractor: DeepSeek-shaped endpoints report cache hits outside
+        // the field the SDK reads (pricing.ts compatibleCacheExtractor), so
+        // without it their reuse counted as 0 and was billed at the input rate.
+        return createOpenAICompatible({ name: p.label, baseURL: p.baseUrl, apiKey, includeUsage: true, metadataExtractor: compatibleCacheExtractor })(binding.modelId);
       }
       case 'anthropic': {
         const apiKey = await this.keyFor(p);
@@ -431,7 +434,8 @@ export class ProviderRegistry {
       case 'openai': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Assistant settings → Cloud providers.`);
-        return createOpenAI({ apiKey })(binding.modelId);
+        // cached(): the per-session prompt_cache_key (prompt-cache.ts).
+        return cached('openai', createOpenAI({ apiKey })(binding.modelId));
       }
       case 'google': {
         const apiKey = await this.keyFor(p);

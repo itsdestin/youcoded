@@ -10,7 +10,7 @@ import { SecretsStore } from '../src/main/providers/secrets-store';
 import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
-import { openRouterCostExtractor } from '../src/main/harness/pricing';
+import { openRouterCostExtractor, compatibleCacheExtractor } from '../src/main/harness/pricing';
 import type { LocalEngineHook } from '../src/main/engine/engine-manager';
 import type { ChatGptAuth } from '../src/main/providers/chatgpt-auth';
 import { limitError } from '../src/main/providers/chatgpt-oauth';
@@ -140,10 +140,18 @@ describe('ProviderRegistry', () => {
     expect((model as any).config.metadataExtractor).toBe(openRouterCostExtractor);
   });
 
+  // A custom endpoint DOES carry an extractor since 2026-10-20 — the one that
+  // counts DeepSeek-style cache hits (compatibleCacheExtractor) — so the guard is
+  // on what it produces: never a cost, even when the body carries a `usage.cost`.
   it('no other provider claims to report a cost', async () => {
     const id = await reg.upsert({ type: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', enabled: true });
     const model = await reg.languageModel({ providerId: id, modelId: 'llama3' });
-    expect((model as any).config.metadataExtractor).toBeUndefined();
+    const x = (model as any).config.metadataExtractor;
+    expect(x).toBe(compatibleCacheExtractor);
+    expect(x).not.toBe(openRouterCostExtractor);
+    const s = x.createStreamExtractor();
+    s.processChunk({ usage: { cost: 0.5, prompt_cache_hit_tokens: 10 } });
+    expect(JSON.stringify(s.buildMetadata())).not.toContain('cost');
   });
 
   // The plan expected a `usage: { include: true }` request body alongside the

@@ -211,6 +211,38 @@ function localMetadata(cacheN: number | undefined) {
   return cacheN === undefined ? undefined : { local: { cacheReadTokens: cacheN } };
 }
 
+/** The `metadataExtractor` for CUSTOM OpenAI-compatible endpoints (2026-10-20).
+ *  WHY: @ai-sdk/openai-compatible reads cache hits only from
+ *  `usage.prompt_tokens_details.cached_tokens`. DeepSeek — and endpoints that
+ *  copy its shape — report them as top-level `usage.prompt_cache_hit_tokens`
+ *  instead (api-docs.deepseek.com/guides/kv_cache), so every DeepSeek cache hit
+ *  read as 0 and the cost estimate charged it at the full input price. Same
+ *  present-vs-absent rule as the extractors above: undefined when not reported,
+ *  and a 0 is a real reading (a cold prompt). The SDK's own number still wins
+ *  in cacheTokensForStep whenever it is non-zero. */
+export const compatibleCacheExtractor = {
+  async extractMetadata({ parsedBody }: { parsedBody: unknown }) {
+    return compatibleMetadata(readCacheHit(parsedBody));
+  },
+  createStreamExtractor() {
+    let hit: number | undefined;
+    return {
+      processChunk(parsedChunk: unknown) {
+        const h = readCacheHit(parsedChunk);
+        if (h !== undefined) hit = h;
+      },
+      buildMetadata() { return compatibleMetadata(hit); },
+    };
+  },
+};
+function readCacheHit(parsed: unknown): number | undefined {
+  const h = (parsed as any)?.usage?.prompt_cache_hit_tokens;
+  return typeof h === 'number' && Number.isFinite(h) && h >= 0 ? h : undefined;
+}
+function compatibleMetadata(hit: number | undefined) {
+  return hit === undefined ? undefined : { compatible: { cacheReadTokens: hit } };
+}
+
 /** The provider's own USD figure for one request, or undefined when it did not
  *  report one (every non-OpenRouter provider, and OpenRouter itself if it ever
  *  omits the field). Never coerces a missing figure to 0. */

@@ -108,6 +108,11 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Custom providers (spec docs/active/specs/2026-10-20-custom-providers-and-catalog-refresh.md):
+  // the Add provider service search and the picker's Refresh model list, designed ahead of
+  // their backend. Delete both rows when providers:services / providers:refresh-catalog land.
+  { channel: 'providers.services', feature: 'Custom providers — Add provider service search' },
+  { channel: 'providers.refreshCatalog', feature: 'Custom providers — Refresh model list' },
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
   // (T2, 2026-09-24): main + preload + remote-shim now carry the real
   // channels; the mock implementations in mock-shim.ts stay (the workbench

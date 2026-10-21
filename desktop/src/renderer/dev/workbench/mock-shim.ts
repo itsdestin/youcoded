@@ -28,6 +28,7 @@ import {
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
+import { services as servicesFixture } from './fixtures/services';
 import { SHEET_BY_REP } from './fixtures/sheets-by-rep';
 import { DOC_LAUNCH_BRIEF } from './fixtures/docs';
 import type { MockState, MockSessionMeta } from './scenarios';
@@ -116,6 +117,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
   'native.send', 'native.setBinding', 'native.switchModel',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
+  // Custom providers (2026-10-20): upsert/remove mirror real channels; services and
+  // refreshCatalog are designed ahead of their backend (mock-only.ts).
+  'providers.upsert', 'providers.remove', 'providers.services', 'providers.refreshCatalog',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
   // off this list escapes the real-or-registered check entirely.
@@ -1404,7 +1408,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // A key saved through the fake Connect dialog, so the card re-reads as
   // having one — the real registry does the same after setKey.
   let openrouterKeySaved = false;
-  const providers: Ns<'providers'> = {
+  // Custom providers (2026-10-20): saved keys and model lists for rows added
+  // through the fake Add provider form, so a row reads the way the real one
+  // will after a save + check. A key containing "fake" fails the check.
+  const addedKeys = new Map<string, string>();
+  const addedIds = new Set<string>();
+  const added = (p: { id: string }) => addedIds.has(p.id);
+  // The real catalog will match on a normalized address (spec: lowercase host +
+  // path, trailing "/" and "/v1" ignored on both sides) — the same rule here.
+  const norm = (u: string) => u.trim().toLowerCase().replace(/\/+$/, '').replace(/\/v1$/, '');
+  const sameAddress = (a: string, b: string) => norm(a) === norm(b);
+  let refreshes = 0;
+  const providers: Ns<'providers'> & import('../../../shared/provider-types').PendingProviderCalls = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
     list: async () => store.getState().providers.map((p) => {
@@ -1419,19 +1434,83 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         const health = openrouterKeySaved ? openrouterHealth('verified') : pin ? openrouterHealth(pin) : undefined;
         return { ...p, hasKey, ready: p.ready && hasKey, ...(health ? { health } : {}) };
       }
+      // A row added through Add provider: enabled, keyed, and what the real
+      // registry will say about its model list (custom-providers U5) — a listed
+      // service's count from the catalog, or a list the endpoint gave itself.
+      if (added(p)) {
+        const key = addedKeys.get(p.id);
+        const svc = servicesFixture().find((s) => p.baseUrl && sameAddress(s.baseUrl, p.baseUrl));
+        const models = svc ? { count: svc.modelCount, source: 'catalog' as const }
+          : key && !key.includes('fake') ? { count: 3, source: 'endpoint' as const } : undefined;
+        // The saved check (spec: every provider's Test result is stored, like OpenRouter's),
+        // so a refused key still reads refused after Settings is closed and reopened.
+        const health = key === undefined ? undefined
+          : { verdict: key.includes('fake') ? 'rejected' as const : 'verified' as const, checkedAt: Date.now() - 60_000 };
+        return { ...p, enabled: (p as any).enabled !== false, hasKey: key !== undefined, ...(models ? { models } : {}), ...(health ? { health } : {}) };
+      }
       return p;
     }),
     catalog: async () => store.getState().catalog,
+    upsert: async (config: any) => {
+      if (store.refuseWrites) throw new Error('refused');
+      const id = config.id ?? `pv-${Math.random().toString(36).slice(2, 8)}`;
+      addedIds.add(id);
+      store.setState((s) => {
+        const others = s.providers.filter((p) => p.id !== id);
+        // Inception's real models (models.dev, 2026-10-20), so a just-added
+        // Inception provider's models show in the picker like any others (U8).
+        const inception = config.baseUrl && sameAddress(config.baseUrl, 'https://api.inceptionlabs.ai/v1')
+          && !s.catalog.some((c) => c.providerId === id)
+          ? ['Mercury 3', 'Mercury 2.5', 'Mercury 2', 'Mercury Edit 2'].map((label) => ({ id: label.toLowerCase().replace(/ /g, '-'), providerId: id, label }))
+          : [];
+        return { ...s, providers: [...others, { ...config, id, ready: config.enabled !== false }], catalog: [...s.catalog, ...inception] };
+      });
+      return id;
+    },
+    remove: async (id: string) => {
+      if (store.refuseWrites) throw new Error('refused');
+      addedKeys.delete(id);
+      store.setState((s) => ({ ...s, providers: s.providers.filter((p) => p.id !== id) }));
+      return true;
+    },
+    // MOCK_ONLY (custom-providers): the services Add provider searches by name.
+    services: async () => servicesFixture(),
+    // MOCK_ONLY (custom-providers): Refresh model list. The first refresh adds
+    // Mercury 3 — the model that started this feature — so the picker shows a
+    // search going from "no results" to found. `?refresh=fail` reports
+    // OpenRouter unreachable; `?stall=providers.refreshCatalog` holds it.
+    refreshCatalog: async () => {
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('refresh') === 'fail') {
+        return { added: 0, failed: ['OpenRouter'] };
+      }
+      await new Promise((r) => setTimeout(r, 600));
+      refreshes += 1;
+      if (refreshes > 1) return { added: 0, failed: [] };
+      store.setState((s) => ({ ...s, catalog: [...s.catalog, { id: 'inception/mercury-3', providerId: 'pv-openrouter', label: 'Inception: Mercury 3' }] }));
+      return { added: 1, failed: [] };
+    },
     // The real Test asks OpenRouter about the key (§3.2). The fake: a candidate
     // key containing "fake" is refused; the saved key answers per `?openrouter=`.
-    test: async (_id: string, key?: string) => {
+    // A row added through Add provider answers from the key it was saved with.
+    test: async (id: string, key?: string) => {
+      const added = addedKeys.get(id);
+      if (key === undefined && added !== undefined) {
+        return added.includes('fake')
+          ? { ok: false, verdict: 'rejected' as const, message: 'The API key was rejected — check it and try again.' }
+          : { ok: true, verdict: 'verified' as const, message: 'Connected.' };
+      }
       const verdict = key !== undefined ? (key.includes('fake') ? 'rejected' : 'verified')
         : openrouterKeySaved ? 'verified' : openrouterHealth(openrouterPin() ?? 'verified')?.verdict ?? 'verified';
       if (verdict === 'rejected') return { ok: false, verdict, message: "OpenRouter didn't accept this key. Check that you copied all of it." };
       if (verdict === 'unchecked') return { ok: false, verdict, message: "OpenRouter couldn't be reached to check the key." };
       return { ok: true, verdict, message: 'Connected.' };
     },
-    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); openrouterKeySaved = true; return true; },
+    setKey: async (id: string, key: string) => {
+      if (store.refuseWrites) throw new Error('refused');
+      if (id === 'pv-openrouter' || id === 'openrouter') openrouterKeySaved = true;
+      else addedKeys.set(id, key);
+      return true;
+    },
   };
 
   // M5 2a. Real backend since (permissions:* on preload + remote-shim); the fake
