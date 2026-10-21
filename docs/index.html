@@ -1732,7 +1732,7 @@ html{-webkit-tap-highlight-color:transparent}
 /* Pressed states. Deliberately a shade of the theme's own foreground rather
    than an accent wash: it has to read on six wallpapers and under a thumb that
    is covering most of the control. */
-.faq summary:active{background:rgba(var(--fg-rgb),.07)}
+.faq summary:active{background:transparent}
 .integration-tag:active,.distro-option:active{background:rgba(var(--fg-rgb),.12)}
 /* .acct's background is `var(--glass-prose) !important` (the readability floor
    every prose panel gets), so a background here cannot win. Brightness instead. */
@@ -1761,33 +1761,39 @@ html{-webkit-tap-highlight-color:transparent}
    same motion: the answer's box grows from 0 to its height while it fades in, the + turns into
    an x, and a press on the question dips the card (Destin, review R-10: "no expand animation or
    press feel"). The <details> element stays open during the closing motion; is-open drives it. */
-.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0;
-  transition:grid-template-rows .34s cubic-bezier(.2,.8,.2,1),opacity .22s ease}
+.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0}
 .faq details .a>.a-in,.storyfold .a>.a-in{overflow:hidden;min-height:0}
 .faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
 .faq details .a{padding:0}
-.faq details .a-in{padding:0 22px 20px}
-/* The row's own corners follow the card's, and the press is a tint only: a transform on a
-   row inside a blurred glass card made the browser paint a square dark block behind it
-   (Destin, 2026-10-21 screenshot). */
-.faq summary{border-radius:var(--radius);transition:background .18s}
+/* The bottom space is content, not padding: padding kept the collapsed box 20px tall, so every close ended with a 19px jump. */
+.faq details .a-in{padding:0 22px}
+.faq details .a-in::after,.storyfold .a-in::after{content:'';display:block;height:20px}
+/* While a card folds its own box is what animates (height, border-box), and it clips its answer. */
+.faq details,.storyfold{box-sizing:border-box}
+.faq details.folding,.storyfold.folding{overflow:hidden}
+/* Hover and press tint the WHOLE card, not the question row: a tint layer under the content
+   (the card's background is !important, so it cannot be changed directly). */
+.faq details,.storyfold{position:relative;isolation:isolate}
+.faq details::before,.storyfold::before{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;
+  background:rgba(var(--fg-rgb),.04);opacity:0;transition:opacity .18s}
+.faq details:hover::before{opacity:1}
+.faq details:active::before,.storyfold:active::before{opacity:1;background:rgba(var(--fg-rgb),.08);transition:none}
+.faq summary{border-radius:var(--radius)}
 .faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
-.faq summary:hover{background:rgba(var(--fg-rgb),.04)}
-.faq summary:active,.storyfold>summary:active{transform:none;background:rgba(var(--fg-rgb),.08)}
-.storyfold>summary{transition:background .18s}
+.faq summary:active,.storyfold>summary:active{transform:none;background:transparent}
 .faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
 .faq details[open] summary::after{content:'+'}
 .faq details.is-open summary::after{transform:rotate(45deg)}
 .storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
-@media (prefers-reduced-motion:reduce){.faq details .a,.storyfold .a,.faq summary,.faq summary::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.faq summary,.faq summary::after{transition:none}}
 @media (max-width:760px){
   .storyfold{padding:0}
   .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius)}
   .storyfold.is-open>summary{border-radius:var(--radius) var(--radius) 0 0}
   .storyfold>summary::after{content:'+';margin-left:auto;color:var(--accent);font-size:1.3rem;line-height:1;transition:transform .34s cubic-bezier(.2,.8,.2,1)}
   .storyfold.is-open>summary::after{transform:rotate(45deg)}
-  .storyfold .a-in{padding:0 17px 18px}
+  .storyfold .a-in{padding:0 17px}
 }
 /* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
    They exist only once the visitor has clicked into the demo (B-1 round 2). */
@@ -3603,12 +3609,17 @@ if (document.querySelector('.demo-deck')) {
         { duration: DUR, delay: b.col * 70, easing: EASE, fill: 'backwards' });
     }
   }
-  var io = null, armed = false;
+  var io = null, armed = false, ioY = scrollY;
   function onIO(es){
+    // WHY (Destin, 2026-10-21: the FAQ "jitters/stutters on expand/close"): a block can enter
+    // the window without any scrolling -- an opening FAQ card pushes the cards below it into
+    // view -- and it then played its rise-and-fade WHILE being shoved down. An entrance is
+    // for arriving by scroll; a block pushed in by a layout change just appears.
+    var scrolled = Math.abs(scrollY - ioY) > 4; ioY = scrollY;
     es.forEach(function(e){
       if (!e.isIntersecting) return;
       var b = risers.filter(function(r){ return r.el === e.target; })[0];
-      if (b) { reveal(b, true); io.unobserve(e.target); }
+      if (b) { reveal(b, scrolled); io.unobserve(e.target); }
     });
   }
   // The only layout read: once per call, and calls are rAF-coalesced.
@@ -4683,27 +4694,36 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
 <script>
 // The story opens folded on a phone, open everywhere else (Q-14).
 (function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
-// Animated folds: the FAQ cards and the story card. Opening sets `open` then, a frame later,
-// is-open so the box transitions from 0; closing removes is-open and waits for the motion to
-// end before the element actually closes. With reduced motion there is no wait.
+// Animated folds: the FAQ cards and the story card.
+// WHY this shape (Destin, 2026-10-21, three rounds): a height transition on the answer stuttered;
+// a clip reveal cut the card's own bottom edge, so its border vanished until the fold ended. Now
+// the CARD's height is animated, so its border, corners and shadow travel with the edge, the
+// content is clipped by the card itself, and the blocks below follow through normal layout.
+// Profiled headless on the machine's GPU at 2x: 27 frames per 420 ms, worst 17 ms.
 (function(){
   var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var DUR = 340, EASE = 'cubic-bezier(.2,.8,.2,1)';
   document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
     var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
     if (d.open) d.classList.add('is-open');
+    var busy = false;
     s.addEventListener('click', function(e){
-      e.preventDefault();
-      if (d.classList.contains('is-open')) {
-        d.classList.remove('is-open');
-        if (reduced) { d.open = false; return; }
-        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; };
-        a.addEventListener('transitionend', function h(ev){ if (ev.propertyName === 'grid-template-rows') { a.removeEventListener('transitionend', h); finish(); } });
-        setTimeout(finish, 450);
-      } else {
-        d.open = true;
-        if (reduced) { d.classList.add('is-open'); return; }
-        requestAnimationFrame(function(){ requestAnimationFrame(function(){ d.classList.add('is-open'); }); });
-      }
+      e.preventDefault(); if (busy) return;
+      var opening = !d.classList.contains('is-open');
+      if (reduced || !d.animate) { d.classList.toggle('is-open', opening); d.open = opening; return; }
+      busy = true;
+      var h0 = d.getBoundingClientRect().height, h1;
+      if (opening) { d.open = true; d.classList.add('is-open'); h1 = d.getBoundingClientRect().height; }
+      else { d.classList.remove('is-open'); h1 = d.getBoundingClientRect().height; d.classList.add('is-open'); }
+      if (Math.abs(h1 - h0) < 1) { if (!opening) { d.classList.remove('is-open'); d.open = false; } busy = false; return; }
+      d.classList.add('folding');
+      var anims = [ d.animate([{ height: h0 + 'px' }, { height: h1 + 'px' }], { duration: DUR, easing: EASE, fill: 'both' }),
+                    a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' }) ];
+      Promise.all(anims.map(function(an){ return an.finished.catch(function(){}); })).then(function(){
+        if (!opening) { d.classList.remove('is-open'); d.open = false; }
+        anims.forEach(function(an){ an.cancel(); });
+        d.classList.remove('folding'); busy = false;
+      });
     });
   });
 })();
