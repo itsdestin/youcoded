@@ -148,7 +148,11 @@ export class ProviderRegistry {
       // OpenRouterHealth.get). `ready` deliberately ignores it: `ready` feeds
       // the launch gate and the model menu, and a refused key must change the
       // WORDS, not lock the user out (§3.1).
-      const health = p.type === 'openrouter' && hasKey ? this.health?.get(p.secretRef) : undefined;
+      // Every key type with a checkable key remembers its last check (custom-providers): a refused
+      // OpenAI key used to read "Connected" again after Settings was reopened.
+      const remembers = p.type === 'openrouter' || p.type === 'anthropic' || p.type === 'openai'
+        || p.type === 'google' || p.type === 'openai-compatible';
+      const health = remembers && hasKey ? this.health?.get(p.secretRef) : undefined;
       return { ...p, builtIn, hasKey, ready, ...(health ? { health } : {}) };
     });
   }
@@ -229,8 +233,9 @@ export class ProviderRegistry {
     }
     const ref = await this.secrets.set(plaintext, entry.secretRef);
     // A new key makes the old verdict meaningless: drop it (or adopt the check
-    // the Connect dialog just ran on this exact key) before anything reads it.
-    if (entry.type === 'openrouter') this.health?.adoptOrClear(ref, plaintext);
+    // the Connect dialog just ran on this exact key) before anything reads it. Every key type has a
+    // stored verdict now, so every type clears it.
+    this.health?.adoptOrClear(ref, plaintext);
     // Persist the pointer by mutating the LIVE entry inside the file lock —
     // NOT by writing back the snapshot read above. A snapshot write would
     // silently undo any concurrent edit (label change, disable) that landed
@@ -566,6 +571,8 @@ export class ProviderRegistry {
     // never-throws contract. (readAll rethrows non-ENOENT I/O errors, and
     // localBaseUrl is injected code we don't control.)
     let p: ProviderConfig | undefined;
+    // The saved key this check used, so its verdict can be remembered (direct keys + custom endpoints).
+    let usedKey: string | undefined;
     try {
       p = this.readAll().find((x) => x.id === id);
       // Kill switch (§6), the same guard languageModel() has: with chatgpt null
@@ -625,6 +632,7 @@ export class ProviderRegistry {
           if (p.secretRef) {
             key = await this.keyFor(p);
             if (!key) return needsKey;
+            usedKey = key;
           }
           res = await fetch(`${stripSlash(p.baseUrl)}/models`, {
             headers: key ? { Authorization: `Bearer ${key}` } : undefined,
@@ -635,6 +643,7 @@ export class ProviderRegistry {
         case 'anthropic': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           res = await fetch('https://api.anthropic.com/v1/models', {
             // Anthropic uses x-api-key (not a bearer header) and requires a
             // version header on every request.
@@ -646,6 +655,7 @@ export class ProviderRegistry {
         case 'openai': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           res = await fetch('https://api.openai.com/v1/models', {
             headers: { Authorization: `Bearer ${key}` },
             signal,
@@ -655,6 +665,7 @@ export class ProviderRegistry {
         case 'google': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           // Google's API takes the key as a query param, not a header.
           res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
@@ -679,15 +690,24 @@ export class ProviderRegistry {
         default:
           return { ok: false, message: `${p.label} has an unknown type and cannot be tested.` };
       }
-      if (res.ok) return { ok: true, message: 'Connected.' };
+      // Remember the answer for a saved key (ux-review-1#U1): a refused key must still read refused
+      // after Settings is reopened. A server error says nothing about the key, so it is not stored.
+      const remember = (verdict: 'verified' | 'rejected') => {
+        if (usedKey && p?.secretRef) this.health?.recordCheck(p.secretRef, usedKey, verdict);
+        return verdict;
+      };
+      if (res.ok) return { ok: true, message: 'Connected.', ...(usedKey ? { verdict: remember('verified') } : {}) };
       if (res.status === 401 || res.status === 403) {
-        return { ok: false, message: 'The API key was rejected — check it and try again.' };
+        return { ok: false, message: 'The API key was rejected — check it and try again.', ...(usedKey ? { verdict: remember('rejected') } : {}) };
       }
       return { ok: false, message: `The provider responded with HTTP ${res.status}.` };
     } catch (e: any) {
       // Network failure / timeout / DNS / store I/O — return, never throw
-      // (UI contract). p may be unset if the read itself threw.
-      return { ok: false, message: `Could not reach ${p?.label ?? id}: ${e?.message ?? String(e)}` };
+      // (UI contract). p may be unset if the read itself threw. Only a check that got as far as
+      // sending a saved key counts as "unchecked"; recordCheck never lets it overwrite a real answer.
+      if (usedKey && p?.secretRef) this.health?.recordCheck(p.secretRef, usedKey, 'unchecked');
+      return { ok: false, message: `Could not reach ${p?.label ?? id}: ${e?.message ?? String(e)}`,
+        ...(usedKey ? { verdict: 'unchecked' as const } : {}) };
     }
   }
 }
