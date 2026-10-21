@@ -938,8 +938,7 @@ export class HarnessSession extends EventEmitter {
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
   get profileSnapshot(): Readonly<CapabilityProfile> { return this.profile; }
-  /** Per-step output cap: the provider policy (profile.outputCap), else the manifest's. */
-  private get maxOutputTokens(): number { return this.profile.outputCap ?? this.opts.harness.limits?.maxTokens ?? 4096; }
+  private get maxOutputTokens(): number { return this.profile.outputCap ?? this.opts.harness.limits?.maxTokens ?? 4096; }   // provider policy, else manifest
   /** An edge cap the PROVIDER named (Anthropic's 2000 px past 20 pictures), kept so later
    *  pictures shrink up front. Not persisted (a reopen relearns it); cleared on a model switch. */
   private tightenedEdgePx: number | null = null;
