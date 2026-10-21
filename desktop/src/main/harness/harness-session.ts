@@ -2823,7 +2823,7 @@ export class HarnessSession extends EventEmitter {
               turnUsage.expectedRebuild = true;
               continue;
             }
-            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId)
+            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId, this.profile.providerType)
               || !await this.maybeCompact(model, aiTools, true)) throw err;
             overflowRetried = true;
             this.prefixMoved = true;
