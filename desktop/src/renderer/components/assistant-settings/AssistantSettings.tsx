@@ -22,8 +22,8 @@ const PAGE_IDS: readonly PageId[] = PAGES.map((p) => p.id);
 // Round 1 (2026-09-05): five pages in one flat list — General, Cloud
 // providers, Local models, Permissions, Specialists.
 //
-// Android (Q-6b): the same row and panel, showing only the pages the phone can
-// serve today (General); the others arrive as the native runtime does.
+// Android uses the same backend now: page availability follows its capabilities,
+// rather than the old General-only platform filter.
 
 export interface AssistantSettingsRowProps {
   defaults: AssistantDefaults;
@@ -35,7 +35,7 @@ export interface AssistantSettingsRowProps {
   autoOpen?: boolean;
   autoOpenPage?: PageId;
   onAutoOpenHandled?: () => void;
-  /** Q-6b: Android mounts the same row; `pages` says which pages exist there. */
+  /** Kept for existing callers; backend capabilities, not platform, decide page availability. */
   platform?: 'desktop' | 'android';
 }
 
@@ -138,7 +138,6 @@ export default function AssistantSettingsRow({
   autoOpen,
   autoOpenPage,
   onAutoOpenHandled,
-  platform = 'desktop',
 }: AssistantSettingsRowProps) {
   const [open, setOpen] = useState(false);
   // The first-run tour moving on closes this panel (guide-events.ts).
@@ -158,16 +157,14 @@ export default function AssistantSettingsRow({
     setOpen(true);
   }, PAGE_IDS);
 
-  // The same gate the Model Providers row had: provider pages exist only where
-  // the native runtime does (false over remote access, false on Android).
+  // WHY capability-only: Android now runs this backend locally, and remote
+  // clients can manage its providers. The old Android override stranded sign-in.
   const nativeSupported = (window as any).claude?.native?.supported === true;
   // The Browser page's own gate: the computer's own window only.
   const hasBrowser = browserSupported();
   const pages = useMemo(
-    () => PAGES.filter((p) => (platform === 'android'
-      ? p.id === 'general'
-      : (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser))),
-    [platform, nativeSupported, hasBrowser],
+    () => PAGES.filter((p) => (!p.needsNative || nativeSupported) && (!p.needsBrowser || hasBrowser)),
+    [nativeSupported, hasBrowser],
   );
 
   useEffect(() => {

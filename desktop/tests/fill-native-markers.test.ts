@@ -65,6 +65,92 @@ describe('reopening a native chat that was cleared', () => {
   });
 });
 
+describe('restoring recorded compaction boundaries', () => {
+  it('keeps a newly discovered boundary after an overlapping user-only predecessor', async () => {
+    const events = [e(ev('user-message', { text: 'before' }, { uuid: 'user-only' })),
+      e(ev('compact-summary', { summary: 'saved', contextUsedAfter: 100 }, { uuid: 'user-only-cut' }))];
+    expect(await reopen(events, { recordHas: [events[0]] })).toEqual(['user: before', 'marker: Conversation compacted']);
+  });
+
+  it('restores a genuine CC compaction proven by its command echo, not a synthetic resume summary', async () => {
+    const events = [
+      e(ev('user-message', { text: 'question' }, { uuid: 'cc-u' })),
+      e(ev('assistant-text', { text: 'answer' }, { uuid: 'cc-a' })),
+      e(ev('turn-complete', { stopReason: 'end_turn' }, { uuid: 'cc-end' })),
+      e(ev('user-message', { text: '/compact' }, { uuid: 'cc-command' })),
+      e(ev('compact-summary', { summary: 'CC saved summary', sourceTimestamp: 100 }, { uuid: 'cc-cut' })),
+      e(ev('user-message', { text: 'next' }, { uuid: 'cc-next' })),
+    ];
+    expect(await reopen(events, { recordHas: [events[0], events[1], events[2], events[5]] }))
+      .toEqual(['user: question', 'assistant: text(answer) [stop=end_turn]', 'marker: Conversation compacted', 'user: next']);
+    const withoutCommand = events.filter(event => event.uuid !== 'cc-command');
+    expect((await reopen(withoutCommand, { recordHas: [] })).filter(row => row.startsWith('marker:'))).toEqual([]);
+  });
+  it.each([false, true])('restores a saved summary with auto=%s when only disk history remains', async (auto) => {
+    const events = [
+      e(ev('user-message', { text: 'old question' }, { uuid: 'old-u' })),
+      e(ev('assistant-text', { text: 'old reply' }, { uuid: 'old-a' })),
+      e(ev('turn-complete', { stopReason: 'end_turn' }, { uuid: 'old-end' })),
+      e(ev('compact-summary', { summary: 'Saved summary', contextUsedAfter: 100,
+        ...(auto ? { autoCompaction: true } : {}) }, { uuid: 'saved-compact' })),
+      e(ev('user-message', { text: 'new question' }, { uuid: 'new-u' })),
+    ];
+    const tl = await reopen(events, { recordHas: [events[4]] });
+    expect(tl).toEqual(['user: old question', 'assistant: text(old reply) [stop=end_turn]',
+      'marker: Conversation compacted', 'user: new question']);
+  });
+
+  it('restores a manual summary on a newly joined screen without a pending spinner', async () => {
+    const events = [
+      e(ev('user-message', { text: 'before' }, { uuid: 'manual-u' })),
+      e(ev('compact-summary', { summary: 'Manual summary', contextUsedAfter: 100 }, { uuid: 'manual-summary' })),
+      e(ev('user-message', { text: 'after' }, { uuid: 'manual-next' })),
+    ];
+    expect(await reopen(events)).toEqual(['user: before', 'marker: Conversation compacted', 'user: after']);
+  });
+
+  it.each(['page-first', 'live-first'])('deduplicates summary markers and accounting across overlap (%s)', (order) => {
+    const summary = e(ev('compact-summary', { summary: 'Saved summary', contextUsedAfter: 100,
+      usage: { inputTokens: 500, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0 } }, { uuid: 'overlap-summary' }));
+    let state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
+    const page = () => { state = chatReducer(state, { type: 'HISTORY_PAGE_LOADED', sessionId: SID,
+      events: [summary], cursor: null, hasMore: false }); };
+    const live = () => { for (const a of eventToAction(summary, { live: true })) state = chatReducer(state, a); };
+    if (order === 'page-first') { page(); live(); } else { live(); page(); }
+    const session = state.get(SID)!;
+    expect(session.timeline.filter(entry => entry.kind === 'system-marker')).toEqual([
+      { kind: 'system-marker', marker: { id: 'compact-done-overlap-summary', timestamp: summary.timestamp,
+        label: 'Conversation compacted', variant: 'compact', summary: 'Saved summary' } },
+    ]);
+    expect(session.totals.inputTokens).toBe(500);
+    expect(session.totals.outputTokens).toBe(20);
+  });
+
+  it('a delayed recorded manual summary does not end the current reply or fail its tool', () => {
+    let state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
+    for (const event of [
+      e(ev('user-message', { text: 'working' }, { uuid: 'working-user' })),
+      e(ev('assistant-text', { text: 'Still working' }, { uuid: 'working-text' })),
+      e(ev('tool-use', { toolUseId: 'active-tool', toolName: 'Read', toolInput: {} }, { uuid: 'working-tool' })),
+    ]) for (const a of eventToAction(event, { live: true })) state = chatReducer(state, a);
+    const before = state.get(SID)!;
+    const summary = e(ev('compact-summary', { summary: 'Older manual summary', contextUsedAfter: 100 }, { uuid: 'delayed-summary' }));
+    for (const a of eventToAction(summary, { live: true })) state = chatReducer(state, a);
+    const after = state.get(SID)!;
+    expect(after.currentTurnId).toBe(before.currentTurnId);
+    expect(after.activeTurnToolIds).toEqual(before.activeTurnToolIds);
+    expect(after.toolCalls.get('active-tool')?.status).toBe('running');
+  });
+
+  it('uses the recorded summary time instead of the time a screen replays it', () => {
+    const summary = e(ev('compact-summary', { summary: 'Earlier summary', autoCompaction: true }, { uuid: 'timed-summary' }));
+    let state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
+    for (const a of eventToAction(summary, { live: true })) state = chatReducer(state, a);
+    const marker = state.get(SID)!.timeline.find(entry => entry.kind === 'system-marker');
+    expect(marker?.kind === 'system-marker' && marker.marker.timestamp).toBe(summary.timestamp);
+  });
+});
+
 describe('the buddy and the preview run the same page case', () => {
   it('both dispatch HISTORY_PAGE_LOADED into chatReducer itself (a source pin: there is no second reducer to fix)', async () => {
     const fs = await import('node:fs');

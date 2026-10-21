@@ -833,8 +833,11 @@ export function ProjectView(props: ProjectViewProps) {
       />
 
       {/* The framed pane: rounded, canvas-coloured, inset by the frame edge
-          like the page view's panel and frame. */}
-      <div className="screen-body flex-1 flex overflow-hidden">
+          like the page view's panel and frame. WHY min-h-0, not overflow-hidden (Destin,
+          2026-10-20: top border cut off in Projects only): the pane's outline is a box-shadow
+          ring just OUTSIDE it and the body has no top padding, so overflow-hidden clipped
+          the ring's top edge. Pages' body never clipped. */}
+      <div className="screen-body flex-1 flex min-h-0">
         {/* Main column — hero + segmented control + active tab. There is no
             project rail anymore; switching projects goes through the palette
             (ProjectSwitcher) opened from the hero name, and project removal

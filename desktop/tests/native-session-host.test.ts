@@ -637,48 +637,31 @@ describe('NativeSessionHost', () => {
 
   // ── A message typed while the session is still STARTING (2026-09-06) ───────
   //
-  // Destin made a session on a local model and typed straight away. The app told
-  // him "This session is no longer running. Start or resume it to send messages."
-  // Both halves were false — the session had never run, the engine was loading a
-  // 29 GB model, and a minute later the same session answered him normally.
-  // send() had ONE reason code for "not in the live map", covering both a session
-  // that has ENDED and one that has not STARTED. These four pin the split and the
-  // holding queue that makes the refusal unnecessary in the first place.
+  // Startup is not an ended conversation. The initializing refusal keeps drafts
+  // on the screen rather than acknowledging a non-durable early-send queue.
 
-  it('a message typed while the session is still starting is HELD, not refused', async () => {
-    // create() is async; this is the real window, entered before its first await
-    // settles — exactly where Destin's message landed.
+  it('refuses input during startup and only sends it after a fresh explicit submission', async () => {
     const creating = host.create({ sessionId: 's-warmup', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    const ack = host.send('s-warmup', 'hello from the starting gate');
-    expect(ack.status, 'held, not refused').toBe('queued');
-    const turns: string[] = [];
-    host.on('transcript-event', (e) => { if (e.type === 'turn-complete') turns.push('t'); });
-    await creating;
+    expect(host.send('s-warmup', 'keep as a draft')).toEqual({ status: 'failed', reason: 'initializing' });
+    await creating; await host.drain('s-warmup');
+    expect(host.queuedMessagesFor('s-warmup')).toEqual([]);
+    expect(host.getHistory('s-warmup')).toEqual([]);
+    expect(host.send('s-warmup', 'keep as a draft')).toEqual({ status: 'sent' });
     await waitForTurnComplete(host, 1);
+    await (host as any).live.get('s-warmup').running;
     await host.drain('s-warmup');
-    // Delivered — and delivered ONCE. The settle window matters: a duplicate
-    // sits in the send queue and only runs AFTER the first turn completes, so
-    // reading the transcript the instant turn 1 lands cannot see it. Held open
-    // until the queue has had every chance to produce a second turn.
-    await new Promise((r) => setTimeout(r, 300));
-    await host.drain('s-warmup');
-    expect(turns.length, 'exactly one turn ran').toBe(1);
-    const history = host.getHistory('s-warmup')!;
-    const typed = history.filter((e) => e.type === 'user-message');
+    const typed = host.getHistory('s-warmup')!.filter(e => e.type === 'user-message');
     expect(typed).toHaveLength(1);
-    expect(typed[0].data.text).toBe('hello from the starting gate');
-    expect(history.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
+    expect(typed[0].data.text).toBe('keep as a draft');
   });
 
-  it('several messages typed during startup arrive in the order they were typed', async () => {
+  it('does not silently deliver any input refused before startup readiness', async () => {
     const creating = host.create({ sessionId: 's-warmup2', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    expect(host.send('s-warmup2', 'first').status).toBe('queued');
-    expect(host.send('s-warmup2', 'second').status).toBe('queued');
-    await creating;
-    await waitForTurnComplete(host, 1);
-    await host.drain('s-warmup2');
-    const typed = host.getHistory('s-warmup2')!.filter((e) => e.type === 'user-message').map((e) => e.data.text);
-    expect(typed).toEqual(['first', 'second']);
+    expect(host.send('s-warmup2', 'first').status).toBe('failed');
+    expect(host.send('s-warmup2', 'second').status).toBe('failed');
+    await creating; await host.drain('s-warmup2');
+    expect(host.getHistory('s-warmup2')).toEqual([]);
+    expect(host.queuedMessagesFor('s-warmup2')).toEqual([]);
   });
 
   it('a session that has ENDED still gets the ended message, not the starting one', async () => {
@@ -690,34 +673,31 @@ describe('NativeSessionHost', () => {
     expect(host.send('never-existed', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
   });
 
-  it('startup refuses with its OWN reason once ten messages are already waiting', async () => {
+  it('uses the initializing reason without ever acknowledging an early holding queue', async () => {
     const creating = host.create({ sessionId: 's-warmup3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    for (let i = 0; i < 10; i++) expect(host.send('s-warmup3', `m${i}`).status).toBe('queued');
-    // The eleventh cannot be held — and it must say "starting", never
-    // "no longer running", because the session is starting.
-    expect(host.send('s-warmup3', 'm10')).toEqual({ status: 'failed', reason: 'starting' });
+    for (let i = 0; i < 11; i++) expect(host.send('s-warmup3', `m${i}`)).toEqual({ status: 'failed', reason: 'initializing' });
+    expect(host.queuedMessageIds('s-warmup3')).toEqual([]);
     await creating;
     await host.destroy('s-warmup3');
   });
 
-  it('a message still waiting for the session to start can be taken back', async () => {
+  it('does not invent a queued item for an unaccepted startup draft', async () => {
     const creating = host.create({ sessionId: 's-warmup4', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    const ack = host.send('s-warmup4', 'oops, wrong thing') as { status: 'queued'; queueId: string };
-    expect(host.removeQueued('s-warmup4', ack.queueId), 'Cancel reaches a held message').toBe(true);
-    await creating;
-    await host.drain('s-warmup4');
-    expect(host.getHistory('s-warmup4')!.filter((e) => e.type === 'user-message')).toHaveLength(0);
+    expect(host.send('s-warmup4', 'still in the composer')).toEqual({ status: 'failed', reason: 'initializing' });
+    expect(host.removeQueued('s-warmup4', 'unaccepted')).toBe(false);
+    expect(host.sendQueuedNow('s-warmup4', 'unaccepted')).toBe(false);
+    await creating; await host.drain('s-warmup4');
+    expect(host.getHistory('s-warmup4')!.filter(e => e.type === 'user-message')).toHaveLength(0);
     await host.destroy('s-warmup4');
   });
 
-  it('a session that never comes up does not hold the message for ever', async () => {
-    // A failed create must release what it was holding — otherwise a typed
-    // message sits in memory for the life of the app, attached to nothing.
+  it('a failed startup leaves no accepted message or live generation behind', async () => {
+    // Nothing was accepted: the failed create cannot later submit the caller's draft.
     const store = new SessionStore(new NativeHome(root));
     vi.spyOn(store, 'create').mockRejectedValue(new Error('disk is full'));
     const doomed = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
     const creating = doomed.create({ sessionId: 's-doomed', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-    expect(doomed.send('s-doomed', 'held').status).toBe('queued');
+    expect(doomed.send('s-doomed', 'unsent draft')).toEqual({ status: 'failed', reason: 'initializing' });
     await expect(creating).rejects.toThrow();
     // Back to the honest answer for a session that is not coming.
     expect(doomed.send('s-doomed', 'again')).toEqual({ status: 'failed', reason: 'not-live' });
@@ -889,6 +869,252 @@ describe('NativeSessionHost', () => {
     // method on the manager, so the host can only give a hold back through the
     // object acquire() returned. See McpLease in mcp-manager.ts.
     const fakeLease = (servers: any[], release = vi.fn(async () => {})) => ({ servers, release });
+
+    it('opens history without waiting for tools and refuses unsent input instead of queueing it', async () => {
+      let finish!: (value: ReturnType<typeof fakeLease>) => void;
+      const acquire = vi.fn(() => new Promise<ReturnType<typeof fakeLease>>(resolve => { finish = resolve; }));
+      const model = vi.fn(factory);
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), model, NO_CONTEXT,
+        async () => null, async () => null, undefined, undefined, undefined, undefined, undefined,
+        { destroyAll: async () => {}, acquire });
+      let opened = false;
+      const opening = h.create({ sessionId: 'slow-tools', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } }).then(() => { opened = true; });
+      try {
+        await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce());
+        expect(h.send('slow-tools', 'keep this draft', ['/tmp/fixture-image.png'])).toMatchObject({ status: 'failed', reason: 'initializing' });
+        await vi.waitFor(() => expect(opened).toBe(true));
+        expect(h.queuedMessagesFor('slow-tools')).toEqual([]);
+        expect(model).not.toHaveBeenCalled();
+      } finally {
+        finish(fakeLease([])); await opening; await h.destroyAll();
+      }
+    });
+
+    it('parks durable background reports before claiming them while tools are connecting', async () => {
+      const home = new NativeHome(root), store = new SessionStore(home);
+      await store.create({ v: 1, sessionId: 'pending-report', cwd: root, harnessId: 'coder', createdAt: Date.now(), binding: { providerId: 'openrouter', modelId: 'm' } });
+      let finish!: (value: ReturnType<typeof fakeLease>) => void;
+      const acquire = vi.fn(() => new Promise<ReturnType<typeof fakeLease>>(resolve => { finish = resolve; }));
+      const model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, { acquire, destroyAll: async () => {} }, home);
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, 'pending-report', { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(), endedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      const claim = vi.spyOn(ledger, 'claimUndelivered');
+      const result = fakeLease([]);
+      try {
+        await h.resume('pending-report', root);
+        expect(h.startupStateFor('pending-report')?.phase).toBe('connecting');
+        expect((h as any).live.get('pending-report').inFlight).toBe(false);
+        // Settle the host's startup reconciliation, not a guessed wall-clock delay.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(claim).not.toHaveBeenCalled();
+        expect(ledger.listFor(root, 'pending-report')[0].injectionAttempted).not.toBe(true);
+        expect(model).not.toHaveBeenCalled();
+        const completed = waitForTurnComplete(h, 1);
+        finish(result); await completed;
+        await vi.waitFor(() => expect(ledger.listFor(root, 'pending-report')[0].delivered).toBe(true));
+        expect(model).toHaveBeenCalledOnce();
+      } finally { finish(result); await h.destroyAll(); }
+    });
+
+    it('does not consume a background report when close wins after its durable injection marker', async () => {
+      const home = new NativeHome(root), store = new SessionStore(home), model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      await h.create({ sessionId: 'closing-report', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, 'closing-report', { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(), endedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      let finish!: () => void, entered!: () => void;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      const marked = new Promise<void>(resolve => { entered = resolve; });
+      const realMark = ledger.markInjectionAttempted.bind(ledger);
+      const mark = vi.spyOn(ledger, 'markInjectionAttempted').mockImplementation(async (...args) => { await realMark(...args); entered(); await held; });
+      (h as any).queueDelivery('closing-report');
+      await marked;
+      const running = (h as any).live.get('closing-report').running;
+      const closing = h.destroy('closing-report'); finish(); await Promise.all([closing, running]);
+      expect(model).not.toHaveBeenCalled();
+      expect(ledger.listFor(root, 'closing-report')[0].injectionAttempted).not.toBe(true);
+      mark.mockRestore();
+      const delivered = waitForTurnComplete(h, 1);
+      await h.resume('closing-report', root); await delivered;
+      await vi.waitFor(() => expect(ledger.listFor(root, 'closing-report')[0].delivered).toBe(true));
+      expect(model).toHaveBeenCalledOnce();
+      await h.destroyAll();
+    });
+
+    it('rearms a report when the replacement scanned before the old injection marker was cleared', async () => {
+      const home = new NativeHome(root), store = new SessionStore(home), model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      const id = 'replacement-report';
+      await h.create({ sessionId: id, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, id, { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(), endedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      let finish!: () => void, entered!: () => void, first = true;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      const marked = new Promise<void>(resolve => { entered = resolve; });
+      const realMark = ledger.markInjectionAttempted.bind(ledger);
+      const mark = vi.spyOn(ledger, 'markInjectionAttempted').mockImplementation(async (...args) => {
+        await realMark(...args);
+        if (first) { first = false; entered(); await held; }
+      });
+      let outgoing: Promise<void> | undefined;
+      try {
+        (h as any).queueDelivery(id); await marked;
+        outgoing = (h as any).live.get(id).running;
+        // Close must not await an optional/outgoing pass. Let the replacement scan
+        // the still-stamped record before allowing that old pass to clean it up.
+        await h.destroy(id);
+        await h.resume(id, root);
+        await (h as any).live.get(id).running;
+        expect((h as any).pendingDeliveryParents.has(id)).toBe(false);
+        expect(ledger.listFor(root, id)[0].injectionAttempted).toBe(true);
+        expect(model).not.toHaveBeenCalled();
+        finish(); await outgoing;
+        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        await h.drain(id);
+        expect(model).toHaveBeenCalledOnce();
+      } finally { finish(); await outgoing; mark.mockRestore(); await h.destroyAll(); }
+    });
+
+    it('an outgoing generation releases only its own delivery claim, not the replacement claim', async () => {
+      const home = new NativeHome(root), store = new SessionStore(home), model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      const id = 'claim-replacement-report';
+      await h.create({ sessionId: id, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, id, { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      let releaseOld!: () => void, releaseNew!: () => void, oldClaimed!: () => void, newClaimed!: () => void;
+      const oldHeld = new Promise<void>(resolve => { releaseOld = resolve; });
+      const newHeld = new Promise<void>(resolve => { releaseNew = resolve; });
+      const oldReady = new Promise<void>(resolve => { oldClaimed = resolve; });
+      const newReady = new Promise<void>(resolve => { newClaimed = resolve; });
+      const realClaim = ledger.claimUndelivered.bind(ledger);
+      let claims = 0;
+      const claim = vi.spyOn(ledger, 'claimUndelivered').mockImplementation(async (...args) => {
+        const record = await realClaim(...args);
+        if (++claims === 1) { oldClaimed(); await oldHeld; }
+        else if (claims === 2) { newClaimed(); await newHeld; }
+        return record;
+      });
+      let outgoing: Promise<void> | undefined;
+      try {
+        (h as any).queueDelivery(id); await oldReady;
+        outgoing = (h as any).live.get(id).running;
+        const oldToken = ledger.listFor(root, id)[0].deliveryClaimId;
+        await h.destroy(id); await h.resume(id, root); await newReady;
+        const newToken = ledger.listFor(root, id)[0].deliveryClaimId;
+        expect(newToken).toBeDefined(); expect(newToken).not.toBe(oldToken);
+        releaseOld(); await outgoing;
+        expect(ledger.listFor(root, id)[0].deliveryClaimId).toBe(newToken);
+        expect(ledger.listFor(root, id)[0].claimedBy).toEqual(OWNER);
+        releaseNew(); await (h as any).live.get(id).running;
+        expect(ledger.listFor(root, id)[0].delivered).toBe(true);
+        expect(model).toHaveBeenCalledOnce();
+      } finally {
+        releaseOld(); releaseNew(); await outgoing;
+        await (h as any).live.get(id)?.running;
+        claim.mockRestore(); await h.destroyAll();
+      }
+    });
+
+    it('keeps an unstarted report pending when both rollback and its recovery claim fail', async () => {
+      const home = new NativeHome(root), store = new SessionStore(home), model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      const id = 'retry-claim-report';
+      await h.create({ sessionId: id, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, id, { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(), endedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      let finish!: () => void, entered!: () => void;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      const marked = new Promise<void>(resolve => { entered = resolve; });
+      const realMark = ledger.markInjectionAttempted.bind(ledger);
+      vi.spyOn(ledger, 'markInjectionAttempted').mockImplementation(async (...args) => { await realMark(...args); entered(); await held; });
+      try {
+        (h as any).queueDelivery(id); await marked;
+        const outgoing = (h as any).live.get(id).running;
+        await h.destroy(id); await h.resume(id, root);
+        await (h as any).live.get(id).running;
+        const failed = Object.assign(new Error('fixture storage unavailable'), { code: 'ENOSPC' });
+        const writes = vi.spyOn(home, 'mutateJson').mockRejectedValueOnce(failed).mockRejectedValueOnce(failed);
+        finish(); await outgoing; await (h as any).live.get(id).running;
+        expect(writes).toHaveBeenCalledTimes(2); // cancellation + one recovery pass; no busy retry loop
+        expect((h as any).pendingDeliveryParents.has(id)).toBe(true);
+        expect(model).not.toHaveBeenCalled();
+        writes.mockRestore();
+        expect(h.send(id, 'storage recovered')).toMatchObject({ status: 'sent' });
+        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        await h.drain(id);
+        expect(model).toHaveBeenCalledTimes(2); // one explicit user turn, one report
+      } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
+    });
+
+    it.each(['before', 'after'] as const)('recovers an unstarted report after rollback fails %s committing', async failure => {
+      const home = new NativeHome(root), store = new SessionStore(home), model = vi.fn(factory);
+      const h = new NativeSessionHost(store, model, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      const id = 'rollback-report';
+      await h.create({ sessionId: id, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, id, { childId: 'done-child', parentToolCallId: 'tc', agentType: 'explorer', title: 'Report',
+        workDir: root, description: 'fixture', background: true, status: 'completed', startedAt: Date.now(), endedAt: Date.now(),
+        delivered: false, rawReport: 'durable report', owner: OWNER, missedSteers: [] });
+      let finish!: () => void, entered!: () => void;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      const marked = new Promise<void>(resolve => { entered = resolve; });
+      const realMark = ledger.markInjectionAttempted.bind(ledger);
+      vi.spyOn(ledger, 'markInjectionAttempted').mockImplementation(async (...args) => { await realMark(...args); entered(); await held; });
+      const realMutate = home.mutateJson.bind(home);
+      try {
+        (h as any).queueDelivery(id); await marked;
+        const outgoing = (h as any).live.get(id).running;
+        await h.destroy(id);
+        // Fail only the cancellation write, leaving subsequent recovery writes healthy.
+        vi.spyOn(home, 'mutateJson').mockImplementationOnce(async (...args) => {
+          if (failure === 'after') await realMutate(...args);
+          throw Object.assign(new Error('fixture rollback write failure'), { code: 'ENOSPC' });
+        });
+        finish(); await outgoing;
+        expect(model).not.toHaveBeenCalled();
+        await h.resume(id, root);
+        await vi.waitFor(() => expect(ledger.listFor(root, id)[0].delivered).toBe(true));
+        await h.drain(id);
+        expect(model).toHaveBeenCalledOnce();
+      } finally { finish(); vi.restoreAllMocks(); await h.destroyAll(); }
+    });
+
+    it('does not wire a conversation closed while its startup header is being read', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const h = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+      await h.create({ sessionId: 'closed-start', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      await h.destroy('closed-start');
+      const read = store.readHeaderAsync.bind(store);
+      let finish!: () => void;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      const probe = vi.spyOn(store, 'readHeaderAsync').mockImplementation(async (...args) => { await held; return read(...args); });
+      const reopening = h.resume('closed-start', root);
+      // Observe rejection immediately so a failed fixture cannot leave an unhandled promise.
+      const outcome = reopening.then(() => 'opened', () => 'cancelled');
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce());
+      await h.destroy('closed-start'); finish();
+      expect(await outcome).toBe('cancelled');
+      expect(h.isNative('closed-start')).toBe(false);
+      await h.destroyAll();
+    });
 
     it('create() acquires this session\'s MCP servers and threads them into the session', async () => {
       const wanted = [fakeServer('srv0')];
@@ -2088,16 +2314,13 @@ describe('NativeSessionHost', () => {
       expect(seen.length).toBe(n);
     });
 
-    it('announces a compaction start, and an end only when it finished without a summary line', async () => {
+    it('refuses compaction during a reply without fabricating a lifecycle', async () => {
       const ev: any[] = [];
       host.on('compaction', (e: any) => ev.push(e));
       host.send(id, 'busy');
       const refused = await host.compact(id);                 // a turn is in flight: refused
       expect(refused).toEqual({ ok: false, reason: 'turn-in-flight' });
-      expect(ev).toEqual([
-        { sessionId: id, phase: 'start' },
-        { sessionId: id, phase: 'end', outcome: 'failed' },
-      ]);
+      expect(ev).toEqual([]); // The refusal belongs only to the requester, never to the running reply's lifecycle.
     });
 
     it('overlapping send queues FIFO and both turns complete in order', async () => {
@@ -3928,6 +4151,64 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
+    it.each(['before', 'after'] as const)('a rejected resume take %s committing retains its exact steers for one later turn', async (failure) => {
+      const home = new NativeHome(root), store = new SessionStore(home);
+      const h = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home);
+      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const { childId, title } = await h.createChild('root-1', {
+        specialist: EXPLORER, prompt: 'p', workDir: root, parentToolCallId: 'tc-take',
+      });
+      const ledger = (h as any).ledger as DelegationLedger;
+      await ledger.recordStart(root, 'root-1', {
+        childId, parentToolCallId: 'tc-take', agentType: EXPLORER.id, title, workDir: root,
+        description: EXPLORER.description, background: false, status: 'completed', startedAt: Date.now(),
+        delivered: true, owner: OWNER, missedSteers: ['SAVED STEER'],
+      });
+      await h.destroy(childId);
+      const originalMutate = home.mutateJson.bind(home);
+      let injected = false;
+      const storage = vi.spyOn(home, 'mutateJson').mockImplementation(async (...args: any[]) => {
+        if (!injected && String(args[0]).endsWith('.delegations.json')) {
+          injected = true;
+          if (failure === 'after') {
+            await (originalMutate as any)(...args);
+            // Another writer appends after the clear committed. Never restore a stale row.
+            await ledger.appendMissedSteers(root, 'root-1', childId, ['CONCURRENT STEER']);
+          }
+          throw new Error('resume take acknowledgement failed');
+        }
+        return (originalMutate as any)(...args);
+      });
+      const reservation = h.reserveSpecialist('root-1', { writer: false });
+      if (!reservation.ok) throw new Error('expected capacity');
+      try {
+        await expect(h.resumeSpecialist('root-1', {
+          childId, prompt: 'retry later', background: false, parentToolCallId: 'tc-rejected', reservation: reservation.token,
+        })).rejects.toThrow('resume take acknowledgement failed');
+        expect(injected).toBe(true);
+        expect((h as any).live.has(childId)).toBe(false);
+        storage.mockRestore();
+        // This ordinary write also gives a retained rollback intent a recovery boundary.
+        await ledger.appendMissedSteers(root, 'root-1', childId, ['LATER STEER']);
+        const pending = ledger.listFor(root, 'root-1').find(row => row.childId === childId)!;
+        expect(pending.missedSteers).toEqual(failure === 'after'
+          ? ['SAVED STEER', 'CONCURRENT STEER', 'LATER STEER'] : ['SAVED STEER', 'LATER STEER']);
+        expect(await h.resumeSpecialist('root-1', {
+          childId, prompt: 'now continue', background: false, parentToolCallId: 'tc-retry', reservation: reservation.token,
+        })).toMatchObject({ status: 'ok' });
+        const messages = store.readEvents(childId, root).filter(event => event.type === 'user-message');
+        expect(messages).toHaveLength(1);
+        const text = (messages[0] as any).data.text as string;
+        expect(text.split('SAVED STEER')).toHaveLength(2);
+        expect(text.split('LATER STEER')).toHaveLength(2);
+        if (failure === 'after') expect(text.split('CONCURRENT STEER')).toHaveLength(2);
+        expect(ledger.listFor(root, 'root-1').find(row => row.childId === childId)!.missedSteers).toEqual([]);
+      } finally {
+        storage.mockRestore(); await h.destroyAll();
+      }
+    });
+
     // External review, Important finding (fix pass 3) — the split-write gap
     // survives in the resume path too. Fix pass 2 folded the read-and-clear
     // of missedSteers into ONE atomic takeMissedSteers() call, but the
@@ -4168,6 +4449,113 @@ describe('NativeSessionHost', () => {
       // mid-pass raced afterEach's folder removal (ENOTEMPTY, Linux CI).
       await (h as any).live.get('root-1')?.running;
       await h.destroyAll();
+    });
+
+    it.each(['delivered', 'injectionAttempted'] as const)('discards a retained outcome behind the durable %s marker', async (marker) => {
+      const home = new NativeHome(root);
+      const h = new NativeSessionHost(
+        new SessionStore(home), factory, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home,
+      );
+      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const record: DelegationRecord = {
+        childId: 'retained-child', parentToolCallId: 'tc-retained', agentType: 'explorer', title: 'Retained',
+        workDir: root, description: 'd', background: true, status: 'completed',
+        startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [], rawReport: 'ALREADY ATTEMPTED',
+      };
+      const events: any[] = [];
+      h.on('transcript-event', (event) => events.push(event));
+      try {
+        await (h as any).ledger.recordStart(root, 'root-1', { ...record, [marker]: true });
+        (h as any).stashFallbackIfParentAlive('root-1', record.childId, record);
+        (h as any).queueDelivery('root-1');
+        await (h as any).live.get('root-1').running;
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+        expect((h as any).inMemoryFallback.has(record.childId)).toBe(false);
+      } finally { await h.destroyAll(); }
+    });
+
+    it.each([
+      [false, false], [true, false], [false, true], [true, true],
+    ])('retains an unknown background outcome until storage recovers (committed=%s, failed=%s)', async (committed, failed) => {
+      const home = new NativeHome(root);
+      let calls = 0;
+      const h = new NativeSessionHost(
+        new SessionStore(home), async () => {
+          if (++calls === 1) {
+            if (failed) throw new Error('ACTUAL CHILD FAILURE');
+            return scriptedModel([stream(...textChunks('t', 'ACTUAL CHILD REPORT'), finishChunk('stop'))]) as any;
+          }
+          return factory();
+        }, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined, undefined, home,
+      );
+      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const ledger = (h as any).ledger as DelegationLedger;
+      const originalUpdate = ledger.updateIfRunning.bind(ledger);
+      const originalCompletion = ledger.update.bind(ledger);
+      const originalList = ledger.listFor.bind(ledger);
+      const originalClaim = ledger.claimUndelivered.bind(ledger);
+      let unreadable = false;
+      vi.spyOn(ledger, 'claimUndelivered').mockImplementation(async (...args) => {
+        if (unreadable) throw new Error('storage unavailable for claim');
+        return originalClaim(...args);
+      });
+      vi.spyOn(ledger, 'update').mockImplementation(async (...args) => {
+        if (args[3].status === 'completed') {
+          if (committed) await originalCompletion(...args);
+          unreadable = true;
+          throw new Error('outcome write acknowledgement failed');
+        }
+        return originalCompletion(...args);
+      });
+      vi.spyOn(ledger, 'updateIfRunning').mockImplementation(async (...args) => {
+        if (args[3].status === (failed ? 'failed' : 'completed')) {
+          if (committed) await originalUpdate(...args);
+          unreadable = true;
+          throw new Error('outcome write acknowledgement failed');
+        }
+        return originalUpdate(...args);
+      });
+      const read = vi.spyOn(ledger, 'listFor').mockImplementation((...args) => {
+        if (unreadable) throw Object.assign(new Error('readback unavailable'), { code: 'EIO' });
+        return originalList(...args);
+      });
+      // Hold the idle pass until the detached outcome handler has settled.
+      const queued = vi.spyOn(h as any, 'queueDelivery').mockImplementation(() => {});
+      const events: any[] = [];
+      h.on('transcript-event', (event) => events.push(event));
+      try {
+        const reservation = h.reserveSpecialist('root-1', { writer: false });
+        if (!reservation.ok) throw new Error('expected capacity');
+        const { childId } = await h.spawnSpecialistBackground('root-1', {
+          specialist: EXPLORER, prompt: 'inspect', workDir: root, parentToolCallId: 'tc-unknown',
+          token: reservation.token, description: EXPLORER.description,
+        });
+        await vi.waitFor(() => expect(queued).toHaveBeenCalled());
+        expect(unreadable).toBe(true);
+        expect((h as any).inMemoryFallback.has(childId)).toBe(true);
+        queued.mockRestore();
+        (h as any).queueDelivery('root-1');
+        await (h as any).live.get('root-1').running;
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(0);
+        expect((h as any).inMemoryFallback.has(childId)).toBe(true);
+        unreadable = false;
+        (h as any).queueDelivery('root-1');
+        await (h as any).live.get('root-1').running;
+        const notices = events.filter((e) => e.data?.injected === 'specialist-report');
+        expect(notices).toHaveLength(1);
+        expect(notices[0].data.text).toContain(failed ? 'ACTUAL CHILD FAILURE' : 'ACTUAL CHILD REPORT');
+        (h as any).queueDelivery('root-1');
+        await (h as any).live.get('root-1').running; // settle a second idle pass: no duplicate
+        expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
+        expect((h as any).inMemoryFallback.has(childId)).toBe(false);
+      } finally {
+        unreadable = false;
+        queued.mockRestore();
+        read.mockRestore();
+        await h.destroyAll();
+      }
     });
 
     // Fix pass, Finding 2 (final review): `rg "Background specialist failed"

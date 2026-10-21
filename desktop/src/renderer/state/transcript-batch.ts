@@ -7,6 +7,7 @@
 // existed for, is gone with the snapshot.)
 import type { ChatAction } from './chat-types';
 import { eventToAction } from './transcript-event-actions';
+import { getCapabilities } from '../platform';
 import type { TranscriptEvent } from '../../shared/types';
 import type { SessionLive } from '../../shared/session-live-types';
 
@@ -25,26 +26,11 @@ export interface TranscriptRouteDeps {
   fallbackContextTokens(sessionId: string): number | null;
 }
 
-/**
- * The backup compaction signal: Claude Code rewrote or shortened the transcript file.
- * Only a window waiting on /compact acts on it.
- *
- * WHY it goes through the batcher too (R4-3 review): a `compact-summary` event still
- * waiting in the frame batch carries the marker's summary and freed-token figure. A
- * shrink that dispatched straight to the store landed FIRST, cleared `compactionPending`,
- * and the queued summary was then dropped as stale: a marker with no summary. In the
- * batch the reducer sees both in arrival order and keeps the first, the real one.
- */
-export function routeTranscriptShrink(payload: { sessionId?: string } | null | undefined, deps: TranscriptRouteDeps): void {
-  const sessionId = payload?.sessionId;
-  if (!sessionId) return;
-  if (!deps.compactionPending(sessionId)) return; // /clear or unrelated shrink — ignore
-  deps.batcher.push({
-    type: 'COMPACTION_COMPLETE',
-    sessionId,
-    markerId: `compact-done-${Date.now()}`,
-    afterContextTokens: deps.fallbackContextTokens(sessionId),
-  });
+/** A file-size change is not an operation result. Keep the legacy notification
+ * listener compatible, but only a certified summary/terminal lifecycle can finish
+ * compaction. /clear, rotation and delayed rewrites can also shrink a file. */
+export function routeTranscriptShrink(_payload: { sessionId?: string } | null | undefined, _deps: TranscriptRouteDeps): void {
+  // WHY: guessing success OR cancellation here can finish a newer operation.
 }
 
 /**
@@ -69,6 +55,9 @@ export function routeTranscriptEvent(event: TranscriptEvent, deps: TranscriptRou
   const actions = eventToAction(event, {
     live: true,
     compactionPending: compacting ? deps.compactionPending(event.sessionId) : undefined,
+    // WHY: current hosts certify results; a stale summary must not borrow the
+    // identity or success state of whatever spinner happens to be on screen.
+    allowLegacyCompaction: compacting ? !getCapabilities().sessionRecord : undefined,
     fallbackContextTokens: compacting ? deps.fallbackContextTokens(event.sessionId) : undefined,
   });
   for (const action of actions) deps.batcher.push(action);
@@ -108,13 +97,13 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
       deps.batcher.push({ type: 'CLEAR_TIMELINE', sessionId, markerId: live.id, timestamp: live.at ?? now() });
       return;
     case 'compact-start':
-      deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, beforeContextTokens: deps.contextTokens(sessionId), hostOwned: true });
+      deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, ...(live.startedAt !== undefined ? { timestamp: live.startedAt } : {}), beforeContextTokens: deps.contextTokens(sessionId), hostOwned: true });
       return;
     case 'compact-end':
       // A stop drops the spinner quietly ("Compaction may have failed" would be false after a Stop); anything else leaves the failed note.
       deps.batcher.push(live.outcome === 'cancelled'
-        ? { type: 'COMPACTION_CANCELLED', sessionId }
-        : { type: 'COMPACTION_COMPLETE', sessionId, markerId: `compact-end-${live.id}`, afterContextTokens: null, aborted: true });
+        ? { type: 'COMPACTION_CANCELLED', sessionId, operationId: live.id }
+        : { type: 'COMPACTION_COMPLETE', sessionId, operationId: live.id, markerId: `compact-end-${live.id}`, afterContextTokens: null, aborted: true });
       return;
     case 'prompt-show':
       deps.batcher.push({
@@ -131,6 +120,7 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
         ? { type: 'ATTENTION_STATE_CHANGED', sessionId, state: 'ok', onlyFrom: 'stuck' }
         : { type: 'ATTENTION_STATE_CHANGED', sessionId, state: live.state });
       return;
+    case 'native-startup':
     case 'input-block':
       // Not conversation state: the send gates read it from state/screen-input-store.ts, written by applySessionLive.
       return;

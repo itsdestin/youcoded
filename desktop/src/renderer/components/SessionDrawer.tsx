@@ -937,14 +937,16 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // pane via the .drawer-expanded class) — the header/input chrome stay put.
   // relative: positioning context for the resize handle. Width follows the
   // same var as the parent .drawer-pane so the two can't drift (youcoded#105).
+  // WHY bg-panel (Destin, 2026-10-20): the files/browser side panels match the game
+  // panel and the Projects/Pages screens, which all sit on --panel.
   const asideClass = expanded
-    ? 'relative flex-1 min-w-0 h-full flex flex-col bg-inset'
+    ? 'relative flex-1 min-w-0 h-full flex flex-col bg-panel'
     // drawer-aside: hook for the <=700px override in globals.css. Without it
     // this stayed a hard 480px child inside a `.drawer-pane` that the media
     // query had already collapsed to 100% — on a 390px phone the right ~90px
     // of the drawer, including its toolbar, was clipped away by the pane's
     // overflow:hidden and simply unreachable.
-    : 'drawer-aside relative w-[var(--right-pane-width,480px)] h-full flex flex-col bg-inset shrink-0';
+    : 'drawer-aside relative w-[var(--right-pane-width,480px)] h-full flex flex-col bg-panel shrink-0';
 
   // No selection AND no preview → the whole drawer is the list (nothing to
   // view yet). A preview clears `active` (exclusivity rule), so this guard

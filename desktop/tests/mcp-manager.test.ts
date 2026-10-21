@@ -244,6 +244,171 @@ describe('McpManager', () => {
     await failed.release(); await good.release();
   });
 
+  it('reports redacted unavailable servers alongside working servers in registry order', async () => {
+    const base: ResolvedMcpServer = { id: 'good', label: 'Working', enabled: true,
+      origin: { kind: 'user' }, missingSecrets: [], transport: { type: 'stdio', command: 'node' } };
+    const servers: ResolvedMcpServer[] = [base,
+      { ...base, id: 'bad', label: 'Broken', env: { TOKEN: 'env-secret' }, headers: { Authorization: 'Bearer header-secret' },
+        transport: { type: 'http', url: 'https://user-secret:pass-secret@example.invalid/?key=query-secret' } },
+      { ...base, id: 'setup', label: 'Setup', missingSecrets: ['API_KEY'] },
+      { ...base, id: 'args', label: 'Arguments', transport: { type: 'stdio', command: 'node', args: ['--token=arg-secret'] } },
+    ];
+    const mgr = new McpManager({ registry: { resolveAllEnabled: async () => servers }, connectionFactory: server => ({
+      state: server.id === 'good' ? 'ready' : 'error',
+      lastError: server.id === 'bad' ? 'env-secret header-secret user-secret pass-secret query-secret' : 'arg-secret',
+      connect: async () => {}, listTools: () => [], callTool: async () => ({ text: 'ok', isError: false }), close: async () => {},
+    }) });
+    const lease = await mgr.acquire('mixed');
+    expect(lease.servers.map(s => s.id)).toEqual(['good']);
+    expect(lease.unavailableServers).toEqual([
+      { id: 'bad', label: 'Broken', error: '[redacted] [redacted] [redacted] [redacted] [redacted]' },
+      { id: 'setup', label: 'Setup', error: 'Setup needs setup — missing secret(s): API_KEY.' },
+      { id: 'args', label: 'Arguments', error: '[redacted]' },
+    ]);
+    await lease.release();
+  });
+
+  it.each(['error', 'needs-setup'] as const)('explicit retry replaces only settled %s entries and preserves exact lease generations', async failure => {
+    const closeOld = vi.fn();
+    const closeNew = vi.fn();
+    const closeReady = vi.fn();
+    let attempts = 0;
+    const base: ResolvedMcpServer = { id: 'bad', label: 'Broken', enabled: true,
+      origin: { kind: 'user' }, missingSecrets: [], transport: { type: 'stdio', command: 'node' } };
+    const factory = vi.fn((server: ResolvedMcpServer) => {
+      const firstFailure = server.id === 'bad' && ++attempts === 1;
+      return { state: firstFailure ? failure : 'ready' as const, lastError: firstFailure ? 'failed' : null,
+        connect: async () => {}, listTools: () => [], callTool: async () => ({ text: 'ok', isError: false }),
+        close: server.id === 'good' ? closeReady : firstFailure ? closeOld : closeNew };
+    });
+    const mgr = new McpManager({ registry: { resolveAllEnabled: async () => [base, { ...base, id: 'good' }] }, connectionFactory: factory });
+    const old = await mgr.acquire('same');
+    const ordinary = await mgr.acquire('ordinary');
+    expect(factory).toHaveBeenCalledTimes(2); // default acquire must not retry
+    const fresh = await mgr.acquire('same', { retryFailed: true });
+    expect(factory).toHaveBeenCalledTimes(3); // working entry is reused
+    expect(fresh.servers.map(s => s.id)).toEqual(['bad', 'good']);
+    await old.release(); await old.release();
+    expect(closeOld).not.toHaveBeenCalled(); // ordinary still holds OLD
+    expect(closeNew).not.toHaveBeenCalled();
+    await fresh.release(); await fresh.release();
+    expect(closeNew).toHaveBeenCalledTimes(1);
+    expect(closeOld).not.toHaveBeenCalled(); // NEW release cannot close OLD
+    expect(closeReady).not.toHaveBeenCalled();
+    await ordinary.release();
+    expect(closeOld).toHaveBeenCalledTimes(1);
+    expect(closeReady).toHaveBeenCalledTimes(1);
+    expect(mgr.status()).toEqual([]);
+  });
+
+  it('coalesces simultaneous explicit retries on the new connecting generation', async () => {
+    let finish!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const connecting = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    const factory = vi.fn(() => {
+      const first = ++attempts === 1;
+      // Even an error state during a pending handshake is not a settled failure.
+      return { state: 'error' as const, lastError: 'failed', connect: async () => { if (!first) { started(); await blocked; } },
+        listTools: () => [], callTool: async () => ({ text: '', isError: true }), close: vi.fn(async () => {}) };
+    });
+    const mgr = new McpManager({ registry: deps().registry, connectionFactory: factory });
+    const old = await mgr.acquire('old');
+    const p1 = mgr.acquire('one', { retryFailed: true });
+    const p2 = mgr.acquire('two', { retryFailed: true });
+    await new Promise<void>(resolve => setImmediate(resolve)); // settle both registry continuations
+    expect(factory).toHaveBeenCalledTimes(2);
+    await connecting;
+    finish();
+    const [one, two] = await Promise.all([p1, p2]);
+    await old.release(); await one.release();
+    expect(factory.mock.results[1].value.close).not.toHaveBeenCalled();
+    await two.release();
+    expect(factory.mock.results.map(r => r.value.close.mock.calls.length)).toEqual([1, 1]);
+  });
+
+  it('joins the replacement generation even when delayed retry registry resolution sees it already failed', async () => {
+    const servers: ResolvedMcpServer[] = [{ id: 'demo', label: 'Demo', enabled: true,
+      origin: { kind: 'user' }, missingSecrets: [], transport: { type: 'stdio', command: 'node' } }];
+    let resolveDelayed!: (value: ResolvedMcpServer[]) => void;
+    const delayed = new Promise<ResolvedMcpServer[]>(resolve => { resolveDelayed = resolve; });
+    const registry = { resolveAllEnabled: vi.fn().mockResolvedValueOnce(servers)
+      .mockResolvedValueOnce(servers).mockReturnValueOnce(delayed) };
+    const factory = vi.fn(() => ({ state: 'error' as const, lastError: 'failed',
+      connect: async () => {}, listTools: () => [],
+      callTool: async () => ({ text: '', isError: true }), close: vi.fn(async () => {}) }));
+    const manager = new McpManager({ registry, connectionFactory: factory });
+    const old = await manager.acquire('same');
+    const a = manager.acquire('same', { retryFailed: true });
+    const b = manager.acquire('same', { retryFailed: true });
+    const one = await a; // replacement E1 is already a settled failure before B resumes
+    resolveDelayed(servers);
+    const two = await b;
+    expect(factory).toHaveBeenCalledTimes(2);
+    await old.release(); await old.release();
+    expect(factory.mock.results[0].value.close).toHaveBeenCalledOnce();
+    expect(factory.mock.results[1].value.close).not.toHaveBeenCalled();
+    await one.release(); await one.release();
+    expect(factory.mock.results[1].value.close).not.toHaveBeenCalled();
+    expect(manager.status()).toHaveLength(1);
+    await two.release(); await two.release();
+    expect(factory.mock.results.map(r => r.value.close.mock.calls.length)).toEqual([1, 1]);
+    expect(manager.status()).toEqual([]);
+  });
+
+  it('joins a connecting replacement even if it fails while the later retry resolves its registry', async () => {
+    const servers: ResolvedMcpServer[] = [{ id: 'demo', label: 'Demo', enabled: true,
+      origin: { kind: 'user' }, missingSecrets: [], transport: { type: 'stdio', command: 'node' } }];
+    let resolveRegistry!: (value: ResolvedMcpServer[]) => void, finish!: () => void, started!: () => void;
+    const delayed = new Promise<ResolvedMcpServer[]>(resolve => { resolveRegistry = resolve; });
+    const handshake = new Promise<void>(resolve => { finish = resolve; });
+    const connecting = new Promise<void>(resolve => { started = resolve; });
+    const registry = { resolveAllEnabled: vi.fn().mockResolvedValueOnce(servers)
+      .mockResolvedValueOnce(servers).mockReturnValueOnce(delayed) };
+    let created = 0;
+    const factory = vi.fn(() => {
+      const replacement = ++created > 1;
+      return { state: 'error' as const, lastError: 'failed',
+        connect: async () => { if (replacement) { started(); await handshake; } },
+        listTools: () => [], callTool: async () => ({ text: '', isError: true }), close: vi.fn(async () => {}) };
+    });
+    const manager = new McpManager({ registry, connectionFactory: factory });
+    const old = await manager.acquire('old');
+    const a = manager.acquire('one', { retryFailed: true });
+    await connecting; // B arrives only after E1 was installed and began its handshake.
+    const b = manager.acquire('two', { retryFailed: true });
+    finish(); const one = await a;
+    resolveRegistry(servers); const two = await b;
+    try {
+      expect(factory).toHaveBeenCalledTimes(2);
+      await old.release(); await one.release();
+      expect(factory.mock.results[1].value.close).not.toHaveBeenCalled();
+      await two.release();
+      expect(factory.mock.results.map(r => r.value.close.mock.calls.length)).toEqual([1, 1]);
+    } finally { await manager.destroyAll(); }
+  });
+
+  it('does not connect when registry resolution spans destroyAll and permits a later acquire', async () => {
+    let resolveRegistry!: (servers: ResolvedMcpServer[]) => void;
+    const pending = new Promise<ResolvedMcpServer[]>(resolve => { resolveRegistry = resolve; });
+    const d = deps();
+    const factory = vi.fn(() => d.connectionFactory());
+    const resolveAllEnabled = vi.fn().mockReturnValueOnce(pending).mockImplementation(d.registry.resolveAllEnabled);
+    const mgr = new McpManager({ registry: { resolveAllEnabled }, connectionFactory: factory });
+    const acquiring = mgr.acquire('stale');
+    const rejected = expect(acquiring).rejects.toThrow('MCP acquisition invalidated by destroyAll');
+    await mgr.destroyAll();
+    resolveRegistry(await d.registry.resolveAllEnabled());
+    await rejected;
+    expect(factory).not.toHaveBeenCalled();
+    expect(mgr.status()).toEqual([]);
+    const fresh = await mgr.acquire('fresh');
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(fresh.servers).toHaveLength(1);
+    await fresh.release();
+  });
+
   it('connects a server once for two sessions', async () => {
     const connect = vi.fn();
     const mgr = new McpManager(deps(connect));

@@ -72,6 +72,8 @@ export const stackLift = (depth: number) => depth * 2;
 
 type ScrimProps = {
   layer: OverlayLayer;
+  /** Use the shared theme-managed scrim blur even over a solid theme. */
+  blurBackground?: boolean;
   /** The depth a caller already took with useOverlayDepth (Dialog does, to lift its panel by
    *  the same amount). Without it the scrim takes its own. */
   depth?: number;
@@ -81,7 +83,7 @@ type ScrimProps = {
   children?: React.ReactNode;
 };
 
-export function Scrim({ layer, depth, onClick, className = '', style, children }: ScrimProps) {
+export function Scrim({ layer, depth, blurBackground, onClick, className = '', style, children }: ScrimProps) {
   // A scrim with no depth from its caller registers its own, so a Dialog opened over it counts it.
   const own = useOverlayDepth(depth === undefined);
   const d = depth ?? own;
@@ -89,6 +91,7 @@ export function Scrim({ layer, depth, onClick, className = '', style, children }
     <div
       className={`layer-scrim ${className}`.trim()}
       data-layer={layer}
+      data-blur-background={blurBackground || undefined}
       style={{ zIndex: SCRIM_Z[layer] + stackLift(d), ...style }}
       onClick={onClick}
     >

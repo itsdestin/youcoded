@@ -27,6 +27,20 @@ beforeEach(() => {
   document.head.innerHTML = '';
 });
 
+describe('shared modal background blur', () => {
+  it('uses the existing scrim blur for opted-in popups on solid themes too', () => {
+    applyThemeToDom(minimalTheme as any, false);
+    const css = document.getElementById('theme-glass')!.textContent!;
+    expect(css).toContain('.layer-scrim[data-blur-background="true"]');
+    expect(css).toContain('backdrop-filter: blur(8px)');
+  });
+  it('removes opted-in background blur when Reduced Effects is enabled', () => {
+    applyThemeToDom(minimalTheme as any, false);
+    applyThemeToDom(minimalTheme as any, true);
+    expect(document.getElementById('theme-glass')!.textContent).not.toContain('data-blur-background');
+  });
+});
+
 describe('Reduced Effects neutralises theme-injected animation', () => {
   const theme = { ...minimalTheme, custom_css: `
     .header-bar { animation: theme-glow 2s linear infinite; }

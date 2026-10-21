@@ -52,6 +52,44 @@ describe('HarnessSession', () => {
   // Windows did not — 2026-07-29).
   const opts = { sessionId: 's-1', cwd: 'C:/x', harness: ASSISTANT_PRESET, binding: { providerId: 'openrouter', modelId: 'm' }, skillCatalog: EMPTY_SKILL_CATALOG };
 
+  it.each(['send', 'skill', 'compact', 'clear', 'binding', 'splice'] as const)('refuses %s before startup can mutate model history', async (kind) => {
+    const model = vi.fn(async () => mockModel(TEXT_FINISH) as any);
+    const session = new HarnessSession({ ...opts, assertReady: () => { throw new Error('still initializing'); } }, model);
+    session.seedHistory([{ role: 'user', content: 'saved history' }]);
+    const before = JSON.stringify((session as any).history);
+    const events = collect(session);
+    if (kind === 'clear') expect(() => session.clearHistory()).toThrow('still initializing');
+    else if (kind === 'binding') expect(() => session.setBinding({ providerId: 'other', modelId: 'other' })).toThrow('still initializing');
+    else {
+      const call = kind === 'splice' ? session.spliceNotice('unaccepted report')
+        : kind === 'send' ? session.send('unsent draft') : kind === 'compact' ? session.compactNow()
+        : session.runSkill({ skillId: 'test', displayName: 'Test', body: 'unsent skill' });
+      await expect(call).rejects.toThrow('still initializing');
+    }
+    expect(JSON.stringify((session as any).history)).toBe(before);
+    expect((session as any).servedSkills.has('test')).toBe(false);
+    expect(events).toEqual([]);
+    expect(model).not.toHaveBeenCalled();
+  });
+
+  it('attaches finalized MCP inventory while startup is blocked without changing saved text', () => {
+    const session = new HarnessSession({ ...opts, assertReady: () => { throw new Error('still initializing'); } }, async () => mockModel(TEXT_FINISH) as any);
+    session.seedHistory([{ role: 'user', content: 'saved text' }]);
+    const before = session.assemblyDigest();
+    const wanted = [{ id: 'connected', label: 'Connected tools', tools: [], call: async () => ({ text: 'ok', isError: false }) }];
+    session.setMcpServers(wanted);
+    expect((session as any).opts.mcpServers).toBe(wanted);
+    expect(session.assemblyDigest()).not.toBe(before);
+    expect((session as any).history).toEqual([{ role: 'user', content: 'saved text' }]);
+  });
+
+  it('does not replace tool inventory under an active model turn', () => {
+    const session = new HarnessSession(opts, async () => mockModel(TEXT_FINISH) as any);
+    (session as any).abort = new AbortController();
+    expect(() => session.setMcpServers([])).toThrow('turn');
+    expect((session as any).opts.mcpServers).toBeUndefined();
+  });
+
   it('send() emits user-message, merged-partId assistant-text deltas, and turn-complete with usage', async () => {
     const session = new HarnessSession(opts, async () => mockModel(TEXT_FINISH) as any);
     const events = collect(session);

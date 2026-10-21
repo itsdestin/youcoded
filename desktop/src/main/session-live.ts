@@ -26,6 +26,7 @@ import { clearDividerId } from '../shared/divider-ids';
 import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 import type { ClaudeControlRequest, ClaudeControlResult } from '../shared/claude-control-types';
+import type { TranscriptEvent } from '../shared/types';
 
 /** Typed into the terminal as a whole write: `/model opus[1m]` + Enter. A write that is only part of a line never matches. */
 const MODEL_COMMAND_RE = /^\/model[ \t]+(\S+)[ \t]*\r?$/;
@@ -63,7 +64,8 @@ export interface SessionLiveDeps {
 export class SessionLiveFacts {
   private readonly now: () => number;
   private readonly timers = new Map<string, unknown>();
-  private readonly lastCompactStart = new Map<string, string>();
+  private readonly lastCompactStart = new Map<string, { id: string; startedAt: number }>();
+  private readonly directCompactions = new WeakMap<ClaudeControlRequest, string>();
   /** A typed /clear waiting for the hook, and when a divider was last drawn (the hook arriving late must not draw a second). */
   private readonly clearTimers = new Map<string, unknown>();
   private readonly lastClearAt = new Map<string, number>();
@@ -130,7 +132,12 @@ export class SessionLiveFacts {
   /** A structured request starts no fake terminal input or optimistic model change. */
   directCommandStarted(sessionId: string, request: ClaudeControlRequest): void {
     if (!this.deps.isClaude(sessionId) || request.kind !== 'command') return;
-    if (request.command === 'compact') this.compactStarted(sessionId);
+    if (request.command === 'compact') {
+      // WHY: the current control request has no public requestId until acceptance. Retain its object identity for delayed refusals.
+      const id = (request as ClaudeControlRequest & { requestId?: string }).requestId ?? this.nextId('compact');
+      this.directCompactions.set(request, id);
+      this.compactStarted(sessionId, id);
+    }
     // Cached model switches can still ask in the native menu. Preserve its declined-switch reconciliation.
     if (request.command === 'model' && request.args) this.modelRequested(sessionId, request.args, request.notice, false);
   }
@@ -171,7 +178,10 @@ export class SessionLiveFacts {
     }
     if (request.kind !== 'command') return;
     if (result.status === 'rejected') {
-      if (request.command === 'compact') this.compactEnded(sessionId, 'failed');
+      if (request.command === 'compact') {
+        const id = this.directCompactions.get(request);
+        if (id) this.compactEnded(sessionId, 'failed', id);
+      }
       return;
     }
     if (result.status !== 'accepted') return; // Unknown is not a failed operation.
@@ -214,10 +224,26 @@ export class SessionLiveFacts {
    *  - assistant output, a tool or a finished turn NEWER than an open prompt card means Claude Code is past that menu: the card is dismissed
    *    (a window that reloaded while the menu was up never reports its going away; review fix, R5-4a F2).
    */
+  /** Certify only a newly written CC summary for the currently running command.
+   * WHY: CC's saved resume summaries have no operation ID. Source time fences
+   * old replays; a copy preserves the transcript while every screen gets one ID. */
+  prepareTranscript(event: TranscriptEvent): TranscriptEvent {
+    if (!this.deps.isClaude(event.sessionId) || event.type !== 'compact-summary' || event.data.operationId) return event;
+    const current = this.lastCompactStart.get(event.sessionId);
+    const sourceTime = event.data.sourceTimestamp;
+    if (!current || typeof sourceTime !== 'number' || !Number.isFinite(sourceTime) || sourceTime <= 0
+      || sourceTime < current.startedAt || !this.deps.records.isCompacting(event.sessionId, current.id)) return event;
+    return { ...event, data: { ...event.data, operationId: current.id } };
+  }
+
   noteTranscript(sessionId: string, event: unknown): void {
     if (!this.deps.isClaude(sessionId)) return;
     const e = (event ?? {}) as { type?: string; uuid?: string; timestamp?: number; data?: { model?: unknown; parentAgentToolUseId?: unknown; slashCommand?: unknown } };
     if (e.data?.parentAgentToolUseId) return;
+    if (e.type === 'compact-summary' && (e.data as { operationId?: string } | undefined)?.operationId === this.lastCompactStart.get(sessionId)?.id) {
+      this.disarm(sessionId);
+      this.lastCompactStart.delete(sessionId);
+    }
     if (e.type === 'user-message' && e.uuid) {
       for (const [id, target] of this.stopTargets) {
         if (target.sessionId === sessionId && target.userUuid === e.uuid) this.confirmStop(sessionId, id, e.uuid);
@@ -285,18 +311,34 @@ export class SessionLiveFacts {
     this.drawClear(sessionId, clearDividerId(typeof claudeSessionId === 'string' && claudeSessionId ? claudeSessionId : this.nextId('clear')));
   }
 
+  /** WHY: preserve the native host's identity/time rather than mint a second
+   * operation while forwarding its lifecycle to all screens. Arrow keeps this bound. */
+  readonly noteNativeCompaction = (event: { sessionId: string; phase: 'start' | 'end'; id: string; startedAt?: number; outcome?: 'cancelled' | 'failed' }): void => {
+    if (event.phase === 'start') this.compactStarted(event.sessionId, event.id, event.startedAt);
+    else this.compactEnded(event.sessionId, event.outcome ?? 'failed', event.id);
+  };
+
   /** The host (native) or this file (Claude Code) began a compaction: draw the spinner everywhere, and watch that it ends. */
-  compactStarted(sessionId: string, id: string = this.nextId('compact')): void {
-    this.lastCompactStart.set(sessionId, id);
-    this.live(sessionId, { kind: 'compact-start', id });
+  compactStarted(sessionId: string, id: string = this.nextId('compact'), startedAt: number = this.now()): void {
+    const previous = this.lastCompactStart.get(sessionId);
+    if (previous?.id === id) return; // Duplicate starts do not restart clocks or watchdogs.
+    // WHY: a second CC request has not replaced the command already running.
+    // Its later refusal must not retire that command's identity or spinner.
+    if (this.deps.isClaude(sessionId) && previous && this.deps.records.isCompacting(sessionId, previous.id)) return;
+    const operation = { id, startedAt };
+    this.lastCompactStart.set(sessionId, operation);
+    this.live(sessionId, { kind: 'compact-start', ...operation });
     this.armWatchdog(sessionId);
   }
 
   /** A compaction ended with no summary line to say so (stopped, refused, failed): the spinner goes. */
-  compactEnded(sessionId: string, outcome: 'cancelled' | 'failed'): void {
-    const id = this.lastCompactStart.get(sessionId) ?? this.nextId('compact');
+  compactEnded(sessionId: string, outcome: 'cancelled' | 'failed', id?: string): void {
+    const current = this.lastCompactStart.get(sessionId);
+    // WHY: delayed failure/cancel callbacks own only their original operation, including its watchdog.
+    if (!current || (id !== undefined && current.id !== id)) return;
     this.disarm(sessionId);
-    this.live(sessionId, { kind: 'compact-end', id, outcome });
+    this.lastCompactStart.delete(sessionId);
+    this.live(sessionId, { kind: 'compact-end', id: current.id, outcome });
   }
 
   /**
@@ -307,13 +349,16 @@ export class SessionLiveFacts {
   private armWatchdog(sessionId: string): void {
     this.disarm(sessionId);
     const set = this.deps.setTimer ?? ((fn: () => void, ms: number) => { const t = setTimeout(fn, ms); t.unref?.(); return t; });
+    const operation = this.lastCompactStart.get(sessionId);
     const handle = set(() => {
+      // WHY: clearing a timer does not retract a callback already queued by the event loop.
+      if (this.lastCompactStart.get(sessionId) !== operation) return;
       this.timers.delete(sessionId);
       const f = this.deps.records.facts(sessionId);
       if (!f) return;
-      // `compacting` lives in the record: its summary line (or a shrink) has already cleared it when the compaction finished.
-      if (!this.deps.records.isCompacting(sessionId)) return;
-      if (this.now() - f.lastActivityAt >= COMPACT_IDLE_LIMIT_MS) { this.compactEnded(sessionId, 'failed'); return; }
+      // `compacting` lives in the record: only a correlated summary or terminal lifecycle can clear this identified operation.
+      if (!this.deps.records.isCompacting(sessionId, operation?.id)) return;
+      if (this.now() - f.lastActivityAt >= COMPACT_IDLE_LIMIT_MS) { this.compactEnded(sessionId, 'failed', operation?.id); return; }
       this.armWatchdog(sessionId);
     }, COMPACT_CHECK_MS);
     this.timers.set(sessionId, handle);

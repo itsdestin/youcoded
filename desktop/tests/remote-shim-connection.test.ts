@@ -187,6 +187,25 @@ describe('remote-shim — saved-key sign-in', () => {
       expect(claude().native.supported).toBe(false);
     });
 
+    it.each([true, false])('exposes ChatGPT account status independently of local sign-in (openExternal=%s)', async (openExternal) => {
+      const api = (globalThis as any).claude;
+      expect(api.chatgpt.supported).toBe(false);
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1,
+        capabilities: { nativeSessions: true, chatgptAccount: true, openExternal } });
+      await Promise.resolve();
+      expect(api.chatgpt.supported).toBe(true);
+      latest().close(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1,
+        capabilities: { nativeSessions: true, chatgptAccount: false, openExternal } });
+      await Promise.resolve();
+      expect(api.chatgpt.supported).toBe(false);
+    });
+
     it('an older computer that sends no capabilities leaves the screen on the conservative set', async () => {
       store[KEY] = 'dev-1:secret';
       start();

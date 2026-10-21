@@ -33,9 +33,18 @@ describe('a screen filled through session:open shows what the old paths showed',
         expect(reply.ok).toBe(true);
         const got = norm(screenOf(state));
         // The target: what a screen that watched the whole session shows (the old phone's snapshot was a copy of exactly this).
-        expect(got).toEqual(norm(g.phone));
+        const expected = norm(g.phone);
+        const restoredCcBoundary = sc.name === 'cc: compaction in the middle';
+        if (restoredCcBoundary) {
+          // Deliberate departure: the old paths lost genuine saved CC compactions.
+          // Keep the historical golden unchanged; the command now proves its boundary.
+          expected.timeline = [...expected.timeline];
+          expected.timeline.splice(expected.timeline.indexOf('user: after compaction'), 0, 'marker: Conversation compacted');
+        }
+        expect(got).toEqual(expected);
         // And the old torn-off window: equal wherever it was complete; where it was not, the gap is named (and the new path is the better one).
-        if (OLD_WINDOW_FELL_SHORT[sc.name]) expect(norm(g.window), `the old window was expected to fall short: ${OLD_WINDOW_FELL_SHORT[sc.name]}`).not.toEqual(norm(g.phone));
+        if (restoredCcBoundary) expect(norm(g.window)).not.toEqual(expected);
+        else if (OLD_WINDOW_FELL_SHORT[sc.name]) expect(norm(g.window), `the old window was expected to fall short: ${OLD_WINDOW_FELL_SHORT[sc.name]}`).not.toEqual(norm(g.phone));
         else expect(got).toEqual(norm(g.window));
       } finally { run.cleanup(); }
     });

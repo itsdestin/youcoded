@@ -31,7 +31,7 @@ export async function forgetReopenList(ids: readonly string[]): Promise<void> {
   try { await sessionApi()?.forgetReopen?.([...ids]); } catch { /* next launch re-offers them; harmless */ }
 }
 
-interface ProviderLike { id: string; type: string }
+interface ProviderLike { id: string; type: string; label?: string; enabled?: boolean; ready?: boolean }
 interface CatalogLike { id: string; providerId: string }
 
 /** The model a native conversation last ran on, as a binding on THIS device —
@@ -44,6 +44,13 @@ export function resolveNativeBinding(
   catalog: readonly CatalogLike[],
 ): ModelBinding | null {
   if (!ref) return null;
+  if (ref.providerType === 'openai-compatible') {
+    // WHY: typed custom models have no catalog. Reuse only an unambiguous saved endpoint name;
+    // choosing a different endpoint (or one of two identically named endpoints) could send private history to the wrong server.
+    const matches = providers.filter(p => p.type === ref.providerType && p.label === ref.providerLabel);
+    const p = matches.length === 1 ? matches[0] : undefined;
+    return p?.enabled === true && p.ready === true ? { providerId: p.id, modelId: ref.modelId } : null;
+  }
   const match = catalog.find((m) => {
     const p = providers.find((row) => row.id === m.providerId);
     return !!p && p.type === ref.providerType && m.id === ref.modelId;

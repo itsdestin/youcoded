@@ -50,6 +50,75 @@ function makeRecord(overrides: Partial<DelegationRecord> & { childId: string }):
 }
 
 describe('DelegationLedger', () => {
+  it('makes an owned report claimable again when its marked injection never began', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed', claimedBy: OWNER, claimedAt: Date.now(), injectionAttempted: true }));
+    expect(await ledger.cancelUnstartedInjection(CWD, 'p1', 'c1')).toBe(true);
+    expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ delivered: false });
+    expect(ledger.listFor(CWD, 'p1')[0].injectionAttempted).toBeUndefined();
+    expect((await ledger.claimUndelivered(CWD, 'p1'))?.childId).toBe('c1');
+  });
+  it('retains a failed unstarted rollback for the next claim without retrying injected reports', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed' }));
+    const claimed = (await ledger.claimUndelivered(CWD, 'p1'))!;
+    await ledger.markInjectionAttempted(CWD, 'p1', 'c1');
+    const write = vi.spyOn(home, 'mutateJson').mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+    await expect(ledger.cancelUnstartedInjection(CWD, 'p1', 'c1', claimed.deliveryClaimId)).rejects.toThrow('disk full');
+    expect(ledger.listFor(CWD, 'p1')[0].injectionAttempted).toBe(true);
+    write.mockRestore();
+    expect((await ledger.claimUndelivered(CWD, 'p1'))?.childId).toBe('c1');
+    await ledger.markInjectionAttempted(CWD, 'p1', 'c1');
+    // A genuine attempted injection has no rollback intent and stays non-claimable.
+    expect(await ledger.claimUndelivered(CWD, 'p1')).toBeNull();
+  });
+  it('cannot apply an old rollback to a newer same-process delivery claim after a commit-then-throw', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed' }));
+    const old = (await ledger.claimUndelivered(CWD, 'p1'))!;
+    await ledger.markInjectionAttempted(CWD, 'p1', 'c1');
+    const mutate = home.mutateJson.bind(home);
+    vi.spyOn(home, 'mutateJson').mockImplementationOnce(async (...args) => { await mutate(...args); throw new Error('after commit'); });
+    await expect(ledger.cancelUnstartedInjection(CWD, 'p1', 'c1', old.deliveryClaimId)).rejects.toThrow('after commit');
+    // A different ledger instance in the same process advances the claim while old cleanup remains pending.
+    const other = new DelegationLedger(home);
+    const fresh = (await other.claimUndelivered(CWD, 'p1'))!;
+    expect(fresh.deliveryClaimId).not.toBe(old.deliveryClaimId);
+    await other.markInjectionAttempted(CWD, 'p1', 'c1');
+    expect(await ledger.claimUndelivered(CWD, 'p1')).toBeNull();
+    expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ injectionAttempted: true, deliveryClaimId: fresh.deliveryClaimId });
+  });
+  it('rechecks dead-owner reconciliation inside the lock so newer claims and runs survive', async () => {
+    const dead = { pid: DEAD_PID, instanceId: 'old-dead-owner' };
+    const old = makeRecord({ childId: 'c1', status: 'running', owner: dead, claimedBy: dead, deliveryClaimId: 'old-claim' });
+    await ledger.recordStart(CWD, 'p1', old);
+    await ledger.update(CWD, 'p1', 'c1', { owner: OWNER, startedAt: old.startedAt + 1,
+      claimedBy: OWNER, deliveryClaimId: 'fresh-claim', injectionAttempted: true });
+    await ledger.reconcileOwner(CWD, 'p1', old);
+    expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ status: 'running', owner: OWNER,
+      claimedBy: OWNER, deliveryClaimId: 'fresh-claim', injectionAttempted: true });
+  });
+  it('reconciles an unchanged dead owner without clearing an attempted injection', async () => {
+    const dead = { pid: DEAD_PID, instanceId: 'old-dead-owner' };
+    const old = makeRecord({ childId: 'c1', status: 'running', owner: dead, claimedBy: dead,
+      deliveryClaimId: 'old-claim', injectionAttempted: true });
+    await ledger.recordStart(CWD, 'p1', old);
+    await ledger.reconcileOwner(CWD, 'p1', old);
+    expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ status: 'interrupted', injectionAttempted: true });
+    expect(ledger.listFor(CWD, 'p1')[0].claimedBy).toBeUndefined();
+    expect(await ledger.claimUndelivered(CWD, 'p1')).toBeNull();
+  });
+  it('does not reject a successful storage change when its notification listener throws', async () => {
+    const onChange = vi.fn(() => { throw new Error('disconnected screen'); });
+    const observed = new DelegationLedger(home, onChange);
+    await expect(observed.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }))).resolves.toBeUndefined();
+    expect(observed.listFor(CWD, 'p1')[0].childId).toBe('c1');
+    expect(onChange).toHaveBeenCalledOnce();
+  });
+  it('cannot clear another owner or an already delivered injection', async () => {
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'foreign', status: 'completed', claimedBy: { ...OWNER, instanceId: 'other-owner' }, injectionAttempted: true }));
+    await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'delivered', status: 'completed', claimedBy: OWNER, injectionAttempted: true, delivered: true }));
+    expect(await ledger.cancelUnstartedInjection(CWD, 'p1', 'foreign')).toBe(false);
+    expect(await ledger.cancelUnstartedInjection(CWD, 'p1', 'delivered')).toBe(false);
+    expect(ledger.listFor(CWD, 'p1').every(record => record.injectionAttempted)).toBe(true);
+  });
   it('recordStart + listFor round-trips a record', async () => {
     await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1' }));
     const rows = ledger.listFor(CWD, 'p1');
@@ -282,6 +351,54 @@ describe('DelegationLedger', () => {
       await ledger.updateUnlessCompleted(CWD, 'p1', 'c1', { status: 'interrupted', endedAt: 200 });
       const rec = ledger.listFor(CWD, 'p1').find((r) => r.childId === 'c1');
       expect(rec?.status).toBe('interrupted');
+    });
+  });
+
+  describe('rejected resume steer packets', () => {
+    it.each(['before', 'after'] as const)('replays packet rollback once when rollback itself fails %s commit', async failure => {
+      await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', status: 'completed', missedSteers: ['saved'] }));
+      const mutate = home.mutateJson.bind(home);
+      const storage = vi.spyOn(home, 'mutateJson')
+        .mockImplementationOnce(async (...args) => { await mutate(...args); throw new Error('take rejected after commit'); })
+        .mockImplementationOnce(async (...args) => { if (failure === 'after') await mutate(...args); throw new Error('rollback rejected'); });
+      await expect(ledger.takeMissedSteers(CWD, 'p1', 'c1', { status: 'running', owner: OWNER })).rejects.toThrow('take rejected');
+      storage.mockRestore();
+      await ledger.appendMissedSteers(CWD, 'p1', 'c1', ['newer']);
+      expect(ledger.listFor(CWD, 'p1')[0].missedSteers).toEqual(['saved', 'newer']);
+      expect(await ledger.takeMissedSteers(CWD, 'p1', 'c1')).toEqual(['saved', 'newer']);
+      await ledger.appendMissedSteers(CWD, 'p1', 'c1', ['latest']);
+      expect(ledger.listFor(CWD, 'p1')[0].missedSteers).toEqual(['latest']);
+    });
+    it('keeps the existing newest-steers bound across repeated rejected-take recovery', async () => {
+      await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', missedSteers:
+        Array.from({ length: MISSED_STEERS_MAX_ENTRIES }, (_, i) => `original-${i}`) }));
+      const mutate = home.mutateJson.bind(home);
+      for (let cycle = 0; cycle < 3; cycle++) {
+        const newer = Array.from({ length: MISSED_STEERS_MAX_ENTRIES }, (_, i) => `cycle-${cycle}-${i}`);
+        const storage = vi.spyOn(home, 'mutateJson').mockImplementationOnce(async (...args) => {
+          await mutate(...args);
+          await ledger.appendMissedSteers(CWD, 'p1', 'c1', newer);
+          throw new Error('take committed then rejected');
+        });
+        await expect(ledger.takeMissedSteers(CWD, 'p1', 'c1')).rejects.toThrow('take committed');
+        storage.mockRestore();
+        expect(ledger.listFor(CWD, 'p1')[0].missedSteers).toEqual(newer);
+      }
+    });
+    it('never restores an old rejected packet into a newer take generation', async () => {
+      await ledger.recordStart(CWD, 'p1', makeRecord({ childId: 'c1', missedSteers: ['saved'] }));
+      const mutate = home.mutateJson.bind(home);
+      const other = new DelegationLedger(home);
+      let newerToken: string | undefined;
+      vi.spyOn(home, 'mutateJson').mockImplementationOnce(async (...args) => {
+        await mutate(...args);
+        await other.appendMissedSteers(CWD, 'p1', 'c1', ['newer']);
+        expect(await other.takeMissedSteers(CWD, 'p1', 'c1')).toEqual(['newer']);
+        newerToken = other.listFor(CWD, 'p1')[0].missedSteerTakeId;
+        throw new Error('old take rejected');
+      });
+      await expect(ledger.takeMissedSteers(CWD, 'p1', 'c1')).rejects.toThrow('old take rejected');
+      expect(ledger.listFor(CWD, 'p1')[0]).toMatchObject({ missedSteers: [], missedSteerTakeId: newerToken });
     });
   });
 

@@ -1524,7 +1524,10 @@ export function registerIpcHandlers(
 
   // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
 
-  transcriptWatcher.on('transcript-event', (event: any) => {
+  transcriptWatcher.on('transcript-event', (sourceEvent: TranscriptEvent) => {
+    // WHY: certify the operation before the record and screens consume a live
+    // CC summary, without mutating the saved transcript line.
+    const event = liveFacts.prepareTranscript(sourceEvent);
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
     // Conversation Store (Phase 2a): feed live activity into the record store.
@@ -1741,21 +1744,18 @@ export function registerIpcHandlers(
   // WHY (2026-09-30 one-core R3-5): the native:* request channels (send, queue, interrupt, compact, models,
   // permission mode, context prefs, step guard, sessions-list, kill-shell, admin password, context text) are
   // table entries (main/ipc/native.ts). The PUSH below stays here: it fans out to windows and phones as before.
-  // Push every seeded or changed mode to each window showing the session AND
-  // every phone. WHY: the get above can answer before a starting session has
-  // its mode, and a change made in one window or on the phone used to reach
-  // only the caller — so chips elsewhere could show a stricter mode than the
-  // session was really running on. The host emits from ONE place (seedMode /
-  // setPermissionMode), so both the IPC and the remote set paths are covered.
+  // WHY: seedMode/setPermissionMode publish to every window and phone, not just
+  // the caller; early reads may precede seeding and otherwise leave stale chips.
   // One-core R5-4a: the messages waiting behind a running turn, as the host holds them, so EVERY screen draws (and can cancel) the same strip.
   nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
   });
-  // A native compaction began or ended without a summary line (stopped or refused): the spinner on every screen.
-  nativeHost.on('compaction', (e: { sessionId: string; phase: 'start' | 'end'; outcome?: 'cancelled' | 'failed' }) => {
-    if (e.phase === 'start') liveFacts.compactStarted(e.sessionId);
-    else liveFacts.compactEnded(e.sessionId, e.outcome ?? 'failed');
+  // Startup readiness is a retained host fact, so every window/phone gates the same unsent draft.
+  nativeHost.on('startup-state', (e: { sessionId: string; state: import('../shared/native-startup').NativeStartupState }) => {
+    publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'native-startup', state: e.state });
   });
+  // A native compaction began or ended without a summary (stopped or failed): the spinner on every screen.
+  nativeHost.on('compaction', liveFacts.noteNativeCompaction);
   // A native session's model changed (the picker, from any screen): the label on every screen.
   nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
     publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });

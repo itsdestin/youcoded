@@ -14,7 +14,7 @@
 // overrides the store's `sessions` directly for the non-empty case.
 import React from 'react';
 import { beforeAll, describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // jsdom has no xterm renderer. A live session's terminal can mount once it is
@@ -30,6 +30,7 @@ import { installMock } from '../src/renderer/dev/workbench/install-mock';
 import { setConnectionMode } from '../src/renderer/platform';
 
 function installBrowserStubs(): void {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   if (!(globalThis as any).IntersectionObserver) {
     (globalThis as any).IntersectionObserver = class {
       observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
@@ -96,6 +97,7 @@ async function mountApp(opts: {
   overrideWindowGetId?: number;
   /** Merged into the fake's session defaults before App mounts (App reads them once at start). */
   overrideDefaults?: Record<string, unknown>;
+  beforeRender?: () => void;
 } = {}): Promise<HTMLElement> {
   installStorage();
   installBrowserStubs();
@@ -123,6 +125,7 @@ async function mountApp(opts: {
       answerClose: () => {},
     };
   }
+  opts.beforeRender?.();
   const { default: App } = await import('../src/renderer/App');
   document.getElementById('root')?.remove();
   const root = document.createElement('div');
@@ -212,6 +215,351 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     // session:reopen-list handed the screen — this is the round trip design
     // §5's "onDone → forgetReopen(ids) with the ids shown" pins.
     await waitFor(() => expect(store.getState().reopen).toEqual([]));
+  });
+
+  it('starts independent restores before a slow restore acknowledges', async () => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    const api = window.claude.session;
+    const release: Array<() => void> = [];
+    const create = vi.fn((args: Parameters<typeof api.create>[0]) => new Promise<Awaited<ReturnType<typeof api.create>>>((resolve, reject) => {
+      release.push(() => { void api.create(args).then(resolve, reject); });
+    }));
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      // No clock budget: the slow create is deliberately unresolved. Other
+      // conversations must reach backend admission without waiting for it.
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+      expect(new Set(create.mock.calls.map(([args]) => args.resumeSessionId)).size).toBe(3);
+    } finally {
+      // Drain the original serial implementation too, so a red test leaves no work behind.
+      window.claude.session = api;
+      await act(async () => { for (const done of release) done(); });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    }
+  });
+
+  it.each(['local', 'remote'] as const)('keeps one recovered chat selected while the other restores arrive (%s)', async (mode) => {
+    let choose!: (payload: { sessionId: string; refocusOnly: boolean }) => void;
+    await mountApp({ beforeRender: () => {
+      const detach = window.claude.detach;
+      window.claude.detach = new Proxy(detach, { get: (target, key) => key === 'onOwnershipAcquired'
+        ? (cb: typeof choose) => { choose = cb; return () => {}; } : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    // Welcome back is desktop-only. Switch after it opens to exercise the
+    // remote reply-adoption path as well as the normal created announcement.
+    setConnectionMode(mode);
+    const api = window.claude.session;
+    const release: Array<() => Promise<unknown>> = [];
+    const create = vi.fn((args: Parameters<typeof api.create>[0]) => new Promise<Awaited<ReturnType<typeof api.create>>>((resolve, reject) => {
+      let result: ReturnType<typeof api.create> | undefined;
+      release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; });
+    }));
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+      await act(async () => { await release[0](); });
+      await waitFor(() => expect(active()).toBeTruthy());
+      const first = active();
+      await act(async () => { await release[1](); });
+      expect(active()).toBe(first);
+      const second = (window as any).__workbenchStore.getState().sessions.find((s: any) => s.id !== first).id;
+      // The session switcher's explicit focus-existing-session choice.
+      act(() => { choose({ sessionId: second, refocusOnly: true }); });
+      await waitFor(() => expect(active()).toBe(second));
+      // An already-open writer emits only a focus request, not sessionCreated.
+      // Its late acknowledgement is automatic too, not a new manual choice.
+      await act(async () => { expect(await api.create(create.mock.calls[0][0])).toMatchObject({ id: first, reused: true }); });
+      expect(active()).toBe(second);
+      await act(async () => { await release[2](); });
+      expect(active()).toBe(second);
+    } finally {
+      window.claude.session = api;
+      await act(async () => { await Promise.all(release.map(done => done())); });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    }
+  });
+
+  it.each(['local', 'remote'] as const)('does not refocus late created pushes delivered after recovery replies (%s)', async (mode) => {
+    const pushes: Array<() => void> = [];
+    await mountApp({ beforeRender: () => {
+      const api = window.claude.on;
+      window.claude.on = new Proxy(api, { get: (target, key) => key === 'sessionCreated'
+        ? (cb: (...args: any[]) => void) => api.sessionCreated((...args: any[]) => { pushes.push(() => cb(...args)); })
+        : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode(mode); });
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    await waitFor(() => expect(pushes).toHaveLength(3));
+    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
+    await waitFor(() => expect(active()).toBeTruthy());
+    const first = active();
+    await act(async () => { for (const push of pushes) push(); });
+    expect(active()).toBe(first);
+  });
+
+  it('does not create on a new host when an old resume lease query resolves late', async () => {
+    let answer!: (value: any) => void;
+    const query = vi.fn(() => new Promise<any>(resolve => { answer = resolve; }));
+    const create = vi.fn();
+    await mountApp({ beforeRender: () => {
+      const api = window.claude.session, sync = window.claude.syncSpaces!;
+      window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+      window.claude.syncSpaces = new Proxy(sync, { get: (target, key) => key === 'leaseQuery' ? query : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode('remote'); window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
+      claudeSessionId: 'old-conversation', projectSlug: 'old', projectPath: '/tmp/old', provider: 'claude',
+    } })); });
+    await waitFor(() => expect(query).toHaveBeenCalledOnce());
+    act(() => { setConnectionMode('local'); });
+    await act(async () => { answer({ held: false }); });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not begin a handoff when old consent is accepted after the host changes', async () => {
+    const begin = vi.fn();
+    const create = vi.fn();
+    await mountApp({ beforeRender: () => {
+      const api = window.claude.session, sync = window.claude.syncSpaces!;
+      const handoff = new Proxy(api.handoff, { get: (target, key) => key === 'begin' ? begin : Reflect.get(target, key) });
+      window.claude.session = new Proxy(api, { get: (target, key) => key === 'handoff' ? handoff
+        : key === 'create' ? create : Reflect.get(target, key) });
+      window.claude.syncSpaces = new Proxy(sync, { get: (target, key) => key === 'leaseQuery'
+        ? async () => ({ held: true, self: false, device: 'old computer' }) : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode('remote'); window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
+      claudeSessionId: 'old-conversation', projectSlug: 'old', projectPath: '/tmp/old', provider: 'claude',
+    } })); });
+    await screen.findByRole('button', { name: 'Take over' });
+    // Capture the pending consent before the host reset. Accepting it must not
+    // route its old conversation into the new host's PendingHandoff owner.
+    act(() => { setConnectionMode('local'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Take over' })); });
+    expect(begin).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not launch an old recovery batch after its provider lookup crosses a host change', async () => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    const providers = window.claude.providers, api = window.claude.session;
+    let finish!: (value: any[]) => void;
+    // WHY only hold the batch lookup: ResumeBrowser also refreshes its model picker.
+    const list = vi.fn(providers.list).mockImplementationOnce(() => new Promise<any[]>(resolve => { finish = resolve; }));
+    const create = vi.fn();
+    window.claude.providers = new Proxy(providers, { get: (target, key) => key === 'list' ? list : Reflect.get(target, key) });
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    act(() => { setConnectionMode('remote'); });
+    await act(async () => { finish([]); });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('clears the new-chat starting state when the connection host changes', async () => {
+    let reply!: (info: any) => void;
+    const create = vi.fn(() => new Promise<any>(resolve => { reply = resolve; }));
+    await mountApp({ beforeRender: () => {
+      const api = window.claude.session;
+      window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Start fresh' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^New session$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^(Create|Start) session$/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(screen.getByText('Starting your session…')).toBeInTheDocument();
+    act(() => { setConnectionMode('remote'); });
+    await act(async () => { reply({ id: 'old-new-chat', name: 'Old chat', cwd: '/tmp/old', provider: 'claude', model: 'sonnet' }); });
+    await waitFor(() => expect(screen.queryByText('Starting your session…')).not.toBeInTheDocument());
+  });
+
+  it.each(['local', 'remote'] as const)('selects an explicit manual resume while an unrelated recovery reply is still pending (%s)', async (mode) => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode(mode); });
+    const api = window.claude.session;
+    const release: Array<() => Promise<unknown>> = [];
+    const create = vi.fn((args: any) => args.resumeSessionId === 'manual-conversation' ? api.create(args)
+      : new Promise<any>((resolve, reject) => { let result: Promise<any> | undefined;
+        release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; }); }));
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+      await act(async () => { await release[0](); });
+      await waitFor(() => expect(active()).toBeTruthy());
+      act(() => { window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
+        claudeSessionId: 'manual-conversation', projectSlug: 'manual', projectPath: '/tmp/manual', provider: 'claude',
+      } })); });
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
+      const info = await create.mock.results[3].value;
+      await waitFor(() => expect(active()).toBe(info.id));
+    } finally {
+      window.claude.session = api;
+      await act(async () => { await Promise.all(release.map(done => done())); });
+    }
+  });
+
+  it.each(['local', 'remote'] as const)('selects an explicit new chat during a held recovery batch (%s)', async (mode) => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode(mode); });
+    const api = window.claude.session;
+    const release: Array<() => Promise<unknown>> = [];
+    const create = vi.fn((args: any) => !args.resumeSessionId ? api.create(args)
+      : new Promise<any>((resolve, reject) => { let result: Promise<any> | undefined;
+        release.push(() => { result ??= api.create(args).then(value => { resolve(value); return value; }, reject); return result; }); }));
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    const active = () => document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')?.getAttribute('data-chat-session-id');
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+      await act(async () => { await release[0](); });
+      await waitFor(() => expect(active()).toBeTruthy());
+      fireEvent.keyDown(document.body, { key: 'Shift' });
+      fireEvent.click(await screen.findByRole('button', { name: /New session$/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /^(Create|Start) session$/ }));
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
+      const info = await create.mock.results[3].value;
+      await waitFor(() => expect(active()).toBe(info.id));
+      await act(async () => { await Promise.all(release.map(done => done())); });
+      expect(active()).toBe(info.id);
+    } finally {
+      window.claude.session = api;
+      await act(async () => { await Promise.all(release.map(done => done())); });
+    }
+  });
+
+  it.each(['host change', 'unmount'] as const)('ignores a remote resume reply after %s', async (invalidate) => {
+    let reply!: (info: any) => void;
+    const create = vi.fn(() => new Promise<any>((resolve) => { reply = resolve; }));
+    let open!: ReturnType<typeof vi.fn>;
+    await mountApp({ beforeRender: () => {
+      const api = window.claude.session;
+      open = vi.fn(api.open);
+      window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create
+        : key === 'open' ? open : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    act(() => { setConnectionMode('remote'); });
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
+      claudeSessionId: 'old-conversation', projectSlug: 'old-project', projectPath: '/tmp/old-project', provider: 'claude',
+    } })); });
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    if (invalidate === 'unmount') cleanup();
+    else act(() => { setConnectionMode('local'); setConnectionMode('remote'); });
+    await act(async () => { reply({ id: 'stale-writer', name: 'Old writer', cwd: '/tmp/old-project', provider: 'claude', permissionMode: 'normal', model: 'sonnet' }); });
+    expect(document.querySelector('[data-chat-session-id="stale-writer"]')).toBeNull();
+    expect(open.mock.calls.some(([req]) => req.sessionId === 'stale-writer')).toBe(false);
+  });
+
+  it('keeps successful restores when another startup fails later', async () => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    const api = window.claude.session;
+    let fail!: () => void;
+    const create = vi.fn((args: Parameters<typeof api.create>[0]) => args.resumeSessionId === 'wb-past-0'
+      ? new Promise<Awaited<ReturnType<typeof api.create>>>((_, reject) => { fail = () => reject(new Error('startup failed')); })
+      : api.create(args));
+    window.claude.session = new Proxy(api, { get: (target, key) => key === 'create' ? create : Reflect.get(target, key) });
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+      const store = (window as any).__workbenchStore;
+      await waitFor(() => expect(store.getState().sessions).toHaveLength(2));
+      expect(screen.getByText('Reopening…')).toBeInTheDocument();
+      await act(async () => { fail(); });
+      expect(await screen.findByText('2 reopened. The 2 left didn’t reopen.')).toBeInTheDocument();
+      expect(store.getState().sessions).toHaveLength(2);
+    } finally {
+      await act(async () => { fail?.(); });
+      window.claude.session = api;
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    }
+  });
+
+  it('queues ownership questions without blocking an unrelated restore', async () => {
+    await mountApp();
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    const api = window.claude.syncSpaces!;
+    const queried: string[] = [];
+    window.claude.syncSpaces = new Proxy(api, { get: (target, key) => key === 'leaseQuery'
+      ? async (id: string) => {
+        queried.push(id);
+        return id === 'wb-past-4' ? { held: false } : { held: true, self: false, device: `device-${id}` };
+      } : Reflect.get(target, key) });
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await waitFor(() => expect(queried).toHaveLength(3));
+      const store = (window as any).__workbenchStore;
+      await waitFor(() => expect(store.getState().sessions).toHaveLength(1));
+      expect(await screen.findByText('device-wb-past-0')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Never mind' }));
+      expect(await screen.findByText('device-wb-past-1')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Never mind' }));
+    } finally {
+      // Settle any dialog still open after a failed assertion, without consenting to takeover.
+      while (screen.queryByRole('button', { name: 'Never mind' })) {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
+      }
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+      window.claude.syncSpaces = api;
+    }
+  });
+
+  it.each(['local', 'remote'] as const)('keeps the active transfer selected and explains why a second must wait (%s)', async (mode) => {
+    let release!: () => Promise<unknown>;
+    const begin = vi.fn(async () => ({ id: 'transfer-1', status: 'waiting' as const }));
+    let finish!: () => void;
+    const waiting = new Promise<any>((resolve) => { finish = () => resolve({ id: 'transfer-1', status: 'cancelled' }); });
+    await mountApp({ beforeRender: () => {
+      const sessionApi = window.claude.session;
+      const syncApi = window.claude.syncSpaces!;
+      // PendingHandoff captures its API during App's first render.
+      const handoff = new Proxy(sessionApi.handoff, { get: (target, key) => key === 'begin' ? begin
+        : key === 'wait' ? () => waiting : Reflect.get(target, key) });
+      const create = (args: Parameters<typeof sessionApi.create>[0]) => new Promise<Awaited<ReturnType<typeof sessionApi.create>>>((resolve, reject) => {
+        let result: ReturnType<typeof sessionApi.create> | undefined;
+        release = () => { result ??= sessionApi.create(args).then(value => { resolve(value); return value; }, reject); return result; };
+      });
+      window.claude.session = new Proxy(sessionApi, { get: (target, key) => key === 'handoff' ? handoff
+        : key === 'create' ? create : Reflect.get(target, key) });
+      window.claude.syncSpaces = new Proxy(syncApi, { get: (target, key) => key === 'leaseQuery'
+        ? async (id: string) => id === 'wb-past-4' ? { held: false }
+          : { held: true, self: false, device: `device-${id}` } : Reflect.get(target, key) });
+    } });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
+    setConnectionMode(mode);
+    fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));
+    try {
+      await screen.findByText('device-wb-past-0');
+      fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+      await waitFor(() => expect(begin).toHaveBeenCalledOnce());
+      await waitFor(() => expect(release).toBeTypeOf('function'));
+      await act(async () => { await release(); });
+      // The unrelated admitted writer is listed, but must not replace the
+      // selected read/draft transfer tab before that transfer is admitted.
+      expect(document.querySelector('[data-chat-session-id]:not([aria-hidden="true"])')).toBeNull();
+      await screen.findByText('device-wb-past-1');
+      fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+      expect(await screen.findByText('Finish the current conversation transfer, then try reopening this one again.')).toBeInTheDocument();
+      expect(begin).toHaveBeenCalledOnce();
+    } finally {
+      while (screen.queryByRole('button', { name: 'Never mind' })) {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Never mind' })); });
+      }
+      await act(async () => { await release?.(); finish(); });
+      await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
+    }
   });
 
   // The screen shows no Skip permissions switch, so Resume all must never

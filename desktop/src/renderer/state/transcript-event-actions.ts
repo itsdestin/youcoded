@@ -11,7 +11,7 @@ import { clearDividerId } from '../../shared/divider-ids';
  *  - the main window's live stream (App.tsx), `live: true`;
  *  - the buddy window's live stream (BubbleFeed.tsx), `live: true`, through the SAME
  *    listener (state/screen-feed.ts); it skips no event type;
- *  - a history page read off disk (`pageEventToAction`), `live: false`.
+ *  - a history page read off disk (`pageEventToActions`), `live: false`.
  *
  * Pure on purpose: no store, no refs, no batching. The callers keep those
  * (App's rAF batcher and its direct-dispatch set stay in App) and pass in the two
@@ -19,8 +19,8 @@ import { clearDividerId } from '../../shared/divider-ids';
  *
  * `live: false` is a page replayed from disk, i.e. HISTORY. It returns nothing
  * for conditions that only mean something while a turn is running: heartbeats and
- * progress payloads, `session-error`, `replay-complete`, the compaction MARKER
- * (only the window that ran /compact draws one) and the /clear gauge re-base.
+ * progress payloads, `session-error`, `replay-complete` and the /clear gauge
+ * re-base. Native compaction boundaries DO replay; CC resume summaries do not.
  * Replaying "the model is thinking" from disk would park a turn that finished
  * hours ago, and replaying an error would re-raise a banner the user already
  * moved past. The one heartbeat-shaped event that DOES replay is the saved retry
@@ -37,10 +37,14 @@ export interface EventToActionOptions {
   live: boolean;
   /**
    * Live only. Did THIS window just run /compact and is it waiting on the
-   * summary? Gates the marker for a manual compaction. A native automatic
-   * compaction draws one regardless (it has no pending flag to satisfy).
+   * summary? Gates legacy CC markers; durable native summaries draw their
+   * boundary regardless of this screen's pending state.
    */
   compactionPending?: boolean;
+  /** Only hosts without a session record may infer CC completion from local pending state. */
+  allowLegacyCompaction?: boolean;
+  /** A history page contains the actual /compact command before this summary. */
+  restoreCompaction?: boolean;
   /**
    * Live only. Claude Code's statusline reading of the context window, used for
    * the marker's "after" figure when the event carries no figure of its own.
@@ -348,14 +352,21 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
           usage: ev.data.usage,
         } as ChatAction);
       }
-      // The MARKER is live only: a page is history, and a compaction that happened
-      // in another window or a past run must not draw a fresh marker now. A manual
-      // /compact needs compactionPending; a native automatic compaction is
-      // spontaneous (~all history was just summarized away) so it always draws one.
-      if (opts.live && (opts.compactionPending || ev.data.autoCompaction)) {
+      // WHY: native summaries are durable boundaries even on screens without a
+      // spinner. CC also emits synthetic resume summaries: preserve suppression
+      // of those unless this screen actually has a live /compact pending.
+      const recorded = (!opts.live && opts.restoreCompaction === true) || ev.data.contextUsedAfter !== undefined || ev.data.contextUsedBefore !== undefined
+        || ev.data.usage !== undefined || ev.data.autoCompaction !== undefined
+        || ev.data.retainedFromUuid !== undefined || ev.data.compactionRecord !== undefined || ev.data.operationId !== undefined;
+      if (recorded || (opts.live && opts.allowLegacyCompaction === true && opts.compactionPending)) {
         out.push({
           type: 'COMPACTION_COMPLETE',
           sessionId,
+          ...(recorded ? { recorded: true } : {}),
+          // WHY: only the producer can correlate success; a screen's current
+          // spinner may belong to a newer operation than this replayed summary.
+          ...(ev.data.operationId !== undefined ? { operationId: ev.data.operationId } : {}),
+          timestamp: ev.data.sourceTimestamp ?? timestamp,
           // A re-docked window replays the same event; a stable event uuid lets the
           // reducer discard the duplicate marker while keeping the turn.
           markerId: `compact-done-${uuid}`,

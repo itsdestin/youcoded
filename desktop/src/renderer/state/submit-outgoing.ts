@@ -14,6 +14,10 @@ import { runPending, optimisticScreen } from './pending-action';
 import { requestClaudeControl } from './claude-control';
 import { screenInputBlock } from './pty-input-gate';
 import { pendingQueueSend, savePendingQueueSend, clearPendingQueueSend } from './pending-queue-send';
+import { getNativeStartup } from './native-startup-store';
+import { nativeStartupBlocked } from '../../shared/native-startup';
+import { sendFailureCopy } from './native-send-copy';
+import { announce } from '../utils/announce';
 
 /** The gap between attached-file paths sent to Claude Code: longer than Ink's 500 ms paste window, so each path is its own paste (verified on a 4-image send). */
 const FILE_GAP_MS = 600;
@@ -32,6 +36,8 @@ export interface OutgoingSend {
   /** Native only (one-core R6-2): draw the bubble BEFORE the computer answers. The caller says yes only on a phone whose conversation is idle, where the
    *  computer would draw the very same bubble: a send that finds a turn running is queued by the computer and drawn from its queue, never as a bubble here. */
   instant?: boolean;
+  /** A recoverable old bubble is replaced only once the new request is accepted/uncertain. */
+  replaceSendId?: string;
 }
 
 /**
@@ -139,7 +145,9 @@ export type NativeOutcome =
 
 export async function sendToNative(o: OutgoingSend): Promise<NativeOutcome> {
   const sendId = newSendId();
-  if (o.instant) return sendToNativeNow(o, sendId);
+  if (nativeStartupBlocked(getNativeStartup(o.sessionId))) return { status: 'failed', result: { status: 'failed', reason: 'initializing' }, sendId };
+  if (o.instant && !o.replaceSendId) return sendToNativeNow(o, sendId);
+  const replaceOld = () => { if (o.replaceSendId) o.dispatch({ type: 'SEND_DISCARD', sessionId: o.sessionId, sendId: o.replaceSendId }); };
   let result: NativeSendResult | undefined;
   let unknown = false;
   try {
@@ -149,6 +157,7 @@ export async function sendToNative(o: OutgoingSend): Promise<NativeOutcome> {
     unknown = !!(err as { outcomeUnknown?: boolean } | null)?.outcomeUnknown;
   }
   if (unknown) {
+    replaceOld();
     o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId });
     o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: 'unsure' });
     // The connection may be fine (a slow answer): ask now. If it dropped, the reconnect asks again.
@@ -156,6 +165,8 @@ export async function sendToNative(o: OutgoingSend): Promise<NativeOutcome> {
     return { status: 'unsure', sendId };
   }
   if (!result || result.status === 'failed') return { status: 'failed', result, sendId };
+  // WHY before the replacement bubble: discarding it afterward would clear the new turn's spinner.
+  replaceOld();
   // A 'sent' answer gets the optimistic bubble (nothing is streaming, so its position is already right); a 'queued' one draws nothing here: the
   // computer holds the queue and says so (`session:live`, kind `queue`), and every screen's strip is drawn from that.
   if (result.status !== 'queued') {
@@ -202,6 +213,13 @@ async function sendToNativeNow(o: OutgoingSend, sendId: string): Promise<NativeO
   return outcome;
 }
 
+export function retainFailedOutgoing(o: OutgoingSend, out: Extract<NativeOutcome, { status: 'failed' }>): void {
+  // WHY a recoverable note: never overwrite a newer draft or silently discard the earlier text/files.
+  o.dispatch({ type: 'UNSENT_RETAINED', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths,
+    sendId: out.sendId, note: out.result ? 'not-sent' : 'unsure' });
+  if (!out.result && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SEND_CHECK_EVENT));
+}
+
 /** The words and files of a sent bubble, back out of it (the bubble's content is the file paths, then the text). */
 export function splitSentContent(content: string, attachments: readonly string[] | undefined): { ptyText: string; paths: string[] } {
   const paths = [...(attachments ?? [])];
@@ -237,6 +255,9 @@ export function discardUnsent(args: {
   args.dispatch({ type: 'SEND_DISCARD', sessionId: args.sessionId, sendId: args.sendId });
 }
 
+// WHY: the old bubble remains usable until admission; repeated presses must share that pending retry, not submit two new sends.
+const pendingRetries = new Set<string>();
+
 /**
  * "Send again" on a message that did not (or may not have) arrive: the old bubble goes and the same words go out as a NEW send. Only ever called
  * by the person pressing the button.
@@ -250,14 +271,19 @@ export function sendAgain(args: {
   dispatch: (action: ChatAction) => void;
   onToast?: (message: string) => void;
 }): void {
+  const notify = args.onToast ?? announce;
+  if (window.claude.session.canSend?.() === false) { notify('Not connected — the original message is still here.'); return; }
   const { ptyText, paths } = splitSentContent(args.content, args.attachments);
-  args.dispatch({ type: 'SEND_DISCARD', sessionId: args.sessionId, sendId: args.sendId });
-  const base: OutgoingSend = { sessionId: args.sessionId, provider: args.provider, ptyText, content: args.content, paths, dispatch: args.dispatch };
+  const base: OutgoingSend = { sessionId: args.sessionId, provider: args.provider, ptyText, content: args.content, paths, dispatch: args.dispatch, replaceSendId: args.sendId };
   if (args.provider === 'native') {
-    void sendToNative(base).then((out) => {
-      if (out.status === 'failed') args.onToast?.('Not connected — your message could not be sent. Try again when you are back online.');
-    });
+    const key = JSON.stringify([args.sessionId, args.sendId]);
+    if (pendingRetries.has(key)) return;
+    pendingRetries.add(key);
+    void sendToNative(base)
+      .then(out => { if (out.status === 'failed') notify(sendFailureCopy(out.result)); })
+      .finally(() => { pendingRetries.delete(key); });
   } else {
+    args.dispatch({ type: 'SEND_DISCARD', sessionId: args.sessionId, sendId: args.sendId });
     sendToClaudeCode(base);
   }
 }

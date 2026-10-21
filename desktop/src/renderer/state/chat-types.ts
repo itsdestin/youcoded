@@ -48,15 +48,19 @@ export type AssistantTurnSegment =
       // Native runtime streams text as per-token deltas merged by partId
       // (same semantics as reasoning). CC's transcript path sends whole
       // blocks with no partId — those keep appending as separate segments.
-      partId?: string }
+      partId?: string; sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number }
   // Reasoning / extended-thinking content with a text payload. The native
   // harness (Phase 2) streams these for thinking models; CC's transcript
   // path may also carry thinking text in future. Rendered as a collapsible
   // disclosure attached to the next text bubble. Reasoning streams as
   // per-token deltas merged into one segment by partId — UNLIKE the text
   // path, which appends each whole block as its own segment.
-  | { type: 'reasoning'; content: string; messageId: string; partId?: string }
+  | { type: 'reasoning'; content: string; messageId: string; partId?: string;
+      sourceUuid?: string; sourceTimestamp?: number; lastSourceUuid?: string; lastSourceTimestamp?: number }
   | { type: 'tool-group'; groupId: string }
+  // WHY: a divider can occur inside one still-running logical reply. Keeping
+  // its position in the segment stream prevents later output overtaking it.
+  | { type: 'system-marker'; marker: SystemMarker }
   // Plan mode: ExitPlanMode tool's `input.plan` surfaced as its own bubble so
   // users see the full plan markdown in chat, not just the approval buttons.
   // Linked to the tool via toolUseId so the reducer can dedup across re-emits.
@@ -96,6 +100,10 @@ export interface TurnUsage {
 export interface AssistantTurn {
   id: string;
   segments: AssistantTurnSegment[];
+  /** WHY: explicit source rows keep in-turn chunks on the correct side of inline cards. */
+  presentationReferences?: boolean;
+  /** Exact terminal source identity for boundaries discovered in overlapping pages. */
+  sourceCompletionUuid?: string;
   /** Epoch ms — captured from the first segment's transcript event */
   timestamp?: number;
   /** Only set when stop_reason is non-end_turn (max_tokens, refusal, etc.). Null for normal completions. */
@@ -257,8 +265,8 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
-  | { kind: 'assistant-turn'; turnId: string }
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
+  | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
   | { kind: 'usage-card'; snapshot: UsageSnapshot }
@@ -375,7 +383,7 @@ export interface SessionChatState {
    * Holds the pre-compaction contextTokens count so COMPACTION_COMPLETE can compute
    * how much was freed.
    */
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
+  compactionPending: { id?: string; startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   /**
    * Native sessions only. Tokens occupying the model's window after the last
    * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
@@ -549,6 +557,16 @@ export type ChatAction =
       sendTransport?: 'direct' | 'pty';
     }
   | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
+  | {
+      /** Preserve refused/uncertain text without accepting a turn or changing runtime status. */
+      type: 'UNSENT_RETAINED';
+      sessionId: string;
+      content: string;
+      timestamp: number;
+      attachments?: string[];
+      sendId: string;
+      note: 'unsure' | 'not-sent';
+    }
   | {
       // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
       type: 'SEND_NOTE';
@@ -1076,6 +1094,7 @@ export type ChatAction =
       type: 'COMPACTION_PENDING';
       sessionId: string;
       cardId: string;
+      timestamp?: number;
       beforeContextTokens: number | null;
       // Native: the IPC call's own answer ends this spinner (marker or refusal),
       // so App's 3-minute "may have failed" watchdog must not guess instead —
@@ -1086,13 +1105,21 @@ export type ChatAction =
     }
   // A native summary the user stopped (or a switch popup that gave up): drop the
   // spinner with NO marker — nothing was compacted, and nothing "may have failed".
-  | { type: 'COMPACTION_CANCELLED'; sessionId: string }
+  | { type: 'COMPACTION_CANCELLED'; sessionId: string; operationId?: string }
   // Compaction finished — remove spinner, clear timeline, add marker with diff.
   // Triggered by transcript-shrink OR first turn-complete (resume-from-summary).
   | {
       type: 'COMPACTION_COMPLETE';
       sessionId: string;
       markerId: string;
+      // A durable summary is valid without a local spinner and must not end a
+      // newer/live logical turn when a screen restores or receives it late.
+      recorded?: boolean;
+      /** Exact predecessor from ordered page replay; not persisted or inferred from clocks. */
+      predecessorUuid?: string;
+      predecessorToolUseId?: string;
+      operationId?: string;
+      timestamp?: number;
       afterContextTokens: number | null;
       // Native sessions only. The Claude Code path leaves this undefined and the
       // reducer falls back to compactionPending.beforeContextTokens, which is
@@ -1112,7 +1139,7 @@ export type ChatAction =
   // A native HISTORY REWRITE that ran outside a turn — /compact or /clear.
   //
   // Separate from COMPACTION_COMPLETE on purpose: that action draws the timeline
-  // MARKER and is gated on `compactionPending || auto`, while this one carries
+  // MARKER (legacy completions require pending/auto; recorded summaries do not), while this one carries
   // the two facts that must land whether or not a marker is drawn — the window's
   // new occupancy, and the summarize request's own bill. Folding them in would
   // make a compaction whose marker guard happened not to fire silently lose both.
@@ -1176,7 +1203,7 @@ export interface SerializedSessionChatState {
   // makes the elapsed number approximate on remote; that is accepted.
   stalledSince?: number | null;
   lastBufferActivityAt: number;
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
+  compactionPending: { id?: string; startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized because it is a fact about the SESSION's window, not about one
   // client's view: a phone that reconnects after the desktop compacted must see

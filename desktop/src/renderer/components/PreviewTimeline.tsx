@@ -21,6 +21,7 @@ import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
 import { shouldRenderAssistantTurn, type SessionChatState } from '../state/chat-types';
 import { findArchiveBoundary } from '../state/archive-boundary';
+import { projectTimeline } from '../state/timeline-presentation';
 import { useTheme } from '../state/theme-context';
 import type { SessionProvider } from '../../shared/types';
 import type { EntryFolding } from '../hooks/use-entry-folding';
@@ -37,10 +38,12 @@ export default function PreviewTimeline({ state, sessionId, provider, folding }:
   folding?: EntryFolding;
 }) {
   const { showTimestamps } = useTheme();
-  const { index: lastArchiveIdx } = React.useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
+  // WHY: previews use the same boundary rows as the live chat, not a second layout.
+  const presentation = React.useMemo(() => projectTimeline(state.timeline, state.assistantTurns), [state.timeline, state.assistantTurns]);
+  const { index: lastArchiveIdx } = React.useMemo(() => findArchiveBoundary(presentation.timeline), [presentation.timeline]);
   return (
     <>
-      {state.timeline.map((entry, idx) => {
+      {presentation.timeline.map((entry, idx) => {
         let key: string;
         let content: React.ReactNode;
         switch (entry.kind) {
@@ -54,7 +57,7 @@ export default function PreviewTimeline({ state, sessionId, provider, folding }:
             );
             break;
           case 'assistant-turn': {
-            const turn = state.assistantTurns.get(entry.turnId);
+            const turn = presentation.assistantTurns.get(entry.turnId);
             if (!shouldRenderAssistantTurn(turn)) return null;
             key = entry.turnId;
             content = (

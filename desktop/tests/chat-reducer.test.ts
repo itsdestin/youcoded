@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
+import { projectTimeline } from '../src/renderer/state/timeline-presentation';
 import { ChatState, ChatAction, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
@@ -19,6 +20,155 @@ function initState(): ChatState {
 function dispatch(state: ChatState, action: ChatAction): ChatState {
   return chatReducer(state, action);
 }
+
+describe('compaction boundary outcomes', () => {
+  it('keeps the running reply and its tools intact when compaction fails', () => {
+    let state = dispatch(initState(), {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'running-tool',
+      toolUseId: 'tool-1', toolName: 'Bash', toolInput: { command: 'work' }, timestamp: 10,
+    });
+    const running = state.get(SESSION)!;
+    state = dispatch(state, { type: 'COMPACTION_PENDING', sessionId: SESSION,
+      cardId: 'compact-request', beforeContextTokens: 1000 });
+    state = dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      markerId: 'compact-refused', afterContextTokens: null, aborted: true });
+    expect(state.get(SESSION)!.currentTurnId).toBe(running.currentTurnId);
+    expect(state.get(SESSION)!.isThinking).toBe(running.isThinking);
+    expect(state.get(SESSION)!.toolCalls.get('tool-1')).toEqual(running.toolCalls.get('tool-1'));
+    expect(state.get(SESSION)!.activeTurnToolIds).toEqual(running.activeTurnToolIds);
+  });
+
+  it('does not mark unchanged history as summarized after a compaction failure', () => {
+    let state = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION,
+      uuid: 'old-answer', text: 'Still in context', timestamp: 10 });
+    state = dispatch(state, { type: 'COMPACTION_PENDING', sessionId: SESSION,
+      cardId: 'compact-request', beforeContextTokens: 1000 });
+    state = dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      markerId: 'compact-refused', afterContextTokens: null, aborted: true });
+    expect(state.get(SESSION)!.timeline.some(e => e.kind === 'system-marker' && e.marker.variant === 'compact')).toBe(false);
+  });
+
+  it('keeps pending sends below model switch dividers and subsequent output', () => {
+    let state = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'Next question', timestamp: 9 });
+    state = dispatch(state, { type: 'MODEL_SWITCH_MARKER', sessionId: SESSION,
+      markerId: 'switch', timestamp: 10, label: 'Model switched' });
+    state = dispatch(state, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION,
+      uuid: 'older-output', text: 'Finishing the earlier reply', timestamp: 11 });
+    const tail = state.get(SESSION)!.timeline.at(-1);
+    expect(tail?.kind).toBe('user');
+    expect(tail?.kind === 'user' && tail.pending).toBe(true);
+  });
+});
+
+describe('pending send ordering around context operations', () => {
+  it.each(['clear', 'compact', 'pending'] as const)('keeps a pending send last after %s', kind => {
+    let state = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'waiting', timestamp: 1 });
+    const action: ChatAction = kind === 'clear' ? { type: 'CLEAR_TIMELINE', sessionId: SESSION, markerId: 'clear', timestamp: 2 }
+      : kind === 'pending' ? { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'pending', beforeContextTokens: null }
+      : { type: 'COMPACTION_COMPLETE', sessionId: SESSION, recorded: true, markerId: 'compact', timestamp: 2, afterContextTokens: 10 };
+    state = dispatch(state, action);
+    expect(state.get(SESSION)!.timeline.at(-1)?.kind).toBe('user');
+  });
+});
+
+describe('boundaries within an active logical reply', () => {
+  const text = (state: ChatState, value: string, uuid: string) => dispatch(state, {
+    type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, text: value, uuid, partId: 'text-0', timestamp: 10,
+  });
+  const compact = (state: ChatState, id: string) => dispatch(state, { type: 'COMPACTION_COMPLETE',
+    sessionId: SESSION, markerId: id, recorded: true, auto: true, timestamp: 20, afterContextTokens: 100 });
+  const visible = (state: ChatState) => {
+    const session = state.get(SESSION)!;
+    const view = projectTimeline(session.timeline, session.assistantTurns);
+    return view.timeline.flatMap(entry => entry.kind === 'system-marker' ? [entry.marker.id]
+      : entry.kind === 'assistant-turn' ? view.assistantTurns.get(entry.turnId)!.segments
+        .filter(s => s.type === 'text').map(s => s.content) : []);
+  };
+
+  it('keeps repeated compaction dividers between old and newly streamed text with reused part IDs', () => {
+    let state = text(initState(), 'before', 'a');
+    const logicalId = state.get(SESSION)!.currentTurnId;
+    state = compact(state, 'first');
+    state = text(state, 'between', 'b');
+    state = compact(state, 'second');
+    state = text(state, 'after', 'c');
+    expect(visible(state)).toEqual(['before', 'first', 'between', 'second', 'after']);
+    expect(state.get(SESSION)!.currentTurnId).toBe(logicalId);
+    expect(state.get(SESSION)!.assistantTurns.size).toBe(1);
+    expect(compact(state, 'first')).toBe(state);
+  });
+
+  it('deduplicates a saved boundary against the same boundary already inside a live turn', () => {
+    let state = text(initState(), 'before', 'a');
+    state = compact(state, 'compact-done-same');
+    state = text(state, 'after', 'b');
+    state = dispatch(state, { type: 'HISTORY_PAGE_LOADED', sessionId: SESSION, cursor: null, hasMore: false,
+      events: [{ type: 'compact-summary', sessionId: SESSION, uuid: 'same', timestamp: 20,
+        data: { autoCompaction: true, contextUsedAfter: 100, summary: 'saved' } }] });
+    expect(visible(state)).toEqual(['before', 'compact-done-same', 'after']);
+    expect(visible(deserializeChatState(serializeChatState(state)))).toEqual(visible(state));
+  });
+
+  it('keeps a model-switch divider before subsequent text and retracts it without losing content', () => {
+    let state = text(initState(), 'before', 'a');
+    state = dispatch(state, { type: 'MODEL_SWITCH_MARKER', sessionId: SESSION,
+      markerId: 'model-cut', timestamp: 20, label: 'Model switched' });
+    state = text(state, 'after', 'b');
+    expect(visible(state)).toEqual(['before', 'model-cut', 'after']);
+    state = dispatch(state, { type: 'MODEL_SWITCH_RETRACT', sessionId: SESSION, markerId: 'model-cut' });
+    expect(visible(state)).toEqual(['before', 'after']);
+  });
+
+  it('keeps pre-boundary content when retry removes a post-boundary part with the same ID', () => {
+    let state = text(initState(), 'before', 'a');
+    state = compact(state, 'cut');
+    state = text(state, 'discarded attempt', 'b');
+    state = dispatch(state, { type: 'NATIVE_PARTS_DROPPED', sessionId: SESSION, partIds: ['text-0'] });
+    state = text(state, 'replacement', 'c');
+    expect(visible(state)).toEqual(['before', 'cut', 'replacement']);
+  });
+
+  it('keeps late tool results above the boundary and new tools below it', () => {
+    let state = dispatch(initState(), { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION,
+      uuid: 't1', toolUseId: 'one', toolName: 'Read', toolInput: {}, timestamp: 10 });
+    const firstGroup = state.get(SESSION)!.currentGroupId;
+    state = compact(state, 'cut');
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION,
+      uuid: 't2', toolUseId: 'two', toolName: 'Read', toolInput: {}, timestamp: 30 });
+    expect(state.get(SESSION)!.currentGroupId).not.toBe(firstGroup);
+    state = dispatch(state, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION,
+      uuid: 'result', toolUseId: 'one', result: 'old result', isError: false });
+    const session = state.get(SESSION)!;
+    const view = projectTimeline(session.timeline, session.assistantTurns);
+    expect(view.timeline.map(e => e.kind)).toEqual(['assistant-turn', 'system-marker', 'assistant-turn']);
+    expect(session.toolCalls.get('one')!.status).toBe('complete');
+    expect(session.toolGroups.get(firstGroup!)!.toolIds).toEqual(['one']);
+  });
+
+  it('ignores stale operation outcomes and preserves a newer identified spinner', () => {
+    let state = dispatch(initState(), { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'new', beforeContextTokens: 200, timestamp: 20 } as ChatAction);
+    const pending = state;
+    state = dispatch(state, { type: 'COMPACTION_CANCELLED', sessionId: SESSION, operationId: 'old' } as ChatAction);
+    expect(state).toBe(pending);
+    state = dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      operationId: 'old', markerId: 'old-failed', afterContextTokens: null, aborted: true } as ChatAction);
+    expect(state).toBe(pending);
+    state = dispatch(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      operationId: 'old', markerId: 'old-success', afterContextTokens: 100, timestamp: 10, recorded: true } as ChatAction);
+    expect(state.get(SESSION)!.compactionPending).toEqual(pending.get(SESSION)!.compactionPending);
+    expect(state.get(SESSION)!.timeline.some(e => e.kind === 'compacting' && e.id === 'new')).toBe(true);
+  });
+
+  it('does not relocate or restart an already pending operation when its start is replayed', () => {
+    let state = dispatch(initState(), { type: 'COMPACTION_PENDING', sessionId: SESSION,
+      cardId: 'same', beforeContextTokens: 200, timestamp: 20 } as ChatAction);
+    const original = state;
+    state = dispatch(state, { type: 'COMPACTION_PENDING', sessionId: SESSION,
+      cardId: 'same', beforeContextTokens: 200, timestamp: 999 } as ChatAction);
+    expect(state).toBe(original);
+    expect(state.get(SESSION)!.compactionPending!.startedAt).toBe(20);
+  });
+});
 
 describe('transient native usage progress', () => {
   const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 });

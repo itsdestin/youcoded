@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { parseTranscriptLine } from '../src/main/transcript-watcher';
 import { SubagentIndex } from '../src/main/subagent-index';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
-import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
+import { pageEventToActions } from '../src/renderer/state/transcript-page-actions';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { looseData, type TranscriptEvent } from '../src/shared/types';
 
@@ -108,7 +108,11 @@ const S = 'sess';
 const d = (s: ChatState, a: ChatAction) => chatReducer(s, a);
 const init = (): ChatState => d(new Map(), { type: 'SESSION_INIT', sessionId: S } as ChatAction);
 const card = (s: ChatState, id = 'toolu_A') => s.get(S)!.toolCalls.get(id)!;
-const toAction = (e: TranscriptEvent) => pageEventToAction(e)!;
+const toAction = (e: TranscriptEvent) => {
+  const actions = pageEventToActions(e);
+  expect(actions).toHaveLength(1); // These background-task fixtures each carry one action.
+  return actions[0];
+};
 const ev = (line: string) => parseTranscriptLine(line, S);
 function launchAgent(s: ChatState): ChatState {
   s = d(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: 'u1', toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Fetch guidance', prompt: 'go' } } as ChatAction);

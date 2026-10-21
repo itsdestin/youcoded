@@ -45,6 +45,9 @@ body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([d
 }
 /* Full screens (Projects, Pages, Marketplace…) draw their own framed pane over
    the chat: the same ring, so every screen's pane has the same edge. */
-body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .screen-pane--frame {
+/* WHY the panel too (Destin, 2026-10-20: "the side panel in pages view should have a border"):
+   the Pages list beside the frame read as an unframed slab next to an outlined pane. */
+body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .screen-pane--frame,
+body:not([data-chrome-style='floating']):not([data-chrome-style='float']):not([data-input-style='floating']) .screen-pane--panel {
   box-shadow: 0 0 0 1px var(--edge-card);
 }

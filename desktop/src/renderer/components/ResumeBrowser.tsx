@@ -423,6 +423,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
   // The row whose transcript the right panel is showing. Distinct
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
+  // WHY: the recovery fixture opens itself; register its own verified capture without opening the everyday browser.
+  useScreenOpen('welcome/back', () => {}, undefined, !!welcomeBack);
   // Photo-only build: `shoot` previews the first conversation (the everyday browser only).
   useScreenOpen('chat/resume/preview', () => { const first = filteredRef.current[0]; if (first) handleSelectRef.current?.(first); }, undefined, !welcomeBack);
   const filteredRef = useRef<PastSession[]>([]);
@@ -1707,7 +1709,8 @@ function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermi
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {resumeOptions.dialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
-      <Scrim layer={1} onClick={wb ? undefined : onClose} />
+      {/* WHY: recovery focuses the popup, including on solid themes; reuse the shared scrim effect. */}
+      <Scrim layer={1} blurBackground={!!wb} onClick={wb ? undefined : onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}

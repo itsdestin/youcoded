@@ -3199,12 +3199,12 @@ export function installShim(): void {
     app: {
       restart: () => invoke('app:restart'),
     },
-    // Native runtime — desktop Electron only. false on Android/remote-browser
-    // so the renderer gates the runtime selector without platform branching.
+    // Native capability comes from the host handshake, including Android's own backend.
     native: {
       get supported(): boolean { return (window as any).claude?.capabilities?.nativeSessions === true; }, // WHY a getter (R6-1): the host's handshake says whether a phone may drive a native session; it arrives after this object is built
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
+      startupAction: (sessionId: string, attemptId: string, action: 'retry' | 'continue') => invoke('native:startup-action', { sessionId, attemptId, action }),
       // M1: invoke — returns {status,reason} so remote UI matches desktop
       send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => (noteSendEpoch(sessionId, sendId), invoke('native:send', { sessionId, text, attachments, sendId })),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
@@ -3269,16 +3269,11 @@ export function installShim(): void {
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
     },
-    // Sign in with ChatGPT (backend design 2026-09-05 §5) — WS transport, no
-    // payload (none of the four takes an argument). `supported: false` on
-    // purpose (review R1-9): the renderer gates the card on `=== true`, and a
-    // remote browser cannot run the sign-in — the browser tab and the
-    // 127.0.0.1:1455 listener live on the desktop. The four invokes still exist
-    // so the five-surface parity test holds and a remote caller gets an honest
-    // answer (status real, sign-in false, cancel / sign-out real) instead of
-    // an undefined namespace.
+    // WHY a host-derived getter: Android's own backend supports ChatGPT sign-in.
+    // Visiting clients must still see the host account; openExternal separately
+    // gates the sign-in button because its browser callback must stay on the host.
     chatgpt: {
-      supported: false,
+      get supported(): boolean { return (window as any).claude?.capabilities?.chatgptAccount === true; },
       status: () => invoke('chatgpt:status'),
       signIn: () => invoke('chatgpt:sign-in'),
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),

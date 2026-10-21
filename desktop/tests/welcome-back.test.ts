@@ -44,6 +44,22 @@ describe('resolveNativeBinding', () => {
     )).toBeNull();
   });
 
+  it('reuses a uniquely named ready custom endpoint even though typed models have no catalog', () => {
+    const custom = { id: 'lab', type: 'openai-compatible', label: 'My endpoint', enabled: true, ready: true };
+    expect(resolveNativeBinding({ modelId: 'typed-model', providerType: 'openai-compatible', providerLabel: 'My endpoint' }, [custom], []))
+      .toEqual({ providerId: 'lab', modelId: 'typed-model' });
+  });
+
+  it('does not guess between custom endpoints or reuse a disabled/unready endpoint', () => {
+    const ref = { modelId: 'typed-model', providerType: 'openai-compatible', providerLabel: 'My endpoint' };
+    const custom = { id: 'a', type: 'openai-compatible', label: 'My endpoint', enabled: true, ready: true };
+    expect(resolveNativeBinding(ref, [custom, { ...custom, id: 'b' }], [])).toBeNull();
+    expect(resolveNativeBinding(ref, [{ ...custom, enabled: false }], [])).toBeNull();
+    expect(resolveNativeBinding(ref, [{ ...custom, ready: false }], [])).toBeNull();
+    expect(resolveNativeBinding(ref, [{ ...custom, label: 'A different endpoint' }], [])).toBeNull();
+    expect(resolveNativeBinding({ ...ref, providerType: 'local-engine' }, [{ ...custom, type: 'local-engine' }], [])).toBeNull();
+  });
+
   it('is null when no provider of the recorded type is configured on this device', () => {
     expect(resolveNativeBinding(
       { modelId: 'llama-4', providerType: 'ollama', providerLabel: 'Ollama' },

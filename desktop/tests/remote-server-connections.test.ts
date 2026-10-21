@@ -8,7 +8,25 @@ import { EventEmitter } from 'events';
 import fs, { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
-import { choosePhonePageSource } from '../src/main/remote-server';
+import { authOkMessage, choosePhonePageSource } from '../src/main/remote-server';
+
+// WHY account visibility and signing in differ: the account belongs to the backend,
+// but the browser callback must return to the device running that backend.
+describe('ChatGPT account capabilities', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([true, false])('advertises ChatGPT status to local and remote clients (local=%s)', (local) => {
+    vi.stubEnv('YOUCODED_CHATGPT', '1');
+    expect(authOkMessage({ deviceId: 'phone' }, null, local).capabilities)
+      .toMatchObject({ chatgptAccount: true, openExternal: local });
+  });
+
+  it.each([true, false])('honors the ChatGPT kill switch in the handshake (local=%s)', (local) => {
+    vi.stubEnv('YOUCODED_CHATGPT', '0');
+    expect(authOkMessage({ deviceId: 'phone' }, null, local).capabilities)
+      .toMatchObject({ chatgptAccount: false });
+  });
+});
 
 vi.mock('ws', async () => {
   const { EventEmitter: EE } = await import('events');

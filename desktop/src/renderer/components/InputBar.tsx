@@ -19,6 +19,10 @@ import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
+import { NativeStartupNotice } from './NativeStartupNotice';
+import { useNativeStartup } from '../hooks/use-native-startup';
+import { getNativeStartup } from '../state/native-startup-store';
+import { nativeStartupBlocked } from '../../shared/native-startup';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { usePopupOpen } from '../hooks/use-esc-close';
 import BrailleBurst from './BrailleBurst';
@@ -32,12 +36,12 @@ import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-ac
 import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
-import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
+import { sendToClaudeCode, sendToNative, retainFailedOutgoing, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
 import { sendClaudeCommand } from '../state/claude-control';
 import { clearRecoveryDraft } from '../state/draft-recovery';
 import { readComposerDraft, writeComposerDraft } from './composer-draft-recovery';
 import { optimisticScreen, connected } from '../state/pending-action';
-import type { NativeSendResult } from '../../shared/types';
+import { sendFailureCopy } from '../state/native-send-copy';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { takeCaretAtStart } from './pages/page-prompt-caret';
 import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
@@ -132,48 +136,9 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-// M1: copy for a refused/unknown native send ack, shown via onToast instead
-// of dispatching a phantom bubble. Each branch names the REAL cause reported
-// by the host (queue-full / not-live / starting) rather than a guessed one — see
-// docs/error-message-standards.md ("never guess an unverified cause").
-//
-// CORRECTED 2026-09-06. That claim used to be false for one branch. The host had
-// a single 'not-live' code for two opposite situations — a session that has ENDED
-// and one that has not STARTED yet — so a brand-new session on a local model told
-// Destin it was "no longer running" and to "start or resume it", while the engine
-// was quietly loading a 29 GB model that answered him a minute later. Neither half
-// was true and neither remedy existed. The host now separates them, and a message
-// typed during startup is HELD and delivered rather than refused at all, so this
-// branch is only reached when ten are already waiting.
-function sendFailureCopy(result: NativeSendResult | undefined): string {
-  // WHY: the host refuses sends during manual compaction rather than falsely
-  // acknowledging one it cannot deliver; tell the user when to retry.
-  if (result?.status === 'failed' && result.reason === 'compacting') {
-    return 'Conversation is compacting. Wait for it to finish, then send your message.';
-  }
-  if (result?.status === 'failed' && result.reason === 'queue-full') {
-    return 'Send queue is full (10 messages waiting). Wait for the current turn to finish.';
-  }
-  if (result?.status === 'failed' && result.reason === 'starting') {
-    return 'Starting up — the model is still loading, and ten messages are already waiting.';
-  }
-  if (result?.status === 'failed' && result.reason === 'not-live') {
-    return 'This session is no longer running. Start or resume it to send messages.';
-  }
-  // WHY two sentences where there was one (error inventory 2026-09-10, false message 5):
-  // this said "could not be sent — no response from the session host" for an ack that
-  // never came back too. Over remote access that is the 30-second timeout, and
-  // remote-shim.ts documents such a request as one that MAY have run — so the message
-  // could already be in the conversation while the restored draft invited a second send.
-  // No ack → say it could not be confirmed. A host that answered "failed" for a reason
-  // with no sentence of its own did refuse it — say only that, without guessing why.
-  if (!result) {
-    return "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.";
-  }
-  return 'The message could not be sent.';
-}
-
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
+  const startup = useNativeStartup(provider === 'native' ? sessionId : null);
+  const sendBlocked = externalSendBlocked || nativeStartupBlocked(startup);
   const draftAuthority = useRef(createQueueDraft(sessionId));
   draftAuthority.current.session(sessionId);
   // WHY: crash recovery and queue checkout share the same synchronous draft authority;
@@ -336,6 +301,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
   const draftsRef = useRef<Map<string, { text: string; attachments: Attachment[] }>>(new Map());
+  const activeSessionRef = useRef(sessionId);
+  activeSessionRef.current = sessionId;
   const prevSessionRef = useRef<string>(sessionId);
   const skipDraftSaveRef = useRef(false);
   const movedDraftFromRef = useRef<string | null>(null);
@@ -780,6 +747,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // the send was refused and the draft should stay in the input bar.
   const sendMessage = useCallback(
     (message: string, files: Attachment[] = [], force = false): boolean => {
+      // WHY read the live gate again: a status push can precede React's next render.
+      if (provider === 'native' && nativeStartupBlocked(getNativeStartup(sessionId))) {
+        onToast?.('This conversation is not ready to send yet. Your message is still here.');
+        return false;
+      }
       // Prompt gate: while a permission request / AskUserQuestion / plan
       // approval / trust prompt is pending, Claude Code's native Ink select
       // menu is LIVE in the PTY. Anything we write would be interpreted as
@@ -852,7 +824,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // invoke-skill intent for native sessions (M3 item 1).
       const route = routeSlashResult(provider, dispatchResult);
       if (route.via === 'native') {
-        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast });
+        const compactionOperationId = getSessionState?.(sessionId)?.compactionPending?.id; // WHY: capture before awaiting IPC.
+        void runNativeSlashAction(route.action, { sessionId, dispatch, onToast, compactionOperationId });
         return true;
       }
       if (route.via === 'pty') {
@@ -913,6 +886,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           const out = await sendToNative({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch, instant });
           if (out.status !== 'failed') return; // sent / queued / unsure: the bubble (or the host's queue strip) says it, and an unsure one says so on itself
           onToast?.(sendFailureCopy(out.result));
+          if (activeSessionRef.current !== sessionId || (inputRef.current?.value ?? textRef.current).trim() || attachmentsRef.current.length) {
+            retainFailedOutgoing({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map(file => file.path), dispatch }, out);
+            return;
+          }
           // A failed ack must not silently lose the draft (the file's own invariant: a refused send keeps the draft). `send()` already ran
           // setText('')/setAttachments([]) right after this function returned `true`, so restore what was in the textarea (pre-sanitize, keeps
           // newlines) and the original files — but only if nothing new was typed or attached meanwhile (never clobber newer input).
@@ -1138,6 +1115,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
       {/* A model chosen at setup that is still downloading (first-run local
           models, Q-4/Q-7): the same thin band, above the box. */}
+      <NativeStartupNotice sessionId={sessionId} enabled={provider === 'native'} />
       {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (

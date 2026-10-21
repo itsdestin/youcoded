@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { chatReducer } from '../../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../../src/renderer/state/chat-types';
 import { eventToAction } from '../../src/renderer/state/transcript-event-actions';
+import { projectTimeline } from '../../src/renderer/state/timeline-presentation';
 import { hookEventToAction } from '../../src/renderer/state/hook-dispatcher';
 import { parseTranscriptLine } from '../../src/main/transcript-watcher';
 import { readTranscriptPage } from '../../src/main/transcript-page';
@@ -307,11 +308,13 @@ export function screenOf(state: ChatState, sid = SID): Screen | null {
     if (g.type === 'tool-group') return `tools[${(s.toolGroups.get(g.groupId)?.toolIds ?? []).map(tool).join(',')}]`;
     return g.type;
   };
-  const timeline = s.timeline.map((e): string => {
+  // WHY: compare what all three real surfaces draw, not logical boundary segments.
+  const presentation = projectTimeline(s.timeline, s.assistantTurns);
+  const timeline = presentation.timeline.map((e): string => {
     switch (e.kind) {
       case 'user': return `user${e.pending ? '(pending)' : ''}: ${e.message.content}`;
       case 'assistant-turn': {
-        const t = s.assistantTurns.get(e.turnId);
+        const t = presentation.assistantTurns.get(e.turnId);
         return `assistant: ${t ? t.segments.map(seg).join(' | ') : '<missing>'}${t?.stopReason ? ` [stop=${t.stopReason}]` : ''}`;
       }
       case 'system-marker': return `marker: ${e.marker.label}`;

@@ -1,4 +1,6 @@
 import type { NativePermissionMode } from '../../../shared/permission-types';
+import { nativeStartupBlocked, type NativeStartupState } from '../../../shared/native-startup';
+import type { SessionLive } from '../../../shared/session-live-types';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -115,7 +117,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
   'session.sendInput', 'session.respondToPermission', 'session.handoff', 'on.transcriptEvent', 'on.hookEvent',
-  'native.send', 'native.setBinding', 'native.switchModel',
+  'native.send', 'native.setBinding', 'native.switchModel', 'native.startupAction', 'on.sessionLive',
   'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Custom providers (2026-10-20): upsert/remove mirror real channels; services and
   // refreshCatalog are designed ahead of their backend (mock-only.ts).
@@ -610,7 +612,9 @@ export function createMockShim(store: MockStore): Window['claude'] {
     // WHY (one-core R4-1): the workbench stands in for whichever screen it is filming, so it answers `capabilities` the way
     // that screen's host would: a phone browser or paired Android app (?connection=remote), the Android app's own runtime
     // (?platform=android), or the computer's window. The app asks capabilities, so the same screens render as before.
-    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }
+    // WHY explicit host answers: the conservative defaults describe an old host,
+    // not the current backend whose account/settings this fixture displays.
+    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: true, chatgptAccount: true }
       : getPlatform() === 'android' ? { ...ANDROID_LOCAL_CAPABILITIES } : { ...DESKTOP_WINDOW_CAPABILITIES },
     protocolVersion: PROTOCOL_VERSION,
     devLabel: 'Session Naming · Workbench',
@@ -950,6 +954,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Scripted replies: transcript/hook subscribers a played reply emits into.
     transcript: new Set<(e: TranscriptEvent) => void>(),
     hook: new Set<(e: any) => void>(),
+  };
+
+  // WHY opt-in and wb-2 only: existing practice chats keep their historical default.
+  // Replay and live choices use the real shared fact, never a composer/draft mutation.
+  const startupPhase = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('nativeStartup');
+  const startupBase = { hostId: 'workbench', generation: 1, revision: 1 };
+  let startup: NativeStartupState | undefined =
+    startupPhase === 'opening' ? { ...startupBase, phase: 'opening' }
+    : startupPhase === 'connecting' ? { ...startupBase, phase: 'connecting', attemptId: 'wb-tools-1' }
+    : startupPhase === 'failed' ? { ...startupBase, phase: 'failed', attemptId: 'wb-tools-1', cause: 'tools', canContinue: true,
+      issues: [{ id: 'wb-reference', label: 'Reference library', error: 'Connection timed out.' }] }
+    : startupPhase === 'ready' ? { ...startupBase, phase: 'ready' } : undefined;
+  const startupListeners = new Set<(event: SessionLive) => void>();
+  const startupEvent = (): SessionLive => ({ sessionId: 'wb-2', kind: 'native-startup', state: startup! });
+  const publishStartup = (state: NativeStartupState) => {
+    startup = state;
+    startupListeners.forEach(cb => cb(startupEvent()));
   };
 
   /** Applies a mutation only when writes are allowed, so the refused scenario
@@ -2037,6 +2058,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let queuedSends = 0;
   const native: Ns<'native'> = {
     supported: true,
+    startupAction: async (sessionId, attemptId, action) => {
+      if (store.refuseWrites || sessionId !== 'wb-2' || startup?.phase !== 'failed' || startup.attemptId !== attemptId) return { ok: false };
+      const failed = startup;
+      if (action === 'continue') {
+        publishStartup({ ...startupBase, revision: failed.revision + 1, phase: 'ready', skippedTools: failed.issues.map(issue => issue.id) });
+      } else {
+        const connecting: NativeStartupState = { ...startupBase, revision: failed.revision + 1, phase: 'connecting', attemptId: `${attemptId}-retry` };
+        publishStartup(connecting);
+        await delay(null);
+        // WHY identity check: a superseded retry must never settle a newer attempt.
+        if ((startup as NativeStartupState | undefined) === connecting) publishStartup({ ...startupBase, revision: connecting.revision + 1, phase: 'ready' });
+      }
+      return { ok: true, state: startup };
+    },
     getContextPreferences: async () => ({ ...contextPreferences }),
     setContextPreferences: async (patch) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');
@@ -2065,6 +2100,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Shares startReply with session.sendInput — see that helper's WHY.
     send: async (sessionId: string, text: string, _attachments?: string[]) => {
       if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      if (sessionId === 'wb-2' && nativeStartupBlocked(startup)) return { status: 'failed', reason: 'initializing' };
       // `?queueSends=1`: answer as if the assistant were busy, so typed messages
       // wait in the strip above the message box (Send now / Edit / Cancel).
       // WHY a switch: the strip is renderer-local and a restored chat copy
@@ -3463,6 +3499,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     remoteConversationStatus: typeof onRemoteConversationStatus;
     seedChat: (cb: (payload: unknown) => void) => () => void;
   } = {
+    sessionLive: (cb) => {
+      startupListeners.add(cb);
+      if (startup) cb(startupEvent());
+      return () => { startupListeners.delete(cb); };
+    },
     sessionCreated: (cb) => { subs.created.add(cb); return () => { subs.created.delete(cb); }; },
     sessionDestroyed: (cb) => { subs.destroyed.add(cb); return () => { subs.destroyed.delete(cb); }; },
     sessionRenamed: (cb) => { subs.renamed.add(cb); return () => { subs.renamed.delete(cb); }; },

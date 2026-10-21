@@ -43,6 +43,32 @@ describe('first-page loader (one fill)', () => {
     expect(r.types()).toEqual(['HISTORY_PAGE_REQUESTED', 'SESSION_FILL_RESET', 'PLAY', 'FLUSH', 'HISTORY_PAGE_LOADED', 'SESSION_WORKING_SYNCED', 'PLAY']);
   });
 
+  it('keeps concurrent out-of-order history fills isolated by session', async () => {
+    const pending = new Map<string, (page: TranscriptPageResult) => void>();
+    const r = rig((_, req) => new Promise<TranscriptPageResult>((resolve) => { pending.set(req.sessionId, resolve); }));
+    const a = r.loader.load('a', { claudeSessionId: 'cc-a', projectSlug: 'project-a' });
+    const b = r.loader.load('b', { claudeSessionId: 'cc-b', projectSlug: 'project-b' });
+    const joined = r.loader.load('a');
+    expect(r.opens).toEqual([
+      { sessionId: 'a', claudeSessionId: 'cc-a', projectSlug: 'project-a', fresh: true },
+      { sessionId: 'b', claudeSessionId: 'cc-b', projectSlug: 'project-b', fresh: true },
+    ]);
+    const bPage = { ...real, events: [{ type: 'user-message', text: 'B history', uuid: 'b-message' } as any] };
+    const aPage = { ...real, events: [{ type: 'user-message', text: 'A history', uuid: 'a-message' } as any] };
+    pending.get('b')!(bPage);
+    await b;
+    expect(r.actions.filter((action) => action.type === 'HISTORY_PAGE_LOADED')).toEqual([
+      expect.objectContaining({ sessionId: 'b', events: bPage.events }),
+    ]);
+    pending.get('a')!(aPage);
+    await Promise.all([a, joined]);
+    expect(r.actions.filter((action) => action.type === 'HISTORY_PAGE_LOADED')).toEqual([
+      expect.objectContaining({ sessionId: 'b', events: bPage.events }),
+      expect.objectContaining({ sessionId: 'a', events: aPage.events }),
+    ]);
+    expect(r.opens).toHaveLength(2);
+  });
+
   it('a first load never resumes: it asks for a fresh page', async () => {
     const r = rig(() => real);
     await r.loader.load('s');

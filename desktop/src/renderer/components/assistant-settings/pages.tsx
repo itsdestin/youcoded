@@ -72,8 +72,8 @@ export interface PageDef {
   /** A full-page explainer (Permissions, Specialists): the (i) flips the page
    *  to it, with the dialog's back arrow to return. */
   explainer?: { intro: string; sections: ExplainerSection[] };
-  /** Provider pages exist only where the native runtime does — the same gate
-   *  the Model Providers row had (false over remote access, false on Android). */
+  /** Provider pages require a backend with native sessions, including Android
+   *  local and remote access to a capable host. */
   needsNative?: boolean;
   /** The Browser page exists only on the computer's own window
    *  (capabilities.assistantBrowser — false on phones, Android and remote). */

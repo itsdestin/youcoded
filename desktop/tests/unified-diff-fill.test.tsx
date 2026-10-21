@@ -7,11 +7,18 @@
 // the button so the host is the sole scroll surface — this test is the guard
 // against that regressing back to the nested-scroll jank Destin reported.
 import React from 'react';
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { diffLines } from 'diff';
+
+vi.mock('diff', async (original) => {
+  const actual = await original<typeof import('diff')>();
+  return { ...actual, diffLines: vi.fn(actual.diffLines) };
+});
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 import { UnifiedDiff } from '../src/renderer/components/diff/UnifiedDiff';
+import { OnScreenContext } from '../src/renderer/state/on-screen-context';
 import type { StructuredPatchHunk } from '../src/shared/types';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 
@@ -19,6 +26,82 @@ afterEach(cleanup);
 
 // A hunk with far more than DIFF_PREVIEW_LINES (15) rows, so the internal cap
 // + Expand button WOULD appear without `fill`.
+describe('large comparisons keep the renderer free', () => {
+  const workers: FakeWorker[] = [];
+  class FakeWorker {
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror: ((event: { preventDefault: () => void }) => void) | null = null;
+    postMessage = vi.fn();
+    terminate = vi.fn();
+    constructor() { workers.push(this); }
+  }
+  const large = (prefix: string) => Array.from({ length: 1000 }, (_, i) => `${prefix}${i}`).join('\n');
+  beforeEach(() => { workers.length = 0; vi.mocked(diffLines).mockClear(); vi.stubGlobal('Worker', FakeWorker); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it('does not run an expensive comparison in render, then draws its worker result', async () => {
+    render(<UnifiedDiff oldStr={large('old')} newStr={large('new')} />);
+    expect(diffLines).not.toHaveBeenCalled();
+    expect(screen.getByText(/Loading comparison/)).toBeInTheDocument();
+    await vi.waitFor(() => expect(workers).toHaveLength(1));
+    await act(async () => workers[0].onmessage?.({ data: { ok: true, rows: [{ kind: 'add', newN: 1, text: 'worker result' }] } }));
+    expect(screen.getByText('worker result')).toBeInTheDocument();
+    expect(screen.queryByText(/Loading comparison/)).toBeNull();
+    expect(workers[0].terminate).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an obsolete comparison and ignores its late answer', async () => {
+    const view = render(<UnifiedDiff oldStr={large('old')} newStr={large('first')} />);
+    await vi.waitFor(() => expect(workers).toHaveLength(1));
+    const late = workers[0].onmessage;
+    view.rerender(<UnifiedDiff oldStr={large('old')} newStr={large('second')} />);
+    await vi.waitFor(() => expect(workers).toHaveLength(2));
+    expect(workers[0].terminate).toHaveBeenCalledOnce();
+    act(() => late?.({ data: { ok: true, rows: [{ kind: 'add', newN: 1, text: 'obsolete result' }] } }));
+    expect(screen.queryByText('obsolete result')).toBeNull();
+    await act(async () => workers[1].onmessage?.({ data: { ok: true, rows: [{ kind: 'add', newN: 1, text: 'current result' }] } }));
+    expect(screen.getByText('current result')).toBeInTheDocument();
+  });
+
+  it('pauses hidden chats without throwing away a completed comparison', async () => {
+    const viewOf = (visible: boolean) => <OnScreenContext.Provider value={visible}><UnifiedDiff oldStr={large('old')} newStr={large('new')} /></OnScreenContext.Provider>;
+    const view = render(viewOf(true));
+    await vi.waitFor(() => expect(workers).toHaveLength(1));
+    view.rerender(viewOf(false));
+    expect(workers[0].terminate).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Loading comparison/)).toBeNull();
+    view.rerender(viewOf(true));
+    await vi.waitFor(() => expect(workers).toHaveLength(2));
+    await act(async () => workers[1].onmessage?.({ data: { ok: true, rows: [{ kind: 'add', newN: 1, text: 'kept result' }] } }));
+    view.rerender(viewOf(false));
+    view.rerender(viewOf(true));
+    await act(async () => {}); // settle: showing a completed comparison starts no new job
+    expect(workers).toHaveLength(2);
+    expect(screen.getByText('kept result')).toBeInTheDocument();
+  });
+
+  it('offers retry after worker failure and cancels the retry when unmounted', async () => {
+    const view = render(<UnifiedDiff oldStr={large('old')} newStr={large('new')} />);
+    await vi.waitFor(() => expect(workers).toHaveLength(1));
+    await act(async () => workers[0].onerror?.({ preventDefault: vi.fn() }));
+    expect(screen.getByText('Couldn’t calculate this comparison.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(screen.getByText(/Loading comparison/)).toBeInTheDocument();
+    await vi.waitFor(() => expect(workers).toHaveLength(2));
+    view.unmount();
+    expect(workers[1].terminate).toHaveBeenCalledOnce();
+    expect(diffLines).not.toHaveBeenCalled();
+  });
+
+  it('keeps short comparisons immediate and structured patches off the worker path', () => {
+    const view = render(<UnifiedDiff oldStr="before" newStr="after" />);
+    expect(screen.getByText('after')).toBeInTheDocument();
+    view.rerender(<UnifiedDiff oldStr={large('old')} newStr={large('new')} structuredPatch={[{oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ['+provided patch']}]} />);
+    expect(screen.getByText('provided patch')).toBeInTheDocument();
+    expect(workers).toHaveLength(0);
+  });
+});
+
 const bigHunk: StructuredPatchHunk = {
   oldStart: 1,
   oldLines: 0,
@@ -28,6 +111,11 @@ const bigHunk: StructuredPatchHunk = {
 };
 
 describe('UnifiedDiff fill prop', () => {
+  it('preserves gutter width at an EOF-newline digit boundary', () => {
+    const text = Array.from({ length: 99 }, () => 'same').join('\n') + '\n';
+    const { container } = render(<UnifiedDiff oldStr={text} newStr={text} />);
+    expect((container.querySelector('.items-start > span') as HTMLElement).style.width).toBe('calc(3ch + 0.75rem)');
+  });
   it('without fill: a long diff shows only the preview and a Show more button', () => {
     render(<UnifiedDiff oldStr="" newStr="" structuredPatch={[bigHunk]} />);
     expect(screen.getByText('Show 25 more lines')).toBeInTheDocument();

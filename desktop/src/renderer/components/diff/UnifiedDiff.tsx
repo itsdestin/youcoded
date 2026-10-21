@@ -16,7 +16,11 @@
 // - Long diffs draw DIFF_PREVIEW_LINES rows with a "Show N more lines" button;
 //   expanded they scroll in a capped box that fills FILE_BOX_CHUNK rows at a time.
 import React, { useMemo, useRef, useState } from 'react';
-import { diffLines as jsdiffLines } from 'diff';
+import { canDiffInline, diffRowsFromStrings, type DiffRow } from './diff-rows';
+import { useDiffJob } from './use-diff-job';
+import { ErrorState, LoadingState } from '../ui/states';
+export { diffRowsFromStrings } from './diff-rows';
+export type { DiffRow } from './diff-rows';
 import type { StructuredPatchHunk } from '../../../shared/types';
 import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAllToggle';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
@@ -42,42 +46,6 @@ export const FILE_BOX_CHUNK = 200;
 // visible (the observer honours the host's clipping), at the cost of the 400px
 // early margin applying to the window rather than the host box.
 const NO_ROOT: React.RefObject<HTMLElement | null> = { current: null };
-
-// Unified-diff row: del = removed line (old side only), add = inserted line
-// (new side only), ctx = unchanged (shown on both sides, dimmed). Line numbers
-// reflect the line's real position within the compared strings (or, via
-// structuredPatch hunks, absolute file positions).
-export type DiffRow =
-  | { kind: 'ctx'; oldN: number; newN: number; text: string }
-  | { kind: 'del'; oldN: number; text: string }
-  | { kind: 'add'; newN: number; text: string };
-
-/** jsdiff-based replacement for the old hand-rolled LCS fallback. Line numbers
- * are relative to the two strings (1-indexed), matching the previous shape. */
-export function diffRowsFromStrings(oldStr: string, newStr: string): DiffRow[] {
-  const rows: DiffRow[] = [];
-  let oldN = 1;
-  let newN = 1;
-  // Normalize a missing EOF newline: jsdiff tokenizes lines WITH their
-  // terminator, so 'a' vs 'a\nb' would report line 1 as changed ('a' ≠ 'a\n').
-  // The previous LCS split on '\n' and never saw the difference — keep that
-  // (an EOF-newline-only change is noise at this row granularity).
-  const oldNorm = oldStr.length > 0 && !oldStr.endsWith('\n') ? oldStr + '\n' : oldStr;
-  const newNorm = newStr.length > 0 && !newStr.endsWith('\n') ? newStr + '\n' : newStr;
-  for (const change of jsdiffLines(oldNorm, newNorm)) {
-    const lines = change.value.split('\n');
-    // jsdiff keeps the trailing newline in `value`, which split() turns into a
-    // phantom empty final line — drop it (a REAL trailing empty line inside a
-    // change is preserved because only the terminator-produced one is last).
-    if (lines[lines.length - 1] === '') lines.pop();
-    for (const text of lines) {
-      if (change.added) rows.push({ kind: 'add', newN: newN++, text });
-      else if (change.removed) rows.push({ kind: 'del', oldN: oldN++, text });
-      else rows.push({ kind: 'ctx', oldN: oldN++, newN: newN++, text });
-    }
-  }
-  return rows;
-}
 
 /** Walk a Claude Code structuredPatch hunk into DiffRows with ABSOLUTE file
  * line numbers. Context advances both counters; '-' only old; '+' only new. */
@@ -120,8 +88,10 @@ export function UnifiedDiff({
    *  host is scrolled, rather than a whole commit's diff at once. */
   fill?: boolean;
 }) {
-  // Prefer Claude Code's pre-computed hunks (absolute file line numbers).
-  // Fall back to a jsdiff line diff when no structured result exists yet.
+  // Prefer precomputed hunks. Only bounded small fallback comparisons may
+  // run here; large ones run off-thread even while the preview is collapsed.
+  const background = !(structuredPatch && structuredPatch.length > 0) && !canDiffInline(oldStr, newStr);
+  const job = useDiffJob(oldStr, newStr, background);
   const { rows, hunkBoundaries, maxLineNum } = useMemo(() => {
     if (structuredPatch && structuredPatch.length > 0) {
       const out: DiffRow[] = [];
@@ -135,13 +105,20 @@ export function UnifiedDiff({
       });
       return { rows: out, hunkBoundaries: boundaries, maxLineNum: max };
     }
-    const fallback = diffRowsFromStrings(oldStr, newStr);
-    return {
-      rows: fallback,
-      hunkBoundaries: new Set<number>(),
-      maxLineNum: Math.max(oldStr.split('\n').length, newStr.split('\n').length),
-    };
-  }, [oldStr, newStr, structuredPatch]);
+    const fallback = background ? job.rows ?? [] : diffRowsFromStrings(oldStr, newStr);
+    // The worker already numbered every line; don't split the large inputs
+    // again on the UI thread just to size a gutter.
+    let oldLines = 0;
+    let newLines = 0;
+    for (const row of fallback) {
+      if (row.kind !== 'add') oldLines = Math.max(oldLines, row.oldN);
+      if (row.kind !== 'del') newLines = Math.max(newLines, row.newN);
+    }
+    // Preserve the old split-based gutter width, including its trailing empty
+    // line, without allocating arrays of every input line on the page.
+    const max = Math.max(1, oldLines + (oldStr.endsWith('\n') ? 1 : 0), newLines + (newStr.endsWith('\n') ? 1 : 0));
+    return { rows: fallback, hunkBoundaries: new Set<number>(), maxLineNum: max };
+  }, [oldStr, newStr, structuredPatch, background, job.rows]);
 
   const total = rows.length;
   const [open, setOpen] = useState(() => getInitialExpanded());
@@ -174,6 +151,9 @@ export function UnifiedDiff({
   // hunkBoundaries.has(idx) stays aligned without re-indexing.
   const drawn = fill || expanded ? reveal.visible : overflow ? rows.slice(0, DIFF_PREVIEW_LINES) : rows;
   const showSentinel = (fill || expanded) && reveal.hasMore;
+
+  if (job.loading) return <div className={DIFF_FRAME}><div className="p-2"><LoadingState what="comparison" /></div></div>;
+  if (job.error) return <ErrorState message={job.error} onRetry={job.retry} />;
 
   const gutterWidth = Math.max(2, String(maxLineNum).length);
   const gutterCh = `calc(${gutterWidth}ch + 0.75rem)`;
