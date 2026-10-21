@@ -4352,6 +4352,23 @@ function createPagesMock(scenario: string): PagesBridge {
           setTimeout(release, 8000);
         }
       }
+      // WHY (2026-10-21, `shoot --check` failed once under heavy load, then passed): the `#menu-open` screen opens the
+      // kit's dropdown INSIDE the page frame on the frame's load event, after the screen already counts as showing. A
+      // busy machine let the check press Escape before the list was open, so Escape closed the whole page. Opening the
+      // list focuses the frame (page-kit.ts openFor), so hold the picture until the frame has focus (cap 8 s).
+      if (id === 'page-kit-pieces' && (page?.data as { demoMenu?: string } | null)?.demoMenu) {
+        const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
+        if (typeof w.__shootInflight === 'number') {
+          w.__shootInflight += 1;
+          w.__shootHoldUntil = performance.now() + 8000;
+          const until = performance.now() + 8000;
+          const poll = () => {
+            if (document.activeElement?.tagName !== 'IFRAME' && performance.now() < until) { setTimeout(poll, 50); return; }
+            w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1;
+          };
+          setTimeout(poll, 50);
+        }
+      }
       return page
         ? { ok: true, page }
         : { ok: false, failure: { kind: 'missing', message: 'This page is no longer in your library.' } };
