@@ -82,7 +82,10 @@ interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundRun
 /** One coalesced-part UUID/range witness (see `assistant-text`.deltaReferences). */
 interface DeltaRef { eventUuid: string; start: number; end: number }
 
-interface StallWarning { retryInMs: number; willRetry: boolean }
+/** `reason` (2026-10-21): set when the wait is a provider-error retry rather than a
+ *  silent stream — the classifier's code ('overloaded' | 'rate-limited' | 'network' | …),
+ *  so the line can say WHY it is waiting. Absent on the stream watchdog's warning. */
+interface StallWarning { retryInMs: number; willRetry: boolean; reason?: string }
 
 interface PromptProcessing { promptTokens: number; budgetMs: number; source?: 'prompt' | 'tool-output'; processed?: number; cached?: number; etaMs?: number | null; timeMs?: number }
 
@@ -316,6 +319,10 @@ interface SessionErrorData {
   /** Which known failure `text` is (e.g. 'openrouter-key-rejected'), so the
    *  error card can offer the one action that fixes it. Absent = show text as is. */
   errorCode?: string;
+  /** What KIND of failure (main/providers/provider-failure.ts FailureKind:
+   *  temporary | account | too-long | blocked | unknown), so the card offers the
+   *  right way forward. Native only, optional: an older host sends none. */
+  errorKind?: string;
   /** The abandoned turn's usage, when any tokens were measured. */
   usage?: TranscriptUsage;
 }

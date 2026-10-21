@@ -306,9 +306,11 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // assumption until the picker or Providers screen has loaded the list (custom-providers plan C-1).
       const cacheOnly = p?.type === 'openai-compatible';
       const contextLength = await modelCatalog.contextLengthFor(binding, providers, { cacheOnly });
+      // The published per-reply output maximum, for providers/output-cap.ts (same cache rule).
+      const maxOutputTokens = await modelCatalog.maxOutputTokensFor(binding, providers, { cacheOnly });
       // A custom endpoint on this computer (Ollama, LM Studio): its unknown window is assumed 32k, not 250k.
-      if (p?.type === 'openai-compatible' && p.baseUrl) return { contextLength, totalSlots: null, onThisComputer: isLocalEndpoint(p.baseUrl) };
-      return { contextLength, totalSlots: null };
+      if (p?.type === 'openai-compatible' && p.baseUrl) return { contextLength, totalSlots: null, maxOutputTokens, onThisComputer: isLocalEndpoint(p.baseUrl) };
+      return { contextLength, totalSlots: null, maxOutputTokens };
     },
     // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
     // this. Unknown provider → null, so the host falls back to a cloud-safe

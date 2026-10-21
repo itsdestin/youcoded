@@ -305,6 +305,24 @@ describe('NativeSessionHost durable continuation', () => {
     expect(carriesCiphertext(body)).toBe(false);
   });
 
+  it('a checkpoint holding an unanswered tool call is not restored; the rebuild answers it instead', async () => {
+    const fx = await firstRun('unpaired');
+    await fx.host.destroy('unpaired');
+    const manifestPath = fx.acceptedHistory.manifestPath('unpaired');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    // Drop every tool message: the assistant's calls are left unanswered, the
+    // shape a mid-call throw published (2026-10-20). Digests cover the
+    // transcript, not the message list, so the store itself still accepts it.
+    manifest.messages = manifest.messages.filter((m: any) => m.role !== 'tool');
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const { body } = await reopenAndSend('unpaired');
+    expect(carriesCiphertext(body)).toBe(false);                        // the checkpoint was refused
+    const wire = JSON.stringify(body.input);
+    expect(wire).toContain('function_call_output');                    // every call answered on the wire
+    expect(wire).toContain('inspect both');
+  });
+
   it('a malformed sidecar falls back without touching the visible transcript', async () => {
     const fx = await firstRun('malformed');
     await fx.host.destroy('malformed');

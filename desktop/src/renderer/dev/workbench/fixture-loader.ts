@@ -148,6 +148,9 @@ export function loadFixture(
         };
         state = chatReducer(state, confirm);
         actions.push(confirm);
+      } else if (parsed.type === 'turn_complete' && parsed.optIn === 'stepLimit' && opts.providerError !== 'step-limit') {
+        // `?providerError=step-limit` only: a turn that stopped at its step limit (Keep going row).
+        continue;
       } else if (parsed.type === 'turn_complete') {
         // Without this a seeded conversation is frozen MID-TURN: the thinking
         // chip ("Contemplating…") and the stop button stay up forever, which
@@ -236,6 +239,7 @@ export function loadFixture(
         const action: ChatAction = {
           type: 'NATIVE_SESSION_ERROR', sessionId, message,
           ...(typeof parsed.errorCode === 'string' ? { errorCode: parsed.errorCode } : {}),
+          ...(typeof parsed.errorKind === 'string' ? { errorKind: parsed.errorKind } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);

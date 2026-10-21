@@ -349,6 +349,17 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
  * a bricked session persists across sends. Synthesize an isError tool-result for
  * each unpaired call — faithful to the live interrupt/cancel back-fill.
  */
+/** Whether any assistant tool-call is NOT immediately followed by a tool
+ *  message answering it — the shape every provider rejects. The same test
+ *  backfillUnpairedToolCalls repairs, exposed so a history that did not come
+ *  through rebuildHistory (the private accepted-history checkpoint) can be
+ *  refused instead of resumed into a permanent 400. */
+export function hasUnpairedToolCalls(messages: ModelMessage[]): boolean {
+  // The repair returns the identical message objects when nothing was missing.
+  const repaired = backfillUnpairedToolCalls(messages);
+  return repaired.length !== messages.length || repaired.some((m, i) => m !== messages[i]);
+}
+
 function backfillUnpairedToolCalls(messages: ModelMessage[]): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (let i = 0; i < messages.length; i++) {

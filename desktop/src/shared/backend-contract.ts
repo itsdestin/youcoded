@@ -509,6 +509,7 @@ export const IPC = {
   // parked step; unlike interrupt it never cascades to specialist children or
   // cancels pending permission asks.
   NATIVE_RETRY: 'native:retry',
+  NATIVE_CONTINUE_TURN: 'native:continue-turn',
   NATIVE_STARTUP_ACTION: 'native:startup-action',
   // M3 item 2 — user-initiated /compact for a native session. invoke (not send):
   // the caller needs the {ok, reason} result to explain a refusal.
@@ -1405,6 +1406,8 @@ interface ClaudeApi {
     interrupt: (sessionId: string) => void;
     // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
     retry: (sessionId: string) => void;
+    /** Try again / Keep going on an ENDED turn: runs again, no new message; ignored mid-turn. */
+    continueTurn: (sessionId: string) => void;
     // M3 item 2: user-initiated /compact. Resolves a coded result rather than
     // a bare boolean so a refusal can be explained to the user rather than
     // swallowed — `reason` is one of turn-in-flight | nothing-to-compact |

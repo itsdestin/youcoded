@@ -127,6 +127,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#chatgpt-app-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: 'official', chatgpt: 'official' } },
   { ...chat('chat#stalled', 'view', 'error-state'), session: 'wb-2', params: { stalled: '1' } },
   ...['key-rejected', 'key-expired', 'credit-short', 'request-refused'].map((e) => ({ ...chat(`chat#openrouter-${e}`, 'view', 'error-state'), session: 'wb-2', params: { openrouter: 'verified', providerError: e } })),
+  // The sorted error card (error-card.questions, 2026-10-21): one per kind, on an Anthropic session.
+  ...['overloaded', 'spend-limit', 'key-rejected', 'too-long', 'unknown'].map((e) => ({ ...chat(`chat#anthropic-${e}`, 'view', 'error-state'), session: 'wb-2', params: { anthropicError: '1', providerError: `anthropic-${e}` } })),
+  { ...chat('chat#step-limit', 'view'), session: 'wb-2', params: { anthropicError: '1', providerError: 'step-limit' } },
   ...['handoff', 'reasoning-stop', 'skill-first', 'approval', 'skills-spread', 'skills-chain', 'deliverables', 'mix', 'silent-steps'].map((b) => ({ ...chat(`chat#bubbles-${b}`, 'view', 'conversation'), session: 'wb-2', params: { seed: `bubbles-${b}` } })),
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.

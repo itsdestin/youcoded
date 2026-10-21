@@ -76,6 +76,10 @@ export interface CatalogModel {
   /** ChatGPT's advertised opt-in maximum, distinct from its default window.
    *  WHY separate: merely listing a model must not opt a plan into long context. */
   maxContextLength?: number;
+  /** The most output tokens ONE reply may carry, as the catalog publishes it
+   *  (models.dev `limit.output`, OpenRouter `top_provider.max_completion_tokens`).
+   *  Absent = not published; the session then keeps its conservative default. */
+  maxOutputTokens?: number;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
   // Whether this catalog row's model accepts image input, per the SOURCE's own

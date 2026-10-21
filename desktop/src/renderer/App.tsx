@@ -3559,8 +3559,7 @@ function AppInner() {
                       // Deliberately not folded into `visible`: the two hide
                       // different things for different reasons.
                       sessionActive={s.id === sessionId}
-                      provider={s.provider}
-                      cwd={s.cwd}
+                      provider={s.provider} model={s.model} providerType={s.providerType} cwd={s.cwd}
                       // Game pane lives in the active session's framed-shell
                       // right slot. Only the active session renders it (others
                       // get null) so there's a single GamePanel instance.

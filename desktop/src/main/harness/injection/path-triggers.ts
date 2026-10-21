@@ -132,7 +132,14 @@ function segmentRegex(seg: string): RegExp {
       let body = seg.slice(i + 1, close);
       const negate = body[0] === '!' || body[0] === '^';
       if (negate) body = body.slice(1);
-      rx += `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      const cls = `[${negate ? '^' : ''}${body.replace(/[\\\]^]/g, '\\$&')}]`;
+      // WHY: an out-of-order range (`[z-a]`) in a rule's `paths:` threw from
+      // new RegExp and broke every tool step that consults triggers; match the
+      // bracket literally instead, like an unclosed one.
+      let compiles = true;
+      try { new RegExp(cls); } catch { compiles = false; }
+      if (!compiles) { rx += '\\['; continue; }
+      rx += cls;
       i = close;
     } else rx += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   }

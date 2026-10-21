@@ -14,7 +14,9 @@
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
-import { imageTooLarge } from '../providers/image-too-large';
+import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
+import { classifyFailure, abortableDelay, retryWaitMs, logTurnFailure, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { truncationRecovery, CONTINUE_TURN_TEXT } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -42,8 +44,8 @@ import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
-import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from './image-support';
-import { collapseOversizedImageParts, collapseLargestImageParts, userAttachmentParts } from './image-history';
+import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, withEdgeCap } from './image-support';
+import { collapseOversizedImageParts, collapseLargestImageParts, fitHistoryToImageLimits, fitHistoryToImageLimitsSync, userAttachmentParts } from './image-history';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -178,7 +180,7 @@ export function rememberedRuleFor(
 import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
-import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
+import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls, unexpectedToolThrowResult } from './tool-group-finalization';
 import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageData, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
@@ -434,7 +436,9 @@ function mapStopReason(finishReason: string | undefined): string {
 // nothing rendered, so it is the same degenerate shape as a bare 'stop' and a
 // retry is exactly right. 'length' (truncation) and 'content-filter' (refusal)
 // stay excluded so their honest mappings are never masked by a retry.
-const ORDERLY_EMPTY_FINISHES = new Set(['stop', 'unknown', 'other', 'tool-calls']);
+// 'error' (2026-10-21) is the AI SDK's mapping of Gemini's MALFORMED_FUNCTION_CALL:
+// the model emitted a tool call that did not parse — the same dropped-call shape.
+const ORDERLY_EMPTY_FINISHES = new Set(['stop', 'unknown', 'other', 'tool-calls', 'error']);
 
 /** Widening advice per tool, in that tool's OWN vocabulary.
  *
@@ -934,6 +938,12 @@ export class HarnessSession extends EventEmitter {
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
   get profileSnapshot(): Readonly<CapabilityProfile> { return this.profile; }
+  private get maxOutputTokens(): number { return this.profile.outputCap ?? this.opts.harness.limits?.maxTokens ?? 4096; }   // provider policy, else manifest
+  /** An edge cap the PROVIDER named (Anthropic's 2000 px past 20 pictures), kept so later
+   *  pictures shrink up front. Not persisted (a reopen relearns it); cleared on a model switch. */
+  private tightenedEdgePx: number | null = null;
+  /** The ONE picture-limit read (send, Read, attachments): profile ∩ named cap. */
+  get imageLimits(): ImageLimits { return withEdgeCap(this.profile.imageLimits, this.tightenedEdgePx); }
 
   // How full this session's context window is right now, in tokens — the SAME
   // number the turn-complete usage payload reports (see the emit site near the
@@ -1008,7 +1018,7 @@ export class HarnessSession extends EventEmitter {
     super();
     this.binding = opts.binding;
     this.toolByName = new Map((opts.tools ?? []).map((t) => [t.name, t]));
-    this.retryDelays = opts.retryDelays ?? [1000, 2000, 4000];
+    this.retryDelays = opts.retryDelays ?? TEMPORARY_RETRY_DELAYS_MS;
     this.profile = opts.profile ?? CLOUD_DEFAULT;
   }
 
@@ -1126,7 +1136,7 @@ export class HarnessSession extends EventEmitter {
       this.prefixMoved = true;
       this.activeSizingTools = null;
       this.usageAnchor = null;
-      this._contextUsedTokens = null;
+      this._contextUsedTokens = null; this.tightenedEdgePx = null;   // the new provider may not have that cap
     }
     this.continuationBinding = undefined;
     // WHY only when `changed` (fix pass, review finding 1, then this pass):
@@ -1878,7 +1888,7 @@ export class HarnessSession extends EventEmitter {
     // WHY assumedWindow: an unknown window budgets with the profile's assumption (250k cloud, 32k on
     // this computer), never a flat 32k that summarised cloud chats far too early.
     return contextBudget({ contextLength: this.opts.contextLength ?? null, assumedWindow: this.profile.assumedContextWindow,
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
   }
 
   /** Automatic selection retires complete groups into one summary. A failed
@@ -1890,7 +1900,7 @@ export class HarnessSession extends EventEmitter {
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096, estimatedInput });
+      maxTokens: this.maxOutputTokens, estimatedInput });
     if (!force && plan.status === 'fits') return false;
     if (this.failedCompactionRevision === this.capture.revision) return false;
     // Routine compaction summarizes; legacy prune transforms remain available
@@ -2013,9 +2023,8 @@ export class HarnessSession extends EventEmitter {
     this.servedReads.clear(); this.servedSkills.clear();
   }
 
-  /** The gate, re-applied to what is already in memory: the session's current
-   *  limits. Returns whether history changed. */
-  private enforceImageLimits(): boolean { return this.collapseOversizedImages(this.profile.imageLimits); }
+  /** The gate re-applied to history (size, then per-request count); true if it changed. */
+  private enforceImageLimits(): boolean { return this.adoptImageRewrite(fitHistoryToImageLimitsSync(this.history, this.imageLimits)); }
 
   /** Collapse every image part over `limits` to the shared oversized note
    *  (the rewrite itself: image-history.ts → collapseOversizedImageParts).
@@ -2024,6 +2033,19 @@ export class HarnessSession extends EventEmitter {
    *  history store describes it (`pruned.oversized`, `note`). shownImages is
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
+
+  /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
+  private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
+
+  /** A step stopped at the output limit: queue the continue / split message and
+   *  withdraw any cut-off tool card. False = recovery spent; end the turn as before. */
+  private recoverTruncation(step: StepResult, soFar: number): boolean {
+    const cut = truncationRecovery({ recoveriesSoFar: soFar, cutOffToolNames: step.pendingPreparing.map(p => p.toolName), maxTokens: this.maxOutputTokens, wroteText: !!step.text?.trim() });
+    if (cut.kind === 'stop') return false;
+    this.withdrawOrphanedPreparing(step.pendingPreparing);
+    this.history.push(markAppGenerated({ role: 'user', content: cut.message })); this.historyOrigins.push(null); this.capture.mutated();
+    return true;
+  }
 
   private adoptImageRewrite(next: ModelMessage[] | null): boolean {
     if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
@@ -2141,7 +2163,7 @@ export class HarnessSession extends EventEmitter {
     if (contextLength == null) return 'fits';
     const base = { contextLength, assumedWindow: this.profile.assumedContextWindow, fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 };
+      maxTokens: this.maxOutputTokens };
     if (planContextBudget(base).status === 'cannot-fit') return 'too-small';
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
@@ -2277,7 +2299,7 @@ export class HarnessSession extends EventEmitter {
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: contextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // WHY: a complete summary is not necessarily an effective one. Validate
     // actual finished text with current tools and the untouched retained tail
     // before changing the accepted history or publishing a completion marker.
@@ -2290,7 +2312,7 @@ export class HarnessSession extends EventEmitter {
   private compactionCut(manual = false, focus?: string, targetContextLength?: number): number {
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: targetContextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // Explicit manual compact may retire history below the automatic threshold;
     // it still returns a no-op when no complete prefix can be retired. A switch
     // uses the target model's own tail allowance: it is already the smaller one.
@@ -2312,7 +2334,7 @@ export class HarnessSession extends EventEmitter {
     const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
     const plan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // WHY: the summary has its own output allowance. An oversized tool result
     // may push this request past that limit between steps; shorten only its
     // summarizer copy, largest first, never the accepted history or recent tail.
@@ -2441,6 +2463,7 @@ export class HarnessSession extends EventEmitter {
     }), [], true);
   }
 
+  continueTurn(): Promise<void> { return this.beginTurn(null, () => ''); }   // Try again / Keep going: CONTINUE_TURN_TEXT's WHY
   /** WHY: keep composer text byte-identical for optimistic bubble dedup;
    * image parts ride alongside it, and paths persist for replay. */
   async send(text: string, attachments: string[] = [], modelAttachments?: ModelAttachment[]): Promise<void> {
@@ -2512,7 +2535,7 @@ export class HarnessSession extends EventEmitter {
    *  the model cannot see images / none were attached. */
   private imagePartsFor(entries: ModelAttachment[]): UserPart[] {
     if (!entries.length || !this.profile.supportsVision) return [];
-    return userAttachmentParts(entries, this.profile.imageLimits);
+    return userAttachmentParts(entries, this.imageLimits);
   }
 
   /** Resolve a tool's promised image paths into deliverable parts, charging the
@@ -2559,7 +2582,7 @@ export class HarnessSession extends EventEmitter {
       // WHY the session's limits: a picture over the provider's pixel budget is
       // refused HERE, before it enters history — once in, every later request
       // would resend it and the provider would reject the whole conversation.
-      const img = readImageFromDisk(p, this.profile.imageLimits);
+      const img = readImageFromDisk(p, this.imageLimits);
       if (!img.ok) {
         // Name the real cause (error-message-standards.md). The oversized note is
         // the shared basename form so reopen rebuilds the identical text.
@@ -2603,7 +2626,7 @@ export class HarnessSession extends EventEmitter {
 
   /** `emit` distinguishes user sends from skill invocation; the driver is shared.
    *  `attachments` is what the MODEL reads (prepared copies where they exist). */
-  private async beginTurn(text: string, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
+  private async beginTurn(text: string | null, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
     this.opts.assertReady?.();
     // Never overwrite the active turn's single-slot state.
     if (this.abort) {
@@ -2612,7 +2635,8 @@ export class HarnessSession extends EventEmitter {
     this.interrupted = false;
     this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
-    this.acceptUserMessage(text, attachments, emit, appGenerated);
+    if (text !== null) this.acceptUserMessage(text, attachments, emit, appGenerated);
+    else if (this.history.at(-1)?.role === 'assistant') { this.history.push(markAppGenerated({ role: 'user', content: CONTINUE_TURN_TEXT })); this.historyOrigins.push(null); this.capture.mutated(); }
     this.abort = new AbortController();
     this.turnEverParked = false;   // cleared at the start of every turn — see field WHY
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill
@@ -2712,7 +2736,7 @@ export class HarnessSession extends EventEmitter {
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets
     // it, so an all-empty turn costs exactly two provider calls.
-    let consecutiveEmptySteps = 0;
+    let consecutiveEmptySteps = 0, truncationRecoveries = 0;
     let stopReason = 'end_turn';
     // Latest step's partial text — the ONLY thing the catch pushes to history
     // (earlier steps already pushed their assistant + tool messages). Reset per
@@ -2815,10 +2839,14 @@ export class HarnessSession extends EventEmitter {
             // is retried unchanged — collapse must report a change. This is the
             // safety net behind enforceImageLimits (a wrong-high placeholder limit). WHY the
             // second mode: our patch count may disagree with the provider's (image-history.ts).
+            // Third (2026-10-20): Anthropic's many-image edge cap — kept for the session,
+            // pictures SHRUNK to it (fitImagesToLimits); else every later send failed.
             const tooLarge = replayable && !imageRetried ? imageTooLarge(err) : null;
-            if (tooLarge && (this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
-              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })
-              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches)))) {
+            const edge = replayable && !imageRetried ? manyImageEdgeLimit(err) : null;
+            if (edge) this.tightenedEdgePx = Math.min(this.tightenedEdgePx ?? Infinity, edge);
+            if ((tooLarge && (this.collapseOversizedImages({ ...this.imageLimits, maxPatches: Math.min(this.imageLimits.maxPatches, tooLarge.limitPatches) })
+              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches))))
+              || (edge && await this.fitImagesToLimits())) {
               imageRetried = true;
               this.prefixMoved = true;
               turnUsage.expectedRebuild = true;
@@ -3025,6 +3053,8 @@ export class HarnessSession extends EventEmitter {
         if (step.toolCalls.length === 0) {
           // WHY: no await before completion; late heads use the host drain.
           if (absorbReadyMessage()) continue turnLoop;
+          // Cut off at the output limit: continue / ask to split, inside the turn (truncation-recovery.ts).
+          if (step.finishReason === 'length' && this.recoverTruncation(step, truncationRecoveries)) { truncationRecoveries++; continue turnLoop; }
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
@@ -3101,7 +3131,11 @@ export class HarnessSession extends EventEmitter {
           try {
             payload = await this.runOneTool(call, recentCalls);
           } catch (err) {
-            if (!(err instanceof PermissionCallbackFailure)) throw err;
+            if (!(err instanceof PermissionCallbackFailure)) {
+              // Answer the call, never leave it dangling (unexpectedToolThrowResult's WHY).
+              payload = unexpectedToolThrowResult(err, call.toolName, this.interrupted || !!this.abort?.signal.aborted);
+              if (payload !== 'interrupted') log('ERROR', 'HarnessSession', 'a tool call threw outside its own error handling', { sessionId: this.opts.sessionId, toolName: call.toolName, error: String(err) });
+            } else {
             // WHY: the assistant already announced every call. A failed permission
             // lookup is neither approval nor a human refusal; complete the accepted
             // group before the outer error path settles the turn.
@@ -3116,6 +3150,7 @@ export class HarnessSession extends EventEmitter {
             this.history.push({ role: 'tool', content: resultParts });
             this.historyOrigins.push([...resultOrigins]);
             throw err;
+            }
           }
           if (payload === 'interrupted') {
             // WHY: uses were emitted up front; back-fill canceled results for
@@ -3336,8 +3371,9 @@ export class HarnessSession extends EventEmitter {
       if (this.interrupted || this.abort?.signal.aborted || (!(err instanceof PermissionCallbackFailure) && err?.name === 'AbortError')) {
         this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
-        const errorCode = classifyProviderError(failure);
-        this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
+        // classifyProviderError keeps its sign-in/key codes; classifyFailure adds the rest.
+        const sorted = logTurnFailure(this.opts.sessionId, failure); const errorCode = classifyProviderError(failure) ?? (sorted.code !== 'unknown' ? sorted.code : undefined);
+        this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), errorKind: sorted.kind, ...abandonedTurnUsage() });
       }
     } finally {
       this._currentUsageProgress = null;
@@ -3402,7 +3438,7 @@ export class HarnessSession extends EventEmitter {
       ? this.fitToContext(this.history) : this.history;
     const requestPlan = planContextBudget({ assumedWindow: this.profile.assumedContextWindow, contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096,
+      maxTokens: this.maxOutputTokens,
       // WHY: the pre-request gate uses the provider's measured prefix when it
       // still matches this history. The sent reply cap must use that SAME
       // occupancy, not a lower chars/4 estimate that promises extra output.
@@ -3426,7 +3462,7 @@ export class HarnessSession extends EventEmitter {
       // window at most a quarter of it, so a reply can never overflow the
       // space the history was fitted to. Absent stays absent — the manifest
       // comment above explains why an uncapped request is its own hazard.
-      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : requestPlan.replyCap,
+      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined && this.profile.outputCap === undefined ? undefined : requestPlan.replyCap,
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw
@@ -4200,29 +4236,28 @@ export class HarnessSession extends EventEmitter {
       supportsVision: this.profile.supportsVision,
       // WHY: Read prepares an over-limit picture against the SAME limits the
       // driver gates with, so its derivative is never refused downstream.
-      imageLimits: this.profile.imageLimits,
+      imageLimits: this.imageLimits,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
     });
   }
 
-  /** Exponential backoff for transient provider errors (429/5xx/network),
-   *  honoring retry-after. Layers ON TOP of the SDK's internal retry (this is
-   *  step-level resilience). Exhaustion rethrows → the session-error path. */
+  /** Backoff for TEMPORARY provider failures only (retryWaitMs). Layers on top of
+   *  the SDK's own retry. Exhaustion rethrows → the session-error path. */
   private async withRetry<T>(fn: (registerRetraction: (retract: () => void) => void) => Promise<T>): Promise<T> {
-    const delays = this.retryDelays;
     for (let attempt = 0; ; attempt++) {
       let retractAttempt: (() => void) | undefined;
       try {
         return await fn((retract) => { retractAttempt = retract; });
       } catch (err: any) {
-        const status = err?.statusCode ?? err?.status;
-        const retryable = status === 429 || (status >= 500 && status < 600) || err?.code === 'ECONNRESET';
-        if (!retryable || attempt >= delays.length || this.abort?.signal.aborted) throw err;
+        const waitMs = this.abort?.signal.aborted ? null : retryWaitMs(err, attempt, this.retryDelays);
+        if (waitMs === null) throw err;
         // WHY: retrying the whole step must first erase ONLY its failed attempt;
         // previously a late provider error left streamed text on disk and screen.
         retractAttempt?.();
-        const ra = Number(err?.responseHeaders?.['retry-after']) * 1000;
-        await new Promise((r) => setTimeout(r, Number.isFinite(ra) && ra > 0 ? ra : delays[attempt]));
+        // Root only: a specialist child shows no thinking card (SUBAGENT_DISPLAY_TYPES).
+        if (!this.opts.isSpecialistChild && waitMs >= 1000) this.emitEvent('assistant-thinking', { stallWarning: { retryInMs: waitMs, willRetry: true, reason: classifyFailure(err).code } });
+        await abortableDelay(waitMs, this.abort?.signal);
+        if (this.abort?.signal.aborted) throw err;
       }
     }
   }

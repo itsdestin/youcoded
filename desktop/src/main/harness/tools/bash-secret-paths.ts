@@ -118,7 +118,17 @@ function globSource(pattern: string, isGlob: (i: number) => boolean = () => true
     else if (c === '[') {
       const close = pattern.indexOf(']', i + 1);
       if (close === -1) { rx += '\\['; continue; }
-      rx += `[${pattern.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`;
+      // WHY the validity check: the command text is the model's, so `[z-a]` or
+      // `[qmp_capabilities,query-name]` (an out-of-order range) reached
+      // new RegExp() and threw "Range out of order" out of the permission check,
+      // killing the turn with the call unanswered (2026-10-20). A bracket whose
+      // class JavaScript cannot compile is matched literally instead — bash
+      // itself matches nothing for such a class, so this can only over-match.
+      const cls = `[${pattern.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`;
+      let compiles = true;
+      try { new RegExp(cls); } catch { compiles = false; }
+      if (!compiles) { rx += '\\['; continue; }
+      rx += cls;
       i = close;
     } else rx += c.replace(/[.+^${}()|\\]/g, '\\$&');
   }

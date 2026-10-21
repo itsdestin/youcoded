@@ -625,6 +625,26 @@ describe('NativeSessionHost', () => {
     expect(rows[0]).toMatchObject({ sessionId: 's-1', provider: 'native' });
   });
 
+  it('continueTurn (Try again / Keep going) is refused for an unknown session and while a turn runs; idle, it runs a turn with no new message', async () => {
+    expect(host.continueTurn('ghost')).toBe(false);
+    await host.create({ sessionId: 's-ct', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const entry = (host as any).live.get('s-ct');
+    entry.inFlight = true;
+    expect(host.continueTurn('s-ct')).toBe(false);   // a press mid-turn never starts a second run
+    entry.inFlight = false;
+    // A real exchange first: Try again only follows a turn that ran.
+    host.send('s-ct', 'hello');
+    await waitForTurnComplete(host, 1);
+    await entry.running;
+    const users: string[] = []; const types: string[] = [];
+    host.on('transcript-event', (e: any) => { types.push(e.type); if (e.type === 'user-message') users.push(e.data.text); });
+    expect(host.continueTurn('s-ct')).toBe(true);
+    await entry.running;
+    expect(types).toContain('turn-complete');
+    expect(users).toEqual([]);
+    expect(host.isIdle('s-ct')).toBe(true);
+  });
+
   it('getHistory returns null for unknown/non-native sessions (replay falls through to CC)', () => {
     expect(host.getHistory('nope')).toBeNull();
   });

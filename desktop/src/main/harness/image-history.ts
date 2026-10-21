@@ -27,6 +27,86 @@ export function collapseOversizedImageParts(history: ModelMessage[], limits: Ima
   });
 }
 
+export type ShrinkFn = (bytes: Buffer, limits: ImageLimits) => Promise<{ bytes: Buffer; mediaType: string } | null>;
+
+/** Every limit applied to history at once, for the session's gate: pictures
+ *  over the size limits are shrunk (when `shrink` is given) or else become the
+ *  oversized note, then the per-request count cap applies. WHY size before
+ *  count: a picture already collapsed for size no longer counts toward the cap,
+ *  so fewer older ones are dropped. Returns null when nothing changed. */
+export async function fitHistoryToImageLimits(history: ModelMessage[], limits: ImageLimits,
+  shrinker?: { shrinkBytes?: ShrinkFn }, signal?: AbortSignal): Promise<ModelMessage[] | null> {
+  // An image service without shrinkBytes (fakes, older wiring) drops to the note.
+  // WHY the signal: shrinking is serial (~0.4 s a picture); after Stop, the rest
+  // skip straight to the note instead of holding the stop behind the queue.
+  const shrunk = shrinker?.shrinkBytes ? await shrinkOversizedImageParts(history, limits,
+    (b, l) => signal?.aborted ? Promise.resolve(null) : shrinker.shrinkBytes!(b, l)) : null;
+  return fitHistoryToImageLimitsSync(shrunk ?? history, limits) ?? shrunk;
+}
+
+/** The synchronous half (no shrinking): oversized → note, then the count cap. */
+export function fitHistoryToImageLimitsSync(history: ModelMessage[], limits: ImageLimits): ModelMessage[] | null {
+  const sized = collapseOversizedImageParts(history, limits);
+  const counted = limits.maxImagesPerRequest === undefined ? null : collapseExcessImageParts(sized ?? history, limits.maxImagesPerRequest);
+  return counted ?? sized;
+}
+
+/** Replace every picture in history that is over `limits` with a smaller copy
+ *  from `shrink` (same label, same place); one that cannot be shrunk is left
+ *  for collapseOversizedImageParts to turn into the note. WHY: when a provider
+ *  tightens its limit mid-conversation (Anthropic's 2000 px once a request holds
+ *  over 20 pictures), the model keeps its pictures instead of losing them.
+ *  Pictures are shrunk one at a time (the shrinker serialises anyway). Same
+ *  identity rules and null-for-no-op as collapseOversizedImageParts.
+ *  KNOWN TRADE-OFF: the shrunk copy lives only in memory, so the private
+ *  accepted-history checkpoint (which cites pictures by the digest of their
+ *  file) cannot describe it and stops publishing for that session; reopening
+ *  uses the ordinary rebuild, which re-reads the originals and relearns the cap
+ *  from one rejection. Chosen over a new checkpoint format: the checkpoint is
+ *  an optimisation, and a stuck conversation is the failure being fixed. */
+async function shrinkOversizedImageParts(history: ModelMessage[], limits: ImageLimits, shrink: ShrinkFn): Promise<ModelMessage[] | null> {
+  const over = (buf: unknown) => { const d = Buffer.isBuffer(buf) ? imageDimensions(buf) : null; return !!d && !withinImageLimits(d, limits); };
+  const replaced = new Map<Buffer, { bytes: Buffer; mediaType: string }>();
+  for (const m of history) {
+    const content = (m as any).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const values = m.role === 'tool' && part?.type === 'tool-result' && part.output?.type === 'content' && Array.isArray(part.output.value)
+        ? part.output.value.filter((v: any) => v?.type === 'file' && v.data?.type === 'data').map((v: any) => v.data.data)
+        : m.role === 'user' && part?.type === 'file' ? [part.data] : [];
+      for (const buf of values) if (over(buf) && !replaced.has(buf)) {
+        const out = await shrink(buf, limits);
+        // Re-check the result: a shrinker that misjudged must not send an over-limit copy.
+        if (out && !over(out.bytes)) replaced.set(buf, out);
+      }
+    }
+  }
+  if (!replaced.size) return null;
+  return history.map((m) => {
+    const content = (m as any).content;
+    if (!Array.isArray(content)) return m;
+    let touched = false;
+    const parts = content.map((part: any) => {
+      if (m.role === 'user' && part?.type === 'file' && replaced.has(part.data)) {
+        touched = true; const r = replaced.get(part.data)!;
+        return { ...part, data: r.bytes, mediaType: r.mediaType };
+      }
+      if (m.role !== 'tool' || part?.type !== 'tool-result' || part.output?.type !== 'content' || !Array.isArray(part.output.value)) return part;
+      let hit = false;
+      const value = part.output.value.map((v: any) => {
+        const r = v?.type === 'file' && v.data?.type === 'data' ? replaced.get(v.data.data) : undefined;
+        if (!r) return v;
+        hit = true;
+        return { ...v, mediaType: r.mediaType, data: { type: 'data', data: r.bytes } };
+      });
+      if (!hit) return part;
+      touched = true;
+      return { ...part, output: { ...part.output, value } };
+    });
+    return touched ? ({ ...(m as object), content: parts } as ModelMessage) : m;
+  });
+}
+
 /** The second recovery mode, for when the provider's patch count disagrees with
  *  ours: it rejected the request ("requires R patches … limit of L") yet no part
  *  is over L by OUR count, so the size-based collapse changed nothing.
@@ -56,9 +136,36 @@ export function collapseLargestImageParts(history: ModelMessage[], requiredPatch
   return chosen.size ? collapseImageParts(history, (part) => chosen.get(part) ?? null) : null;
 }
 
-/** The shared rewrite: `pick` returns the W×H to write in the note for an image
- *  part that must go, or null to keep it. Visits parts in history order. */
-function collapseImageParts(history: ModelMessage[], pick: (part: object, buf: unknown) => { width: number; height: number } | null): ModelMessage[] | null {
+/** Once history holds more than `max` pictures, keep only the NEWEST 80% of
+ *  `max`; each older one becomes the shared 'over-count' note. WHY: every
+ *  picture in history is resent with each request, and a provider with a
+ *  per-request cap (Anthropic: 100) refuses the whole request once a
+ *  conversation passes it — and every send after, since failed turns keep
+ *  history. Oldest go first: the newest are likeliest to matter. Same identity
+ *  rules and null-for-no-op as collapseOversizedImageParts. */
+export function collapseExcessImageParts(history: ModelMessage[], max: number): ModelMessage[] | null {
+  // WHY the media-type test: a user-attached PDF is also a `file` part; it is
+  // not a picture, so it neither counts nor gets the picture note.
+  const isPicture = (part: any) => typeof part?.mediaType === 'string' && part.mediaType.startsWith('image/');
+  let total = 0;
+  collapseImageParts(history, (part) => { if (isPicture(part)) total++; return null; });   // survey only
+  if (total <= max) return null;
+  // WHY down to 80% rather than to `max`: dropping exactly one old picture per
+  // new one would rewrite the start of history on EVERY later turn, missing the
+  // provider's prompt cache each time. A batch moves it once per ~20 pictures.
+  let drop = total - Math.floor(Math.max(0, max) * 0.8);
+  return collapseImageParts(history, () => null, (label, part) => {
+    if (drop <= 0 || !isPicture(part)) return null;
+    drop--;
+    return imageNote({ kind: 'unavailable', label, reason: 'over-count' });
+  });
+}
+
+/** The shared rewrite: `pick` returns the W×H to write in the oversized note for
+ *  an image part that must go, or null to keep it; `pickNote` (optional, asked
+ *  first) returns a finished note instead. Visits parts in history order. */
+function collapseImageParts(history: ModelMessage[], pick: (part: object, buf: unknown) => { width: number; height: number } | null,
+  pickNote?: (label: string, part: object) => string | null): ModelMessage[] | null {
   let changed = false;
   const next = history.map((m) => {
     const content = (m as any).content;
@@ -69,8 +176,12 @@ function collapseImageParts(history: ModelMessage[], pick: (part: object, buf: u
         if (part?.type !== 'tool-result' || part.output?.type !== 'content' || !Array.isArray(part.output.value)) return part;
         const texts: string[] = []; const files: any[] = []; const notes: string[] = [];
         for (const v of part.output.value) {
-          const dims = v?.type === 'file' && v.data?.type === 'data' ? pick(v, v.data.data) : null;
-          if (dims) notes.push(imageNote({ kind: 'oversized', label: v.filename ?? part.toolName ?? 'image', width: dims.width, height: dims.height }));
+          const isImage = v?.type === 'file' && v.data?.type === 'data';
+          const label = v?.filename ?? part.toolName ?? 'image';
+          const ready = isImage && pickNote ? pickNote(label, v) : null;
+          const dims = isImage && !ready ? pick(v, v.data.data) : null;
+          if (ready) notes.push(ready);
+          else if (dims) notes.push(imageNote({ kind: 'oversized', label, width: dims.width, height: dims.height }));
           else if (v?.type === 'text') texts.push(v.text);
           else files.push(v);
         }
@@ -88,8 +199,10 @@ function collapseImageParts(history: ModelMessage[], pick: (part: object, buf: u
     if (m.role === 'user') {
       const kept: any[] = []; const notes: any[] = [];
       for (const p of content) {
-        const dims = p?.type === 'file' ? pick(p, p.data) : null;
-        if (dims) notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: dims.width, height: dims.height }) });
+        const ready = p?.type === 'file' && pickNote ? pickNote('image', p) : null;
+        const dims = p?.type === 'file' && !ready ? pick(p, p.data) : null;
+        if (ready) notes.push({ type: 'text', text: ready });
+        else if (dims) notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: dims.width, height: dims.height }) });
         else kept.push(p);
       }
       if (!notes.length) return m;

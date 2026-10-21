@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { HarnessSession, type HarnessSessionOpts } from '../src/main/harness/harness-session';
-import { rebuildHistory, rebuildHistoryWithOrigins, restorePortableHistory } from '../src/main/harness/history-rebuild';
+import { rebuildHistory, rebuildHistoryWithOrigins, restorePortableHistory, hasUnpairedToolCalls } from '../src/main/harness/history-rebuild';
 import { compactionSourceDigest } from '../src/main/harness/compaction-record';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore, type NativeSessionHeader } from '../src/main/harness/session-store';
@@ -813,5 +813,30 @@ describe('image tool-result resume', () => {
         { type: 'file', mediaType: 'image/png', filename: 'ok.png', data: { type: 'data', data: Buffer.from('png!') } },
       ],
     });
+  });
+});
+
+describe('hasUnpairedToolCalls — the pairing test a restored checkpoint must pass', () => {
+  const call = (id: string) => ({ type: 'tool-call', toolCallId: id, toolName: 'Bash', input: {} });
+  const result = (id: string) => ({ type: 'tool-result', toolCallId: id, toolName: 'Bash', output: { type: 'text', value: 'ok' } });
+  it('a call followed by a user message (the shape a mid-call throw left in a checkpoint) is unpaired', () => {
+    expect(hasUnpairedToolCalls([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [call('c1')] },
+      { role: 'user', content: 'next' },
+    ] as any)).toBe(true);
+  });
+  it('a truncated tail and a partially answered group are unpaired', () => {
+    expect(hasUnpairedToolCalls([{ role: 'assistant', content: [call('c1')] }] as any)).toBe(true);
+    expect(hasUnpairedToolCalls([{ role: 'assistant', content: [call('c1'), call('c2')] }, { role: 'tool', content: [result('c1')] }] as any)).toBe(true);
+  });
+  it('a fully answered history, and plain text turns, are paired', () => {
+    expect(hasUnpairedToolCalls([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [call('c1'), call('c2')] },
+      { role: 'tool', content: [result('c1'), result('c2')] },
+      { role: 'assistant', content: 'done' },
+    ] as any)).toBe(false);
+    expect(hasUnpairedToolCalls([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] as any)).toBe(false);
   });
 });

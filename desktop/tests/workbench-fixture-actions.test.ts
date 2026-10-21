@@ -171,6 +171,8 @@ describe('shipped fixtures replay', () => {
         // by `?providerError=` replays (a session shows one failure card at a
         // time), so they are counted by the dedicated case below, not here.
         .filter((p) => p.optIn !== 'providerError')
+        // The step-limit turn rides the same `?providerError=step-limit` switch.
+        .filter((p) => p.optIn !== 'stepLimit')
         // A user_message line dispatches TWO actions: the optimistic USER_PROMPT and
         // the transcript's confirmation (fixture-loader.ts — else it stays pending).
         .reduce((n, p) => n + (p.type === 'user_message' ? 2 : 1), 0);

@@ -10,6 +10,10 @@ import type { SessionInfo } from '../../../../shared/types';
 //
 // MOCKUP: extra native sessions with different providers so the model chip
 // restyle (brand colors + icons) is visible across all brands at once.
+function anthropicErrorReview(): boolean {
+  return typeof location !== 'undefined' && new URLSearchParams(location.search).get('anthropicError') === '1';
+}
+
 export function sessions(): SessionInfo[] {
   return [
     {
@@ -34,6 +38,10 @@ export function sessions(): SessionInfo[] {
       provider: 'native',
       harnessId: 'coder',
       model: 'qwen2.5-coder:14b',
+      // `?anthropicError=1` (error-card review, 2026-10-21): the same session read as
+      // Claude Opus on the user's own Anthropic key, so the sorted error cards name
+      // the provider and offer its billing page as they would for real.
+      ...(anthropicErrorReview() ? { model: 'claude-opus-5-5', providerType: 'anthropic' } : {}),
     },
     // --- Mockup: brand-color showcase sessions (native) ---
     {
