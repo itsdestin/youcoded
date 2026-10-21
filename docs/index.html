@@ -193,7 +193,8 @@ h2{font-family:var(--font-ui);font-size:clamp(2rem,4vw,3rem);font-weight:800;let
 /* ---- story / accounts / faq / gallery ---- */
 .story p+p{margin-top:16px}
 .sign{display:inline-block;margin-top:22px;font-weight:700;color:var(--accent);text-decoration:none}
-.acctgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:26px}
+.acctgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-top:26px}
+@media (max-width:1100px){.acctgrid{grid-template-columns:repeat(2,1fr)}}
 .acct{padding:24px}
 .acct h3{font-size:1.02rem;font-weight:700;margin-bottom:9px}
 .acct p{font-size:.87rem;opacity:.78}
@@ -2435,6 +2436,7 @@ Contract: mascots/README.md (from the repo root)
   <div class="acctgrid">
         <a class="panel acct" href="https://github.com/signup" target="_blank" rel="noopener"><div class="badges"><span class="badge req">Required</span> <span class="badge">Free</span></div><h3>GitHub</h3><p>Keeps your conversations and files in sync across devices and delivers marketplace updates. Sign up with your Google or Apple account.</p><span class="acct-link">Create a GitHub account &rarr;</span></a>
         <a class="panel acct" href="https://claude.ai/upgrade" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Paid</span></div><h3>Anthropic</h3><p>A Claude Pro or Max plan lets you use Claude — the model YouCoded was built with.</p><span class="acct-link">See Claude plans &rarr;</span></a>
+        <a class="panel acct" href="https://openai.com/chatgpt/pricing/" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Paid</span></div><h3>OpenAI</h3><p>A ChatGPT plan lets you sign in and use OpenAI&rsquo;s models on your subscription.</p><span class="acct-link">See ChatGPT plans &rarr;</span></a>
         <a class="panel acct" href="https://openrouter.ai/" target="_blank" rel="noopener"><div class="badges"><span class="badge">Optional</span> <span class="badge">Pay as you go</span></div><h3>OpenRouter</h3><p>One account provides access to hundreds of models from every AI company. Pay only for what you use.</p><span class="acct-link">Create an OpenRouter account &rarr;</span></a>
         <div class="panel acct" role="link" tabindex="0" data-href="https://accounts.google.com/signup"><div class="badges"><span class="badge">Optional</span> <span class="badge">Free</span></div><h3>Google or Apple</h3><p>An extra copy of your data in Google Drive or iCloud, on top of GitHub.</p><span class="acct-link">Create a Google account &rarr;</span><a class="acct-alt" href="https://account.apple.com/account" target="_blank" rel="noopener">or an Apple ID &rarr;</a></div>
   </div>
