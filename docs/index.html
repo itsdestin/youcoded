@@ -1732,7 +1732,7 @@ html{-webkit-tap-highlight-color:transparent}
 /* Pressed states. Deliberately a shade of the theme's own foreground rather
    than an accent wash: it has to read on six wallpapers and under a thumb that
    is covering most of the control. */
-.faq summary:active{background:rgba(var(--fg-rgb),.07)}
+.faq summary:active{background:transparent}
 .integration-tag:active,.distro-option:active{background:rgba(var(--fg-rgb),.12)}
 /* .acct's background is `var(--glass-prose) !important` (the readability floor
    every prose panel gets), so a background here cannot win. Brightness instead. */
@@ -1767,14 +1767,23 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
 .faq details .a{padding:0}
 .faq details .a-in{padding:0 22px 20px}
-/* The row's own corners follow the card's, and the press is a tint only: a transform on a
-   row inside a blurred glass card made the browser paint a square dark block behind it
-   (Destin, 2026-10-21 screenshot). */
-.faq summary{border-radius:var(--radius);transition:background .18s}
+/* WHY no blur while a fold moves (Destin, 2026-10-21: "jitters/stutters"): the card's glass blur
+   is recomputed on every frame its height changes. Measured on the page: 15 frames with 63 ms
+   stalls over a 0.45 s open with the blur on, 29 even frames with it off. The wallpaper behind
+   the FAQ is a soft gradient, so the card looks the same without the blur for that third of a
+   second; `.moving` turns it off for exactly the animation and the script removes it after. */
+/* The whole list, not just the opening card: the cards below it move too, and a moving blurred card costs the same. */
+.faq.moving details,.storyfold.moving{-webkit-backdrop-filter:none !important;backdrop-filter:none !important}
+/* Hover and press tint the WHOLE card, not the question row: a tint layer under the content
+   (the card's background is !important, so it cannot be changed directly). */
+.faq details,.storyfold{position:relative;isolation:isolate}
+.faq details::before,.storyfold::before{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;
+  background:rgba(var(--fg-rgb),.04);opacity:0;transition:opacity .18s}
+.faq details:hover::before{opacity:1}
+.faq details:active::before,.storyfold:active::before{opacity:1;background:rgba(var(--fg-rgb),.08);transition:none}
+.faq summary{border-radius:var(--radius)}
 .faq details.is-open summary{border-radius:var(--radius) var(--radius) 0 0}
-.faq summary:hover{background:rgba(var(--fg-rgb),.04)}
-.faq summary:active,.storyfold>summary:active{transform:none;background:rgba(var(--fg-rgb),.08)}
-.storyfold>summary{transition:background .18s}
+.faq summary:active,.storyfold>summary:active{transform:none;background:transparent}
 .faq summary::after{transition:transform .34s cubic-bezier(.2,.8,.2,1)}
 .faq details[open] summary::after{content:'+'}
 .faq details.is-open summary::after{transform:rotate(45deg)}
@@ -4693,16 +4702,22 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     if (d.open) d.classList.add('is-open');
     s.addEventListener('click', function(e){
       e.preventDefault();
+      // `moving` drops the card's blur for the duration of the motion (see the CSS WHY).
+      var box = d.closest('.faq') || d; clearTimeout(d._moveT); box.classList.add('moving');
+      var settle = function(){ box.classList.remove('moving'); };
       if (d.classList.contains('is-open')) {
         d.classList.remove('is-open');
-        if (reduced) { d.open = false; return; }
-        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; };
+        if (reduced) { d.open = false; settle(); return; }
+        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; settle(); };
         a.addEventListener('transitionend', function h(ev){ if (ev.propertyName === 'grid-template-rows') { a.removeEventListener('transitionend', h); finish(); } });
-        setTimeout(finish, 450);
+        d._moveT = setTimeout(finish, 450);
       } else {
         d.open = true;
-        if (reduced) { d.classList.add('is-open'); return; }
-        requestAnimationFrame(function(){ requestAnimationFrame(function(){ d.classList.add('is-open'); }); });
+        if (reduced) { d.classList.add('is-open'); settle(); return; }
+        // One synchronous layout so the closed state is applied, then the open state: the
+        // growth starts on the very next frame (two queued frames read as a hesitation).
+        void a.offsetHeight; d.classList.add('is-open');
+        d._moveT = setTimeout(settle, 420);
       }
     });
   });
