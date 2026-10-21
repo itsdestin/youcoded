@@ -70,9 +70,9 @@ describe('ModelCatalog', () => {
       expect(models.map((m) => m.id)).toEqual(['tiny-Q4_K_M']);
     });
 
-    it('a custom endpoint on this computer alone: zero fetches', async () => {
+    it('a custom endpoint on this computer alone: no internet catalog fetch (only its own /models, on this computer)', async () => {
       expect(await cat.get([CUSTOM] as any)).toEqual([]);
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.map(([u]: [string]) => u)).toEqual(['http://localhost:11434/v1/models']);
     });
 
     it('a cloud custom endpoint DOES fetch (it can now be matched by address)', async () => {
@@ -539,5 +539,89 @@ describe('custom endpoints matched to models.dev by address', () => {
   });
   it('an unknown address gets no models.dev rows', async () => {
     expect(await make().get([custom('https://nobody.example.com/v1')] as any)).toEqual([]);
+  });
+});
+
+describe("an unmatched custom endpoint is asked for its own /models", () => {
+  let dir: string;
+  const custom = (baseUrl: string, id = 'c1') => ({ id, type: 'openai-compatible', label: 'Mine', baseUrl, enabled: true, builtIn: false, hasKey: true, ready: true });
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-catalog-ep-')); });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
+
+  function rig(endpointBody: unknown, opts: { ok?: boolean; key?: string } = {}) {
+    const calls: { url: string; auth?: string }[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: any) => {
+      calls.push({ url, auth: init?.headers?.Authorization });
+      if (url.includes('openrouter') || url.includes('models.dev')) return { ok: true, json: async () => ({}) };
+      return { ok: opts.ok ?? true, json: async () => endpointBody };
+    });
+    const cat = new ModelCatalog(dir, fetchImpl as any, { endpointKey: async () => opts.key });
+    return { cat, calls };
+  }
+
+  it('reads an OpenRouter-shaped list: names, context and per-token prices', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'm3', name: 'Mercury 3', context_length: 1000000,
+      pricing: { prompt: '0.0000001', completion: '0.00000035' }, supported_parameters: ['tools'] }] }, { key: 'sk-1' });
+    const rows = await cat.get([custom('https://unknown.example.com/v1/')] as any);
+    expect(rows).toEqual([{ id: 'm3', providerId: 'c1', label: 'Mercury 3', contextLength: 1000000, supportsTools: true,
+      pricing: { in: expect.closeTo(0.1, 10), out: expect.closeTo(0.35, 10) } }]);
+    expect(calls.find((c) => c.url === 'https://unknown.example.com/v1/models')?.auth).toBe('Bearer sk-1');
+  });
+  it('reads an id-only list and leaves every other fact unset', async () => {
+    const { cat } = rig({ object: 'list', data: [{ id: 'kimi-k2.6', object: 'model' }] });
+    expect(await cat.get([custom('https://ollama.example.com/v1')] as any)).toEqual([{ id: 'kimi-k2.6', providerId: 'c1', label: 'kimi-k2.6' }]);
+  });
+  it('sends no Authorization header when no key is saved', async () => {
+    const { cat, calls } = rig({ data: [] });
+    await cat.get([custom('http://localhost:11434/v1')] as any);
+    expect(calls.find((c) => c.url === 'http://localhost:11434/v1/models')?.auth).toBeUndefined();
+  });
+  it('a local endpoint is asked, but no internet catalog is fetched', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'llama3' }] });
+    expect((await cat.get([custom('http://localhost:11434/v1')] as any)).map((r) => r.id)).toEqual(['llama3']);
+    expect(calls.some((c) => c.url.includes('openrouter') || c.url.includes('models.dev'))).toBe(false);
+  });
+  it('a failing endpoint gives no rows and never throws', async () => {
+    const { cat } = rig(null, { ok: false });
+    expect(await cat.get([custom('https://down.example.com')] as any)).toEqual([]);
+  });
+  it('asks once for two callers at the same time', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'a' }] });
+    await Promise.all([cat.get([custom('https://one.example.com')] as any), cat.get([custom('https://one.example.com')] as any)]);
+    expect(calls.filter((c) => c.url === 'https://one.example.com/models')).toHaveLength(1);
+  });
+  it('a failed re-ask keeps the previous list for the same key', async () => {
+    let up = true;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (!url.endsWith('/models')) return { ok: true, json: async () => ({}) };
+      return { ok: up, json: async () => ({ data: [{ id: 'kept' }] }) };
+    });
+    // ttlMs -1: every call is past its time, so the second call really asks again.
+    const cat = new ModelCatalog(dir, fetchImpl as any, { ttlMs: -1, endpointKey: async () => 'sk-1' });
+    await cat.get([custom('https://flaky.example.com')] as any);
+    up = false;
+    expect((await cat.get([custom('https://flaky.example.com')] as any)).map((r) => r.id)).toEqual(['kept']);
+    expect(fetchImpl.mock.calls.filter(([u]) => u === 'https://flaky.example.com/models')).toHaveLength(2);
+  });
+  it('a session-start lookup (cacheOnly) never asks the endpoint', async () => {
+    const { cat, calls } = rig({ data: [{ id: 'a' }] });
+    expect(await cat.get([custom('https://quiet.example.com')] as any, { cacheOnly: true })).toEqual([]);
+    expect(calls).toHaveLength(0);
+    await cat.get([custom('https://quiet.example.com')] as any);
+    expect((await cat.get([custom('https://quiet.example.com')] as any, { cacheOnly: true })).map((r) => r.id)).toEqual(['a']);
+  });
+  it('a new key is never served the old key’s list', async () => {
+    let key = 'sk-old';
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: any) => {
+      if (!url.startsWith('https://k.example.com')) return { ok: true, json: async () => ({}) };
+      seen.push(init?.headers?.Authorization);
+      return { ok: true, json: async () => ({ data: [{ id: key }] }) };
+    });
+    const cat = new ModelCatalog(dir, fetchImpl as any, { endpointKey: async () => key });
+    await cat.get([custom('https://k.example.com')] as any);
+    key = 'sk-new';
+    expect((await cat.get([custom('https://k.example.com')] as any)).map((r) => r.id)).toEqual(['sk-new']);
+    expect(seen).toEqual(['Bearer sk-old', 'Bearer sk-new']);
   });
 });

@@ -254,6 +254,16 @@ export class ProviderRegistry {
     }
   }
 
+  /** The saved key for a provider id, for the model catalog's own /models request on a custom
+   *  endpoint. Never throws: a missing provider, no key, or an undecryptable store all answer
+   *  undefined, and the catalog then asks without a key. */
+  async endpointKey(id: string): Promise<string | undefined> {
+    try {
+      const p = this.readAll().find((x) => x.id === id);
+      return p ? await this.keyFor(p) : undefined;
+    } catch { return undefined; }
+  }
+
   private async keyFor(p: ProviderConfig): Promise<string | undefined> {
     if (!p.secretRef) return undefined;
     // SecretsStore.get returns null for missing/undecryptable — normalize to

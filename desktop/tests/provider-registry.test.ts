@@ -52,6 +52,14 @@ describe('ProviderRegistry', () => {
   });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
+  it('endpointKey answers the saved key, and undefined for a provider without one or an unknown id', async () => {
+    const id = await reg.upsert({ type: 'openai-compatible', label: 'Mine', baseUrl: 'https://x.example.com/v1', enabled: true });
+    expect(await reg.endpointKey(id)).toBeUndefined();
+    await reg.setKey(id, 'sk-123');
+    expect(await reg.endpointKey(id)).toBe('sk-123');
+    expect(await reg.endpointKey('nope')).toBeUndefined();
+  });
+
   it('seeds the two built-ins on first init and is idempotent', async () => {
     const list = await reg.list();
     expect(list.map((p) => p.id).sort()).toEqual(['local', 'openrouter']);

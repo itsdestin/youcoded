@@ -215,6 +215,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     // The plan's models come from ChatGptAuth's manifest cache (§4.2); absent
     // under the kill switch so the catalog contributes nothing for 'chatgpt'.
     ...(chatgptForUi ? { chatgptModels: () => chatgptForUi.models() } : {}),
+    // A custom endpoint's own /models list is asked with its saved key (model-catalog endpointModels).
+    endpointKey: (id) => providerRegistry.endpointKey(id),
   });
   // WebSearch stack (Phase 2 Plan B): keys live in SecretsStore, the ref map in
   // ~/.youcoded/search-providers.json (via NativeHome). SearchChain caches the

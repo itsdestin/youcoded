@@ -7,6 +7,7 @@
 // omitted, never guessed.
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import type { CatalogModel, ModelBinding, ProviderStatus } from '../../shared/provider-types';
 import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
 import { cloudContextLength } from './cloud-context';
@@ -17,6 +18,8 @@ const CACHE_FILE = 'provider-catalog-cache.json';
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h, marketplace-cache precedent
 // Model lists are big but not huge; a slow fetch should not hang the picker.
 const FETCH_TIMEOUT_MS = 15_000;
+// A custom endpoint's own /models: one server, a short list — 8 s is plenty and keeps the picker responsive.
+const ENDPOINT_TIMEOUT_MS = 8_000;
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const MODELSDEV_URL = 'https://models.dev/api.json';
 
@@ -34,6 +37,74 @@ function isObj(x: unknown): x is Record<string, any> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
 }
 
+/** One OpenRouter-shaped row → CatalogModel, or null when malformed. Shared with a custom
+ *  endpoint's own /models, which many servers answer in the same shape. */
+function openrouterRow(row: unknown, providerId: string): CatalogModel | null {
+  if (!isObj(row) || typeof row.id !== 'string') return null; // skip malformed
+  const m: CatalogModel = {
+    id: row.id,
+    providerId,
+    label: typeof row.name === 'string' ? row.name : row.id,
+  };
+  if (typeof row.context_length === 'number') m.contextLength = row.context_length;
+  if (Array.isArray(row.supported_parameters)) m.supportsTools = row.supported_parameters.includes('tools');
+  // Vision support: OpenRouter is a TRANSPORT (one endpoint serves vision and
+  // text-only models), so unlike the direct-key providers this is the one
+  // catalog source that can actually answer "does THIS model accept images"
+  // from data rather than a hand-maintained guess. `architecture` and its
+  // `input_modalities` array are both optional per OpenRouter's schema and
+  // rows are untrusted JSON — isObj + Array.isArray gate every access, and a
+  // missing/malformed shape leaves supportsVision unset (undefined = "don't
+  // know"), never a guessed `false` (see CatalogModel's field comment).
+  // A row without input_modalities may still carry the older single-string
+  // `architecture.modality` field (e.g. "text+image->text") — the fallback
+  // branch below reads that instead of giving up, with the same
+  // never-guess-false posture.
+  const architecture = isObj(row.architecture) ? row.architecture : null;
+  if (architecture && Array.isArray(architecture.input_modalities)) {
+    m.supportsVision = architecture.input_modalities.includes('image');
+  } else if (architecture && typeof architecture.modality === 'string' && architecture.modality.includes('->')) {
+    // Legacy OpenRouter shape, predating input_modalities: a single string
+    // like "text+image->text" ("<input>-><output>"). Only trust it when
+    // the '->' delimiter is actually present — a modality string without
+    // one gives no reliable way to isolate the input side, so that case
+    // (and a non-string modality) falls through to "don't know" below,
+    // same defensive posture as the input_modalities branch above.
+    const inputSide = architecture.modality.split('->')[0];
+    m.supportsVision = inputSide.includes('image');
+  }
+  // OpenRouter pricing is USD-per-TOKEN strings; CatalogModel.pricing is
+  // USD per 1M tokens, hence the *1e6. Require strings with NON-WHITESPACE
+  // CONTENT before Number(): Number(null), Number('') and Number('  ') are
+  // all 0, which would map a JSON null — or a field the upstream padded
+  // with spaces — to "free", violating "absent fields are omitted, never
+  // guessed" (header comment). The .trim() is the load-bearing part: a
+  // padded field must read as "not published", NOT as a real rate of zero,
+  // which would silently bill the user's cached reads at $0. Matches the
+  // sibling parser in harness/eval/estimate.ts (isNumeric).
+  const pricing = isObj(row.pricing) ? row.pricing : null;
+  if (pricing
+      && typeof pricing.prompt === 'string' && pricing.prompt.trim() !== ''
+      && typeof pricing.completion === 'string' && pricing.completion.trim() !== '') {
+    const prompt = Number(pricing.prompt);
+    const completion = Number(pricing.completion);
+    if (Number.isFinite(prompt) && Number.isFinite(completion)) {
+      m.pricing = { in: prompt * 1e6, out: completion * 1e6 };
+      // Cache rates ride the same payload and the same never-guess rule:
+      // a model that doesn't publish them leaves them UNSET, so the cost
+      // chip falls back to the full input rate rather than pricing a
+      // cached read at $0.
+      const cr = typeof pricing.input_cache_read === 'string' && pricing.input_cache_read.trim() !== ''
+        ? Number(pricing.input_cache_read) : NaN;
+      const cw = typeof pricing.input_cache_write === 'string' && pricing.input_cache_write.trim() !== ''
+        ? Number(pricing.input_cache_write) : NaN;
+      if (Number.isFinite(cr)) m.pricing.cacheRead = cr * 1e6;
+      if (Number.isFinite(cw)) m.pricing.cacheWrite = cw * 1e6;
+    }
+  }
+  return m;
+}
+
 export class ModelCatalog {
   private readonly ttlMs: number;
   private readonly cachePath: string;
@@ -46,6 +117,11 @@ export class ModelCatalog {
   // back now. Null under the kill switch or in tests without it.
   private readonly chatgptModels: (() => Promise<CatalogModel[]>) | null;
   private readonly contextPreferences: () => ContextPreferences;
+  // The saved key for a custom endpoint (ProviderRegistry.endpointKey), for its own /models ask.
+  private readonly endpointKey: ((id: string) => Promise<string | undefined>) | null;
+  // A custom endpoint's own /models answers, in memory only (see endpointModels).
+  private endpointCache = new Map<string, { at: number; rows: CatalogModel[] }>();
+  private endpointInflight = new Map<string, Promise<{ rows: CatalogModel[]; ok: boolean }>>();
   // In-memory copy of the last cache we returned (ROADMAP 2026-08-11: every
   // ensureFresh() re-read + re-parsed the whole catalog file from disk, twice
   // per session start). SERVED only while its own fetchedAt is inside the TTL
@@ -68,12 +144,14 @@ export class ModelCatalog {
                 localModels?: () => Promise<CatalogModel[]>;
                 chatgptModels?: () => Promise<CatalogModel[]>;
                 contextPreferences?: () => ContextPreferences;
+                endpointKey?: (providerId: string) => Promise<string | undefined>;
               }) {
     this.cachePath = path.join(cacheDir, CACHE_FILE);
     this.ttlMs = opts?.ttlMs ?? TTL_MS;
     this.localModels = opts?.localModels ?? null;
     this.chatgptModels = opts?.chatgptModels ?? null;
     this.contextPreferences = opts?.contextPreferences ?? (() => DEFAULT_CONTEXT_PREFERENCES);
+    this.endpointKey = opts?.endpointKey ?? null;
   }
 
   /** null on missing/corrupt. Unlike providers.json (user data — read errors
@@ -153,72 +231,12 @@ export class ModelCatalog {
     const rows = isObj(payload) && Array.isArray(payload.data) ? payload.data : [];
     const out: CatalogModel[] = [];
     for (const row of rows) {
-      if (!isObj(row) || typeof row.id !== 'string') continue; // skip malformed
-      const m: CatalogModel = {
-        id: row.id,
-        providerId,
-        label: typeof row.name === 'string' ? row.name : row.id,
-      };
-      if (typeof row.context_length === 'number') m.contextLength = row.context_length;
-      if (Array.isArray(row.supported_parameters)) m.supportsTools = row.supported_parameters.includes('tools');
-      // Vision support: OpenRouter is a TRANSPORT (one endpoint serves vision and
-      // text-only models), so unlike the direct-key providers this is the one
-      // catalog source that can actually answer "does THIS model accept images"
-      // from data rather than a hand-maintained guess. `architecture` and its
-      // `input_modalities` array are both optional per OpenRouter's schema and
-      // rows are untrusted JSON — isObj + Array.isArray gate every access, and a
-      // missing/malformed shape leaves supportsVision unset (undefined = "don't
-      // know"), never a guessed `false` (see CatalogModel's field comment).
-      // A row without input_modalities may still carry the older single-string
-      // `architecture.modality` field (e.g. "text+image->text") — the fallback
-      // branch below reads that instead of giving up, with the same
-      // never-guess-false posture.
-      const architecture = isObj(row.architecture) ? row.architecture : null;
-      if (architecture && Array.isArray(architecture.input_modalities)) {
-        m.supportsVision = architecture.input_modalities.includes('image');
-      } else if (architecture && typeof architecture.modality === 'string' && architecture.modality.includes('->')) {
-        // Legacy OpenRouter shape, predating input_modalities: a single string
-        // like "text+image->text" ("<input>-><output>"). Only trust it when
-        // the '->' delimiter is actually present — a modality string without
-        // one gives no reliable way to isolate the input side, so that case
-        // (and a non-string modality) falls through to "don't know" below,
-        // same defensive posture as the input_modalities branch above.
-        const inputSide = architecture.modality.split('->')[0];
-        m.supportsVision = inputSide.includes('image');
-      }
-      // OpenRouter pricing is USD-per-TOKEN strings; CatalogModel.pricing is
-      // USD per 1M tokens, hence the *1e6. Require strings with NON-WHITESPACE
-      // CONTENT before Number(): Number(null), Number('') and Number('  ') are
-      // all 0, which would map a JSON null — or a field the upstream padded
-      // with spaces — to "free", violating "absent fields are omitted, never
-      // guessed" (header comment). The .trim() is the load-bearing part: a
-      // padded field must read as "not published", NOT as a real rate of zero,
-      // which would silently bill the user's cached reads at $0. Matches the
-      // sibling parser in harness/eval/estimate.ts (isNumeric).
-      const pricing = isObj(row.pricing) ? row.pricing : null;
-      if (pricing
-          && typeof pricing.prompt === 'string' && pricing.prompt.trim() !== ''
-          && typeof pricing.completion === 'string' && pricing.completion.trim() !== '') {
-        const prompt = Number(pricing.prompt);
-        const completion = Number(pricing.completion);
-        if (Number.isFinite(prompt) && Number.isFinite(completion)) {
-          m.pricing = { in: prompt * 1e6, out: completion * 1e6 };
-          // Cache rates ride the same payload and the same never-guess rule:
-          // a model that doesn't publish them leaves them UNSET, so the cost
-          // chip falls back to the full input rate rather than pricing a
-          // cached read at $0.
-          const cr = typeof pricing.input_cache_read === 'string' && pricing.input_cache_read.trim() !== ''
-            ? Number(pricing.input_cache_read) : NaN;
-          const cw = typeof pricing.input_cache_write === 'string' && pricing.input_cache_write.trim() !== ''
-            ? Number(pricing.input_cache_write) : NaN;
-          if (Number.isFinite(cr)) m.pricing.cacheRead = cr * 1e6;
-          if (Number.isFinite(cw)) m.pricing.cacheWrite = cw * 1e6;
-        }
-      }
-      out.push(m);
+      const m = openrouterRow(row, providerId);
+      if (m) out.push(m);
     }
     return out;
   }
+
 
   /** models.dev api.json rows for one provider key → CatalogModel. */
   private modelsdevModels(payload: any, key: string, providerId: string): CatalogModel[] {
@@ -264,6 +282,51 @@ export class ModelCatalog {
       if (!best || count > best.count || (count === best.count && key < best.key)) best = { key, count };
     }
     return best?.key ?? null;
+  }
+
+  /** A custom endpoint's own GET /models, for an address models.dev does not know.
+   *  `ok` is false when the ask failed (network, timeout, non-2xx, bad JSON) — `rows` then holds the
+   *  previous answer for the same provider + address + key, else []. `refresh()` reports `ok`.
+   *  `cacheOnly`: never ask; answer only what is cached (session-start paths, plan C-1).
+   *  WHY keyed by key fingerprint and normalized address: an edited address or a replaced key must
+   *  never be served another one's list. WHY memory only: the list is cheap to re-ask, and a file write
+   *  here would block the main process (rule: main never blocks). Never throws. */
+  private async endpointModels(p: ProviderStatus, opts?: { force?: boolean; cacheOnly?: boolean }): Promise<{ rows: CatalogModel[]; ok: boolean }> {
+    const base = p.baseUrl ? normalizeEndpoint(p.baseUrl) : null;
+    if (!base || !p.baseUrl) return { rows: [], ok: true };
+    let key: string | undefined;
+    try { key = (await this.endpointKey?.(p.id)) || undefined; } catch { key = undefined; }
+    const fp = key ? createHash('sha256').update(key).digest('hex').slice(0, 16) : 'none';
+    const cacheKey = `${p.id}\0${base}\0${fp}`;
+    const hit = this.endpointCache.get(cacheKey);
+    if (opts?.cacheOnly) return { rows: hit?.rows ?? [], ok: true };
+    if (hit && !opts?.force && Date.now() - hit.at < this.ttlMs) return { rows: hit.rows, ok: true };
+    // WHY share a running ask even when forced: a refresh that joins an ask already in flight gets
+    // an answer at least as new as the click — a second request would add nothing.
+    const running = this.endpointInflight.get(cacheKey);
+    if (running) return running;
+    const url = `${p.baseUrl.replace(/\/+$/, '')}/models`;
+    const ask = (async () => {
+      try {
+        const res = await this.fetchImpl(url, {
+          headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+          signal: AbortSignal.timeout(ENDPOINT_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error('not ok');
+        const body = await res.json();
+        const list = Array.isArray(body) ? body : isObj(body) && Array.isArray(body.data) ? body.data : null;
+        if (!list) throw new Error('no list');
+        const rows = list.map((r: unknown) => openrouterRow(r, p.id)).filter((r: CatalogModel | null): r is CatalogModel => r !== null);
+        this.endpointCache.set(cacheKey, { at: Date.now(), rows });
+        return { rows, ok: true };
+      } catch {
+        return { rows: hit?.rows ?? [], ok: false };
+      } finally {
+        this.endpointInflight.delete(cacheKey);
+      }
+    })();
+    this.endpointInflight.set(cacheKey, ask);
+    return ask;
   }
 
   /** Catalog rows scoped to the ENABLED providers passed in. Never throws.
@@ -319,9 +382,12 @@ export class ModelCatalog {
         // to no ChatGPT rows; get() keeps its never-throws contract.
         try { out.push(...await this.chatgptModels()); } catch { /* account unavailable */ }
       } else if (p.type === 'openai-compatible') {
-        // Matched by address to a models.dev provider.
+        // Matched by address to a models.dev provider first.
         const key = this.modelsdevKeyForAddress(cache.modelsdev, p.baseUrl);
         if (key) out.push(...this.modelsdevModels(cache.modelsdev, key, p.id));
+        // Otherwise the endpoint's own list (Ollama, LM Studio, a proxy, a service models.dev lacks).
+        // A local address is asked too: that is the user's own computer, not the internet.
+        else out.push(...(await this.endpointModels(p, { cacheOnly: opts?.cacheOnly })).rows);
       }
     }
     return out;
