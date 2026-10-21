@@ -282,7 +282,9 @@ function ProviderCard({ title, status, actions, children, screen }: {
         </div>
         {actions && <div className="shrink-0 flex items-center gap-1.5">{actions}</div>}
       </div>
-      {children && <div className="mt-2.5 space-y-2">{children}</div>}
+      {/* WHY toArray: a row passes several conditional children that are often all `false`; a bare
+          truthiness check drew an empty mt-2.5 box under the title (2026-10-21). */}
+      {React.Children.toArray(children).length > 0 && <div className="mt-2.5 space-y-2">{children}</div>}
     </div>
   );
 }
