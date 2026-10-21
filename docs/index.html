@@ -1765,14 +1765,16 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details .a>.a-in,.storyfold .a>.a-in{overflow:hidden;min-height:0}
 .faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
 .faq details .a{padding:0}
-.faq details .a-in{padding:0 22px 20px}
-/* WHY no blur while a fold moves (Destin, 2026-10-21: "jitters/stutters"): the card's glass blur
-   is recomputed on every frame its height changes. Measured on the page: 15 frames with 63 ms
-   stalls over a 0.45 s open with the blur on, 29 even frames with it off. The wallpaper behind
-   the FAQ is a soft gradient, so the card looks the same without the blur for that third of a
-   second; `.moving` turns it off for exactly the animation and the script removes it after. */
-/* The whole list, not just the opening card: the cards below it move too, and a moving blurred card costs the same. */
-.faq.moving details,.storyfold.moving{-webkit-backdrop-filter:none !important;backdrop-filter:none !important}
+/* The bottom space is content, not padding: padding kept the collapsed box 20px tall, so every close ended with a 19px jump. */
+.faq details .a-in{padding:0 22px}
+.faq details .a-in::after,.storyfold .a-in::after{content:'';display:block;height:20px}
+/* WHY these stay on their own graphics layers (Destin, 2026-10-21: a fold "shrinks a very small
+   bit, then freezes, then fully collapses"): promoting the cards and the sections below them to
+   layers at the START of each fold -- and tearing the layers down at the end -- is a big one-off
+   cost on a HiDPI screen, and it landed as a freeze right after the motion began. Promoted once,
+   up front, they just glide. (An earlier attempt toggled the blur off during the fold for the
+   same reason; the toggle itself was the hitch.) */
+.faq details,.storyfold,#faq ~ section,#story ~ section,footer{will-change:transform}
 /* Hover and press tint the WHOLE card, not the question row: a tint layer under the content
    (the card's background is !important, so it cannot be changed directly). */
 .faq details,.storyfold{position:relative;isolation:isolate}
@@ -1795,7 +1797,7 @@ html{-webkit-tap-highlight-color:transparent}
   .storyfold.is-open>summary{border-radius:var(--radius) var(--radius) 0 0}
   .storyfold>summary::after{content:'+';margin-left:auto;color:var(--accent);font-size:1.3rem;line-height:1;transition:transform .34s cubic-bezier(.2,.8,.2,1)}
   .storyfold.is-open>summary::after{transform:rotate(45deg)}
-  .storyfold .a-in{padding:0 17px 18px}
+  .storyfold .a-in{padding:0 17px}
 }
 /* Tips over the live demo: glass chips hanging under the demo's own buttons on straight stems.
    They exist only once the visitor has clicked into the demo (B-1 round 2). */
@@ -4727,27 +4729,22 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
       var opening = !d.classList.contains('is-open');
       if (reduced || !d.animate) { d.classList.toggle('is-open', opening); d.open = opening; return; }
       busy = true;
-      var box = d.closest('.faq') || d; box.classList.add('moving');
       var rad = getComputedStyle(d).borderRadius || '0px';
       var h0 = d.offsetHeight, list = followers(d);
       if (opening) { d.open = true; d.classList.add('is-open'); }
       var h1 = opening ? d.offsetHeight : (function(){ d.classList.remove('is-open'); var h = d.offsetHeight; d.classList.add('is-open'); return h; })();
-      var dh = Math.abs(h1 - h0); if (!dh) { if (!opening) { d.classList.remove('is-open'); d.open = false; } box.classList.remove('moving'); busy = false; return; }
-      // The card on top of its neighbours while it moves, so the reveal is never covered.
-      d.style.zIndex = '3';
+      var dh = Math.abs(h1 - h0); if (!dh) { if (!opening) { d.classList.remove('is-open'); d.open = false; } busy = false; return; }
       var clipFrom = 'inset(0 0 ' + (opening ? dh : 0) + 'px 0 round ' + rad + ')', clipTo = 'inset(0 0 ' + (opening ? 0 : dh) + 'px 0 round ' + rad + ')';
       var anims = [ d.animate([{ clipPath: clipFrom }, { clipPath: clipTo }], { duration: DUR, easing: EASE, fill: 'both' }),
                     a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' }) ];
       list.forEach(function(el){
-        el.style.willChange = 'transform';
         anims.push(el.animate([{ transform: 'translateY(' + (opening ? -dh : 0) + 'px)' }, { transform: 'translateY(' + (opening ? 0 : -dh) + 'px)' }], { duration: DUR, easing: EASE, fill: 'both' }));
       });
       Promise.all(anims.map(function(an){ return an.finished.catch(function(){}); })).then(function(){
         // Closing: shut the element in the same frame the glide is undone, so nothing jumps.
         if (!opening) { d.classList.remove('is-open'); d.open = false; }
         anims.forEach(function(an){ an.cancel(); });
-        list.forEach(function(el){ el.style.willChange = ''; });
-        d.style.zIndex = ''; box.classList.remove('moving'); busy = false;
+        busy = false;
       });
     });
   });
