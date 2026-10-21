@@ -141,13 +141,17 @@ describe('splitMarkdownBlocks while a reply streams', () => {
   // CRLF). This is what found the per-block cut wrong, then CRLF read as a blank
   // line, then indented code's context: 8,000+ documents passed at every
   // character when this landed; 150 here keep it quick.
-  it('parses random documents exactly as the whole message, at every character', () => {
+  // WHY: under the full suite's parallel CPU load even 75 seeded documents
+  // exceeded a 30-second test deadline (versus 2.7 s alone). Give each small
+  // group a separate deadline without dropping any of the same 150 documents.
+  it.each(Array.from({ length: 10 }, (_, i) => i * 15))('parses random documents exactly as the whole message, at every character (group %i)', (start) => {
     const FRAGS = ['para text', 'more *words*', '# h', '#', '##x', '===', '---', '-', '- item', '  - nested', '1. one', '3) three', '> quote', '>', 'lazy', '```', '```js', '~~~', '    indented', '\t tab', '| a | b |', '| - | - |', '|---|', '<details>', '<summary>s</summary>', '</details>', '<div>', '</div>', '<!--', '-->', '***', '* star', '+ plus', '[x]: http://a', '[x]', '[^1]', 'http://example.com', '/tmp/a.txt', '  ', '', '', '', 'a  ', 'b\\', '<pre>', '</pre>', '* * *', '1.', '10. ten', '- [ ] task', 'Setext', '===', '  ```', '```  ', '> ```', '> - x', '   - three', '    - four', '<b>x</b>', '', '', '', '', '    code', '> ', '1) x', '- ', '* ', '```py', 'x | y', '--- | ---', '<details><summary>t</summary>', '[a][x]', '![i](p.png)', '  1. y', '    ', '\t- tabbed', '> > deep', '#     spaced', 'Title\n---'];
     let seed = 20260923;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     for (let d = 0; d < 150; d++) {
       const lines = Array.from({ length: 3 + Math.floor(rnd() * 14) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]);
       const md = lines.join(rnd() < 0.1 ? '\r\n' : '\n');
+      if (d < start || d >= start + 15) continue;
       let whole: unknown[];
       stream(everyCharacter(md), (state, prefix) => {
         // A few odd prefixes trip a development-only assertion inside

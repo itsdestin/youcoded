@@ -19,12 +19,14 @@ export type ScenarioId =
   | 'site'
   // Welcome back (design 2026-09-24): a cold start after a crash — nothing in
   // the strip, four conversations that were open when the app went down.
-  | 'welcome-back';
+  | 'welcome-back'
+  // WHY: a single native conversation lets the spending review open on its actual plan card.
+  | 'plans-spending-review';
 
 export const SCENARIO_IDS: readonly ScenarioId[] = [
   'default', 'empty', 'no-providers', 'refused', 'stress',
   'statusbar-cc', 'statusbar-local', 'statusbar-metered', 'statusbar-unpriced', 'statusbar-delegated',
-  'site', 'welcome-back',
+  'site', 'welcome-back', 'plans-spending-review',
 ];
 
 /** A row in the Resume Browser's list. Mirrors ResumeBrowser.tsx's local
@@ -273,6 +275,8 @@ export function seed(scenario: ScenarioId): MockState {
     reopen: [],
   };
   switch (scenario) {
+    case 'plans-spending-review':
+      return { ...base, sessions: base.sessions.filter((s) => s.id === 'wb-2') };
     case 'empty':
       return { ...base, sessions: [], past: [], tags: [], permissions: [] };
     case 'no-providers':

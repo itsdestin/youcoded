@@ -258,6 +258,34 @@ describe('reply fixtures', () => {
   });
 });
 
+// WHY: a live spending pane can silently show the default chat if its named
+// fixture fails to replay. Exercise the exact fixture loader and scenario choice.
+describe('spending review conversations', () => {
+  it.each(['plan-proposed', 'plan-proposed-chatgpt', 'plan-proposed-local', 'plan-proposed-heavy',
+    'plan-running', 'plan-running-limit', 'plan-running-unpriced', 'plan-paused',
+    'plan-completed', 'plan-interrupted', 'plan-multi-source'])('%s replays its plan into chat', (name) => {
+    const raw = readFileSync(join(FIXTURE_ROOT, 'bubbles', `${name}.jsonl`), 'utf8');
+    const result = loadFixture(name, raw, 'wb-2');
+    expect(result.error).toBeUndefined();
+    expect(result.actions.some((action) => action.type === 'PLAN_CHANGED')).toBe(true);
+    expect(result.actions.some((action) => action.type === 'TRANSCRIPT_ASSISTANT_TEXT')).toBe(true);
+  });
+
+  it('pauses at the spending limit so Continue asks for a new total instead of resuming immediately', () => {
+    // WHY: the old "plan-limit" pause silently took the generic Continue path,
+    // making the review's new-limit box impossible to open.
+    const raw = readFileSync(join(FIXTURE_ROOT, 'bubbles', 'plan-paused.jsonl'), 'utf8');
+    const plan = JSON.parse(raw.split('\n').find((line) => line.includes('"type": "plan"'))!).plan;
+    expect(plan.paused.kind).toBe('spend-limit');
+    expect(plan.spendLimit).toEqual({ usd: 5 });
+  });
+
+  it('opens the review on the conversation that receives the plan', async () => {
+    const { seed } = await import('../src/renderer/dev/workbench/scenarios');
+    expect(seed('plans-spending-review').sessions.map((session) => session.id)).toEqual(['wb-2']);
+  });
+});
+
 // The hydrate payload is what App.tsx:1465 actually receives, so a payload that
 // deserializes into empty timelines means "the workbench shows no conversation"
 // — with no error anywhere. Guard the round-trip, not just the actions.

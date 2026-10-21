@@ -431,11 +431,13 @@ describe('fields main computes', () => {
       // Fetched once, it would sit there saying "Applies after the current reply"
       // for as long as it is open — the user closes it, reopens it, and concludes
       // the setting never stuck.
-      await openSettings(
-        { ...SETTINGS, keepLoaded: true, pendingApply: true },
-        { ...SETTINGS, keepLoaded: true },
-      );
+      // WHY: hold the second answer until the pending line is observed. Under a
+      // loaded full suite the 50 ms poll could clear it before this assertion.
+      const { reads } = deferredModels({ ...SETTINGS, keepLoaded: true, pendingApply: true });
+      await openDialog();
       expect(screen.getByText('Applies after the current reply.')).toBeTruthy();
+      await waitFor(() => expect(reads.length).toBeGreaterThan(0), POLLED);
+      await act(async () => reads[0].resolve({ ...SETTINGS, keepLoaded: true }));
       await waitFor(
         () => expect(screen.queryByText('Applies after the current reply.')).toBeNull(),
         POLLED,
