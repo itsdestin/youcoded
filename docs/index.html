@@ -1761,8 +1761,7 @@ html{-webkit-tap-highlight-color:transparent}
    same motion: the answer's box grows from 0 to its height while it fades in, the + turns into
    an x, and a press on the question dips the card (Destin, review R-10: "no expand animation or
    press feel"). The <details> element stays open during the closing motion; is-open drives it. */
-.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0;
-  transition:grid-template-rows .34s cubic-bezier(.2,.8,.2,1),opacity .22s ease}
+.faq details .a,.storyfold .a{display:grid;grid-template-rows:0fr;opacity:0}
 .faq details .a>.a-in,.storyfold .a>.a-in{overflow:hidden;min-height:0}
 .faq details.is-open .a,.storyfold.is-open .a{grid-template-rows:1fr;opacity:1}
 .faq details .a{padding:0}
@@ -1789,7 +1788,7 @@ html{-webkit-tap-highlight-color:transparent}
 .faq details.is-open summary::after{transform:rotate(45deg)}
 .storyfold>summary{list-style:none;display:none}
 .storyfold>summary::-webkit-details-marker{display:none}
-@media (prefers-reduced-motion:reduce){.faq details .a,.storyfold .a,.faq summary,.faq summary::after{transition:none}}
+@media (prefers-reduced-motion:reduce){.faq summary,.faq summary::after{transition:none}}
 @media (max-width:760px){
   .storyfold{padding:0}
   .storyfold>summary{display:flex;gap:10px;cursor:pointer;padding:15px 17px;font-weight:700;font-size:.95rem;border-radius:var(--radius)}
@@ -3612,12 +3611,17 @@ if (document.querySelector('.demo-deck')) {
         { duration: DUR, delay: b.col * 70, easing: EASE, fill: 'backwards' });
     }
   }
-  var io = null, armed = false;
+  var io = null, armed = false, ioY = scrollY;
   function onIO(es){
+    // WHY (Destin, 2026-10-21: the FAQ "jitters/stutters on expand/close"): a block can enter
+    // the window without any scrolling -- an opening FAQ card pushes the cards below it into
+    // view -- and it then played its rise-and-fade WHILE being shoved down. An entrance is
+    // for arriving by scroll; a block pushed in by a layout change just appears.
+    var scrolled = Math.abs(scrollY - ioY) > 4; ioY = scrollY;
     es.forEach(function(e){
       if (!e.isIntersecting) return;
       var b = risers.filter(function(r){ return r.el === e.target; })[0];
-      if (b) { reveal(b, true); io.unobserve(e.target); }
+      if (b) { reveal(b, scrolled); io.unobserve(e.target); }
     });
   }
   // The only layout read: once per call, and calls are rAF-coalesced.
@@ -4692,33 +4696,59 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
 <script>
 // The story opens folded on a phone, open everywhere else (Q-14).
 (function(){ var d = document.querySelector('.storyfold'); if (d && matchMedia('(max-width: 760px)').matches) d.removeAttribute('open'); })();
-// Animated folds: the FAQ cards and the story card. Opening sets `open` then, a frame later,
-// is-open so the box transitions from 0; closing removes is-open and waits for the motion to
-// end before the element actually closes. With reduced motion there is no wait.
+// Animated folds: the FAQ cards and the story card.
+// WHY compositor-only (Destin, 2026-10-21: "still has the same stutter on expand/close"): the
+// first version animated the answer's height, which re-laid-out and repainted the card and
+// everything under it on every frame -- the cards below, the ideas wall's pictures, the footer,
+// and the glass blur of each moving card. Now the card changes size ONCE (one layout), and the
+// motion is a clip reveal on the card plus a transform glide on everything below it, both of
+// which the GPU draws without touching layout. Closing runs the same in reverse and only then
+// shuts the element. Reduced motion: instant.
 (function(){
   var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var DUR = 340, EASE = 'cubic-bezier(.2,.8,.2,1)';
+  // Everything after the card in page order: the later cards, then the later sections -- never
+  // a fixed element (the docked pill, the back-to-top button), which would visibly jump.
+  function followers(d){
+    var out = [], n = d;
+    while (n && n !== document.body) {
+      var sib = n.nextElementSibling;
+      while (sib) { if (sib.nodeType === 1 && getComputedStyle(sib).position !== 'fixed' && sib.tagName !== 'SCRIPT') out.push(sib); sib = sib.nextElementSibling; }
+      n = n.parentElement;
+    }
+    return out;
+  }
   document.querySelectorAll('.faq details, details.storyfold').forEach(function(d){
     var s = d.querySelector('summary'), a = d.querySelector('.a'); if (!s || !a) return;
     if (d.open) d.classList.add('is-open');
+    var busy = false;
     s.addEventListener('click', function(e){
-      e.preventDefault();
-      // `moving` drops the card's blur for the duration of the motion (see the CSS WHY).
-      var box = d.closest('.faq') || d; clearTimeout(d._moveT); box.classList.add('moving');
-      var settle = function(){ box.classList.remove('moving'); };
-      if (d.classList.contains('is-open')) {
-        d.classList.remove('is-open');
-        if (reduced) { d.open = false; settle(); return; }
-        var done = false, finish = function(){ if (done) return; done = true; if (!d.classList.contains('is-open')) d.open = false; settle(); };
-        a.addEventListener('transitionend', function h(ev){ if (ev.propertyName === 'grid-template-rows') { a.removeEventListener('transitionend', h); finish(); } });
-        d._moveT = setTimeout(finish, 450);
-      } else {
-        d.open = true;
-        if (reduced) { d.classList.add('is-open'); settle(); return; }
-        // One synchronous layout so the closed state is applied, then the open state: the
-        // growth starts on the very next frame (two queued frames read as a hesitation).
-        void a.offsetHeight; d.classList.add('is-open');
-        d._moveT = setTimeout(settle, 420);
-      }
+      e.preventDefault(); if (busy) return;
+      var opening = !d.classList.contains('is-open');
+      if (reduced || !d.animate) { d.classList.toggle('is-open', opening); d.open = opening; return; }
+      busy = true;
+      var box = d.closest('.faq') || d; box.classList.add('moving');
+      var rad = getComputedStyle(d).borderRadius || '0px';
+      var h0 = d.offsetHeight, list = followers(d);
+      if (opening) { d.open = true; d.classList.add('is-open'); }
+      var h1 = opening ? d.offsetHeight : (function(){ d.classList.remove('is-open'); var h = d.offsetHeight; d.classList.add('is-open'); return h; })();
+      var dh = Math.abs(h1 - h0); if (!dh) { if (!opening) { d.classList.remove('is-open'); d.open = false; } box.classList.remove('moving'); busy = false; return; }
+      // The card on top of its neighbours while it moves, so the reveal is never covered.
+      d.style.zIndex = '3';
+      var clipFrom = 'inset(0 0 ' + (opening ? dh : 0) + 'px 0 round ' + rad + ')', clipTo = 'inset(0 0 ' + (opening ? 0 : dh) + 'px 0 round ' + rad + ')';
+      var anims = [ d.animate([{ clipPath: clipFrom }, { clipPath: clipTo }], { duration: DUR, easing: EASE, fill: 'both' }),
+                    a.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: DUR * .7, delay: opening ? DUR * .15 : 0, easing: 'ease', fill: 'both' }) ];
+      list.forEach(function(el){
+        el.style.willChange = 'transform';
+        anims.push(el.animate([{ transform: 'translateY(' + (opening ? -dh : 0) + 'px)' }, { transform: 'translateY(' + (opening ? 0 : -dh) + 'px)' }], { duration: DUR, easing: EASE, fill: 'both' }));
+      });
+      Promise.all(anims.map(function(an){ return an.finished.catch(function(){}); })).then(function(){
+        // Closing: shut the element in the same frame the glide is undone, so nothing jumps.
+        if (!opening) { d.classList.remove('is-open'); d.open = false; }
+        anims.forEach(function(an){ an.cancel(); });
+        list.forEach(function(el){ el.style.willChange = ''; });
+        d.style.zIndex = ''; box.classList.remove('moving'); busy = false;
+      });
     });
   });
 })();
