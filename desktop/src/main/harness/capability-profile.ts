@@ -1,6 +1,7 @@
 // Capability profiles (spec §4.1, decisions 2/9). Resolved in THREE layers so a
 // known model gets curated tuning, an unknown one gets a safe fallback, and the
 // harness NEVER branches on a model-name string (only the registry matcher does).
+import { outputCapFor } from '../providers/output-cap';
 import { KNOWN_MODELS, matchKnownModel, type KnownModelEntry } from './known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from './specialists/limits';
 // Type-only: the app-wide list of provider kinds, used below ONLY to check that
@@ -48,6 +49,10 @@ export interface CapabilityProfile {
   nativeImageToolResults: boolean;
   /** Admission limits for pictures (see ImageLimits). Provider-type fact. */
   imageLimits: ImageLimits;
+  /** Output tokens ONE reply step may use (providers/output-cap.ts: the model's
+   *  published maximum on a user's own key, 32k on OpenRouter). Absent = the
+   *  harness manifest's limits.maxTokens, as before. */
+  outputCap?: number;
   /** May the model-invoked Task tool (Task 6, spec decision 4) be attached, to
    *  spawn a specialist subagent? Spec decision 4: a weak/unverified
    *  orchestrator does not actually parallelize delegated work — it
@@ -173,6 +178,8 @@ export interface DiscoveredModel {
    *  as the middle precedence layer: below the KNOWN_MODELS registry, above the
    *  provider-type default. */
   supportsVision?: boolean;
+  /** The catalog's published per-reply output maximum, when it has one. */
+  maxOutputTokens?: number | null;
   /** Task 13 — the engine's live parallel-slot count (llama-server's
    *  `total_slots`; `n_slots` on older builds), read from the SAME
    *  `/props?model=<id>` call that already supplies contextLength — a call
@@ -502,7 +509,10 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
   // registry entry can never override a picture-size limit.
   const imageLimits = imageLimitsFor(d.providerType);
   if (d.providerType !== 'local-engine') {
-    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
+    // Per-step output cap: a provider-type policy over the catalog's published maximum
+    // (output-cap.ts). Cloud only — a local model stays bounded by its context window.
+    const outputCap = outputCapFor(d.providerType, d.maxOutputTokens);
+    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, ...(outputCap !== undefined ? { outputCap } : {}) };
   }
   const base = localFallback(d.contextLength);
   const known = matchKnownModel(d.modelId, registry);   // LAYER 2 overlay

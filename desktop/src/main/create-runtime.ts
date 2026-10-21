@@ -297,7 +297,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return engineManager.effectiveContextWindow(binding.modelId);
-      return { contextLength: await modelCatalog.contextLengthFor(binding, providers), totalSlots: null };
+      return { contextLength: await modelCatalog.contextLengthFor(binding, providers), totalSlots: null,
+        maxOutputTokens: await modelCatalog.maxOutputTokensFor(binding, providers) };
     },
     // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
     // this. Unknown provider → null, so the host falls back to a cloud-safe

@@ -15,6 +15,8 @@ import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
 import { imageTooLarge, manyImageEdgeLimit } from '../providers/image-too-large';
+import { classifyFailure, abortableDelay, retryWaitMs, TEMPORARY_RETRY_DELAYS_MS } from '../providers/provider-failure';
+import { truncationRecovery } from './truncation-recovery';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -433,7 +435,9 @@ function mapStopReason(finishReason: string | undefined): string {
 // nothing rendered, so it is the same degenerate shape as a bare 'stop' and a
 // retry is exactly right. 'length' (truncation) and 'content-filter' (refusal)
 // stay excluded so their honest mappings are never masked by a retry.
-const ORDERLY_EMPTY_FINISHES = new Set(['stop', 'unknown', 'other', 'tool-calls']);
+// 'error' (2026-10-21) is the AI SDK's mapping of Gemini's MALFORMED_FUNCTION_CALL:
+// the model emitted a tool call that did not parse — the same dropped-call shape.
+const ORDERLY_EMPTY_FINISHES = new Set(['stop', 'unknown', 'other', 'tool-calls', 'error']);
 
 /** Widening advice per tool, in that tool's OWN vocabulary.
  *
@@ -933,6 +937,8 @@ export class HarnessSession extends EventEmitter {
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
   get profileSnapshot(): Readonly<CapabilityProfile> { return this.profile; }
+  /** Per-step output cap: the provider policy (profile.outputCap), else the manifest's. */
+  private get maxOutputTokens(): number { return this.profile.outputCap ?? this.opts.harness.limits?.maxTokens ?? 4096; }
   /** An edge cap the PROVIDER named (Anthropic's 2000 px past 20 pictures), kept so later
    *  pictures shrink up front. Not persisted (a reopen relearns it); cleared on a model switch. */
   private tightenedEdgePx: number | null = null;
@@ -1012,7 +1018,7 @@ export class HarnessSession extends EventEmitter {
     super();
     this.binding = opts.binding;
     this.toolByName = new Map((opts.tools ?? []).map((t) => [t.name, t]));
-    this.retryDelays = opts.retryDelays ?? [1000, 2000, 4000];
+    this.retryDelays = opts.retryDelays ?? TEMPORARY_RETRY_DELAYS_MS;
     this.profile = opts.profile ?? CLOUD_DEFAULT;
   }
 
@@ -1879,7 +1885,7 @@ export class HarnessSession extends EventEmitter {
    *  trim floor and compaction trigger all come from here, so the trigger can
    *  never sit above the floor again. */
   private budget() {
-    return contextBudget({ contextLength: this.opts.contextLength ?? null, maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+    return contextBudget({ contextLength: this.opts.contextLength ?? null, maxTokens: this.maxOutputTokens });
   }
 
   /** Automatic selection retires complete groups into one summary. A failed
@@ -1891,7 +1897,7 @@ export class HarnessSession extends EventEmitter {
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
     const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096, estimatedInput });
+      maxTokens: this.maxOutputTokens, estimatedInput });
     if (!force && plan.status === 'fits') return false;
     if (this.failedCompactionRevision === this.capture.revision) return false;
     // Routine compaction summarizes; legacy prune transforms remain available
@@ -2028,6 +2034,16 @@ export class HarnessSession extends EventEmitter {
   /** enforceImageLimits, but SHRINKING over-limit pictures first (fitHistoryToImageLimits). */
   private async fitImagesToLimits(): Promise<boolean> { return this.adoptImageRewrite(await fitHistoryToImageLimits(this.history, this.imageLimits, this.opts.toolServices?.images, this.abort?.signal)); }
 
+  /** A step stopped at the output limit: queue the continue / split message and
+   *  withdraw any cut-off tool card. False = recovery spent; end the turn as before. */
+  private recoverTruncation(step: StepResult, soFar: number): boolean {
+    const cut = truncationRecovery({ recoveriesSoFar: soFar, cutOffToolNames: step.pendingPreparing.map(p => p.toolName), maxTokens: this.maxOutputTokens, wroteText: !!step.text?.trim() });
+    if (cut.kind === 'stop') return false;
+    this.withdrawOrphanedPreparing(step.pendingPreparing);
+    this.history.push(markAppGenerated({ role: 'user', content: cut.message })); this.historyOrigins.push(null); this.capture.mutated();
+    return true;
+  }
+
   private adoptImageRewrite(next: ModelMessage[] | null): boolean {
     if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
     this.history = next;
@@ -2144,7 +2160,7 @@ export class HarnessSession extends EventEmitter {
     if (contextLength == null) return 'fits';
     const base = { contextLength, fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 };
+      maxTokens: this.maxOutputTokens };
     if (planContextBudget(base).status === 'cannot-fit') return 'too-small';
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
@@ -2280,7 +2296,7 @@ export class HarnessSession extends EventEmitter {
     const plan = planContextBudget({ contextLength: contextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // WHY: a complete summary is not necessarily an effective one. Validate
     // actual finished text with current tools and the untouched retained tail
     // before changing the accepted history or publishing a completion marker.
@@ -2293,7 +2309,7 @@ export class HarnessSession extends EventEmitter {
   private compactionCut(manual = false, focus?: string, targetContextLength?: number): number {
     const plan = planContextBudget({ contextLength: targetContextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // Explicit manual compact may retire history below the automatic threshold;
     // it still returns a no-op when no complete prefix can be retired. A switch
     // uses the target model's own tail allowance: it is already the smaller one.
@@ -2315,7 +2331,7 @@ export class HarnessSession extends EventEmitter {
     const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
     const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+      maxTokens: this.maxOutputTokens });
     // WHY: the summary has its own output allowance. An oversized tool result
     // may push this request past that limit between steps; shorten only its
     // summarizer copy, largest first, never the accepted history or recent tail.
@@ -2715,7 +2731,7 @@ export class HarnessSession extends EventEmitter {
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets
     // it, so an all-empty turn costs exactly two provider calls.
-    let consecutiveEmptySteps = 0;
+    let consecutiveEmptySteps = 0, truncationRecoveries = 0;
     let stopReason = 'end_turn';
     // Latest step's partial text — the ONLY thing the catch pushes to history
     // (earlier steps already pushed their assistant + tool messages). Reset per
@@ -3032,6 +3048,8 @@ export class HarnessSession extends EventEmitter {
         if (step.toolCalls.length === 0) {
           // WHY: no await before completion; late heads use the host drain.
           if (absorbReadyMessage()) continue turnLoop;
+          // Cut off at the output limit: continue / ask to split, inside the turn (truncation-recovery.ts).
+          if (step.finishReason === 'length' && this.recoverTruncation(step, truncationRecoveries)) { truncationRecoveries++; continue turnLoop; }
           // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
@@ -3348,8 +3366,9 @@ export class HarnessSession extends EventEmitter {
       if (this.interrupted || this.abort?.signal.aborted || (!(err instanceof PermissionCallbackFailure) && err?.name === 'AbortError')) {
         this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
-        const errorCode = classifyProviderError(failure);
-        this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
+        // classifyProviderError keeps its sign-in/key codes; classifyFailure adds the rest.
+        const sorted = classifyFailure(failure); const errorCode = classifyProviderError(failure) ?? (sorted.code !== 'unknown' ? sorted.code : undefined);
+        this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), errorKind: sorted.kind, ...abandonedTurnUsage() });
       }
     } finally {
       this._currentUsageProgress = null;
@@ -3414,7 +3433,7 @@ export class HarnessSession extends EventEmitter {
       ? this.fitToContext(this.history) : this.history;
     const requestPlan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
-      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096,
+      maxTokens: this.maxOutputTokens,
       // WHY: the pre-request gate uses the provider's measured prefix when it
       // still matches this history. The sent reply cap must use that SAME
       // occupancy, not a lower chars/4 estimate that promises extra output.
@@ -3438,7 +3457,7 @@ export class HarnessSession extends EventEmitter {
       // window at most a quarter of it, so a reply can never overflow the
       // space the history was fitted to. Absent stays absent — the manifest
       // comment above explains why an uncapped request is its own hazard.
-      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : requestPlan.replyCap,
+      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined && this.profile.outputCap === undefined ? undefined : requestPlan.replyCap,
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw
@@ -4217,24 +4236,23 @@ export class HarnessSession extends EventEmitter {
     });
   }
 
-  /** Exponential backoff for transient provider errors (429/5xx/network),
-   *  honoring retry-after. Layers ON TOP of the SDK's internal retry (this is
-   *  step-level resilience). Exhaustion rethrows → the session-error path. */
+  /** Backoff for TEMPORARY provider failures only (retryWaitMs). Layers on top of
+   *  the SDK's own retry. Exhaustion rethrows → the session-error path. */
   private async withRetry<T>(fn: (registerRetraction: (retract: () => void) => void) => Promise<T>): Promise<T> {
-    const delays = this.retryDelays;
     for (let attempt = 0; ; attempt++) {
       let retractAttempt: (() => void) | undefined;
       try {
         return await fn((retract) => { retractAttempt = retract; });
       } catch (err: any) {
-        const status = err?.statusCode ?? err?.status;
-        const retryable = status === 429 || (status >= 500 && status < 600) || err?.code === 'ECONNRESET';
-        if (!retryable || attempt >= delays.length || this.abort?.signal.aborted) throw err;
+        const waitMs = this.abort?.signal.aborted ? null : retryWaitMs(err, attempt, this.retryDelays);
+        if (waitMs === null) throw err;
         // WHY: retrying the whole step must first erase ONLY its failed attempt;
         // previously a late provider error left streamed text on disk and screen.
         retractAttempt?.();
-        const ra = Number(err?.responseHeaders?.['retry-after']) * 1000;
-        await new Promise((r) => setTimeout(r, Number.isFinite(ra) && ra > 0 ? ra : delays[attempt]));
+        // Root only: a specialist child shows no thinking card (SUBAGENT_DISPLAY_TYPES).
+        if (!this.opts.isSpecialistChild && waitMs >= 1000) this.emitEvent('assistant-thinking', { stallWarning: { retryInMs: waitMs, willRetry: true } });
+        await abortableDelay(waitMs, this.abort?.signal);
+        if (this.abort?.signal.aborted) throw err;
       }
     }
   }

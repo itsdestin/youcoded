@@ -2177,7 +2177,9 @@ export class NativeSessionHost extends EventEmitter {
     // count, or read null instead of a real number — with no throw, just a
     // wrong cap. Collapsing to one return value removes the shared state
     // entirely: there is no ordering left to get wrong.
-    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null }>,
+    // `maxOutputTokens` (optional, 2026-10-21): the catalog's published per-reply output
+    // maximum, which providers/output-cap.ts turns into this session's per-step cap.
+    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null; maxOutputTokens?: number | null }>,
     // Resolves a binding's provider TYPE (local-engine / openrouter / anthropic /
     // …) so the host can pick the right CapabilityProfile (Task 5). A binding
     // whose provider is unknown returns null → resolveContextAndProfile falls back
@@ -2608,7 +2610,7 @@ export class NativeSessionHost extends EventEmitter {
     // that used to share one /props reading through a variable at the
     // ipc-handlers.ts wiring site. There is nothing left to order: this is
     // the single await that produces both values for this binding.
-    const { contextLength: raw, totalSlots } = await this.contextAndSlotsFor(binding);
+    const { contextLength: raw, totalSlots, maxOutputTokens } = await this.contextAndSlotsFor(binding);
     const discoveredSlots = totalSlots ?? undefined;
     const type = (await this.providerTypeFor(binding)) ?? 'openrouter';     // unknown → cloud-safe default
     // The registry ceiling (effectiveContextForModel) is a LOCAL-model concern: it
@@ -2626,7 +2628,7 @@ export class NativeSessionHost extends EventEmitter {
     // it did before this closure existed.
     const discoveredVision = (await this.visionSupportFor(binding)) ?? undefined;
     const profile = resolveProfile({
-      providerType: type, modelId: binding.modelId, contextLength, supportsVision: discoveredVision,
+      providerType: type, modelId: binding.modelId, contextLength, supportsVision: discoveredVision, maxOutputTokens,
       // Threads the engine's real slot reading into the known-model overlay's
       // concurrency clamp (capability-profile.ts's localSlotCap). undefined
       // for every non-local-engine binding — the ipc-handlers wiring never

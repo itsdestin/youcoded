@@ -316,6 +316,10 @@ interface SessionErrorData {
   /** Which known failure `text` is (e.g. 'openrouter-key-rejected'), so the
    *  error card can offer the one action that fixes it. Absent = show text as is. */
   errorCode?: string;
+  /** What KIND of failure (main/providers/provider-failure.ts FailureKind:
+   *  temporary | account | too-long | blocked | unknown), so the card offers the
+   *  right way forward. Native only, optional: an older host sends none. */
+  errorKind?: string;
   /** The abandoned turn's usage, when any tokens were measured. */
   usage?: TranscriptUsage;
 }

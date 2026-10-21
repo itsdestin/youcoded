@@ -2945,6 +2945,16 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(JSON.stringify(history[1])).toContain('answer');
   });
 
+  it('an empty step that Gemini ended with MALFORMED_FUNCTION_CALL (SDK finishReason error) is retried once, like a dropped call', async () => {
+    const seen: any[] = [];
+    const model = scriptedModel([stream(finishChunk('error')), stream(...textChunks('a', 'fixed'), finishChunk('stop'))], seen);
+    const session = new HarnessSession(makeOpts({}), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(seen).toHaveLength(2);
+    expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
+  });
+
   it('case 6: empty step with finishReason length → NO retry, ends max_tokens', async () => {
     // The finishReason gate: 'length' means truncation — a retry would hit the
     // same output limit, so today's mapStopReason path must be kept EXACTLY.
@@ -3556,5 +3566,128 @@ describe('HarnessSession keeps the request under the provider\'s picture count',
     expect((wire.match(/no longer sent: this conversation holds more pictures/g) ?? []).length).toBe(21);
     expect(wire).toContain('p0.png is no longer sent');
     expect(wire).not.toContain('p100.png is no longer sent');
+  });
+});
+
+describe('HarnessSession recovers from a reply cut off at the output limit', () => {
+  /** A model that plays the given streams in order, recording each request. */
+  const playing = (prompts: any[], ...scripts: any[][]) => {
+    let i = 0;
+    return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[i++] ?? stream(...textChunks('z', 'done'), finishChunk('stop')) }) }; } });
+  };
+  const lastUserText = (prompt: any) => JSON.stringify(prompt.prompt.filter((m: any) => m.role === 'user').at(-1));
+
+  it('text cut off mid-answer: asks the model to continue where it stopped, and the turn completes', async () => {
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'Here is the first half'), finishChunk('length')), stream(...textChunks('b', ' and the rest.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write it');
+    expect(prompts).toHaveLength(2);
+    expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('a tool call cut off mid-arguments is NEVER run; the model is told to split it, and the turn carries on', async () => {
+    const prompts: any[] = [];
+    const write = fakeTool('Write', { schema: z.object({ file_path: z.string(), content: z.string() }) });
+    const model = playing(prompts,
+      stream(...textChunks('a', 'Writing the plan.'), ...toolInputChunks('w1', 'Write', '{"file_path":"/tmp/plan.md","content":"# Plan\\n'), finishChunk('length')),
+      stream(...textChunks('b', 'Written in parts.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [write], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write the plan');
+    expect((write as any).calls).toHaveLength(0);
+    expect(prompts).toHaveLength(2);
+    expect(lastUserText(prompts[1])).toContain('Write call was cut off');
+    expect(lastUserText(prompts[1])).toContain('NOT run');
+    // The "preparing" card for the dropped call is withdrawn.
+    expect(events.some(e => e.type === 'assistant-thinking' && (e.data as any).toolPreparing?.cleared === true)).toBe(true);
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('a recovered turn reopens as valid history: the cut-off and continued text rebuild into ONE assistant message', async () => {
+    // The continue message is history-only (like a steer), so the transcript holds
+    // assistant text, then more assistant text; the rebuild must not produce two
+    // assistant messages in a row (providers reject that) or lose either half.
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'First half'), finishChunk('length')), stream(...textChunks('b', ' second half.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write it');
+    const rebuilt = rebuildHistory(events as any);
+    expect(rebuilt.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+    expect(JSON.stringify(rebuilt[1].content)).toContain('First half second half.');
+  });
+
+  it('stops recovering after two attempts — the turn ends with the truncation footer as before', async () => {
+    const prompts: any[] = [];
+    const cut = () => stream(...textChunks(`t${prompts.length}`, 'more'), finishChunk('length'));
+    const model = playing(prompts, cut(), cut(), cut(), cut());
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(prompts).toHaveLength(3);
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('max_tokens');
+  });
+
+  it('sends the provider\'s output cap: the published maximum on an Anthropic key, 32k on OpenRouter', async () => {
+    for (const [providerType, published, expected] of [['anthropic', 128_000, 128_000], ['openrouter', 128_000, 32_000], ['openrouter', 8_192, 8_192]] as const) {
+      const prompts: any[] = [];
+      const profile = resolveProfile({ providerType, modelId: 'm', contextLength: 1_000_000, maxOutputTokens: published });
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 1_000_000, profile }), async () => playing(prompts) as any);
+      await session.send('hi');
+      expect(prompts[0].maxOutputTokens).toBe(expected);
+    }
+  });
+});
+
+describe('HarnessSession sorts a provider failure before deciding to retry', () => {
+  const failing = (prompts: any[], errs: any[]) => {
+    let i = 0;
+    return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); const e = errs[i++];
+      return { stream: simulateReadableStream({ chunks: e ? stream({ type: 'error', error: e }) : stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+  };
+  const err = (statusCode: number, type: string, message: string, more: Record<string, unknown> = {}) =>
+    Object.assign(new Error(message), { statusCode, responseBody: JSON.stringify({ type: 'error', error: { type, message, ...more } }) });
+
+  it('an Anthropic overload is retried with a visible countdown, and the turn completes', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1000] }),
+      async () => failing(prompts, [err(529, 'overloaded_error', 'Overloaded')]) as any);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const events = collect(session);
+      const turn = session.send('hi');
+      await vi.waitFor(() => expect(events.some(e => e.type === 'assistant-thinking' && (e.data as any).stallWarning?.willRetry === true)).toBe(true));
+      await vi.advanceTimersByTimeAsync(1000);
+      await turn;
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a spend cap is NOT retried even though it is a 429, and the error says what kind it was', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1] }),
+      async () => failing(prompts, [err(429, 'rate_limit_error', 'You have reached your monthly spend cap', { details: { error_code: 'enforced_spend_limit_reached' } })]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorKind: 'account', errorCode: 'spend-limit' });
+  });
+
+  it('an unrecognised error is not retried and is reported as unknown, in the provider\'s own words', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1] }),
+      async () => failing(prompts, [err(400, 'invalid_request_error', 'messages: text content blocks must be non-empty')]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    const data = (events.find(e => e.type === 'session-error') as any).data;
+    expect(data.errorKind).toBe('unknown');
+    expect(data.errorCode).toBeUndefined();
+    expect(data.text).toContain('text content blocks must be non-empty');
   });
 });

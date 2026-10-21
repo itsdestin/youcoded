@@ -1235,7 +1235,7 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   copy, so the message would arrive twice.
 - **No "preparing" indicator on the desktop.** After sending a huge picture the chat can sit silent
   for up to ~30 s while it is shrunk; the reply then starts normally.
-- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder**, so 5K
+- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder** (Anthropic's stricter 2000 px many-image rule is learned from its rejection — see "Provider failures that must not end a conversation"), so 5K
   screenshots and 48 MP photos are downscaled for providers that might accept them as they are.
   The model is told (Read's text, the composer's "downscaled" note); the person is not.
 - **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
@@ -1253,3 +1253,80 @@ oversized cases in `accepted-history-store.test.ts`, `harness-history-rebuild.te
 `harness-tools-core.test.ts`, `native-image-attachments.test.ts` and
 `native-session-host-continuation.test.ts`, and the attachment-preparation cases in
 `native-channels.test.ts`.
+
+## Provider failures that must not end a conversation (2026-10-21)
+
+What broke: three ways a native conversation could never send again, because a
+failed turn keeps its history and the provider refused every later request —
+and one way a long task could never finish.
+
+- **Anthropic's many-image rule.** Once a request holds more than 20 pictures,
+  any side over 2000 px is rejected ("exceed max allowed size for many-image
+  requests: 2000 pixels"). The default limits are NOT lowered (that replaced
+  older large screenshots with a note in conversations never at risk); the
+  rejection is the signal. `manyImageEdgeLimit` (`providers/image-too-large.ts`)
+  reads the cap, the session keeps it (`tightenedEdgePx`, read through the ONE
+  getter `HarnessSession.imageLimits` that sending, Read, attachments and
+  resume all use), shrinks the pictures already in memory to it
+  (`ImagePreparer.shrinkBytes`, worker thread; `image-history.ts`
+  `fitHistoryToImageLimits`) and retries once. Only an unshrinkable picture
+  becomes the oversized note; Stop skips the remaining shrinks. Not persisted:
+  a reopen relearns the cap from one rejection.
+- **Anthropic's 100-pictures-per-request cap** (`maxImagesPerRequest`, provider
+  types `anthropic` and `openrouter` only). Past it, the oldest pictures become
+  the `over-count` note in a batch down to 80, so the cached prefix moves once
+  per ~20 new pictures rather than every turn.
+- **A tool call left unanswered.** An unexpected throw in a call's
+  pre-execution checks becomes that call's error result
+  (`unexpectedToolThrowResult`, `tool-group-finalization.ts`) instead of
+  escaping the turn; a restored private checkpoint whose messages fail
+  `hasUnpairedToolCalls` falls back to the rebuild; an uncompilable `[..]`
+  class in the secret-path and path-trigger globs is matched literally.
+- **Per-step output cap per provider** (`providers/output-cap.ts`, carried as
+  `CapabilityProfile.outputCap`, read through `HarnessSession.maxOutputTokens`).
+  A user's own Anthropic/OpenAI/Google key: the catalog's published maximum
+  (`CatalogModel.maxOutputTokens` from models.dev `limit.output`), capped at
+  128k, 16k when unpublished — billed by tokens produced, and Anthropic
+  documents that `max_tokens` does not count against rate limits. OpenRouter:
+  32k (Destin, 2026-10-21), never above the model's own maximum — the cap
+  exists because OpenRouter reserves credit for it up front. ChatGPT sign-in:
+  none (the endpoint refuses one). Local/custom: the manifest's 16k.
+- **A reply cut off at that cap** (`finishReason: 'length'`, no runnable tool
+  call) is recovered inside the turn, at most twice (`truncation-recovery.ts`):
+  text gets an app-generated "continue exactly where you stopped"; a tool call
+  cut off mid-arguments is never run (its partial arguments are discarded, as
+  before) and the model is told to split the work. A step with nothing written
+  ends as before.
+- **One classifier for every provider error** (`providers/provider-failure.ts`
+  `classifyFailure`): temporary (overload, rate limit, 5xx, 408/409, network —
+  including the AI SDK's "Cannot connect to API" and a garbled 2xx), account
+  (bad key, 402 credits, OpenAI `insufficient_quota`, Anthropic spend cap — a
+  429 with `enforced_spend_limit_reached` — permission, unknown model),
+  too-long, blocked (OpenRouter moderation), unknown. Rules match documented
+  shapes only; anything else is `unknown`. `withRetry` retries ONLY temporary
+  failures, on 1/2/4/8/15/30 s (about a minute) or the provider's retry-after
+  up to 60 s, shows the wait on the existing stall countdown (root sessions),
+  and Stop ends the wait at once. The turn's `session-error` carries
+  `errorKind` and, where the older classifier named nothing, the new `errorCode`.
+
+### Known limitations
+- **A conversation whose pictures were shrunk stops publishing its private
+  checkpoint** (the checkpoint cites pictures by the digest of their file, and
+  the shrunk copy is in memory only); reopening uses the ordinary rebuild.
+- **The error card does not yet act on `errorKind`.** A Retry button for
+  temporary and unknown errors, settings for account errors, "summarise and
+  continue" for too-long, and plain wording for each code are renderer work
+  awaiting a review deck.
+- **Gemini's SAFETY / RECITATION finishes** arrive as the SDK's
+  `content-filter` and end the turn with "declined to respond", as before.
+  MALFORMED_FUNCTION_CALL (SDK `error`) now joins the empty-step retry.
+
+Guards: `provider-failure.test.ts`, `image-history.test.ts`, the output-cap
+cases in `capability-profile.test.ts`, and in `harness-session-loop.test.ts`
+the suites "recovers from a reply cut off at the output limit", "sorts a
+provider failure before deciding to retry", "Anthropic's many-image
+rejection", "keeps the request under the provider's picture count" and
+"answers a tool call whose pre-execution checks throw";
+`native-session-host-continuation.test.ts` (unanswered tool call in a
+checkpoint); `bash-secret-paths.test.ts` and `path-triggers.test.ts` (bracket
+classes); `image-resize.test.ts` (`shrinkBytes`).

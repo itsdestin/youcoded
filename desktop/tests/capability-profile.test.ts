@@ -454,8 +454,10 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
   it('is identical to the direct OpenAI-key profile for the same GPT model — same models, same wire', () => {
     for (const modelId of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini']) {
       for (const contextLength of [null, 272_000]) {
-        expect(resolveProfile({ providerType: 'chatgpt', modelId, contextLength }), `${modelId} @ ${contextLength}`)
-          .toEqual(resolveProfile({ providerType: 'openai', modelId, contextLength }));
+        // WHY outputCap is set aside: the plan's endpoint refuses any output cap
+        // (chatgpt-model.ts), so it carries none; a direct key gets its policy cap.
+        const { outputCap: _keyCap, ...viaKey } = resolveProfile({ providerType: 'openai', modelId, contextLength });
+        expect(resolveProfile({ providerType: 'chatgpt', modelId, contextLength }), `${modelId} @ ${contextLength}`).toEqual(viaKey);
       }
     }
   });
@@ -473,7 +475,9 @@ describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", ()
     expect(viaPlan.injectionBudgetTokens).toBe(viaOpenRouter.injectionBudgetTokens);
     // WHY imageLimits differs: it is a provider-TYPE fact and the plan rides
     // OpenAI's wire (30,000-patch budget), while OpenRouter keeps the default.
-    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt', imageLimits: IMAGE_LIMITS_OPENAI });
+    // …and the output cap: OpenRouter's is its own policy (32k), the plan sends none.
+    const { outputCap: _orCap, ...openRouterRest } = viaOpenRouter;
+    expect(viaPlan).toEqual({ ...openRouterRest, promptVariant: 'gpt', imageLimits: IMAGE_LIMITS_OPENAI });
     // And without the catalog fact, OpenRouter alone falls to "no vision" — the
     // plan does not, because it is not a transport.
     expect(resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null }).supportsVision).toBe(false);
@@ -518,5 +522,23 @@ describe('resolveProfile — imageLimits is a provider-type fact', () => {
   });
   it('CLOUD_DEFAULT carries the conservative default, never the OpenAI budget', () => {
     expect(CLOUD_DEFAULT.imageLimits).toEqual({ maxEdgePx: 4096, maxPatches: 16_384 });
+  });
+});
+
+describe('resolveProfile — the per-step output cap is a provider policy over the published maximum', () => {
+  it('a user\'s own key gets the model\'s published maximum (capped at 128k); unknown → 16k', () => {
+    expect(resolveProfile({ providerType: 'anthropic', modelId: 'claude-opus-5-5', contextLength: 1_000_000, maxOutputTokens: 128_000 }).outputCap).toBe(128_000);
+    expect(resolveProfile({ providerType: 'openai', modelId: 'o3', contextLength: 200_000, maxOutputTokens: 100_000 }).outputCap).toBe(100_000);
+    expect(resolveProfile({ providerType: 'google', modelId: 'g', contextLength: null, maxOutputTokens: 1_000_000 }).outputCap).toBe(128_000);
+    expect(resolveProfile({ providerType: 'anthropic', modelId: 'unlisted', contextLength: null }).outputCap).toBe(16_000);
+  });
+  it('OpenRouter is 32k, never above the model\'s own maximum', () => {
+    expect(resolveProfile({ providerType: 'openrouter', modelId: 'anthropic/claude-opus-5.5', contextLength: null, maxOutputTokens: 128_000 }).outputCap).toBe(32_000);
+    expect(resolveProfile({ providerType: 'openrouter', modelId: 'small', contextLength: null, maxOutputTokens: 8_192 }).outputCap).toBe(8_192);
+    expect(resolveProfile({ providerType: 'openrouter', modelId: 'unlisted', contextLength: null }).outputCap).toBe(32_000);
+  });
+  it('ChatGPT sign-in and local models carry no cap of their own', () => {
+    expect(resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-5.6', contextLength: null, maxOutputTokens: 128_000 }).outputCap).toBeUndefined();
+    expect(resolveProfile(local('qwen2.5-7b-instruct', 32_768)).outputCap).toBeUndefined();
   });
 });

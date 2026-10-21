@@ -157,6 +157,8 @@ export class ModelCatalog {
         label: typeof row.name === 'string' ? row.name : row.id,
       };
       if (typeof row.context_length === 'number') m.contextLength = row.context_length;
+      const maxOut = isObj(row.top_provider) ? row.top_provider.max_completion_tokens : undefined;
+      if (typeof maxOut === 'number' && maxOut > 0) m.maxOutputTokens = maxOut;
       if (Array.isArray(row.supported_parameters)) m.supportsTools = row.supported_parameters.includes('tools');
       // Vision support: OpenRouter is a TRANSPORT (one endpoint serves vision and
       // text-only models), so unlike the direct-key providers this is the one
@@ -231,6 +233,7 @@ export class ModelCatalog {
         label: typeof row.name === 'string' ? row.name : id,
       };
       if (isObj(row.limit) && typeof row.limit.context === 'number') m.contextLength = row.limit.context;
+      if (isObj(row.limit) && typeof row.limit.output === 'number' && row.limit.output > 0) m.maxOutputTokens = row.limit.output;
       if (typeof row.tool_call === 'boolean') m.supportsTools = row.tool_call;
       if (typeof row.reasoning === 'boolean') m.supportsReasoning = row.reasoning;
       // models.dev cost is already USD per 1M tokens — no scaling.
@@ -295,6 +298,13 @@ export class ModelCatalog {
       // openai-compatible custom endpoints still have no catalog (user types a model id).
     }
     return out;
+  }
+
+  /** The catalog's published per-reply output maximum for this binding, or null
+   *  (not in the catalog / not published). providers/output-cap.ts decides the cap. */
+  async maxOutputTokensFor(binding: ModelBinding, providers: ProviderStatus[]): Promise<number | null> {
+    const hit = (await this.get(providers)).find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
+    return hit?.maxOutputTokens ?? null;
   }
 
   /** HarnessSession asks this for context-window sizing. null when the model
