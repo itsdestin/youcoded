@@ -43,6 +43,11 @@ Changes since 1.3.1: custom model providers, a durable message queue for Claude 
 - Windows: fixed the buddy and chat input.
 - Touch scrolling works in the active sessions list; file-comment popups and side panels have cleaner borders; Pages can use purpose-designed icons.
 
+### Known issues
+
+- A custom provider whose models don't report their conversation size may show a "conversation too long" error that Summarize and continue can't fix. Start a new conversation or pick a model with a known size.
+- On Android, Assistant settings shows the Local models page, but local models don't run on phones.
+
 ## [1.3.1] — 2026-10-18
 
 **Claude Code CLI baseline:** v2.1.302 (desktop review); Android bundles v2.1.300.
