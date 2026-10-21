@@ -240,6 +240,19 @@ describe('Bash description — reflects the settled AdminCapability (F1)', () =>
     resetAdminCapabilityForTests(); // restore the default for every other test file
   });
 
+  it.each(['card', 'windows', 'no-password-only'] as const)('requires last-resort admin work approval regardless of capability (%s)', (capability) => {
+    settleAdminCapability(capability);
+    for (const d of [BashTool.description, BashTool.shortDescription!]) {
+      expect(d).toContain('administrator privileges only as a last resort');
+      expect(d).toContain('unprivileged commands and user-writable locations');
+      expect(d).toContain('ask the user in chat for approval');
+      expect(d).toContain('additional permission or password prompts');
+      expect(d).toContain('Wait for approval');
+      expect(d).toContain('pause and ask');
+      expect(d).toContain('does not replace');
+    }
+  });
+
   it('says sudo works with a password card when the feature is available', () => {
     settleAdminCapability('card');
     const d = BashTool.description;
