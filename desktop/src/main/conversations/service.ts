@@ -22,6 +22,7 @@ import { reconcile } from './reconciler';
 // here would be a cycle. See heldForkIds' WHY in slug-repair-state.ts.
 import { heldForkIds } from './slug-repair-state';
 import { laneMatches } from './lane-guards';
+import { containedTranscriptPath } from './transcript-path';
 import { ccProjectSlug, nativeStoreSlug } from '../slug-encoding';
 import { onSyncSpacesEvent, syncSpacesSyncNow, syncSpacesSyncNowAwaited, getManagedRoots } from '../sync-spaces/service';
 import { readFolders } from '../saved-folders';
@@ -356,12 +357,7 @@ function spaceTranscriptPath(projectKey: string, sessionId: string, sessionProvi
 // remote WS). Joining it unchecked would let a crafted record read/write outside
 // the space root. Same refuse-on-escape stance as providerDir/recordPath in
 // conversation-store.ts. Exported for tests.
-export function containedTranscriptPath(root: string, ref: string): string | null {
-  if (!ref || path.isAbsolute(ref)) return null;
-  const resolvedRoot = path.resolve(root);
-  const joined = path.resolve(resolvedRoot, ref);
-  return joined.startsWith(resolvedRoot + path.sep) ? joined : null;
-}
+export { containedTranscriptPath } from './transcript-path';
 // The on-disk transcript path for this session, on THIS device.
 // 'claude' -> ~/.claude/projects/<ccProjectSlug(cwd)>/<id>.jsonl (CC's own convention).
 // 'native' -> ~/.youcoded/sessions/<nativeStoreSlug(cwd)>/<id>.jsonl — mirrors
