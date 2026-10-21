@@ -509,6 +509,7 @@ export const IPC = {
   // parked step; unlike interrupt it never cascades to specialist children or
   // cancels pending permission asks.
   NATIVE_RETRY: 'native:retry',
+  NATIVE_CONTINUE_TURN: 'native:continue-turn',
   NATIVE_STARTUP_ACTION: 'native:startup-action',
   // M3 item 2 — user-initiated /compact for a native session. invoke (not send):
   // the caller needs the {ok, reason} result to explain a refusal.
@@ -547,6 +548,8 @@ export const IPC = {
   PROVIDER_TEST: 'provider:test',
   PROVIDER_SET_KEY: 'provider:set-key',
   PROVIDER_CATALOG: 'provider:catalog',
+  PROVIDER_SERVICES: 'provider:services',
+  PROVIDER_REFRESH_CATALOG: 'provider:refresh-catalog',
   // ---- Sign in with ChatGPT (design 2026-09-04, backend design 2026-09-05 §5) ----
   // status → ChatGptAccountStatus (shared/chatgpt-types.ts); the three verbs →
   // boolean, or a THROWN sentence the card renders verbatim. Kill switch
@@ -1403,6 +1406,8 @@ interface ClaudeApi {
     interrupt: (sessionId: string) => void;
     // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
     retry: (sessionId: string) => void;
+    /** Try again / Keep going on an ENDED turn: runs again, no new message; ignored mid-turn. */
+    continueTurn: (sessionId: string) => void;
     // M3 item 2: user-initiated /compact. Resolves a coded result rather than
     // a bare boolean so a refusal can be explained to the user rather than
     // swallowed — `reason` is one of turn-in-flight | nothing-to-compact |
@@ -1444,8 +1449,8 @@ interface ClaudeApi {
     sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => Promise<SessionContextText | { error: string }>;
     onSessionContext: (cb: (e: { sessionId: string; context: SessionContext | null }) => void) => () => void;
   };
-  // Provider registry — native runtime model providers (desktop-only; the
-  // Android/remote stubs reject with not-implemented).
+  // Provider registry — native runtime model providers. Served to the computer's windows and, through
+  // the channel table, to a phone (Destin, 2026-10-21: services + refresh-catalog open to phones too).
   providers: {
     list: () => Promise<any[]>;
     upsert: (config: any) => Promise<string>;
@@ -1455,6 +1460,10 @@ interface ClaudeApi {
     test: (id: string, key?: string) => Promise<{ ok: boolean; message: string; verdict?: 'verified' | 'rejected' | 'unchecked' }>;
     setKey: (id: string, key: string) => Promise<boolean>;
     catalog: () => Promise<any[]>;
+    /** The services Add provider can search (models.dev, cached). */
+    services: () => Promise<import('./provider-types').ServiceEntry[]>;
+    /** "Check for new models": re-download every model list now. */
+    refreshCatalog: () => Promise<{ added: number; failed: string[] }>;
   };
   // Remembered "Always allow" rules (M5 2a). Keyed by PROJECT SLUG, not
   // cwd — permissions.json never stored the cwd, and the slug is lossy.

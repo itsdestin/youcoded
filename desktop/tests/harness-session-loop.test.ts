@@ -14,7 +14,7 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
-import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, readImageFromDisk } from '../src/main/harness/image-support';
+import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, imageDimensions, readImageFromDisk } from '../src/main/harness/image-support';
 import { rebuildHistory } from '../src/main/harness/history-rebuild';
 import * as crypto from 'crypto';
 import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
@@ -62,9 +62,13 @@ describe('HarnessSession — multi-step turn driver', () => {
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 208000 tokens > 200000 maximum' } }, true],
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }, false],
     ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'The prompt is too long for this model, maybe' } }, false],
-  ])('classifies structured overflow only for %s adapter', (provider, body, expected) => {
-    expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(expected);
-    expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(false);
+    // A custom endpoint: matched by TYPE (its id is random), on the OpenAI envelope's exact code only.
+    ['01HRANDOMID', { error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }, true, 'openai-compatible'],
+    ['01HRANDOMID', { error: { type: 'invalid_request_error', code: 'invalid_value' } }, false, 'openai-compatible'],
+    ['01HRANDOMID', { error: { code: 'context_length_exceeded' } }, false, undefined],
+  ] as [string, unknown, boolean, string?][])('classifies structured overflow only for %s adapter', (provider, body, expected, type) => {
+    expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider, type)).toBe(expected);
+    expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider, type)).toBe(false);
   });
 
   it('recovers one structured overflow on a rejected request after completed tools without redoing them', async () => {
@@ -88,6 +92,27 @@ describe('HarnessSession — multi-step turn driver', () => {
     await session.send('continue');
     expect(prompts).toHaveLength(4);
     expect((read as any).calls).toHaveLength(1);
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+  });
+
+  it('a custom endpoint’s context-too-long error is recovered with one summary and a retry', async () => {
+    // The shape @ai-sdk/openai-compatible throws for an OpenAI-style 400 (captured 2026-10-21).
+    const overflow = Object.assign(new Error('Bad Request'), { statusCode: 400, url: 'https://x.example.com/v1/chat/completions',
+      responseBody: JSON.stringify({ error: { message: 'too long', type: 'invalid_request_error', code: 'context_length_exceeded' } }) });
+    const scripts = [
+      stream({ type: 'error', error: overflow }),
+      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('a', 'done'), finishChunk('stop')),
+    ];
+    let index = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }) });
+    const profile = resolveProfile({ providerType: 'openai-compatible', modelId: 'm', contextLength: null });
+    const session = new HarnessSession(makeOpts({ binding: { providerId: '01HRANDOMID', modelId: 'm' }, profile, contextLength: 8192 }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'original ' + 'x'.repeat(10000) }, { role: 'assistant', content: 'ack' }] as any);
+    const events = collect(session);
+    await session.send('continue');
+    expect(index).toBe(3);
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
     expect(events.some(e => e.type === 'turn-complete')).toBe(true);
   });
@@ -2945,6 +2970,16 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(JSON.stringify(history[1])).toContain('answer');
   });
 
+  it('an empty step that Gemini ended with MALFORMED_FUNCTION_CALL (SDK finishReason error) is retried once, like a dropped call', async () => {
+    const seen: any[] = [];
+    const model = scriptedModel([stream(finishChunk('error')), stream(...textChunks('a', 'fixed'), finishChunk('stop'))], seen);
+    const session = new HarnessSession(makeOpts({}), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(seen).toHaveLength(2);
+    expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
+  });
+
   it('case 6: empty step with finishReason length → NO retry, ends max_tokens', async () => {
     // The finishReason gate: 'length' means truncation — a retry would hit the
     // same output limit, so today's mapStopReason path must be kept EXACTLY.
@@ -3248,6 +3283,81 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect(JSON.stringify(prompts[1].prompt)).toContain("above this model's image size limit");
   });
 
+  describe('Anthropic\'s many-image rejection', () => {
+    const EDGE_400 = () => Object.assign(new Error('rejected'), { statusCode: 400, responseBody: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error',
+      message: 'messages.21.content.91.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels' } }) });
+    const wide = () => Buffer.concat([pngHeader(2160, 1350), Buffer.alloc(40)]);
+    const anthropic = () => resolveProfile({ providerType: 'anthropic', modelId: 'claude-x', contextLength: null });
+    /** A model that rejects the first request with the many-image 400, then answers. */
+    const rejectOnce = (prompts: any[]) => {
+      const scripts = [stream({ type: 'error', error: EDGE_400() }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
+      let index = 0;
+      return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(...textChunks('b', 'again'), finishChunk('stop')) }) }; } });
+    };
+    const wideHistory = () => { const h = blockedHistory(); (h[2] as any).content[0].output.value[1].data.data = wide(); return h; };
+    /** A shrinker standing in for the image worker: returns a header claiming the requested fit. */
+    const fakeShrinker = (calls: Array<{ width: number; height: number }>) => ({
+      prepare: async () => ({ kind: 'unchanged' as const }), preparedPathFor: () => null,
+      shrinkBytes: async (bytes: Buffer, limits: any) => {
+        const d = imageDimensions(bytes)!; const s = (limits.maxEdgePx * 0.9) / Math.max(d.width, d.height);
+        const out = { width: Math.floor(d.width * s), height: Math.floor(d.height * s) };
+        calls.push(out);
+        return { bytes: Buffer.concat([pngHeader(out.width, out.height), Buffer.alloc(8)]), mediaType: 'image/png' as const };
+      },
+    });
+
+    it('a 2160 px picture is sent as-is until the provider objects — no picture is touched up front', async () => {
+      const prompts: any[] = [];
+      const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'done'), finishChunk('stop')) }) }; } });
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic() }), async () => model as any);
+      session.seedHistory(wideHistory());
+      await session.send('continue');
+      expect(prompts).toHaveLength(1);
+      expect(JSON.stringify(prompts[0].prompt)).not.toContain('image not attached');
+    });
+
+    it('shrinks the over-limit pictures to the named edge and retries ONCE — the model keeps every picture', async () => {
+      const prompts: any[] = []; const shrinks: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: fakeShrinker(shrinks) } as any }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      const events = collect(session);
+      await session.send('continue');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+      expect(shrinks).toEqual([{ width: 1800, height: 1125 }]);
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images');                                    // no note: nothing was lost
+      expect(out.value.slice(1).map((v: any) => v.filename)).toEqual(['contact.png', 'ok.png']);
+      expect(imageDimensions(out.value[1].data.data)).toEqual({ width: 1800, height: 1125 });
+    });
+
+    it('remembers the cap for the rest of the conversation: later pictures are judged against it up front', async () => {
+      const prompts: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic(),
+        toolServices: { images: fakeShrinker([]) } as any }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      expect(session.imageLimits.maxEdgePx).toBe(4096);
+      await session.send('continue');
+      expect(session.imageLimits.maxEdgePx).toBe(2000);
+      await session.send('more');
+      expect(prompts).toHaveLength(3);                                                  // no second rejection
+    });
+
+    it('without an image service, falls back to the note for that picture and still recovers', async () => {
+      const prompts: any[] = [];
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000, profile: anthropic() }), async () => rejectOnce(prompts) as any);
+      session.seedHistory(wideHistory());
+      const events = collect(session);
+      await session.send('continue');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+      expect(out.value[0].text).toBe('Read images\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2160, height: 1350 }));
+    });
+  });
+
   it('collapse output equals rebuildHistory output for the same persisted tool events (one label, one shape)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-collapse-'));
     const contact = path.join(dir, 'contact.png'); fs.writeFileSync(contact, huge);
@@ -3436,5 +3546,207 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect((session as any).history[0]).toBe(first);            // same message object, never rebuilt
     expect((session as any).history[0].content[1].data).toBe(fine);   // never re-encoded, never copied
     expect(prompts).toHaveLength(2);
+  });
+});
+
+describe('HarnessSession answers a tool call whose pre-execution checks throw', () => {
+  it('records the error as that call\'s result, keeps pairing, and the turn completes', async () => {
+    // A guard that throws (2026-10-20: an uncompilable regex in the secret-path
+    // check) used to escape the turn with the call unanswered, and every later
+    // request was refused with "Tool result is missing for tool call …".
+    const brittle = fakeTool('Read', { permissionSubject: () => { throw new Error('Range out of order in character class'); } });
+    const session = new HarnessSession(makeOpts({ tools: [brittle], decide: async () => ALLOW }),
+      async () => scriptModel([{ toolCalls: [{ name: 'Read', input: { file_path: '/tmp/x' } }] }, { text: 'carrying on' }]) as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    const result = events.find(e => e.type === 'tool-result');
+    expect(result?.data).toMatchObject({ isError: true });
+    expect(String(result?.data.toolResult)).toContain('Range out of order');
+    expect((brittle as any).calls).toHaveLength(0);
+    const history = session.acceptedHistory().messages as any[];
+    const callIdx = history.findIndex(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some((p: any) => p.type === 'tool-call'));
+    expect(history[callIdx + 1].role).toBe('tool');
+  });
+});
+
+describe('HarnessSession keeps the request under the provider\'s picture count', () => {
+  it('with 101 pictures in history, the first request sends 80 and notes the oldest 21', async () => {
+    const history: any[] = [];
+    for (let i = 0; i < 101; i++) {
+      history.push({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: `c${i}`, toolName: 'Read', input: { file_path: `/tmp/p${i}.png` } }] });
+      history.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: `c${i}`, toolName: 'Read', output: { type: 'content', value: [
+        { type: 'text', text: 'Read image' }, { type: 'file', mediaType: 'image/png', data: { type: 'data', data: pngHeader(100, 100) }, filename: `p${i}.png` },
+      ] } }] });
+    }
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 1_000_000,
+      profile: resolveProfile({ providerType: 'anthropic', modelId: 'claude-x', contextLength: null }) }), async () => model as any);
+    session.seedHistory(history);
+    await session.send('next');
+    const wire = JSON.stringify(prompts[0].prompt);
+    expect((wire.match(/"type":"file"/g) ?? []).length).toBe(80);
+    expect((wire.match(/no longer sent: this conversation holds more pictures/g) ?? []).length).toBe(21);
+    expect(wire).toContain('p0.png is no longer sent');
+    expect(wire).not.toContain('p100.png is no longer sent');
+  });
+});
+
+describe('HarnessSession recovers from a reply cut off at the output limit', () => {
+  /** A model that plays the given streams in order, recording each request. */
+  const playing = (prompts: any[], ...scripts: any[][]) => {
+    let i = 0;
+    return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[i++] ?? stream(...textChunks('z', 'done'), finishChunk('stop')) }) }; } });
+  };
+  const lastUserText = (prompt: any) => JSON.stringify(prompt.prompt.filter((m: any) => m.role === 'user').at(-1));
+
+  it('text cut off mid-answer: asks the model to continue where it stopped, and the turn completes', async () => {
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'Here is the first half'), finishChunk('length')), stream(...textChunks('b', ' and the rest.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write it');
+    expect(prompts).toHaveLength(2);
+    expect(lastUserText(prompts[1])).toContain('Continue exactly where you stopped');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('a tool call cut off mid-arguments is NEVER run; the model is told to split it, and the turn carries on', async () => {
+    const prompts: any[] = [];
+    const write = fakeTool('Write', { schema: z.object({ file_path: z.string(), content: z.string() }) });
+    const model = playing(prompts,
+      stream(...textChunks('a', 'Writing the plan.'), ...toolInputChunks('w1', 'Write', '{"file_path":"/tmp/plan.md","content":"# Plan\\n'), finishChunk('length')),
+      stream(...textChunks('b', 'Written in parts.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [write], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write the plan');
+    expect((write as any).calls).toHaveLength(0);
+    expect(prompts).toHaveLength(2);
+    expect(lastUserText(prompts[1])).toContain('Write call was cut off');
+    expect(lastUserText(prompts[1])).toContain('NOT run');
+    // The "preparing" card for the dropped call is withdrawn.
+    expect(events.some(e => e.type === 'assistant-thinking' && (e.data as any).toolPreparing?.cleared === true)).toBe(true);
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('a recovered turn reopens as valid history: the cut-off and continued text rebuild into ONE assistant message', async () => {
+    // The continue message is history-only (like a steer), so the transcript holds
+    // assistant text, then more assistant text; the rebuild must not produce two
+    // assistant messages in a row (providers reject that) or lose either half.
+    const prompts: any[] = [];
+    const model = playing(prompts, stream(...textChunks('a', 'First half'), finishChunk('length')), stream(...textChunks('b', ' second half.'), finishChunk('stop')));
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('write it');
+    const rebuilt = rebuildHistory(events as any);
+    expect(rebuilt.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+    expect(JSON.stringify(rebuilt[1].content)).toContain('First half second half.');
+  });
+
+  it('stops recovering after two attempts — the turn ends with the truncation footer as before', async () => {
+    const prompts: any[] = [];
+    const cut = () => stream(...textChunks(`t${prompts.length}`, 'more'), finishChunk('length'));
+    const model = playing(prompts, cut(), cut(), cut(), cut());
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 128_000 }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(prompts).toHaveLength(3);
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('max_tokens');
+  });
+
+  it('sends the provider\'s output cap: the published maximum on an Anthropic key, 32k on OpenRouter', async () => {
+    for (const [providerType, published, expected] of [['anthropic', 128_000, 128_000], ['openrouter', 128_000, 32_000], ['openrouter', 8_192, 8_192]] as const) {
+      const prompts: any[] = [];
+      const profile = resolveProfile({ providerType, modelId: 'm', contextLength: 1_000_000, maxOutputTokens: published });
+      const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, contextLength: 1_000_000, profile }), async () => playing(prompts) as any);
+      await session.send('hi');
+      expect(prompts[0].maxOutputTokens).toBe(expected);
+    }
+  });
+});
+
+describe('HarnessSession sorts a provider failure before deciding to retry', () => {
+  const failing = (prompts: any[], errs: any[]) => {
+    let i = 0;
+    return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); const e = errs[i++];
+      return { stream: simulateReadableStream({ chunks: e ? stream({ type: 'error', error: e }) : stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+  };
+  const err = (statusCode: number, type: string, message: string, more: Record<string, unknown> = {}) =>
+    Object.assign(new Error(message), { statusCode, responseBody: JSON.stringify({ type: 'error', error: { type, message, ...more } }) });
+
+  it('an Anthropic overload is retried with a visible countdown, and the turn completes', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1000] }),
+      async () => failing(prompts, [err(529, 'overloaded_error', 'Overloaded')]) as any);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const events = collect(session);
+      const turn = session.send('hi');
+      await vi.waitFor(() => expect(events.some(e => e.type === 'assistant-thinking' && (e.data as any).stallWarning?.willRetry === true)).toBe(true));
+      await vi.advanceTimersByTimeAsync(1000);
+      await turn;
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a spend cap is NOT retried even though it is a 429, and the error says what kind it was', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1] }),
+      async () => failing(prompts, [err(429, 'rate_limit_error', 'You have reached your monthly spend cap', { details: { error_code: 'enforced_spend_limit_reached' } })]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    expect((events.find(e => e.type === 'session-error') as any)?.data).toMatchObject({ errorKind: 'account', errorCode: 'spend-limit' });
+  });
+
+  it('an unrecognised error is not retried and is reported as unknown, in the provider\'s own words', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [1, 1, 1] }),
+      async () => failing(prompts, [err(400, 'invalid_request_error', 'messages: text content blocks must be non-empty')]) as any);
+    const events = collect(session);
+    await session.send('hi');
+    expect(prompts).toHaveLength(1);
+    const data = (events.find(e => e.type === 'session-error') as any).data;
+    expect(data.errorKind).toBe('unknown');
+    expect(data.errorCode).toBeUndefined();
+    expect(data.text).toContain('text content blocks must be non-empty');
+  });
+});
+
+describe('HarnessSession.continueTurn — Try again / Keep going without a new message', () => {
+  it('after a provider error, re-runs on the same history: no new user-message event, and the turn completes', async () => {
+    const prompts: any[] = []; let i = 0;
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o);
+      return { stream: simulateReadableStream({ chunks: i++ === 0
+        ? stream({ type: 'error', error: Object.assign(new Error('bad'), { statusCode: 400, responseBody: JSON.stringify({ error: { message: 'unrecognised' } }) }) })
+        : stream(...textChunks('a', 'Here it is.'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW, retryDelays: [] }), async () => model as any);
+    const events = collect(session);
+    await session.send('write the plan');
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+    const before = events.filter(e => e.type === 'user-message').length;
+    await session.continueTurn();
+    expect(events.filter(e => e.type === 'user-message')).toHaveLength(before);
+    expect(prompts).toHaveLength(2);
+    // The second request is the same conversation: it still ends on the person's message.
+    expect(JSON.stringify(prompts[1].prompt.at(-1))).toContain('write the plan');
+    expect((events.filter(e => e.type === 'turn-complete').at(-1) as any).data.stopReason).toBe('end_turn');
+  });
+
+  it('when history ends on the assistant (a kept partial), adds a history-only "continue" so the request never ends on it', async () => {
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'more'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], decide: async () => ALLOW }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'go' }, { role: 'assistant', content: 'half a pla' }] as any);
+    const events = collect(session);
+    await session.continueTurn();
+    const last = prompts[0].prompt.at(-1);
+    expect(last.role).toBe('user');
+    expect(JSON.stringify(last)).toContain('Continue from where you left off');
+    expect(events.some(e => e.type === 'user-message')).toBe(false);
   });
 });

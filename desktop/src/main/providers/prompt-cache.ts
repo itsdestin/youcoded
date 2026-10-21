@@ -1,4 +1,4 @@
-// Prompt-cache request shaping for Anthropic (direct) and OpenRouter.
+// Prompt-cache request shaping for Anthropic (direct), OpenRouter and OpenAI (direct).
 //
 // WHY this exists (cache follow-ups item 1 + 6, 2026-09-10): Anthropic's cache
 // is opt-in per request — without a `cache_control` marker every step of every
@@ -32,7 +32,7 @@ import { ENV_OPEN } from '../harness/prompt-assembly';
 
 const MARKER = { type: 'ephemeral', ttl: '1h' } as const;
 
-export type PromptCacheProvider = 'anthropic' | 'openrouter';
+export type PromptCacheProvider = 'anthropic' | 'openrouter' | 'openai';
 
 /** Pure: the params rewrite, exported so tests can pin it without a model. */
 export function applyPromptCache(
@@ -66,6 +66,19 @@ export function applyPromptCache(
       ? { ...params.providerOptions, anthropic: { ...params.providerOptions?.anthropic, cacheControl: MARKER } }
       : params.providerOptions;
     return { ...params, prompt, providerOptions };
+  }
+  // OpenAI (a user's own key, 2026-10-20): caching is automatic, but OpenAI
+  // routes a request to the machine holding a matching prefix by
+  // `prompt_cache_key` — the same per-session key the ChatGPT plan branch
+  // already sends (chatgpt-model.ts). @ai-sdk/openai reads it from
+  // providerOptions.openai.promptCacheKey on both the Responses and the Chat
+  // Completions model. Sent on summaries too: no marker, nothing written at a
+  // premium, so there is no reason to withhold the routing hint.
+  if (o.provider === 'openai') {
+    return {
+      ...params,
+      providerOptions: { ...params.providerOptions, openai: { ...params.providerOptions?.openai, promptCacheKey: o.cacheKey } },
+    };
   }
   // OpenRouter: @ai-sdk/openai-compatible spreads providerOptions.openrouter
   // verbatim into the request body. `session_id` pins the upstream; the

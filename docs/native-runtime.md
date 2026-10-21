@@ -151,9 +151,9 @@ Cloud-first slice: `~/.youcoded/` home, provider registry + keychain keys, `Harn
 - **`native:send` is an `ipcMain.handle` invoke on ALL transports** (desktop IPC and remote WS) over the SAME transcript-event pipe CC uses — same `NativeSendResult` shape either side, no throw-vs-`{ok:false}` divergence (contrast the provider IPC parity gap above). Emits `user-message`/`assistant-text`/`assistant-thinking`/`turn-complete`/`user-interrupt`/`session-error`, forwarded by ONE `publish(sessionId, IPC.TRANSCRIPT_EVENT, event)` (main/publish.ts: the session's windows, every phone, and the session's record in main/session-record.ts — a hand-written `sendForSession` + `broadcast` pair is rejected by the ast-grep rule `no-paired-session-send-and-broadcast`). `TRANSCRIPT_REPLAY` falls through `nativeHost.getHistory(id) ?? transcriptWatcher.getHistory(id)`.
 - **Renderer send branch** — `sendChatMessage` (`native-send.ts`): native → `window.claude.native.send(sessionId, text)` with NO `\r`, no 56-byte chunking, no echo wait, no `FILE_GAP_MS` paste timing, no `hasPendingInteraction` gate. **The native send string MUST equal `buildOutgoingMessage(...).content`** or the optimistic USER_PROMPT bubble never dedups (permanent pending bubble). ESC → `native.interrupt`. `useSubmitConfirmation` is gated OFF for native. The entire claude/PTY path is byte-unchanged below the native early-return.
 - **`createSession` native branch** builds NO PTY worker (`ManagedSession.worker` is now optional — guard every `session.worker.X`). Requires a `binding` UNLESS `resumeSessionId` is set (resume reads the binding from the stored header). On a resume whose stored header is gone, `SESSION_CREATE` emits a `session-error` event so the user gets the banner, not a silent empty chat.
-- **Provider IPC error semantics differ by transport** (latent parity gap, reconcile before Phase 2 ungates the Providers UI on remote): desktop `ipcMain.handle` THROWS → renderer promise REJECTS; remote WS resolves `{ok:false, error}`. `ProvidersSection`'s `safeProviders` normalizes BOTH into a thrown error for one try/catch — except `test()`, where `ok:false` is a real result to display. preload passes provider args positionally; remote-shim wraps them as objects (`{id}`, `{id,key}`).
+- **Provider IPC error semantics differ by transport**: the provider channels are channel-table entries served to phones too; desktop THROWS → renderer promise REJECTS; a phone gets `{ok:false, error}` with the table's failure marker (and `provider:refresh-catalog` is in `REJECT_ON_NOT_OK`). `ProvidersSection`'s `safeProviders` normalizes BOTH into a thrown error for one try/catch — except `test()`, where `ok:false` is a real result to display. preload passes provider args positionally; remote-shim wraps them as objects (`{id}`, `{id,key}`).
 - **AI SDK is v7** (`ai@7`, `@ai-sdk/openai-compatible@3`, first-party `@ai-sdk/anthropic|openai|google@4`, explicit `zod`). `streamText().fullStream` parts carry the chunk in `part.text` (NOT `part.delta` — the raw provider-level field); usage via `result.usage` (`totalUsage` deprecated); mock is `MockLanguageModelV4` from `ai/test`. `HarnessSession` maps SDK usage → the fixed transcript `usage` shape `{inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, tokensPerSecond}` (native adds `tokensPerSecond` from stream timing — CC never reports it).
-- **`ModelCatalog` (models.dev + OpenRouter, 24h disk cache in `userData`) re-stamps `fetchedAt` ONLY when BOTH sources succeed** — a partial refresh keeps the expired stamp so the next call retries the dead source (else a first-fetch with one source down freezes an empty picker for 24h). Pricing is gated on a non-empty STRING before `Number()` (`Number(null)`/`Number('')` are 0 → would map JSON-null to "free").
+- **`ModelCatalog` (models.dev + OpenRouter, 24h disk cache in `userData`; custom endpoints matched by address or asked for their own `/models` — `provider-dependencies.md`) re-stamps `fetchedAt` ONLY when BOTH sources succeed** — a partial refresh keeps the expired stamp so the next call retries the dead source (else a first-fetch with one source down freezes an empty picker for 24h). Pricing is gated on a non-empty STRING before `Number()` (`Number(null)`/`Number('')` are 0 → would map JSON-null to "free"). Upstream fetches are single-flight (`ensureFresh`; a forced "Check for new models" `refresh()` joins a running one). Session start reads a custom endpoint's rows with `cacheOnly` — never a fetch in front of a chat.
 
 ## Conversation store, resume & auto-title participation (Plan M2, 2026-07-22)
 
@@ -245,7 +245,7 @@ Providers discount the repeated part of a request only while its opening bytes m
 
 - **Anthropic markers and the OpenRouter pin live in the registry, keyed on `cacheKey`** (`providers/prompt-cache.ts`, wrapped in `languageModel()` ONLY when a `cacheKey` is passed — the unwrapped handle is what the registry's structural tests reach into, and the one keyless caller, session naming, is the one-shot request that must carry nothing). Direct Anthropic: one explicit `1h` breakpoint on the last system block (render order is tools → system → messages, so it covers the tools; after a compaction the automatic tail's 20-position lookback finds nothing earlier, and without this entry the tools+system would be re-written too) plus Anthropic's top-level automatic `cache_control` for the moving tail. OpenRouter: `session_id` = the session id on every harness request (pins the upstream from the FIRST request; without it OpenRouter pins only after a cache hit, expiry 10 min idle), plus top-level `cache_control` for `anthropic/*` models only — DeepSeek, OpenAI and Gemini cache automatically. **One TTL, `1h`**: a read refreshes the timer, so 1h costs 2x (vs 1.25x) only on each turn's new tokens, and a single 5–60 minute pause between human messages would otherwise re-write the whole prefix. **A summary request gets no tail marker** (system-only direct, nothing on OpenRouter): `toolChoice: 'none'` makes the Anthropic SDK drop the tools, so its prefix matches nothing and a marker would write the whole span at 2x for an entry nothing reads. Guard: `prompt-cache.test.ts` (real SDK providers, stubbed network, assertions on the wire body).
 - **ChatGPT-plan requests carry the session id as the `session-id` header, not only as `prompt_cache_key`** (`chatgpt-model.ts` `transformParams`; `x-client-request-id` mirrors it). The Codex backend picks the server — and so the cache — from that header (codex-rs: "ChatGPT derives cache affinity from the Responses session-id header"); Codex, OpenCode, pi and Hermes all send it. Without it, follow-up turns hit 13/20 vs OpenCode's 18/20; with it 18/20, and 45/45 across a restart + resume + compaction (live rig, workspace `docs/active/investigations/2026-09-23-chatgpt-cache-affinity.md`). Cache lifetime on GPT-5.6+ is a fixed 30-minute sliding window: never send `prompt_cache_retention` (the backend 400s it on these models). Guard: `chatgpt-model.test.ts`.
-- **The near-limit window budget** (`planContextBudget` in `compaction.ts`) uses `C = min(real window, provider input limit)`, fixed request cost `F` (system and tool schemas), summary-instruction overhead `J`, reply reserve `min(16,000, floor(C/4))` on a known window, margin `max(min(1024, floor(C/32)), floor(C/100))`, and summary allowance `S = min(13,107, floor((C − F)/4))` (further clamped by a known provider summary-output limit). Trigger is `C − max(reply reserve, S) − margin − J`; the token tail target is `min(20,000, floor((trigger − F)/4))`, rounded down to a complete group. The output cap on the outgoing request is recomputed from the SAME anchored occupancy that made the compaction decision. An unfit newest group produces an explicit error instead of silently front-trimming accepted history. The older `contextBudget` and its pair-aware `fitToContext` remain for legacy-reopen fallback and decoding older snapshots, not the ordinary loop. Guard: `compaction-budget.test.ts`, `message-size.test.ts`, `harness-session-loop.test.ts`.
+- **The near-limit window budget** (`planContextBudget` in `compaction.ts`) uses `C = min(real window, provider input limit)`, fixed request cost `F` (system and tool schemas), summary-instruction overhead `J`, reply reserve `min(16,000, floor(C/4))` on a known window (an UNKNOWN window plans with `assumedWindow` = the profile's `assumedContextWindow`: 250k hosted, 32k for the local engine or a custom endpoint on this computer — never stored or shown as the window), margin `max(min(1024, floor(C/32)), floor(C/100))`, and summary allowance `S = min(13,107, floor((C − F)/4))` (further clamped by a known provider summary-output limit). Trigger is `C − max(reply reserve, S) − margin − J`; the token tail target is `min(20,000, floor((trigger − F)/4))`, rounded down to a complete group. The output cap on the outgoing request is recomputed from the SAME anchored occupancy that made the compaction decision. An unfit newest group produces an explicit error instead of silently front-trimming accepted history. The older `contextBudget` and its pair-aware `fitToContext` remain for legacy-reopen fallback and decoding older snapshots, not the ordinary loop. Guard: `compaction-budget.test.ts`, `message-size.test.ts`, `harness-session-loop.test.ts`.
 - **The summary request reuses the conversation's warm prefix** (`generateSummary`): the same system text, tools and adapted retired span, followed by a single summary instruction and `toolChoice: 'none'`. Which user-role messages the app wrote (earlier summaries, notices, rules, skills) is said in a note appended to the instruction (`summaryProvenanceNote`), never by editing those messages — an edited early message broke the cache match for every compaction after the first. For an oversized retired tool result it shortens only a deep copy sent to the summarizer; it never front-trims user input, the retained tail, or accepted history. The summary output allowance, margin and instruction framing are reserved before sending. Anthropic's SDK drops tools under `'none'`, so its summary call cannot reuse the tool-schema prefix. Guards: `summary-warm-prefix.test.ts`, `compaction.test.ts`.
 - **`usage.expectedRebuild` on `turn-complete`** (`harness-session.ts` `prefixMoved`) marks a deliberate summary (auto/manual), clear, or real model swap; unchanged appends never set it. Prune-only commits no longer happen, though old pruned snapshots can still decode. Low cache reads with the flag are an expected prefix rebuild; without it they need investigation. Guard: `cache-rebuild-flag.test.ts`.
 - **Cache numbers the SDK does not surface ride provider metadata** (`harness/cache-usage.ts`, extractors in `harness/pricing.ts`): llama.cpp's `timings.cache_n` (prompt tokens reused from the KV cache — the only ground truth for local prefix reuse) becomes `cacheReadTokens` for a local step; OpenRouter's `prompt_tokens_details.cache_write_tokens` becomes `cacheCreationTokens`. The SDK's own numbers win when non-zero. Guard: `cache-usage-metadata.test.ts`.
@@ -1235,7 +1235,7 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   copy, so the message would arrive twice.
 - **No "preparing" indicator on the desktop.** After sending a huge picture the chat can sit silent
   for up to ~30 s while it is shrunk; the reply then starts normally.
-- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder**, so 5K
+- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder** (Anthropic's stricter 2000 px many-image rule is learned from its rejection — see "Provider failures that must not end a conversation"), so 5K
   screenshots and 48 MP photos are downscaled for providers that might accept them as they are.
   The model is told (Read's text, the composer's "downscaled" note); the person is not.
 - **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
@@ -1253,3 +1253,106 @@ oversized cases in `accepted-history-store.test.ts`, `harness-history-rebuild.te
 `harness-tools-core.test.ts`, `native-image-attachments.test.ts` and
 `native-session-host-continuation.test.ts`, and the attachment-preparation cases in
 `native-channels.test.ts`.
+
+## Provider failures that must not end a conversation (2026-10-21)
+
+What broke: three ways a native conversation could never send again, because a
+failed turn keeps its history and the provider refused every later request —
+and one way a long task could never finish.
+
+- **Anthropic's many-image rule.** Once a request holds more than 20 pictures,
+  any side over 2000 px is rejected ("exceed max allowed size for many-image
+  requests: 2000 pixels"). The default limits are NOT lowered (that replaced
+  older large screenshots with a note in conversations never at risk); the
+  rejection is the signal. `manyImageEdgeLimit` (`providers/image-too-large.ts`)
+  reads the cap, the session keeps it (`tightenedEdgePx`, read through the ONE
+  getter `HarnessSession.imageLimits` that sending, Read, attachments and
+  resume all use), shrinks the pictures already in memory to it
+  (`ImagePreparer.shrinkBytes`, worker thread; `image-history.ts`
+  `fitHistoryToImageLimits`) and retries once. Only an unshrinkable picture
+  becomes the oversized note; Stop skips the remaining shrinks. Not persisted:
+  a reopen relearns the cap from one rejection.
+- **Anthropic's 100-pictures-per-request cap** (`maxImagesPerRequest`, provider
+  types `anthropic` and `openrouter` only). Past it, the oldest pictures become
+  the `over-count` note in a batch down to 80, so the cached prefix moves once
+  per ~20 new pictures rather than every turn.
+- **A tool call left unanswered.** An unexpected throw in a call's
+  pre-execution checks becomes that call's error result
+  (`unexpectedToolThrowResult`, `tool-group-finalization.ts`) instead of
+  escaping the turn; a restored private checkpoint whose messages fail
+  `hasUnpairedToolCalls` falls back to the rebuild; an uncompilable `[..]`
+  class in the secret-path and path-trigger globs is matched literally.
+- **Per-step output cap per provider** (`providers/output-cap.ts`, carried as
+  `CapabilityProfile.outputCap`, read through `HarnessSession.maxOutputTokens`).
+  A user's own Anthropic/OpenAI/Google key: the catalog's published maximum
+  (`CatalogModel.maxOutputTokens` from models.dev `limit.output`), capped at
+  128k, 16k when unpublished — billed by tokens produced, and Anthropic
+  documents that `max_tokens` does not count against rate limits. OpenRouter:
+  32k (Destin, 2026-10-21), never above the model's own maximum — the cap
+  exists because OpenRouter reserves credit for it up front. ChatGPT sign-in:
+  none (the endpoint refuses one). Local/custom: the manifest's 16k.
+- **A reply cut off at that cap** (`finishReason: 'length'`, no runnable tool
+  call) is recovered inside the turn, at most twice (`truncation-recovery.ts`):
+  text gets an app-generated "continue exactly where you stopped"; a tool call
+  cut off mid-arguments is never run (its partial arguments are discarded, as
+  before) and the model is told to split the work. A step with nothing written
+  ends as before.
+- **One classifier for every provider error** (`providers/provider-failure.ts`
+  `classifyFailure`): temporary (overload, rate limit, 5xx, 408/409, network —
+  including the AI SDK's "Cannot connect to API" and a garbled 2xx), account
+  (bad key, 402 credits, OpenAI `insufficient_quota`, Anthropic spend cap — a
+  429 with `enforced_spend_limit_reached` — permission, unknown model),
+  too-long, blocked (OpenRouter moderation), unknown. Rules match documented
+  shapes only; anything else is `unknown`. `withRetry` retries ONLY temporary
+  failures, on 1/2/4/8/15/30 s (about a minute) or the provider's retry-after
+  up to 60 s, shows the wait on the existing stall countdown (root sessions),
+  and Stop ends the wait at once. The turn's `session-error` carries
+  `errorKind` and, where the older classifier named nothing, the new `errorCode`.
+
+### Known limitations
+- **A conversation whose pictures were shrunk stops publishing its private
+  checkpoint** (the checkpoint cites pictures by the digest of their file, and
+  the shrunk copy is in memory only); reopening uses the ordinary rebuild.
+- **The step-limit footer cannot name the step count** ("Stopped after 150
+  steps"): the count is not on the turn-complete event, so the footer says
+  "Stopped after reaching the step limit for one reply." 
+- **Gemini's SAFETY / RECITATION finishes** arrive as the SDK's
+  `content-filter` and end the turn with "declined to respond", as before.
+  MALFORMED_FUNCTION_CALL (SDK `error`) now joins the empty-step retry.
+
+### The error card (decks `docs/active/design/2026-10-21-error-card/`, approved 2026-10-21)
+- **`errorKind` reaches the screen** (`session-error` → `NATIVE_SESSION_ERROR` →
+  `SessionChatState.errorKind`, serialized for phones). `AttentionBanner` asks
+  `renderer/components/error-card-copy.ts` for one plain sentence naming the
+  provider, the provider's words under Details, and the kind's buttons:
+  temporary → Switch model + Try again; account → Open settings (bad key) or
+  Open billing (spend cap / quota / credit, where a billing page is known) +
+  Switch model, never Try again; too-long → Summarise and continue
+  (`native.compact`, then continue); blocked → Switch model; unknown → the
+  provider's words as the line + Report bug + Try again. OpenRouter's and
+  ChatGPT's own cards (codes `openrouter-*`, `chatgpt-*`) and an older host's
+  error (no kind) render exactly as before. A button whose handler a screen
+  lacks is left out.
+- **Try again / Keep going = `native:continue-turn`** (five surfaces, phone
+  open — Destin signed off 2026-10-21: "yes should work on phone"): `NativeSessionHost.continueTurn`
+  (refused unless idle) → `HarnessSession.continueTurn` runs the model again on
+  the history as it stands, with NO new message; a history ending on the
+  assistant gets the history-only `CONTINUE_TURN_TEXT` note. Keep going shows
+  under the newest turn when it stopped at `max_steps` (`KeepGoingRow`).
+- **The retry wait names its reason**: `StallWarning.reason` (the classifier's
+  code) → `retryWaitLine` ("Anthropic is overloaded — trying again in 8s…").
+  The stream watchdog's warning carries no reason and keeps its own line.
+- **A hidden chat tab never looks up its provider** (`useModelProviderType`'s
+  `paused`, ChatView passes `!visible`).
+
+Guards: `provider-failure.test.ts`, `image-history.test.ts`, `error-card-copy.test.ts`,
+the sorted-card cases in `attention-banner.test.tsx`, `native:continue-turn` parity in
+`ipc-channels.test.ts`, the paused case in `use-provider-type.test.tsx`, the output-cap
+cases in `capability-profile.test.ts`, and in `harness-session-loop.test.ts`
+the suites "recovers from a reply cut off at the output limit", "sorts a
+provider failure before deciding to retry", "Anthropic's many-image
+rejection", "keeps the request under the provider's picture count" and
+"answers a tool call whose pre-execution checks throw";
+`native-session-host-continuation.test.ts` (unanswered tool call in a
+checkpoint); `bash-secret-paths.test.ts` and `path-triggers.test.ts` (bracket
+classes); `image-resize.test.ts` (`shrinkBytes`).

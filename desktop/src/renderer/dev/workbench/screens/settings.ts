@@ -60,6 +60,16 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
   settings('settings/assistant/cloud', 'dialog'),
+  // Custom providers (2026-10-20): Add provider — empty, searching, a service picked,
+  // a typed address, then the rows it closes onto (checked OK, and a refused key).
+  { ...settings('settings/assistant/cloud/add-provider', 'dialog'), newIn: 'after' },
+  { ...settings('settings/assistant/cloud/add-provider#search', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }] },
+  { ...settings('settings/assistant/cloud/add-provider#picked', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }] },
+  // Round 2: the picked service's Models fold opened (review-1#R-3: models as cards).
+  { ...settings('settings/assistant/cloud/add-provider#models', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'click', target: { role: 'button', labelStarts: '4 supported models' } }] },
+  { ...settings('settings/assistant/cloud/add-provider#other', 'dialog'), newIn: 'after', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'other' }, { do: 'key', key: 'Enter' }] },
+  { ...settings('settings/assistant/cloud/add-provider#added', 'dialog'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-inception-123' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
+  { ...settings('settings/assistant/cloud/add-provider#refused', 'dialog', 'error-state'), newIn: 'after', mark: 'settings/assistant/cloud', open: [{ do: 'type', target: { role: 'combobox', label: 'Provider' }, text: 'incep' }, { do: 'click', target: { role: 'option', label: 'Inception (api.inceptionlabs.ai)' } }, { do: 'scroll', target: { role: 'textbox', label: 'Name' }, dir: 'down', times: 2 }, { do: 'type', target: { role: 'textbox', label: 'API key' }, text: 'sk-fake-key' }, { do: 'click', target: { role: 'button', label: 'Add provider' } }] },
   settings('settings/assistant/local', 'dialog'),
   settings('settings/assistant/local/engine-advanced', 'dialog'),
   // Failures with their Try again (small-fixes-1): the engine's set-up check, and a model download

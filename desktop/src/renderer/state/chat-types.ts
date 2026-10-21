@@ -327,6 +327,12 @@ export interface SessionChatState {
    */
   errorCode: string | null;
   /**
+   * What KIND of failure (temporary | account | too-long | blocked | unknown,
+   * main/providers/provider-failure.ts), so the card offers the right way
+   * forward. Native only; null from an older host. Set/cleared with errorCode.
+   */
+  errorKind: string | null;
+  /**
    * Native sessions only. Set when the streaming watchdog detects the provider
    * has gone silent (no chunk for ~60s). Drives ThinkingIndicator's "This is
    * taking a while… Retrying in Ns" countdown. `willRetry` is true when the
@@ -335,7 +341,7 @@ export interface SessionChatState {
    * `stallWarning`-bearing TRANSCRIPT_THINKING_HEARTBEAT; cleared (→ null) by any
    * subsequent activity (a plain heartbeat, reasoning/text delta) and by endTurn().
    */
-  stallWarning: { retryInMs: number; willRetry: boolean } | null;
+  stallWarning: { retryInMs: number; willRetry: boolean; reason?: string } | null;
   /** When the stalled card was first shown, on THIS client's clock — the
    *  count-up's origin. Null whenever the turn is not parked. Stamped on the
    *  first `stalled` heartbeat and left alone by later ones, so the elapsed
@@ -509,6 +515,7 @@ export function createSessionChatState(): SessionChatState {
     attentionState: 'ok',
     errorMessage: null,
     errorCode: null,
+    errorKind: null,
     stallWarning: null,
     stalledSince: null,
     promptProcessing: null,
@@ -665,6 +672,8 @@ export type ChatAction =
       timestamp?: number;
       /** The session-error event's optional `errorCode` (see SessionChatState). */
       errorCode?: string;
+      /** The session-error event's optional `errorKind` (see SessionChatState). */
+      errorKind?: string;
       /** The failing event's uuid, for the totals dedup in the reducer. Optional
        *  because the two non-App dispatchers — the workbench fixture loader and
        *  a renderer test — raise this condition without an event to name. */
@@ -718,7 +727,7 @@ export type ChatAction =
       // Native watchdog: present → the stream has stalled; drives the
       // ThinkingIndicator countdown. Absent → a normal heartbeat that CLEARS any
       // active stall warning (activity resumed).
-      stallWarning?: { retryInMs: number; willRetry: boolean };
+      stallWarning?: { retryInMs: number; willRetry: boolean; reason?: string };
       // Native watchdog stage 2: the turn is PARKED. Absent → a normal
       // heartbeat that clears the park (the stream resumed).
       stalled?: true;
@@ -1195,7 +1204,9 @@ export interface SerializedSessionChatState {
   // Optional so a pre-field snapshot from an older host still deserializes.
   errorCode?: string | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
-  stallWarning?: { retryInMs: number; willRetry: boolean } | null;
+  errorKind?: string | null;
+  // Optional so a pre-field snapshot from an older host still deserializes.
+  stallWarning?: { retryInMs: number; willRetry: boolean; reason?: string } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized (unlike promptProcessing) because a parked turn is a condition
   // of the HOST that outlives any one client — a phone reconnecting to a
@@ -1257,6 +1268,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         attentionState: s.attentionState,
         errorMessage: s.errorMessage,
         errorCode: s.errorCode,
+        errorKind: s.errorKind,
         stallWarning: s.stallWarning,
         stalledSince: s.stalledSince,
         lastBufferActivityAt: s.lastBufferActivityAt,
@@ -1304,6 +1316,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       errorMessage: ser.errorMessage ?? null,
       // WHY carried: a phone that reconnects must get the same action button.
       errorCode: ser.errorCode ?? null,
+      errorKind: ser.errorKind ?? null,
       // Older hosts predate stallWarning — default null so a pre-field snapshot hydrates.
       stallWarning: ser.stallWarning ?? null,
       // Older hosts predate stalledSince — default null so a pre-field snapshot hydrates.

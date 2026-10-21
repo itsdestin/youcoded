@@ -561,7 +561,7 @@ function openRouterSignInApi(): {
   return (window as any).claude?.openrouter;
 }
 
-export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) {
+export function OpenRouterBlock() {
   useScreenOpen('settings/assistant/cloud/openrouter', () => {}); // photo-only build: the card is on the Cloud page already
   // The OpenRouter builtin provider (stable id 'openrouter'). undefined = still
   // loading; null = not found (shouldn't happen — it's builtin).
@@ -741,11 +741,8 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
 
       {/* Other API providers — direct keys (Anthropic/OpenAI/Google) + custom
           endpoints. Embedded hides the openrouter + local-engine rows.
-          `keysHeading`: the Assistant settings page names the list, because
-          there the OpenRouter card is the only thing above it. */}
-      {keysHeading && (
-        <SectionLabel className="mt-4 mb-2">{keysHeading}</SectionLabel>
-      )}
+          No heading (Destin, 2026-10-21): the keys sit straight under OpenRouter,
+          as cards of the same level as Claude / ChatGPT / OpenRouter. */}
       <ProvidersSection embedded="cloud" />
 
       {connectOpen && openrouter && (

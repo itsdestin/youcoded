@@ -19,6 +19,7 @@ import { spawnDetached, killTree, formatElapsed, MAX_EXPLICIT_RUNNING } from '..
 import { CWD_SENTINEL, ENV_SENTINEL, stripAnsi, stripSentinelLines } from './shell-text';
 import { forgetOnCallExit } from '../askpass/admin-forget';
 import { getSettledAdminCapability } from '../admin-capability';
+import { ADMIN_WORK_GUIDANCE } from '../prompts/admin-work-guidance';
 import { adminRefusedModelLine } from '../../../shared/admin-password-copy';
 // Why re-exported: harness-tools-core.test.ts and other callers import
 // stripAnsi from here; moving the implementation into shell-text.ts (so the
@@ -448,7 +449,7 @@ function bashDescription(): string {
     // Passwordless (NOPASSWD) sudo keeps working on EVERY platform either
     // way — nothing about this feature refuses it; this paragraph only ever
     // changes the model's own expectations, never behavior.
-    adminSudoSentence() +
+    ADMIN_WORK_GUIDANCE + ' ' + adminSudoSentence() +
     '`doas`, `su`, `pkexec`, and `run0` are refused; use `sudo` instead.'
   );
 }
@@ -479,7 +480,7 @@ export const BashTool = defineTool({
   // Compact form for small local models (simplified presentation, spec §4.2).
   // MERGE RECONCILIATION: stays a plain static string rather than joining the
   // lazy-getter dance — it names no shell, so there is nothing to resolve.
-  shortDescription: 'Run a shell command and return its output.',
+  shortDescription: 'Run a shell command and return its output. ' + ADMIN_WORK_GUIDANCE,
   inputSchema: z.object({
     command: z.string(),
     timeout: z.number().int().optional().describe('Timeout in milliseconds'),

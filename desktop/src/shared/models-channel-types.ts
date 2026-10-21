@@ -31,6 +31,8 @@ export interface ModelsChannelTypes {
   'provider:test': { request: { id: string; key?: unknown }; response: Answer<'providerRegistry', 'testConnection'> | TestAnswer };
   'provider:set-key': { request: { id: string; key: string }; response: true };
   'provider:catalog': { request: void; response: Answer<'modelCatalog', 'get'> };
+  'provider:services': { request: void; response: Answer<'modelCatalog', 'services'> };
+  'provider:refresh-catalog': { request: void; response: Answer<'modelCatalog', 'refresh'> };
   'endpoints:detect': { request: void; response: DetectedEndpoint[] };
   // Sign in with ChatGPT / OpenRouter, and Claude Code's own sign-in.
   'chatgpt:status': { request: void; response: ChatGptAccountStatus };

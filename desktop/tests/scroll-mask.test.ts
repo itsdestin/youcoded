@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import ts from 'typescript';
 import { describe, it, expect } from 'vitest';
+import { budgetCpuPerTest, CPU_BOUND_WALL_LIMIT_MS } from './helpers/cpu-budget';
 
 // EVERY SCROLL AREA FADES, WITH THE APP'S ONE FADE.
 //
@@ -149,7 +150,12 @@ function walk(dir: string, ext: string[]): string[] {
 const rel = (f: string) => relative(SRC, f).split('\\').join('/');
 const excepted = (f: Finding) => EXCEPTIONS.find((e) => e.file === f.file && f.text.includes(e.has));
 
-describe('every scroll area fades (the one scroll fade)', () => {
+// WHY a CPU budget, not the wall clock (test-suite-hygiene.md): every test here parses the whole
+// renderer with the TypeScript parser — pure CPU. On a loaded machine (verify.sh, load 25+ on 32
+// threads, 2026-10-21) "the painted band is gone" took over 30 s of wall time with nothing regressed,
+// and passed alone. The CPU budget still catches a real slowdown; the wall limit only a hang.
+describe('every scroll area fades (the one scroll fade)', { timeout: CPU_BOUND_WALL_LIMIT_MS }, () => {
+  budgetCpuPerTest();
   const files = walk(SRC, ['.tsx', '.ts']);
   const results = files.map((f) => ({ file: rel(f), ...scanSource(rel(f), readFileSync(f, 'utf8')) }));
   const all = results.flatMap((r) => r.bare);
@@ -194,7 +200,11 @@ describe('every scroll area fades (the one scroll fade)', () => {
     const painted = /(?<![\w-])scroll-fade(?:-x)?(?![\w-])/;
     const users: string[] = [];
     for (const f of files) {
-      const sf = ts.createSourceFile(f, readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const source = readFileSync(f, 'utf8');
+      // WHY: parsing every renderer file again times out under suite load. A literal's
+      // getText is a source substring, so files without the token cannot contain a hit.
+      if (!painted.test(source)) continue;
+      const sf = ts.createSourceFile(f, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
       const visit = (n: ts.Node) => {
         if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n)) && painted.test(n.getText(sf))) users.push(`${rel(f)}: ${n.getText(sf)}`);
         ts.forEachChild(n, visit);

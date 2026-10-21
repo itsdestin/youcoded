@@ -1098,7 +1098,7 @@ async function restoreImage(image: ImageDescriptor, limits?: ImageLimits): Promi
   return data;
 }
 
-const NOTE_REASONS: readonly string[] = ['missing', 'too-many-bytes', 'undeliverable', 'prepare-failed'];
+const NOTE_REASONS: readonly string[] = ['missing', 'too-many-bytes', 'undeliverable', 'prepare-failed', 'over-count'];
 
 /** WHY: a note's fields go straight into text the provider will read, so a field
  *  imageNote could not have been called with is a corrupt manifest. */

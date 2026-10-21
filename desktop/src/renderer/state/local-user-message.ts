@@ -28,6 +28,6 @@ export function localUserMessage(session: SessionChatState, action: LocalUserAct
     currentGroupId: session.currentTurnId ? session.currentGroupId : null,
     currentTurnId: session.currentTurnId,
     // Only an admitted new prompt clears the previous error/park/prefill state.
-    attentionState: 'ok', errorMessage: null, errorCode: null, stallWarning: null, stalledSince: null, promptProcessing: null,
+    attentionState: 'ok', errorMessage: null, errorCode: null, errorKind: null, stallWarning: null, stalledSince: null, promptProcessing: null,
   };
 }

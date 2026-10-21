@@ -306,3 +306,13 @@ describe('path-scoped rules', () => {
     expect((await buildTriggerIndex(root)).match(path.join(root, 'x.ts'))).toEqual([]);
   });
 });
+
+describe('path-scoped rules with a bracket class', () => {
+  it('an out-of-order range in paths: is matched literally instead of throwing', async () => {
+    const root = tmpRepo();
+    write(root, '.claude/rules/odd.md', '---\npaths:\n  - "src/[z-a]/**"\n---\nOdd rule.');
+    const index = await buildTriggerIndex(root);
+    expect(() => index.match(path.join(root, 'src', 'x', 'a.ts'))).not.toThrow();
+    expect(index.match(path.join(root, 'src', '[z-a]', 'a.ts')).map((h) => h.body).join()).toContain('Odd rule');
+  });
+});

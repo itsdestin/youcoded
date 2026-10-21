@@ -41,6 +41,13 @@ export function patchCount(width: number, height: number): number {
 export function withinImageLimits(dims: { width: number; height: number }, limits: ImageLimits): boolean {
   return Math.max(dims.width, dims.height) <= limits.maxEdgePx && patchCount(dims.width, dims.height) <= limits.maxPatches;
 }
+/** `limits` narrowed to a stricter long-edge cap the provider named mid-conversation
+ *  (null = none). WHY a cap, not a new default (2026-10-20): Anthropic's 2000 px applies
+ *  only once a request holds over 20 pictures, so it is learned from that rejection
+ *  instead of shrinking every picture for every provider up front. Never loosens. */
+export function withEdgeCap(limits: ImageLimits, edgePx: number | null): ImageLimits {
+  return edgePx === null || edgePx >= limits.maxEdgePx ? limits : { ...limits, maxEdgePx: edgePx };
+}
 
 /** Width/height from the first bytes of a deliverable image, or null. Pure and
  *  total: junk, truncation and unknown layouts yield null, never a throw.
@@ -91,13 +98,16 @@ export function imageDimensions(buf: Buffer): { width: number; height: number } 
 // the store and the rebuild describe it the same way.
 export type ImageNote =
   | { kind: 'oversized'; label: string; width: number; height: number }
-  | { kind: 'unavailable'; label: string; reason: 'missing' | 'too-many-bytes' | 'undeliverable' | 'prepare-failed'; detail?: string }
+  | { kind: 'unavailable'; label: string; reason: 'missing' | 'too-many-bytes' | 'undeliverable' | 'prepare-failed' | 'over-count'; detail?: string }
   | { kind: 'downscaled'; label: string; width: number; height: number; shownWidth: number; shownHeight: number };
 const UNAVAILABLE_TEXT = {
   'missing': 'could not be read',
   'too-many-bytes': `exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit`,
   'undeliverable': 'is not a deliverable image format',
   'prepare-failed': 'could not be downscaled for the model',
+  // An earlier picture no longer sent because the conversation holds more than
+  // the provider accepts in one request (ImageLimits.maxImagesPerRequest).
+  'over-count': 'is no longer sent: this conversation holds more pictures than this model accepts in one request — open it again if you still need it',
 } as const;
 export function imageNote(n: ImageNote): string {
   if (n.kind === 'oversized') return `[image not attached: ${n.label} is ${n.width}×${n.height} px, above this model's image size limit]`;
@@ -132,7 +142,7 @@ export function parseImageNote(line: string): ImageNote | null {
   if (d) return { kind: 'downscaled', label: d[1], width: Number(d[2]), height: Number(d[3]), shownWidth: Number(d[4]), shownHeight: Number(d[5]) };
   const f = PREPARE_FAILED_RE.exec(line);
   if (f) return { kind: 'unavailable', label: f[1], reason: 'prepare-failed', ...(f[2] !== undefined ? { detail: f[2] } : {}) };
-  for (const reason of ['missing', 'too-many-bytes', 'undeliverable'] as const) {
+  for (const reason of ['missing', 'too-many-bytes', 'undeliverable', 'over-count'] as const) {
     const suffix = ` ${UNAVAILABLE_TEXT[reason]}]`;
     if (line.startsWith('[image not attached: ') && line.endsWith(suffix)) {
       const label = line.slice('[image not attached: '.length, line.length - suffix.length);

@@ -1,8 +1,10 @@
 // Capability profiles (spec §4.1, decisions 2/9). Resolved in THREE layers so a
 // known model gets curated tuning, an unknown one gets a safe fallback, and the
 // harness NEVER branches on a model-name string (only the registry matcher does).
+import { outputCapFor } from '../providers/output-cap';
 import { KNOWN_MODELS, matchKnownModel, type KnownModelEntry } from './known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from './specialists/limits';
+import { UNKNOWN_CLOUD_WINDOW, UNKNOWN_LOCAL_WINDOW } from './compaction';
 // Type-only: the app-wide list of provider kinds, used below ONLY to check that
 // this file's own copy of that list has not fallen behind it.
 import type { ProviderType } from '../../shared/provider-types';
@@ -48,6 +50,10 @@ export interface CapabilityProfile {
   nativeImageToolResults: boolean;
   /** Admission limits for pictures (see ImageLimits). Provider-type fact. */
   imageLimits: ImageLimits;
+  /** Output tokens ONE reply step may use (providers/output-cap.ts: the model's
+   *  published maximum on a user's own key, 32k on OpenRouter). Absent = the
+   *  harness manifest's limits.maxTokens, as before. */
+  outputCap?: number;
   /** May the model-invoked Task tool (Task 6, spec decision 4) be attached, to
    *  spawn a specialist subagent? Spec decision 4: a weak/unverified
    *  orchestrator does not actually parallelize delegated work — it
@@ -87,6 +93,14 @@ export interface CapabilityProfile {
    *  below excludes it: provider-registry documents that type as the Ollama /
    *  LM Studio shape, i.e. a local model in disguise. */
   announcePrefill: boolean;
+  /** The window the budget math assumes when no source knows this model's real one
+   *  (compaction.ts UNKNOWN_CLOUD_WINDOW / UNKNOWN_LOCAL_WINDOW). PROVIDER-TYPE fact: 32k for the local
+   *  engine and a custom endpoint on this computer, 250k for everything hosted. Never stored or shown
+   *  as the model's window — that stays null ("Unknown"). */
+  assumedContextWindow: number;
+  /** The provider type this profile was resolved for (context-overflow recovery needs it for a custom
+   *  endpoint, whose id is random). Optional so hand-built test profiles still compile. */
+  providerType?: ProfileProviderType;
 }
 
 /** How big a picture this provider type accepts in ONE request. Patches are
@@ -99,7 +113,11 @@ export interface CapabilityProfile {
  *  wrong-high fails the whole turn with a provider error, wrong-low only means
  *  a picture is downscaled further than needed. Raise a row only with a
  *  captured provider response. */
-export interface ImageLimits { maxEdgePx: number; maxPatches: number }
+/** `maxImagesPerRequest` (optional; absent = no cap): every picture in history
+ *  is resent with each request, so a long conversation can pass a provider's
+ *  per-request picture count and be refused on every send. Past it, the oldest
+ *  pictures are replaced by a note (image-history collapseExcessImageParts). */
+export interface ImageLimits { maxEdgePx: number; maxPatches: number; maxImagesPerRequest?: number }
 /** OpenAI's wire (direct key and Sign in with ChatGPT). maxPatches VERIFIED.
  *  maxEdgePx is NOT: no edge-length rejection was ever captured; 8192 is an
  *  explicit, conservative guess kept above 30,000 patches' natural reach
@@ -107,12 +125,24 @@ export interface ImageLimits { maxEdgePx: number; maxPatches: number }
  *  patch-bound first), so the one verified limit stays the binding one. */
 export const IMAGE_LIMITS_OPENAI: ImageLimits = { maxEdgePx: 8192, maxPatches: 30_000 };
 /** Everyone else. 4096² = 16,384 patches, below every published limit we know
- *  of (Anthropic documents 8000 px per side); unverified against a live reply. */
+ *  of (Anthropic documents 8000 px per side); unverified against a live reply.
+ *  NOT 2000 px, deliberately: Anthropic's stricter 2000 px applies only once a
+ *  request holds more than 20 pictures, and Gemini/local models never apply
+ *  it. Gating every picture at 2000 replaced older large screenshots with a
+ *  note in conversations that were never at risk. That case is handled where
+ *  it happens instead: the provider's rejection names the cap, and the session
+ *  shrinks its pictures to it (HarnessSession.tightenedEdgePx). */
 export const IMAGE_LIMITS_DEFAULT: ImageLimits = { maxEdgePx: 4096, maxPatches: 16_384 };
+/** Anthropic, and OpenRouter (which routes to Anthropic models): the default
+ *  sizes plus Anthropic's documented 100-pictures-per-request cap for models
+ *  with a 200k window (600 for larger ones — the lower number, since one row
+ *  serves every model). Not for Gemini or local models, which have no such cap. */
+const IMAGE_LIMITS_ANTHROPIC: ImageLimits = { ...IMAGE_LIMITS_DEFAULT, maxImagesPerRequest: 100 };
 // WHY not exported: resolveProfile (below) is its only caller; everything else reads
 // the resolved `profile.imageLimits`, so an export would only grow knip's ratchet.
 function imageLimitsFor(t: ProfileProviderType): ImageLimits {
-  return t === 'openai' || t === 'chatgpt' ? IMAGE_LIMITS_OPENAI : IMAGE_LIMITS_DEFAULT;
+  if (t === 'openai' || t === 'chatgpt') return IMAGE_LIMITS_OPENAI;
+  return t === 'anthropic' || t === 'openrouter' ? IMAGE_LIMITS_ANTHROPIC : IMAGE_LIMITS_DEFAULT;
 }
 
 export type ProfileProviderType =
@@ -157,6 +187,8 @@ export interface DiscoveredModel {
    *  as the middle precedence layer: below the KNOWN_MODELS registry, above the
    *  provider-type default. */
   supportsVision?: boolean;
+  /** The catalog's published per-reply output maximum, when it has one. */
+  maxOutputTokens?: number | null;
   /** Task 13 — the engine's live parallel-slot count (llama-server's
    *  `total_slots`; `n_slots` on older builds), read from the SAME
    *  `/props?model=<id>` call that already supplies contextLength — a call
@@ -184,6 +216,9 @@ export interface DiscoveredModel {
    *  reaches the same fallback in the known-model overlay below:
    *  conservative 1, never "one slot confirmed". */
   totalSlots?: number | null;
+  /** A custom endpoint whose address is on this computer (Ollama, LM Studio) — its unknown window is
+   *  assumed small like the local engine's. Filled by the host from the context closure. */
+  onThisComputer?: boolean;
 }
 
 const SMALL_LOCAL_CONTEXT = 32_768;
@@ -219,6 +254,7 @@ export const CLOUD_DEFAULT: CapabilityProfile = {
   // spreads the real provider-type answer over this. False is also the honest
   // value for a session that genuinely IS this default — a hosted model.
   announcePrefill: false,
+  assumedContextWindow: UNKNOWN_CLOUD_WINDOW,
 };
 
 function cloudVariant(t: ProfileProviderType): PromptVariant {
@@ -342,7 +378,7 @@ function mcpBudgetSizing(d: DiscoveredModel, registry: KnownModelEntry[]): numbe
 // it depends on the window rather than on which layer won. Typing that
 // honestly keeps tsc able to catch a missing field at every construction site
 // instead of letting a spread paper over it.
-type BehavioralProfile = Omit<CapabilityProfile, 'exposeSkillCatalog' | 'injectionBudgetTokens' | 'mcpToolBudgetTokens' | 'supportsVision'>;
+type BehavioralProfile = Omit<CapabilityProfile, 'exposeSkillCatalog' | 'injectionBudgetTokens' | 'mcpToolBudgetTokens' | 'supportsVision' | 'assumedContextWindow'>;
 
 // Task 13 — the local engine's REAL parallel-slot ceiling this app trusts,
 // per the 2026-08-12 probe recorded in docs/engine-dependencies.md
@@ -485,12 +521,19 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
   // WHY: provider-type fact like the two above, spread onto every return so a
   // registry entry can never override a picture-size limit.
   const imageLimits = imageLimitsFor(d.providerType);
+  // PROVIDER-TYPE facts too, spread LAST on every return so no base or registry entry overrides them.
+  const assumedContextWindow = d.providerType === 'local-engine' || (d.providerType === 'openai-compatible' && d.onThisComputer === true)
+    ? UNKNOWN_LOCAL_WINDOW : UNKNOWN_CLOUD_WINDOW;
+  const providerType = d.providerType;
   if (d.providerType !== 'local-engine') {
-    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
+    // Per-step output cap: a provider-type policy over the catalog's published maximum
+    // (output-cap.ts). Cloud only — a local model stays bounded by its context window.
+    const outputCap = outputCapFor(d.providerType, d.maxOutputTokens);
+    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, assumedContextWindow, providerType, ...(outputCap !== undefined ? { outputCap } : {}) };
   }
   const base = localFallback(d.contextLength);
   const known = matchKnownModel(d.modelId, registry);   // LAYER 2 overlay
-  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
+  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill, assumedContextWindow, providerType };
   return {
     maxToolPresentation: known.maxToolPresentation ?? base.maxToolPresentation,
     promptVariant: known.promptVariant ?? base.promptVariant,
@@ -520,5 +563,7 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
     nativeImageToolResults,
     imageLimits,
     announcePrefill,
+    assumedContextWindow,
+    providerType,
   };
 }

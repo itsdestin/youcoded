@@ -236,3 +236,18 @@ describe('secret-path floor: indirect reads (scripts, curl @file, git rev:path, 
     expect(secretPathIn("find . -name '*.ts' -exec cat {} +", ctx)).toBeNull();
   });
 });
+
+describe('secret-path floor: a bracket the regex engine cannot compile never throws', () => {
+  it.each([
+    'cat [qmp_capabilities,query-name]',
+    'ls [z-a]*',
+    'cat ~/[z-a]/id_rsa',
+  ])('%s', (command) => {
+    // An out-of-order range used to throw "Range out of order" out of the
+    // permission check, ending the turn with the tool call unanswered.
+    expect(() => secretPathVerdict(command, ctx)).not.toThrow();
+  });
+  it('a valid bracket class still reaches a secret file', () => {
+    expect(secretPathVerdict('cat .[e]nv', ctx)?.kind).toBe('secret-maybe');
+  });
+});

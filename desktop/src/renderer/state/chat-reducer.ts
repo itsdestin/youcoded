@@ -472,6 +472,7 @@ function endTurn(
     attentionState: 'ok' as const,
     errorMessage: null,
     errorCode: null,
+    errorKind: null,
     // Any turn end also dismisses a pending stall countdown (the give-up path
     // ends the turn via NATIVE_SESSION_ERROR, which spreads endTurn()).
     stallWarning: null,
@@ -1162,6 +1163,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         attentionState: 'error',
         errorMessage: action.message,
         errorCode: action.errorCode ?? null,
+        errorKind: action.errorKind ?? null,
       });
       return next;
     }
@@ -2092,6 +2094,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // stall warning would sit on top of a healthy new turn.
         errorMessage: null,
         errorCode: null,
+        errorKind: null,
         stallWarning: null,
         // A skill invocation is a new turn start — same reasoning as above.
         stalledSince: null,
@@ -2351,7 +2354,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...withShells,
         ...ended,
         ...(session.attentionState === 'error'
-          ? { attentionState: 'error' as const, errorMessage: session.errorMessage, errorCode: session.errorCode }
+          ? { attentionState: 'error' as const, errorMessage: session.errorMessage, errorCode: session.errorCode, errorKind: session.errorKind }
           : {}),
       });
       return next;

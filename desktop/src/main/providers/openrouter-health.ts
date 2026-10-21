@@ -129,6 +129,15 @@ export class OpenRouterHealth {
     this.save();
   }
 
+  /** Store a verdict from a plain models-list check (direct keys and custom endpoints). Same rule as
+   *  check(): an unreachable check never overwrites a real answer already on file. No reason field —
+   *  those reasons describe OpenRouter's own key endpoint. */
+  recordCheck(ref: string, key: string, verdict: ProviderHealth['verdict']): void {
+    const prior = this.get(ref);
+    if (verdict === 'unchecked' && prior && prior.verdict !== 'unchecked') return;
+    this.record(ref, key, { verdict, checkedAt: this.now() });
+  }
+
   /** Called by setKey: forget the old key's verdict, and adopt a check of the
    *  NEW key made moments earlier (the Connect dialog checks before saving),
    *  so the card does not fall back to "Checking…" right after a good save. */

@@ -22,7 +22,7 @@ import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
-import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-rebuild';
+import { rebuildHistoryWithOrigins, restorePortableHistory, hasUnpairedToolCalls } from './history-rebuild';
 import { compactionSourceDigest, withLiveCompactionOperation } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
@@ -2177,7 +2177,11 @@ export class NativeSessionHost extends EventEmitter {
     // count, or read null instead of a real number — with no throw, just a
     // wrong cap. Collapsing to one return value removes the shared state
     // entirely: there is no ordering left to get wrong.
-    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null }>,
+    // `onThisComputer` (optional): a custom endpoint whose address is on this computer — its unknown
+    // window is then assumed small (capability-profile assumedContextWindow). Carried on this call,
+    // not a setter, so no session can be resolved before the fact is known. `maxOutputTokens`
+    // (optional, 2026-10-21): the catalog's published per-reply output maximum (providers/output-cap.ts).
+    private contextAndSlotsFor: (binding: ModelBinding) => Promise<{ contextLength: number | null; totalSlots: number | null; onThisComputer?: boolean; maxOutputTokens?: number | null }>,
     // Resolves a binding's provider TYPE (local-engine / openrouter / anthropic /
     // …) so the host can pick the right CapabilityProfile (Task 5). A binding
     // whose provider is unknown returns null → resolveContextAndProfile falls back
@@ -2608,7 +2612,7 @@ export class NativeSessionHost extends EventEmitter {
     // that used to share one /props reading through a variable at the
     // ipc-handlers.ts wiring site. There is nothing left to order: this is
     // the single await that produces both values for this binding.
-    const { contextLength: raw, totalSlots } = await this.contextAndSlotsFor(binding);
+    const { contextLength: raw, totalSlots, onThisComputer, maxOutputTokens } = await this.contextAndSlotsFor(binding);
     const discoveredSlots = totalSlots ?? undefined;
     const type = (await this.providerTypeFor(binding)) ?? 'openrouter';     // unknown → cloud-safe default
     // The registry ceiling (effectiveContextForModel) is a LOCAL-model concern: it
@@ -2626,12 +2630,13 @@ export class NativeSessionHost extends EventEmitter {
     // it did before this closure existed.
     const discoveredVision = (await this.visionSupportFor(binding)) ?? undefined;
     const profile = resolveProfile({
-      providerType: type, modelId: binding.modelId, contextLength, supportsVision: discoveredVision,
+      providerType: type, modelId: binding.modelId, contextLength, supportsVision: discoveredVision, maxOutputTokens,
       // Threads the engine's real slot reading into the known-model overlay's
       // concurrency clamp (capability-profile.ts's localSlotCap). undefined
       // for every non-local-engine binding — the ipc-handlers wiring never
       // queries the engine for those.
       totalSlots: discoveredSlots,
+      onThisComputer,
     });
     // Task 11 (spec §5): the price this binding runs at, and whether it costs
     // anything at all. Resolved here so create/resume/swap all get it from the
@@ -3231,7 +3236,13 @@ export class NativeSessionHost extends EventEmitter {
           imageLimits: session.profileSnapshot.imageLimits,
         });
         check();
-        if (restored.ok) {
+        // WHY (2026-10-20): a checkpoint published while a tool call was left
+        // unanswered (a throw mid-call) restored that dangling call verbatim on
+        // every resume, and the provider refused every request after it — the
+        // rebuild below repairs pairing, this path never did. Fall back to it.
+        if (restored.ok && hasUnpairedToolCalls(restored.messages)) {
+          this.logContinuation(sessionId, 'unpaired-tool-call', 'restore');
+        } else if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.
           // Their exact provider history may be used, but a portable cut needs
           // a matching, validated public record and event-backed suffix.
@@ -3251,7 +3262,7 @@ export class NativeSessionHost extends EventEmitter {
           });
           return;
         }
-        this.logContinuation(sessionId, restored.reason, 'restore');
+        if (!restored.ok) this.logContinuation(sessionId, restored.reason, 'restore');
       }
     }
     // WHY: the private exact snapshot is optional. The public checkpoint has
@@ -4082,10 +4093,25 @@ export class NativeSessionHost extends EventEmitter {
     return { status: 'sent' };
   }
 
+  /** Try again / Keep going on an ENDED turn (2026-10-21): the model runs again on
+   *  the history as it stands, with no new message. Refused (false) unless the
+   *  session is live, ready and idle — a press while a turn runs is a no-op, never
+   *  a queued second run. Goes through runTurns like any send, so queued messages
+   *  and notices still drain after it. */
+  continueTurn(sessionId: string): boolean {
+    const entry = this.live.get(sessionId);
+    if (!entry || !this.entryReady(entry) || entry.inFlight || entry.quiescing || entry.compacting) return false;
+    entry.inFlight = true;
+    entry.running = new Promise<void>((resolve) => {
+      setImmediate(() => { void this.runTurns(sessionId, entry, () => entry.session.continueTurn()).then(resolve, resolve); });
+    });
+    return true;
+  }
+
   /** The live session's picture limits, for the send handler's preparation step.
    *  A session still starting gets the conservative default. */
   imageLimitsFor(sessionId: string): ImageLimits {
-    return this.live.get(sessionId)?.session.profileSnapshot.imageLimits ?? IMAGE_LIMITS_DEFAULT;
+    return this.live.get(sessionId)?.session.imageLimits ?? IMAGE_LIMITS_DEFAULT;
   }
 
   /** Cancel/edit a queued-but-not-yet-sent message (Task 11). Sync findIndex +

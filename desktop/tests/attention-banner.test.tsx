@@ -235,3 +235,38 @@ describe('AttentionBanner — errorCode picks the action', () => {
     expect(openSettingsButton(container)).not.toBeNull();
   });
 });
+
+describe('AttentionBanner — the sorted error card (error-card.questions)', () => {
+  afterEach(() => cleanup());
+  const buttons = (c: HTMLElement) => Array.from(c.querySelectorAll('button')).map((b) => b.textContent?.trim());
+
+  it('a temporary failure: plain sentence, the provider\'s words under Details, Switch model + Try again (filled, last)', () => {
+    const onRetry = vi.fn(); const onSwitchProviders = vi.fn();
+    const { container, getByText } = render(
+      <AttentionBanner state="error" errorKind="temporary" errorCode="overloaded" providerType="anthropic"
+        errorMessage="Overloaded (provider error 529)" onRetry={onRetry} onSwitchProviders={onSwitchProviders} />);
+    expect(getByText('Anthropic is overloaded right now. The app tried again for about a minute.')).toBeTruthy();
+    expect(buttons(container)).toEqual(expect.arrayContaining(['Details', 'Switch model', 'Try again']));
+    fireEvent.click(Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Try again')!);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('an account failure offers no Try again', () => {
+    const { container } = render(
+      <AttentionBanner state="error" errorKind="account" errorCode="key-rejected" providerType="anthropic"
+        errorMessage="invalid x-api-key" onRetry={vi.fn()} onOpenProviderSettings={vi.fn()} />);
+    expect(buttons(container)).toContain('Open settings');
+    expect(buttons(container)).not.toContain('Try again');
+  });
+
+  it('a button whose handler this screen lacks is left out, never drawn dead', () => {
+    const { container } = render(
+      <AttentionBanner state="error" errorKind="too-long" errorCode="context-too-long" providerType="anthropic" errorMessage="prompt is too long: 2 tokens > 1 maximum" />);
+    expect(buttons(container)).not.toContain('Summarise and continue');
+  });
+
+  it('an error from an older host (no kind) renders exactly as before', () => {
+    const { getByText } = render(<AttentionBanner state="error" errorMessage="upstream 502 from the provider" />);
+    expect(getByText('upstream 502 from the provider')).toBeTruthy();
+  });
+});

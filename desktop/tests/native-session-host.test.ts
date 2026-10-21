@@ -625,6 +625,26 @@ describe('NativeSessionHost', () => {
     expect(rows[0]).toMatchObject({ sessionId: 's-1', provider: 'native' });
   });
 
+  it('continueTurn (Try again / Keep going) is refused for an unknown session and while a turn runs; idle, it runs a turn with no new message', async () => {
+    expect(host.continueTurn('ghost')).toBe(false);
+    await host.create({ sessionId: 's-ct', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const entry = (host as any).live.get('s-ct');
+    entry.inFlight = true;
+    expect(host.continueTurn('s-ct')).toBe(false);   // a press mid-turn never starts a second run
+    entry.inFlight = false;
+    // A real exchange first: Try again only follows a turn that ran.
+    host.send('s-ct', 'hello');
+    await waitForTurnComplete(host, 1);
+    await entry.running;
+    const users: string[] = []; const types: string[] = [];
+    host.on('transcript-event', (e: any) => { types.push(e.type); if (e.type === 'user-message') users.push(e.data.text); });
+    expect(host.continueTurn('s-ct')).toBe(true);
+    await entry.running;
+    expect(types).toContain('turn-complete');
+    expect(users).toEqual([]);
+    expect(host.isIdle('s-ct')).toBe(true);
+  });
+
   it('getHistory returns null for unknown/non-native sessions (replay falls through to CC)', () => {
     expect(host.getHistory('nope')).toBeNull();
   });
@@ -1328,6 +1348,19 @@ describe('NativeSessionHost', () => {
   // session's real ceiling can be smaller than hosted's. The fallback constant
   // above still applies whenever no live session backs the parent id (the
   // 'never created' cases in the describe block above). ----
+  describe('the assumed window for an unknown custom endpoint', () => {
+    const providerTypeFor = async () => 'openai-compatible';
+    it('follows whether the context lookup says the address is on this computer', async () => {
+      const ctx = async (b: any) => ({ contextLength: null, totalSlots: null, onThisComputer: b.modelId === 'here' });
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, ctx as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'here', cwd: root, binding: { providerId: 'c1', modelId: 'here' } });
+      await h.create({ sessionId: 'away', cwd: root, binding: { providerId: 'c1', modelId: 'away' } });
+      expect((h as any).live.get('here').session.profileSnapshot.assumedContextWindow).toBe(32_768);
+      expect((h as any).live.get('away').session.profileSnapshot.assumedContextWindow).toBe(250_000);
+      await h.destroyAll();
+    });
+  });
+
   describe('specialist concurrency cap follows the profile', () => {
     const providerTypeFor = async (b: any) => (b.providerId === 'local' ? 'local-engine' : 'openrouter');
     // Fix pass 2: contextLengthFor collapsed into contextAndSlotsFor — this

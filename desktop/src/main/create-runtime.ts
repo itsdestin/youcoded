@@ -14,7 +14,7 @@ import os from 'os';
 import { generateText } from 'ai';
 import { hasRealTitle } from '../shared/session-title';
 import type { SessionProvider } from '../shared/types';
-import type { ModelBinding } from '../shared/provider-types';
+import { isLocalEndpoint, type ModelBinding } from '../shared/provider-types';
 import { ENGINE_PORT } from '../shared/ports';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
@@ -215,6 +215,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     // The plan's models come from ChatGptAuth's manifest cache (§4.2); absent
     // under the kill switch so the catalog contributes nothing for 'chatgpt'.
     ...(chatgptForUi ? { chatgptModels: () => chatgptForUi.models() } : {}),
+    // A custom endpoint's own /models list is asked with its saved key (model-catalog endpointModels).
+    endpointKey: (id) => providerRegistry.endpointKey(id),
+    // "Check for new models" also asks the ChatGPT plan for its current list.
+    ...(chatgptForUi ? { refreshChatgpt: () => chatgptForUi.refreshModels() } : {}),
   });
   // WebSearch stack (Phase 2 Plan B): keys live in SecretsStore, the ref map in
   // ~/.youcoded/search-providers.json (via NativeHome). SearchChain caches the
@@ -297,7 +301,16 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return engineManager.effectiveContextWindow(binding.modelId);
-      return { contextLength: await modelCatalog.contextLengthFor(binding, providers), totalSlots: null };
+      // WHY cacheOnly for a custom endpoint: its rows come from models.dev or its own /models, and
+      // a session start must never wait on either — an unknown window falls back to the profile's
+      // assumption until the picker or Providers screen has loaded the list (custom-providers plan C-1).
+      const cacheOnly = p?.type === 'openai-compatible';
+      const contextLength = await modelCatalog.contextLengthFor(binding, providers, { cacheOnly });
+      // The published per-reply output maximum, for providers/output-cap.ts (same cache rule).
+      const maxOutputTokens = await modelCatalog.maxOutputTokensFor(binding, providers, { cacheOnly });
+      // A custom endpoint on this computer (Ollama, LM Studio): its unknown window is assumed 32k, not 250k.
+      if (p?.type === 'openai-compatible' && p.baseUrl) return { contextLength, totalSlots: null, maxOutputTokens, onThisComputer: isLocalEndpoint(p.baseUrl) };
+      return { contextLength, totalSlots: null, maxOutputTokens };
     },
     // Provider TYPE resolver (Task 5): the host picks a CapabilityProfile from
     // this. Unknown provider → null, so the host falls back to a cloud-safe
@@ -383,7 +396,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // create/resume/swap (measured 2026-09-05 while fixing the local half).
       // A provider missing from the registry is caught below: `p` undefined
       // means no rows, and the lookup falls through to null as before.
-      const models = await modelCatalog.get(p ? [p] : []);
+      // cacheOnly for a custom endpoint: same reason as the context closure above.
+      const models = await modelCatalog.get(p ? [p] : [], { cacheOnly: p?.type === 'openai-compatible' });
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.pricing ?? null;
     },

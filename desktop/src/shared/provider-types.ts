@@ -76,6 +76,10 @@ export interface CatalogModel {
   /** ChatGPT's advertised opt-in maximum, distinct from its default window.
    *  WHY separate: merely listing a model must not opt a plan into long context. */
   maxContextLength?: number;
+  /** The most output tokens ONE reply may carry, as the catalog publishes it
+   *  (models.dev `limit.output`, OpenRouter `top_provider.max_completion_tokens`).
+   *  Absent = not published; the session then keeps its conservative default. */
+  maxOutputTokens?: number;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
   // Whether this catalog row's model accepts image input, per the SOURCE's own
@@ -113,4 +117,28 @@ export interface ProviderStatus extends ProviderConfig {
   /** Read-only: the last check of this profile's key (§3.1). Absent until a
    *  check has run. Never sent back to provider:upsert. */
   health?: ProviderHealth;
+  /** Read-only: how many models this provider offers and where that list came
+   *  from (custom-providers U5). Absent when nothing is known. */
+  models?: ProviderModelInfo;
+}
+
+/** One AI service the app can connect to through a custom endpoint, from
+ *  models.dev's provider list (custom-providers spec, 2026-10-20). Only rows
+ *  that publish an API address are offered, so picking one fills it in. */
+export interface ServiceEntry {
+  id: string;          // models.dev provider key ('inception')
+  label: string;       // 'Inception'
+  baseUrl: string;     // 'https://api.inceptionlabs.ai/v1'
+  modelCount: number;
+  /** The service's models as the catalog lists them, for the Models fold under a
+   *  picked service (custom-providers-review-1#R-3). Absent fields are unknown —
+   *  never shown as zero. */
+  models?: { id: string; label: string; contextLength?: number; priceIn?: number; priceOut?: number; tools?: boolean }[];
+}
+
+/** What a provider row can say about its model list (U5). Absent = unknown. */
+export interface ProviderModelInfo {
+  count: number;
+  /** Where the list came from: the public catalog, or the endpoint itself. */
+  source: 'catalog' | 'endpoint';
 }

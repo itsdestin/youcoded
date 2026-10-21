@@ -30,6 +30,11 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),
+  // Custom providers (2026-10-20): a search that finds nothing offers "Check for new
+  // models"; the first check finds Mercury 3, a failed one says which list it couldn't reach.
+  { ...chat('chat/model-picker#no-match', 'dialog'), newIn: 'after', session: 'wb-2', open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }] },
+  { ...chat('chat/model-picker#refreshed', 'dialog'), newIn: 'after', session: 'wb-2', waitMs: 1500, open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }, 'Check for new models'] },
+  { ...chat('chat/model-picker#refresh-failed', 'dialog', 'error-state'), newIn: 'after', session: 'wb-2', params: { refresh: 'fail' }, open: [{ do: 'type', target: { role: 'textbox', label: 'Search all models' }, text: 'mercury' }, 'Check for new models'] },
   chat('chat/model-picker/fast-mode', 'dialog'),
   chat('chat/model-picker/switch-model', 'dialog'),
   chat('chat/preferences', 'dialog'),
@@ -122,6 +127,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#chatgpt-app-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: 'official', chatgpt: 'official' } },
   { ...chat('chat#stalled', 'view', 'error-state'), session: 'wb-2', params: { stalled: '1' } },
   ...['key-rejected', 'key-expired', 'credit-short', 'request-refused'].map((e) => ({ ...chat(`chat#openrouter-${e}`, 'view', 'error-state'), session: 'wb-2', params: { openrouter: 'verified', providerError: e } })),
+  // The sorted error card (error-card.questions, 2026-10-21): one per kind, on an Anthropic session.
+  ...['overloaded', 'spend-limit', 'key-rejected', 'too-long', 'unknown'].map((e) => ({ ...chat(`chat#anthropic-${e}`, 'view', 'error-state'), session: 'wb-2', params: { anthropicError: '1', providerError: `anthropic-${e}` } })),
+  { ...chat('chat#step-limit', 'view'), session: 'wb-2', params: { anthropicError: '1', providerError: 'step-limit' } },
   ...['handoff', 'reasoning-stop', 'skill-first', 'approval', 'skills-spread', 'skills-chain', 'deliverables', 'mix', 'silent-steps'].map((b) => ({ ...chat(`chat#bubbles-${b}`, 'view', 'conversation'), session: 'wb-2', params: { seed: `bubbles-${b}` } })),
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.

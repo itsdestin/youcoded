@@ -9,7 +9,7 @@
 // Both ride the SDK's metadataExtractor hook into providerMetadata, and one
 // reader turns SDK usage + metadata into the step's cache numbers.
 import { describe, it, expect } from 'vitest';
-import { localTimingsExtractor, openRouterCostExtractor } from '../src/main/harness/pricing';
+import { localTimingsExtractor, openRouterCostExtractor, compatibleCacheExtractor } from '../src/main/harness/pricing';
 import { cacheTokensForStep } from '../src/main/harness/cache-usage';
 
 describe('localTimingsExtractor', () => {
@@ -46,6 +46,26 @@ describe('openRouterCostExtractor cache writes', () => {
   });
 });
 
+// DeepSeek reports cache reads as top-level `prompt_cache_hit_tokens` (its usage
+// block, api-docs.deepseek.com/guides/kv_cache), which the SDK never maps.
+describe('compatibleCacheExtractor', () => {
+  const DEEPSEEK_FINAL = { choices: [], usage: { prompt_tokens: 1200, completion_tokens: 40, prompt_cache_hit_tokens: 1024, prompt_cache_miss_tokens: 176 } };
+  it('carries a DeepSeek-style cache hit off the final usage chunk', async () => {
+    const x = compatibleCacheExtractor.createStreamExtractor();
+    x.processChunk({ choices: [{ delta: { content: 'hi' } }] });
+    x.processChunk(DEEPSEEK_FINAL);
+    expect(x.buildMetadata()).toEqual({ compatible: { cacheReadTokens: 1024 } });
+  });
+  it('reports NOTHING when the endpoint does not use that field', async () => {
+    const x = compatibleCacheExtractor.createStreamExtractor();
+    x.processChunk({ usage: { prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 8 } } });
+    expect(x.buildMetadata()).toBeUndefined();
+  });
+  it('non-streaming: reads the same field off the whole body', async () => {
+    expect(await compatibleCacheExtractor.extractMetadata({ parsedBody: DEEPSEEK_FINAL })).toEqual({ compatible: { cacheReadTokens: 1024 } });
+  });
+});
+
 describe('cacheTokensForStep', () => {
   it('prefers the SDK usage when it carries cache numbers', () => {
     expect(cacheTokensForStep({ inputTokenDetails: { cacheReadTokens: 10, cacheWriteTokens: 3 } } as any, { local: { cacheReadTokens: 99 } }))
@@ -58,6 +78,10 @@ describe('cacheTokensForStep', () => {
   it('falls back to OpenRouter cache_write_tokens for writes', () => {
     expect(cacheTokensForStep({ inputTokenDetails: { cacheReadTokens: 100, cacheWriteTokens: 0 } } as any, { openrouter: { costUsd: 0.5, cacheWriteTokens: 40 } }))
       .toEqual({ cacheReadTokens: 100, cacheCreationTokens: 40 });
+  });
+  it('falls back to a DeepSeek-style hit count when the SDK saw no cached_tokens', () => {
+    expect(cacheTokensForStep({ inputTokenDetails: { cacheReadTokens: 0 } } as any, { compatible: { cacheReadTokens: 1024 } }))
+      .toEqual({ cacheReadTokens: 1024, cacheCreationTokens: 0 });
   });
   it('zeros when nothing reported anything', () => {
     expect(cacheTokensForStep(undefined, undefined)).toEqual({ cacheReadTokens: 0, cacheCreationTokens: 0 });

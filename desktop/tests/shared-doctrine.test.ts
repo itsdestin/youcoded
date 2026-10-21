@@ -80,6 +80,24 @@ describe('sharedDoctrine — consolidation review', () => {
   });
 });
 
+describe('sharedDoctrine — admin work approval', () => {
+  for (const compact of [false, true]) {
+    for (const audience of ['user', 'parent'] as const) {
+      it(`requires prior chat approval for admin work (${audience}, compact=${compact})`, () => {
+        const d = sharedDoctrine({ ...FULL, compact, audience });
+        expect(d).toContain('administrator privileges only as a last resort');
+        expect(d).toContain('unprivileged commands and user-writable locations');
+        expect(d).toContain('ask the user in chat for approval');
+        expect(d).toContain('additional permission or password prompts');
+        expect(d).toContain('Wait for approval');
+        expect(d).toContain('pause and ask');
+        expect(d).toContain('does not replace');
+        expect(d).toContain('Except for admin work');
+      });
+    }
+  }
+});
+
 describe('sharedDoctrine — capability assumption', () => {
   it('every audience is told to find a way before declining, in both sizes', () => {
     expect(sharedDoctrine(FULL)).toContain('Assume you can do whatever the user asks');

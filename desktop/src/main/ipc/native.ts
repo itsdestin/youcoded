@@ -138,6 +138,8 @@ export const nativeChannels: MainChannelDef[] = [
   // Fire-and-forget: the host never throws for an unknown id.
   defineChannel({ name: IPC.NATIVE_INTERRUPT, kind: 'on', handler: ({ sessionId }, ctx) => { ctx.runtime?.nativeHost.interrupt(sessionId); } }),
   defineChannel({ name: IPC.NATIVE_RETRY, kind: 'on', handler: ({ sessionId }, ctx) => { ctx.runtime?.nativeHost.retryStalledStep(sessionId); } }),
+  // Try again / Keep going on an ended turn; the host refuses it unless the session is idle.
+  defineChannel({ name: IPC.NATIVE_CONTINUE_TURN, kind: 'on', handler: ({ sessionId }, ctx) => { ctx.runtime?.nativeHost.continueTurn(sessionId); } }),
   defineChannel({ name: IPC.NATIVE_STARTUP_ACTION, kind: 'handle', handler: ({ sessionId, attemptId, action }, ctx) => {
     const host = ctx.runtime?.nativeHost;
     const ok = host?.startupAction(sessionId, attemptId, action) ?? false;

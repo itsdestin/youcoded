@@ -491,6 +491,7 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
   'native:retry': 'user-action',
+  'native:continue-turn': 'user-action',
   'ui:action': 'user-action',
   'system:notify-stack-state': 'transport',
   // Batch 2: the readiness handshake is the connection talking about itself. Sent only
@@ -800,6 +801,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'theme:list',
   'commands:list',
   'appearance:get-favorite-themes',
+  // "Check for new models" (custom providers): a failure must show the picker's error box, never
+  // resolve as "the model list is up to date".
+  'provider:refresh-catalog',
   // Installing Claude Code (first-run local models, F-5): open to a phone — the computer
   // runs the installer (table entry main/ipc/claude-code.ts, Node first). Listed here so a
   // refusal or failure `{ ok:false }` rejects instead of resolving as an install that finished.
@@ -3214,6 +3218,7 @@ export function installShim(): void {
       interrupt: (sessionId: string) => fire('native:interrupt', { sessionId }),
       // Fire-and-forget like interrupt above — the stalled card needs no answer.
       retry: (sessionId: string) => fire('native:retry', { sessionId }),
+      continueTurn: (sessionId: string) => fire('native:continue-turn', { sessionId }),
       // Request/response (mirrors preload.ts) — the remote UI needs the same
       // {ok, reason} so a refused compaction explains itself over remote too.
       compact: (sessionId: string, focus?: string) => invoke('native:compact', { sessionId, focus }),
@@ -3268,6 +3273,8 @@ export function installShim(): void {
       test: (id: string, key?: string) => invoke('provider:test', key === undefined ? { id } : { id, key }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
+      services: () => invoke('provider:services'),
+      refreshCatalog: () => invoke('provider:refresh-catalog'),
     },
     // WHY a host-derived getter: Android's own backend supports ChatGPT sign-in.
     // Visiting clients must still see the host account; openExternal separately

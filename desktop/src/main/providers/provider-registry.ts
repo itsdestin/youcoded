@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
 import { ChatGptRequestDiagnostics } from './chatgpt-request-diagnostics';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { openRouterCostExtractor, localTimingsExtractor } from '../harness/pricing';
+import { openRouterCostExtractor, localTimingsExtractor, compatibleCacheExtractor } from '../harness/pricing';
 import { withPrefillProgress, type PrefillProgress } from './prefill-progress';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -148,7 +148,11 @@ export class ProviderRegistry {
       // OpenRouterHealth.get). `ready` deliberately ignores it: `ready` feeds
       // the launch gate and the model menu, and a refused key must change the
       // WORDS, not lock the user out (§3.1).
-      const health = p.type === 'openrouter' && hasKey ? this.health?.get(p.secretRef) : undefined;
+      // Every key type with a checkable key remembers its last check (custom-providers): a refused
+      // OpenAI key used to read "Connected" again after Settings was reopened.
+      const remembers = p.type === 'openrouter' || p.type === 'anthropic' || p.type === 'openai'
+        || p.type === 'google' || p.type === 'openai-compatible';
+      const health = remembers && hasKey ? this.health?.get(p.secretRef) : undefined;
       return { ...p, builtIn, hasKey, ready, ...(health ? { health } : {}) };
     });
   }
@@ -229,8 +233,9 @@ export class ProviderRegistry {
     }
     const ref = await this.secrets.set(plaintext, entry.secretRef);
     // A new key makes the old verdict meaningless: drop it (or adopt the check
-    // the Connect dialog just ran on this exact key) before anything reads it.
-    if (entry.type === 'openrouter') this.health?.adoptOrClear(ref, plaintext);
+    // the Connect dialog just ran on this exact key) before anything reads it. Every key type has a
+    // stored verdict now, so every type clears it.
+    this.health?.adoptOrClear(ref, plaintext);
     // Persist the pointer by mutating the LIVE entry inside the file lock —
     // NOT by writing back the snapshot read above. A snapshot write would
     // silently undo any concurrent edit (label change, disable) that landed
@@ -254,6 +259,16 @@ export class ProviderRegistry {
     }
   }
 
+  /** The saved key for a provider id, for the model catalog's own /models request on a custom
+   *  endpoint. Never throws: a missing provider, no key, or an undecryptable store all answer
+   *  undefined, and the catalog then asks without a key. */
+  async endpointKey(id: string): Promise<string | undefined> {
+    try {
+      const p = this.readAll().find((x) => x.id === id);
+      return p ? await this.keyFor(p) : undefined;
+    } catch { return undefined; }
+  }
+
   private async keyFor(p: ProviderConfig): Promise<string | undefined> {
     if (!p.secretRef) return undefined;
     // SecretsStore.get returns null for missing/undecryptable — normalize to
@@ -264,10 +279,10 @@ export class ProviderRegistry {
   /** THE factory (spec §2.2). Throws plain-language errors — they surface in the UI error banner.
    *  `opts.serialToolCalls` (spec §4.2) is honored ONLY on the local-engine branch —
    *  cloud providers handle parallel tool calls fine and ignore it.
-   *  `opts.cacheKey` (the harness session id) is honored on three branches:
+   *  `opts.cacheKey` (the harness session id) is honored on four branches:
    *  chatgpt (the endpoint's prompt_cache_key), anthropic (cache_control
-   *  markers) and openrouter (session_id pin + cache_control for Claude
-   *  models) — see prompt-cache.ts. A caller without one gets none of them. */
+   *  markers), openrouter (session_id pin + cache_control for Claude
+   *  models) and openai (prompt_cache_key) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
     opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
@@ -421,7 +436,10 @@ export class ProviderRegistry {
         // includeUsage: same reason as the local-engine branch. A server that
         // doesn't understand stream_options ignores it (it's standard OpenAI), so
         // this degrades to the previous no-usage behavior rather than failing.
-        return createOpenAICompatible({ name: p.label, baseURL: p.baseUrl, apiKey, includeUsage: true })(binding.modelId);
+        // metadataExtractor: DeepSeek-shaped endpoints report cache hits outside
+        // the field the SDK reads (pricing.ts compatibleCacheExtractor), so
+        // without it their reuse counted as 0 and was billed at the input rate.
+        return createOpenAICompatible({ name: p.label, baseURL: p.baseUrl, apiKey, includeUsage: true, metadataExtractor: compatibleCacheExtractor })(binding.modelId);
       }
       case 'anthropic': {
         const apiKey = await this.keyFor(p);
@@ -431,7 +449,8 @@ export class ProviderRegistry {
       case 'openai': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Assistant settings → Cloud providers.`);
-        return createOpenAI({ apiKey })(binding.modelId);
+        // cached(): the per-session prompt_cache_key (prompt-cache.ts).
+        return cached('openai', createOpenAI({ apiKey })(binding.modelId));
       }
       case 'google': {
         const apiKey = await this.keyFor(p);
@@ -552,6 +571,8 @@ export class ProviderRegistry {
     // never-throws contract. (readAll rethrows non-ENOENT I/O errors, and
     // localBaseUrl is injected code we don't control.)
     let p: ProviderConfig | undefined;
+    // The saved key this check used, so its verdict can be remembered (direct keys + custom endpoints).
+    let usedKey: string | undefined;
     try {
       p = this.readAll().find((x) => x.id === id);
       // Kill switch (§6), the same guard languageModel() has: with chatgpt null
@@ -611,6 +632,7 @@ export class ProviderRegistry {
           if (p.secretRef) {
             key = await this.keyFor(p);
             if (!key) return needsKey;
+            usedKey = key;
           }
           res = await fetch(`${stripSlash(p.baseUrl)}/models`, {
             headers: key ? { Authorization: `Bearer ${key}` } : undefined,
@@ -621,6 +643,7 @@ export class ProviderRegistry {
         case 'anthropic': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           res = await fetch('https://api.anthropic.com/v1/models', {
             // Anthropic uses x-api-key (not a bearer header) and requires a
             // version header on every request.
@@ -632,6 +655,7 @@ export class ProviderRegistry {
         case 'openai': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           res = await fetch('https://api.openai.com/v1/models', {
             headers: { Authorization: `Bearer ${key}` },
             signal,
@@ -641,6 +665,7 @@ export class ProviderRegistry {
         case 'google': {
           const key = await this.keyFor(p);
           if (!key) return needsKey;
+          usedKey = key;
           // Google's API takes the key as a query param, not a header.
           res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
@@ -665,15 +690,24 @@ export class ProviderRegistry {
         default:
           return { ok: false, message: `${p.label} has an unknown type and cannot be tested.` };
       }
-      if (res.ok) return { ok: true, message: 'Connected.' };
+      // Remember the answer for a saved key (ux-review-1#U1): a refused key must still read refused
+      // after Settings is reopened. A server error says nothing about the key, so it is not stored.
+      const remember = (verdict: 'verified' | 'rejected') => {
+        if (usedKey && p?.secretRef) this.health?.recordCheck(p.secretRef, usedKey, verdict);
+        return verdict;
+      };
+      if (res.ok) return { ok: true, message: 'Connected.', ...(usedKey ? { verdict: remember('verified') } : {}) };
       if (res.status === 401 || res.status === 403) {
-        return { ok: false, message: 'The API key was rejected — check it and try again.' };
+        return { ok: false, message: 'The API key was rejected — check it and try again.', ...(usedKey ? { verdict: remember('rejected') } : {}) };
       }
       return { ok: false, message: `The provider responded with HTTP ${res.status}.` };
     } catch (e: any) {
       // Network failure / timeout / DNS / store I/O — return, never throw
-      // (UI contract). p may be unset if the read itself threw.
-      return { ok: false, message: `Could not reach ${p?.label ?? id}: ${e?.message ?? String(e)}` };
+      // (UI contract). p may be unset if the read itself threw. Only a check that got as far as
+      // sending a saved key counts as "unchecked"; recordCheck never lets it overwrite a real answer.
+      if (usedKey && p?.secretRef) this.health?.recordCheck(p.secretRef, usedKey, 'unchecked');
+      return { ok: false, message: `Could not reach ${p?.label ?? id}: ${e?.message ?? String(e)}`,
+        ...(usedKey ? { verdict: 'unchecked' as const } : {}) };
     }
   }
 }

@@ -445,6 +445,12 @@ function attachReal(child: ChildProcess, lines: number, producer = PRODUCER) {
 // in 12 MB, at a few block edges, on macOS CI daily since 2026-10-08). That is the kernel's doing,
 // passed through untouched; a lost or duplicated LINE still fails every comparison below.
 const received = (r: { state: { out: string } }) => (process.platform === 'darwin' ? r.state.out.replace(/\r+\n/g, '\r\n') : r.state.out);
+/** Where two long outputs first part, with the characters around it — a failure message, not a check. */
+const firstDifference = (got: string, want: string) => {
+  let i = 0;
+  while (i < got.length && i < want.length && got[i] === want[i]) i++;
+  return `first difference at ${i} of ${want.length}: expected …${JSON.stringify(want.slice(Math.max(0, i - 40), i + 20))}… got …${JSON.stringify(got.slice(Math.max(0, i - 40), i + 20))}…`;
+};
 
 describe('real PTY harness acknowledgement lifecycle', () => {
   afterEach(() => vi.useRealTimers());
@@ -516,7 +522,10 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
     expect(await r.until(() => r.state.out.includes('DONE-MARKER'), 60000)).toBe(true);
     r.child.send({ type: 'input', data: 'q' });
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
-    expect(received(r).length).toBe(expected(lines).length);
+    // WHY the first-difference message (2026-10-21): this failed once on Linux at load ~90 with ONE
+    // extra character in 12 MB and passed alone; a bare length mismatch could not say whether it was a
+    // doubled "\r" (the macOS kernel quirk normalized in received()) or real duplicated output.
+    expect(received(r).length, firstDifference(received(r), expected(lines))).toBe(expected(lines).length);
     expect(received(r)).toBe(expected(lines));
     // Never more than the high mark plus the reads already in flight when the brake went on.
     expect(r.state.maxOwed).toBeLessThan(200_000 + 700_000);

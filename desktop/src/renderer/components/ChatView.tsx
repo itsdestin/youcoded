@@ -1,3 +1,5 @@
+import { KeepGoingRow } from './KeepGoingRow';
+import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
 import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
@@ -111,10 +113,19 @@ interface Props {
   filling?: boolean;
   /** Fake local-model state solely for the workbench width review; no engine. */
   modelLoadingDemo?: boolean;
+  /** Native session's model id and provider type (strings: stable props). The
+   *  error card names the provider and picks its billing page from them. */
+  model?: string;
+  providerType?: string;
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo, model, providerType }: Props) {
+  // Paused while hidden: an unstamped session's lookup registers a listener and reads
+  // the provider lists, and a hidden tab does no work (performance.md rule 2).
+  // Guard: use-provider-type.test.tsx "a paused caller…".
+  const native = provider === 'native';
+  const activeProviderType = useModelProviderType(native ? model : null, native ? providerType : null, !visible);
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
@@ -1202,7 +1213,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                       </div>
                     </div>
                   )
-                  : <ThinkingIndicator stallWarning={state.stallWarning} promptProcessing={state.promptProcessing} lastOutputAt={state.lastOutputAt} />;
+                  : <ThinkingIndicator stallWarning={state.stallWarning} promptProcessing={state.promptProcessing} lastOutputAt={state.lastOutputAt} providerType={activeProviderType} />;
               }
               if (state.attentionState !== 'ok' && (thinkingArea || terminalAttention)) {
                 return (
@@ -1211,6 +1222,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
                     errorCode={state.errorCode}
+                    errorKind={state.errorKind}
+                    providerType={activeProviderType}
                     stalledSince={state.stalledSince}
                     // Native sessions get the stuck line without the
                     // "check Terminal view" pointer — they have no Terminal.
@@ -1226,9 +1239,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork
                     // the conversation mid-turn.
+                    // An ENDED turn's Try again (error-card.questions#Q-1) runs the
+                    // model again on the history as it stands — never a new message.
                     onRetry={state.attentionState === 'stalled'
                       ? () => window.claude.native.retry(sessionId)
-                      : undefined}
+                      : state.attentionState === 'error' && provider === 'native'
+                        ? () => window.claude.native.continueTurn(sessionId)
+                        : undefined}
+                    onSummarise={provider === 'native' ? () => { void window.claude.native.compact(sessionId).then((r: any) => { if (r?.ok) window.claude.native.continueTurn(sessionId); }); } : undefined}
                     // Stop is ESC: the existing interrupt path, which already
                     // ends the turn cleanly and flushes the partial text to disk.
                     onStop={state.attentionState === 'stalled'
@@ -1236,6 +1254,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                       : undefined}
                   />
                 );
+              }
+              // error-card.questions#Q-6: the newest turn stopped at its step limit
+              // and nothing is running → Keep going continues the same task.
+              const lastEntry = state.timeline[state.timeline.length - 1];
+              const lastTurn = lastEntry?.kind === 'assistant-turn' ? state.assistantTurns.get(lastEntry.turnId) : undefined;
+              if (provider === 'native' && !state.isThinking && lastTurn?.stopReason === 'max_steps') {
+                return <KeepGoingRow onKeepGoing={() => window.claude.native.continueTurn(sessionId)} />;
               }
               return null;
             })()}
