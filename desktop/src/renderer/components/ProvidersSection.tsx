@@ -10,13 +10,8 @@ function pendingProviderCalls(): PendingProviderCalls {
   return (window.claude?.providers ?? {}) as PendingProviderCalls;
 }
 
-
-/** Same address, ignoring case, a trailing "/" and a trailing "/v1" — how the
- *  catalog matches a custom endpoint to a listed service (custom-providers spec). */
-function sameAddress(a: string, b: string): boolean {
-  const n = (u: string) => u.trim().toLowerCase().replace(/\/+$/, '').replace(/\/v1$/, '');
-  return n(a) === n(b);
-}
+// WHY shared: the catalog (main) matches endpoints by the same rule, so the form and the picker agree.
+import { sameEndpoint } from '../../shared/endpoint-address';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 
 /** Pass-through that forgets the provider-type cache once a write succeeded. */
@@ -560,7 +555,7 @@ function ProviderForm({ initial, onDone, onCancel }: {
     // Once the list arrives, an edited provider whose address is a listed service
     // shows as that service rather than "Other address…".
     if (!initial?.baseUrl || value !== OTHER_VALUE) return;
-    const s = services.find((x) => sameAddress(x.baseUrl, initial.baseUrl!));
+    const s = services.find((x) => sameEndpoint(x.baseUrl, initial.baseUrl!));
     if (s) setValue(`service:${s.id}`);
   }, [services]); // eslint-disable-line react-hooks/exhaustive-deps
 

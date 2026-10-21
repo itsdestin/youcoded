@@ -540,6 +540,7 @@ import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl 
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
+import { sameEndpoint } from '../../../shared/endpoint-address';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -1435,10 +1436,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const addedKeys = new Map<string, string>();
   const addedIds = new Set<string>();
   const added = (p: { id: string }) => addedIds.has(p.id);
-  // The real catalog will match on a normalized address (spec: lowercase host +
-  // path, trailing "/" and "/v1" ignored on both sides) — the same rule here.
-  const norm = (u: string) => u.trim().toLowerCase().replace(/\/+$/, '').replace(/\/v1$/, '');
-  const sameAddress = (a: string, b: string) => norm(a) === norm(b);
+  // The real catalog's address rule (shared/endpoint-address.ts), so the fake matches the same way.
+  const sameAddress = sameEndpoint;
   let refreshes = 0;
   const providers: Ns<'providers'> & import('../../../shared/provider-types').PendingProviderCalls = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
