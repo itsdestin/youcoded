@@ -191,7 +191,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // key, stored beside its secrets (userData), never in shared ~/.youcoded.
   const openRouterHealth = new OpenRouterHealth({ dir: userDataDir });
   const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi, openRouterHealth);
-  void providerRegistry.init();
+  // WHY .catch: fire-and-forget must not become an unhandled rejection — a seed write that
+  // fails (disk full, or a test's temp home removed mid-write, which reddened master CI's
+  // macOS shard on 2026-10-21) is logged; list() still reads whatever is on disk.
+  void providerRegistry.init().catch((err) => console.warn('[providers] seeding built-ins failed:', err));
   // Re-check the OpenRouter key shortly after launch and every 5 minutes, so a
   // key that died while the app sat idle reads as dead before anyone sends a
   // message. refreshOpenRouter asks nothing unless OpenRouter is on with a key.

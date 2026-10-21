@@ -98,8 +98,10 @@ describe('instance-owned Claude queue runtime', () => {
    expect(freezes).toBe(2);
    expect(await f.runtime.action('s',{kind:'send-now',itemId:queued.itemId})).toMatchObject({status:'done'});
    expect(f.publish.mock.lastCall?.[1]).toMatchObject({paused:false});
+   // An outside identity change (in-terminal /resume) rebinds rather than freezing the session for good;
+   // the retained message is paused again, never auto-delivered into the other conversation.
    await f.runtime.identityChanged('s','resume','external-conversation');
-   expect(await f.runtime.action('s',{kind:'send-now',itemId:queued.itemId})).toMatchObject({status:'rejected'});
+   expect(JSON.parse(await readFile(join(f.root,'claude-queues',identity.identity.queueId+'.json'),'utf8'))).toMatchObject({alias:{conversationId:'external-conversation'},paused:true});
   } finally {releaseRebind.resolve();releaseDuplicate.resolve();freeze.mockRestore();rebind.mockRestore();await f.runtime.close();}
  });
  it('pauses retained messages around Clear and uses one authorized command, preserving the current-only Stop byte', async () => {
@@ -108,6 +110,15 @@ describe('instance-owned Claude queue runtime', () => {
   expect(await f.runtime.action('s', { kind: 'stop' })).toMatchObject({ status: 'done' }); expect(f.manager.sendInput).toHaveBeenCalledExactlyOnceWith('s', '\x1b');
   expect(await f.runtime.action('s', { kind: 'clear' })).toMatchObject({ status: 'done' });
   expect(f.bridge.executeQueueClear).toHaveBeenCalledTimes(1); expect(f.publish.mock.lastCall?.[1]).toMatchObject({ paused: true, queue: [expect.objectContaining({ content: 'keep' })] });
+  await f.runtime.close();
+ });
+ it('keeps sending after Claude Code changes conversation on its own (plan "clear context", terminal /clear)', async () => {
+  const f=await fixture();
+  f.bridge.emit('state','s',{claudeSessionId:'cleared-elsewhere',turnId:null});
+  await f.runtime.identityChanged('s','clear','cleared-elsewhere');
+  const id=await f.runtime.action('s',{kind:'identity'});if(id.status!=='identity')throw Error('identity');
+  // Before the fix every later send was refused with "Conversation identity changed" until the session was reopened.
+  expect(await f.runtime.action('s',{kind:'enqueue',queueId:id.identity.queueId,payload:{sendEpoch:id.identity.sendEpoch,sendId:'after',originalText:'hello',attachments:[],displayContent:'hello'}})).toMatchObject({status:'queued'});
   await f.runtime.close();
  });
 });

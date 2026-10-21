@@ -12,6 +12,13 @@ function fill(r: SessionRecords, n: number, size = 20) {
 }
 
 describe('startup facts for late screens', () => {
+  it('hands a late screen the "Started with" record, which a fill would otherwise clear', () => {
+    const r = new SessionRecords(); r.begin(S);
+    const context = { assembledBy: 'claude-code', skills: [{ name: 'a' }], tools: [] };
+    r.note(S, 'native:session-context', { sessionId: S, context });
+    fill(r, RING_MAX_EVENTS + 10);
+    expect(r.liveFill(S)).toContainEqual({ type: 'native:session-context', payload: { sessionId: S, context } });
+  });
   it('keeps startup state outside the trimmed transcript ring', () => {
     const r = new SessionRecords(); r.begin(S);
     const state = { phase: 'connecting', attemptId: 'attempt', hostId: 'host', generation: 1, revision: 1 };
