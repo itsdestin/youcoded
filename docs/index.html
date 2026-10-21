@@ -4606,12 +4606,22 @@ w.addEventListener('animationstart',go);w.addEventListener('animationiteration',
     svg.innerHTML = lines;
   }
   // Re-render when the demo changes (a page opens, settings slides in) or the window resizes.
-  var mo = null, queued = false;
-  function queue(){ if (queued) return; queued = true; requestAnimationFrame(function(){ queued = false; render(); }); }
+  var mo = null, queued = false, later = null;
+  // WHY the second pass (Destin, 2026-10-21: "expanding settings panel doesn't update the
+  // chips"): the panel slides in over ~300 ms with no DOM change after the first one, and
+  // detect() read its close button while it was still off-screen left, so the chips stayed
+  // on the chat set. Every change is now re-read once more after the slide, and the demo's
+  // transitionend/animationend events re-read it too.
+  function queue(){
+    if (!queued) { queued = true; requestAnimationFrame(function(){ queued = false; render(); }); }
+    clearTimeout(later); later = setTimeout(render, 420);
+  }
   function watch(){
     var d = doc(); if (!d || !d.body || mo) return;
     mo = new MutationObserver(queue); mo.observe(d.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'aria-label'] });
     d.defaultView.addEventListener('resize', queue);
+    d.addEventListener('transitionend', queue, true);
+    d.addEventListener('animationend', queue, true);
   }
   // The app draws its toolbar a beat after the iframe's load event, so keep looking until
   // the first button exists (and give up after ten seconds).
