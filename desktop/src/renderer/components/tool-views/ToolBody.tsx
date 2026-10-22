@@ -366,7 +366,9 @@ export function useElapsed(startedAt: number | undefined, endedAt: number | unde
 
 // Why a background command stopped, in the user's words. 'assistant' is the
 // model calling KillShell; 'user' is the card's own Stop button.
-const STOP_REASON: Record<NonNullable<ShellRunView['stopReason']>, string> = {
+// Exported for the Background commands popup (BackgroundCommandsChip.tsx), so a
+// stopped command reads the same words on its card and in the popup.
+export const STOP_REASON: Record<NonNullable<ShellRunView['stopReason']>, string> = {
   user: 'Stopped by you',
   assistant: 'Stopped by the assistant',
   'conversation-closed': 'Stopped when the conversation closed',
