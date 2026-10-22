@@ -12,6 +12,9 @@ function agentIdOf(name: string): string {
   return name.slice('agent-'.length, -'.jsonl'.length);
 }
 
+/** Most bytes one helper-transcript read takes at once. */
+export const SUBAGENT_READ_CAP_BYTES = 1024 * 1024;
+
 interface PerFileState {
   agentId: string;
   jsonlPath: string;
@@ -44,6 +47,9 @@ export interface SubagentWatcherOptions {
   subagentsDir: string;
   index: SubagentIndex;
   emit: (event: TranscriptEvent) => void;
+  /** Re-read helper transcripts that already exist when start() runs. Off in production (see start());
+   *  tests that exercise the read path set it so they can write a file before starting. */
+  replayExisting?: boolean;
 }
 
 /**
@@ -83,12 +89,16 @@ export class SubagentWatcher {
   private scanInFlight: Promise<void> | null = null;
   private rescanQueued = false;
   private generation = 0;
+  // Set by start(); consumed by the first directory scan only.
+  private startAtEndOnce = false;
+  private readonly replayExisting: boolean;
 
   constructor(opts: SubagentWatcherOptions) {
     this.sessionId = opts.sessionId;
     this.subagentsDir = opts.subagentsDir;
     this.index = opts.index;
     this.emitFn = opts.emit;
+    this.replayExisting = opts.replayExisting ?? false;
   }
 
   start(): void {
@@ -96,6 +106,13 @@ export class SubagentWatcher {
     this.started = true;
     // Replay of any existing files. Async (B1): the helpers are tracked a tick
     // later; their lines were always delivered asynchronously anyway.
+    // WHY startAtEnd (2026-10-22 freeze hunt): helpers that already exist when the session is watched
+    // are NOT replayed. The old whole-file replay read every old helper transcript at session start or
+    // resume (128 files / 682 MB measured: a 1.7 s freeze and ~700 MB of memory). Their history reaches
+    // the chat through getHistory (transcript-page.ts) exactly as the parent transcript's does, and the
+    // parent tailer already starts at its end for the same reason. Helpers that appear LATER still read
+    // from byte 0, and a file that grows is read from where it stood.
+    this.startAtEndOnce = !this.replayExisting;
     void this.scanDirectory();
     this.attachDirWatcher();
     // The prune timer is armed lazily by deliver() on the first buffered event.
@@ -319,14 +336,19 @@ export class SubagentWatcher {
   private scanDirectory(): Promise<void> {
     if (this.scanInFlight) { this.rescanQueued = true; return this.scanInFlight; }
     const gen = this.generation;
+    // The first scan after start() is the only one that sees pre-existing files (see start()).
+    const startAtEnd = this.startAtEndOnce;
+    this.startAtEndOnce = false;
     // Declared first so the finally below can compare against it (it only
     // runs after the first await, by which point `run` is assigned).
     let run: Promise<void> | null = null;
+    let firstPass = true;
     run = (async () => {
       try {
         do {
           this.rescanQueued = false;
-          await this.scanOnce(gen);
+          await this.scanOnce(gen, startAtEnd && firstPass);
+          firstPass = false;
         } while (this.rescanQueued && gen === this.generation);
       } finally {
         if (this.scanInFlight === run) this.scanInFlight = null;
@@ -336,17 +358,23 @@ export class SubagentWatcher {
     return run;
   }
 
-  private async scanOnce(gen: number): Promise<void> {
+  private async scanOnce(gen: number, startAtEnd = false): Promise<void> {
     let names: string[];
     try { names = await fs.promises.readdir(this.subagentsDir); } catch { return; }
     if (gen !== this.generation) return;
     const fresh = names.filter(isAgentJsonl).map(agentIdOf).filter((id) => !this.perFile.has(id));
     if (fresh.length === 0) return;
+    // Sizes are taken right after the listing, alongside the meta reads, so the start point is as close
+    // to "now" as possible and a file watch can never read from 0 in the gap.
+    const sizesP = startAtEnd
+      ? Promise.all(fresh.map((id) => fs.promises.stat(path.join(this.subagentsDir, `agent-${id}.jsonl`)).then((st) => st.size, () => 0)))
+      : null;
     const metas = await Promise.all(fresh.map((id) => this.readMeta(id)));
+    const sizes = sizesP ? await sizesP : null;
     if (gen !== this.generation) return; // stop() ran during the reads
     fresh.forEach((agentId, i) => {
       const meta = metas[i];
-      if (meta) this.trackSubagent(agentId, meta);
+      if (meta) this.trackSubagent(agentId, meta, sizes ? sizes[i] : 0);
     });
   }
 
@@ -451,7 +479,7 @@ export class SubagentWatcher {
     }, 5000);
   }
 
-  private trackSubagent(agentId: string, meta: SubagentMeta): void {
+  private trackSubagent(agentId: string, meta: SubagentMeta, startOffset = 0): void {
     if (this.perFile.has(agentId)) return;
     const jsonlPath = path.join(this.subagentsDir, `agent-${agentId}.jsonl`);
     const metaPath = path.join(this.subagentsDir, `agent-${agentId}.meta.json`);
@@ -461,7 +489,7 @@ export class SubagentWatcher {
       agentId,
       jsonlPath,
       metaPath,
-      offset: 0,
+      offset: startOffset,
       partialBytes: Buffer.alloc(0),
       reading: false,
       rerunQueued: false,
@@ -541,7 +569,10 @@ export class SubagentWatcher {
     }
     if (fileSize <= state.offset) return;
 
-    const buffer = Buffer.alloc(fileSize - state.offset);
+    // WHY capped (2026-10-22 freeze hunt): this used to allocate and read everything unread in one go
+    // (up to a whole multi-MB transcript). Read at most 1 MiB, then come back for the rest after
+    // yielding to the event loop; partialBytes already carries a line or character split at the cap.
+    const buffer = Buffer.alloc(Math.min(fileSize - state.offset, SUBAGENT_READ_CAP_BYTES));
     let handle: fs.promises.FileHandle;
     try { handle = await fs.promises.open(state.jsonlPath, 'r'); } catch { return; }
     // Fix 4: advance offset only by bytesRead (not fileSize) so a short read
@@ -556,6 +587,11 @@ export class SubagentWatcher {
     }
     if (bytesRead === 0) return;
     state.offset += bytesRead;
+    if (state.offset < fileSize) {
+      // More is waiting: have readNewLines loop again, after letting other work run.
+      state.rerunQueued = true;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
 
     // Stitch the byte carry BEFORE decoding so a multi-byte UTF-8 char split
     // across reads reassembles losslessly (mirrors TranscriptWatcher).
