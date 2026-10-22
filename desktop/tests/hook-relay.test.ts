@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { HookRelay } from '../src/main/hook-relay';
+import { HookRelay, hookPipeName } from '../src/main/hook-relay';
 import { randomUUID } from 'crypto';
+import fs from 'fs';
+import net from 'net';
+import os from 'os';
+import path from 'path';
 
 describe('HookRelay', () => {
   let relay: HookRelay;
@@ -391,5 +395,84 @@ describe('HookRelay — hooks from a nested claude', () => {
     await vi.waitFor(() => expect(events.filter((e) => e.type === 'PermissionRequest')).toHaveLength(1));
     expect(relay.hasPendingPermission('desk-1')).toBe(true);
     expect((relay as any).holdTimers.size).toBe(1);
+  });
+});
+
+// WHY (2026-10-22): something deleted the live app's socket file in shared /tmp
+// while the app kept running, so every new session sat on "Initializing session…".
+// The socket moved to the private runtime folder, and a session start re-creates
+// a deleted file.
+describe('hookPipeName', () => {
+  it('uses the private runtime folder on Linux, never shared /tmp', () => {
+    expect(hookPipeName(42, 'linux', { XDG_RUNTIME_DIR: '/run/user/1000' }))
+      .toBe('/run/user/1000/youcoded/claude-desktop-hooks-42.sock');
+  });
+  it('falls back to the temp folder without one (Android, macOS) and a named pipe on Windows', () => {
+    expect(hookPipeName(42, 'linux', {})).toMatch(/claude-desktop-hooks-42\.sock$/);
+    expect(hookPipeName(42, 'darwin', { XDG_RUNTIME_DIR: '/run/user/1000' })).not.toContain('/run/user');
+    expect(hookPipeName(42, 'win32', {})).toBe('\\\\.\\pipe\\claude-desktop-hooks-42');
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('HookRelay.ensureListening — a deleted socket file', () => {
+  let dir: string;
+  let relay: HookRelay;
+  const sockPath = () => path.join(dir, 'nested', 'hooks.sock');
+  const reach = (payload: object) => new Promise<void>((resolve, reject) => {
+    const c = net.createConnection(sockPath(), () => c.end(JSON.stringify(payload) + '\n', () => resolve()));
+    c.on('error', reject);
+  });
+
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'yc-hook-sock-'));
+    relay = new HookRelay(sockPath());
+  });
+  afterEach(async () => {
+    relay.stop();
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  it('start() creates a missing socket folder', async () => {
+    await relay.start();
+    expect(fs.existsSync(sockPath())).toBe(true);
+  });
+
+  it('re-creates the file, and hooks reach the app again', async () => {
+    await relay.start();
+    const events: any[] = [];
+    relay.on('hook-event', (e) => events.push(e));
+    await fs.promises.unlink(sockPath());
+    await expect(reach({ hook_event_name: 'SessionStart', session_id: 'a' })).rejects.toThrow();
+
+    await relay.ensureListening();
+    await reach({ hook_event_name: 'SessionStart', session_id: 'b' });
+    await vi.waitFor(() => expect(events.map((e) => e.payload.session_id)).toEqual(['b']));
+    // The replaced listener is left open: closing it would delete the new file.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fs.existsSync(sockPath())).toBe(true);
+  });
+
+  it('re-creates the whole folder if that was deleted too', async () => {
+    await relay.start();
+    await fs.promises.rm(path.dirname(sockPath()), { recursive: true });
+    await relay.ensureListening();
+    expect(fs.existsSync(sockPath())).toBe(true);
+  });
+
+  it('leaves a present file alone and does nothing before start()', async () => {
+    await relay.ensureListening();
+    expect(fs.existsSync(sockPath())).toBe(false);
+    await relay.start();
+    const before = (await fs.promises.lstat(sockPath())).ino;
+    await relay.ensureListening();
+    expect((await fs.promises.lstat(sockPath())).ino).toBe(before);
+  });
+
+  it('never deletes a file it did not make', async () => {
+    await relay.start();
+    await fs.promises.unlink(sockPath());
+    await fs.promises.writeFile(sockPath(), 'someone else');
+    await relay.ensureListening();
+    expect(await fs.promises.readFile(sockPath(), 'utf8')).toBe('someone else');
   });
 });
