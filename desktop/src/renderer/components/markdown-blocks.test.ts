@@ -4,6 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import {
   splitMarkdownBlocks, blockChunks, definitionsOf, withDefinitions, startStream, advanceStream,
+  splitOpenList, scanOpenList, OPEN_LIST_CHUNK_ITEMS, type ListScan,
   type MarkdownBlocks, type StreamView,
 } from './markdown-blocks';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
@@ -343,5 +344,70 @@ describe('an open code fence is found however the words arrive', () => {
       // Parsed once at the opening line and once at the close, never per update: well under 4x the message.
       expect(parsed.chars).toBeLessThan(4 * message.length);
     }
+  });
+});
+
+// A long tight list that is still being typed is cut into finished chunks and a small tail
+// (perf-lab pathlist-stream, 2026-10-22). The chunks and tail must give back exactly the text.
+describe('splitOpenList', () => {
+  const item = (i: number) => `- item ${i} /home/u/p${i}.ts`;
+  const list = (n: number) => Array.from({ length: n }, (_, i) => item(i)).join('\n') + '\n';
+
+  it('is null while the list is short, then freezes whole chunks and keeps a 20-39 item tail', () => {
+    expect(splitOpenList(list(2 * OPEN_LIST_CHUNK_ITEMS - 1))).toBeNull();
+    for (const n of [40, 59, 60, 61, 500]) {
+      const s = splitOpenList(list(n))!;
+      expect(s.chunks.join('') + s.tail, `n=${n}`).toBe(list(n));
+      expect(s.chunks.every((c) => c.split('\n').length - 1 === OPEN_LIST_CHUNK_ITEMS)).toBe(true);
+      const tailItems = s.tail.split('\n').filter((l) => l.startsWith('- ')).length;
+      expect(tailItems).toBeGreaterThanOrEqual(OPEN_LIST_CHUNK_ITEMS);
+      expect(tailItems).toBeLessThan(2 * OPEN_LIST_CHUNK_ITEMS);
+    }
+  });
+
+  it('reads only the new lines per update and agrees with a fresh scan', () => {
+    let scan: ListScan | null = null;
+    let md = '';
+    for (let n = 1; n <= 300; n++) {
+      md += item(n) + '\n';
+      const before = scan?.scanned ?? 0;
+      scan = scanOpenList(md, scan)!;
+      // The cursor only moves over the text that arrived (one line), never back to the start.
+      expect(scan.scanned - before).toBeLessThanOrEqual(item(n).length + 1);
+      const fresh = scanOpenList(md, null)!;
+      expect(scan.chunks).toEqual(fresh.chunks);
+      expect(scan.itemStarts.slice(0, scan.itemCount)).toEqual(fresh.itemStarts.slice(0, fresh.itemCount));
+    }
+  });
+
+  it('keeps the first number of an ordered list', () => {
+    const s = splitOpenList(Array.from({ length: 50 }, (_, i) => `${i + 5}. step ${i}`).join('\n') + '\n')!;
+    expect(s.ordered).toBe(true);
+    expect(s.start).toBe(5);
+  });
+
+  it('refuses shapes that markdown reads across items', () => {
+    const base = list(60);
+    for (const [name, extra] of [
+      ['a blank line', '\n- more\n'],
+      ['another bullet', '* star\n'],
+      ['a task', '- [ ] todo\n'],
+      ['a rule', '---\n'],
+      ['a shallow indent', ' - odd\n'],
+      ['a heading after a lazy gap', '  indented\n# head\n'],
+      ['nested marker in an item', '- - nested\n'],
+      ['html', '- <b>x</b>\n'],
+    ] as const) {
+      expect(splitOpenList(base + extra), name).toBeNull();
+    }
+    // once refused, still refused as text follows
+    const bad = scanOpenList(base + '\n', null)!;
+    expect(bad.bad).toBe(true);
+    expect(splitOpenList(base + '\n- x\n', bad)).toBeNull();
+  });
+
+  it('accepts nested items and lazy continuation lines', () => {
+    const s = splitOpenList(Array.from({ length: 50 }, (_, i) => `- p${i}\n  - child\n    deeper\n- q${i}\nlazy`).join('\n') + '\n');
+    expect(s).not.toBeNull();
   });
 });
