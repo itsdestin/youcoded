@@ -114,7 +114,11 @@ export function createBrowserHost(port: HostPort, rootDir: string, hostOpts: Bro
         return true;
       case 'set-show-window': {
         await settings.update({ showWindow: c.show });
-        if (service.isRunning() && !(await settings.read()).useMyChrome) await service.restart();
+        // WHY: a sign-in card's "Show window" holds the window open on its own,
+        // above the setting — so the panel's Hide did nothing while one waited.
+        // Hiding ends that hold too (it restarts only if the window must go).
+        if (!c.show && service.hasWindowOverride()) await service.setWindowOverride(null);
+        else if (service.isRunning() && !(await settings.read()).useMyChrome) await service.restart();
         send({ t: 'info-changed' });
         return info();
       }
