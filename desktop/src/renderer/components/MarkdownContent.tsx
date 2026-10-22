@@ -3,9 +3,9 @@ import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { Plugin, PluggableList } from 'unified';
-import type { Root, Element, Text, RootContent } from 'hast';
+import type { Root, Element, RootContent } from 'hast';
 import { visitParents } from 'unist-util-visit-parents';
-import { detectLinkTokens } from './markdown-linkify';
+import { rehypeLinkTokens } from './rehype-link-tokens';
 import { Button } from './ui';
 import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
@@ -151,97 +151,6 @@ function hastText(node: unknown): string {
   if (Array.isArray(n.children)) return n.children.map(hastText).join('');
   return '';
 }
-
-/**
- * Rehype plugin: splits plain text nodes into clickable tokens — web URLs
- * (rendered as real <a> links) and file paths (rendered as filepath-token,
- * which becomes a FilepathToken chip below).
- *
- * WHY it runs in the hast (HTML AST) pass rather than on the markdown source:
- * the ancestor chain is available here, so "is this inside a code block?" is a
- * fact rather than a guess, and nothing has to be re-parsed.
- *
- * WHY it runs AFTER rehype-highlight in the plugin array: the highlighter
- * rewrites a code block's single text node into a tree of <span> tokens. Going
- * last means we split the leaves it produced, so a URL inside ```bash is found
- * and the colouring around it survives.
- *
- * Text already inside an <a> is skipped — remark-gfm has already autolinked
- * bare URLs in prose, and linkifying a link would nest anchors.
- *
- * Fenced code blocks are NO LONGER skipped (they were, for paths). A URL or a
- * path printed in a code block is the single most common way Claude hands one
- * over, and reading it out by hand was the complaint this fixes.
- */
-const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
-  (options) => (tree: Root) => {
-  const filepaths = options?.filepaths ?? false;
-  // visitParents provides the full ancestor chain, which is what tells us
-  // whether we are inside an existing link or inside a fenced code block.
-  visitParents(tree, 'text', (node, ancestors) => {
-    const parent = ancestors[ancestors.length - 1];
-    if (!parent) return;
-    const index = (parent as Element | Root).children.indexOf(node as Text);
-    if (index === -1) return;
-
-    // Never linkify inside an existing anchor — that would nest <a> in <a>,
-    // which is invalid HTML and makes the click target ambiguous.
-    if (ancestors.some((a) => a.type === 'element' && (a as Element).tagName === 'a')) return;
-
-    // Inside a fenced block the chip styling would break the monospace grid, so
-    // FilepathToken uses its quieter 'inline' variant there (see the component
-    // map below). Inline `backticks` keep the chip.
-    const inPreBlock = ancestors.some(
-      (a) => a.type === 'element' && (a as Element).tagName === 'pre',
-    );
-
-    const textNode = node as Text;
-    const matches = detectLinkTokens(textNode.value, { filepaths });
-    if (matches.length === 0) return;
-
-    // Split the text node into a sequence of text + token elements.
-    const replacements: RootContent[] = [];
-    let cursor = 0;
-    for (const m of matches) {
-      if (m.start > cursor) {
-        replacements.push({ type: 'text', value: textNode.value.slice(cursor, m.start) });
-      }
-      // The matched source text is kept as the element's child even when the
-      // component ignores it: CopyButton reads the raw text off this hast tree
-      // (hastText), so dropping it would silently delete every path from what a
-      // code block copies.
-      const child: Text = { type: 'text', value: m.text };
-      replacements.push(
-        m.kind === 'url'
-          ? ({
-              type: 'element',
-              tagName: 'a',
-              properties: { href: m.value },
-              children: [child],
-            } as Element)
-          : ({
-              type: 'element',
-              tagName: 'filepath-token',
-              properties: {
-                'data-path': m.value,
-                'data-raw': m.text,
-                ...(inPreBlock ? { 'data-in-code': 'true' } : {}),
-              },
-              children: [child],
-            } as Element),
-      );
-      cursor = m.end;
-    }
-    if (cursor < textNode.value.length) {
-      replacements.push({ type: 'text', value: textNode.value.slice(cursor) });
-    }
-
-    // Replace the original text node with our sequence in the parent's children array.
-    (parent as Element | Root).children.splice(index as number, 1, ...replacements);
-    // Skip past the newly-inserted nodes — they're already processed.
-    return index + replacements.length;
-  });
-};
 
 /**
  * rehype-highlight, but with ONE highlighter shared by every render.
