@@ -77,7 +77,7 @@ interface CompactionRecord {
 }
 
 /** A `background-task` event's payload: which task(s) ended and how. `taskIds` is a list because Claude Code reports several orphaned commands in one notice on resume. */
-interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundRun['status'], 'running'>; summary?: string; result?: string }
+interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundRun['status'], 'running'>; summary?: string; result?: string; /** A Bash command's exit code, read from the notice's summary text ("…failed with exit code 144") — Claude Code writes it nowhere else. */ exitCode?: number }
 
 /** One coalesced-part UUID/range witness (see `assistant-text`.deltaReferences). */
 interface DeltaRef { eventUuid: string; start: number; end: number }
@@ -199,6 +199,10 @@ interface ToolResultData extends SubagentStamp {
    *  so the result is a launch receipt, not the outcome. The outcome arrives
    *  later as a 'background-task' event. */
   backgroundTaskId?: string;
+  /** Claude Code Monitor only: the watcher was started `persistent` — it runs until it is stopped or the session exits, with no timeout of its own (audit C5). */
+  backgroundPersistent?: boolean;
+  /** Claude Code TaskStop only: the task a SUCCESSFUL stop ended (`toolUseResult.task_id`). TaskStop writes no <task-notification> for a Bash command (264 of 264 measured), so this result is the only signal (audit C1). */
+  stoppedTaskId?: string;
   /** Claude Code SendMessage only: the finished helper it resumed
    *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
   resumedTaskId?: string;

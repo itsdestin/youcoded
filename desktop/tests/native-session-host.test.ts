@@ -5559,7 +5559,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it('caps replay at SPECIALIST_SPAWN_BUDGET_PER_SESSION records', async () => {
+    it('replays records beyond one process\'s spawn budget, newest included (the ledger outlives the per-process budget)', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
         store, factory, NO_CONTEXT, async () => null, async () => null,
@@ -5567,11 +5567,11 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
-      // One more record than the lifetime spawn budget allows. In production
-      // the ledger can never actually hold more than the budget for one
-      // parent (trySpendSpecialistSpawnBudget gates every spawn BEFORE
-      // recordStart ever runs) — this proves the defensive cap holds even so.
-      for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION + 1; i++) {
+      // The spawn budget (30) resets every app start while the ledger file keeps
+      // growing, so a long-lived conversation holds more records than the budget.
+      // The old test pinned a cap that kept the OLDEST 30 and hid the newest runs.
+      const total = SPECIALIST_SPAWN_BUDGET_PER_SESSION + 5;
+      for (let i = 0; i < total; i++) {
         await (h as any).ledger.recordStart(root, 'root-1', {
           childId: `child-${i}`, parentToolCallId: `tc-${i}`, agentType: 'explorer', title: `T${i}`,
           workDir: root, description: 'd', background: true,
@@ -5579,7 +5579,9 @@ describe('NativeSessionHost', () => {
         });
       }
 
-      expect(h.specialistRunsFor('root-1')).toHaveLength(SPECIALIST_SPAWN_BUDGET_PER_SESSION);
+      const runs = h.specialistRunsFor('root-1');
+      expect(runs).toHaveLength(total);
+      expect(runs.some((r) => r.childId === `child-${total - 1}`)).toBe(true);
 
       await h.destroyAll();
     });
@@ -6624,4 +6626,73 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     // And the live push carries the same id, on the same card.
     expect(views.some((v) => v.sessionId === 'e2e' && v.run.shellId === shellId && v.run.toolUseId === res.data.toolUseId)).toBe(true);
   }, 20_000);
+});
+
+describe('background Bash records survive a restart (D2/D3/D4)', () => {
+  const posix = process.platform !== 'win32';
+  let root: string;
+  let host: NativeSessionHost | undefined;
+  const binding = { providerId: 'openrouter', modelId: 'm' };
+  const chatty = async () => scriptedModel([stream(...textChunks('t', 'ok'), finishChunk('stop'))]) as any;
+  const BASH = { shellCmd: '/bin/bash', shellArgs: ['-c'] };
+  const boot = () => new NativeSessionHost(new SessionStore(new NativeHome(root)), chatty, NO_CONTEXT, async () => null, async () => null,
+    undefined, undefined, undefined, undefined, undefined, undefined, new NativeHome(root));
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-shell-persist-')); });
+  afterEach(async () => { await host?.destroyAll(); host = undefined; fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
+
+  it.skipIf(!posix)('a command that finished before the app closed keeps its real exit code when the conversation is reopened', async () => {
+    host = boot();
+    await host.create({ sessionId: 's1', cwd: root, binding });
+    const reg = (host as any).shellRegistries.get('s1');
+    const started = reg.start({ toolUseId: 'tu-1', command: 'echo built; exit 4', description: 'build', cwd: root, ...BASH, env: { ...process.env } });
+    await started.run.exited;
+    await (host as any).shellSidecars.get('s1').flush();
+
+    // "Restart": a brand-new host over the same home.
+    await host.destroyAll();
+    host = boot();
+    await host.create({ sessionId: 's1', cwd: root, binding });
+    const runs = await host.shellRunsForAsync('s1');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ toolUseId: 'tu-1', status: 'exited', exitCode: 4, command: 'echo built; exit 4', description: 'build', restored: true });
+  });
+
+  it.skipIf(!posix)('a conversation this host is not running still serves its saved commands (D4)', async () => {
+    host = boot();
+    await host.create({ sessionId: 's2', cwd: root, binding });
+    const started = (host as any).shellRegistries.get('s2').start({ toolUseId: 'tu-2', command: 'exit 0', cwd: root, ...BASH, env: { ...process.env } });
+    await started.run.exited;
+    await (host as any).shellSidecars.get('s2').flush();
+    await host.destroyAll();
+    host = boot(); // s2 is NOT live here
+    expect(host.shellRunsFor('s2')).toEqual([]); // the live-only view is still empty...
+    const runs = await host.persistedShellRunsFor('s2', root); // ...but the saved record is served
+    expect(runs[0]).toMatchObject({ toolUseId: 'tu-2', status: 'exited', exitCode: 0 });
+  });
+
+  it.skipIf(!posix || process.platform !== 'linux')('after a crash, a command whose process is still alive is reported running and Stop ends it (D3)', async () => {
+    host = boot();
+    await host.create({ sessionId: 's3', cwd: root, binding });
+    const reg = (host as any).shellRegistries.get('s3');
+    const started = reg.start({ toolUseId: 'tu-3', command: 'sleep 60', cwd: root, ...BASH, env: { ...process.env } });
+    const pid = started.run.child.pid as number;
+    await vi.waitFor(() => expect(started.run.procStart).toBeTruthy());
+    await (host as any).shellSidecars.get('s3').flush();
+    // Crash: the file claims "running" from an owner that no longer exists; the process lives on.
+    const file = path.join(root, '.youcoded', 'sessions');
+    const sidecar = fs.readdirSync(file, { recursive: true, encoding: 'utf8' }).map(String).find((f) => f.endsWith('s3.shells.json'))!;
+    const full = path.join(file, sidecar);
+    const doc = JSON.parse(fs.readFileSync(full, 'utf8'));
+    doc.runs[0].ownerInstance = 'dead-instance';
+    fs.writeFileSync(full, JSON.stringify(doc));
+    (reg as any).runs.delete(started.run.shellId); // the old registry is gone without killing the process
+    const oldHost = host; // the "crashed" app: abandoned, torn down at the end
+    host = boot();
+    await host.create({ sessionId: 's3', cwd: root, binding });
+    const runs = await host.shellRunsForAsync('s3');
+    expect(runs[0]).toMatchObject({ status: 'running', restored: true });
+    expect(await host.killShell('s3', runs[0].shellId)).toEqual({ ok: true });
+    expect(() => process.kill(pid, 0)).toThrow();
+    await oldHost.destroyAll();
+  });
 });

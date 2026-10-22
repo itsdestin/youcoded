@@ -191,6 +191,43 @@ describe('transcript:page locator memory', () => {
     expect(older.reconcileInterrupted).toBe(true);
   });
 
+  // A7/C3 (2026-10-22 audit): a conversation that is only being VIEWED (no watcher, no process we
+  // spawned) cannot have background work still running — the page says so, and the renderer reads
+  // the page's unreported "running" work as stopped. A just-resumed session is NOT that case: its new
+  // process is live (it has a resume boundary), so the page must not claim otherwise.
+  it('a page for a conversation with no attached process says its background work cannot be running', async () => {
+    writeTranscript(2);
+    const page = await pageHandler()(evt, { sessionId: 'viewing-only', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG });
+    expect(page.reconcileBackground).toBe(true);
+  });
+
+  it('a page for a just-resumed session (a live process we spawned) does not', async () => {
+    writeTranscript(2);
+    const manager: any = {
+      createSession: vi.fn(() => ({ id: 'desktop-3', provider: 'claude', cwd: '/home/destin/project', status: 'active' })),
+      destroySession: vi.fn(), listSessions: vi.fn(() => []), getSession: vi.fn(),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    const handler = pageHandler(new WindowRegistry(), manager);
+    const create = [...(mockIpcMain.handle as any).mock.calls].reverse().find((c: any) => c[0] === 'session:create')[1];
+    await create(evt, { provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
+    const page = await handler(evt, { sessionId: 'desktop-3', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG });
+    expect(page.reconcileBackground).toBeFalsy();
+  });
+
+  it('a page for a live Claude Code session whose watcher is not attached yet does not', async () => {
+    // A running process of ours, but no watcher and no resume boundary (not a resume, or the
+    // pre-spawn snapshot failed): its background work may still be running, so nothing is settled.
+    writeTranscript(2);
+    const manager: any = {
+      createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []),
+      getSession: vi.fn(() => ({ id: 'desktop-4', provider: 'claude', cwd: '/home/destin/project', status: 'active' })),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    const page = await pageHandler(new WindowRegistry(), manager)(evt, { sessionId: 'desktop-4', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG });
+    expect(page.reconcileBackground).toBeFalsy();
+  });
+
   // The phone's session:create runs the desktop's own create path (the session:create table entry), so a
   // Claude Code resume started from a phone takes the same pre-spawn snapshot.
   it('a Claude Code resume started from a phone is bounded the same way', async () => {

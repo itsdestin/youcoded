@@ -173,7 +173,8 @@ export function buildHydratePayload(): SerializedChatState {
     if (raw) {
       // WHY: the question review needs the same shared card on both transport
       // lanes; the CC fixture replaces wb-1, never masquerades as wb-2 native.
-      const isCcQuestion = bubbleName === 'questions-cc';
+      // `-cc` scenarios (questions-cc, background-cc) are Claude Code conversations.
+      const isCcQuestion = bubbleName.endsWith('-cc');
       const target = isCcQuestion ? 'claude-code' : 'native';
       const targetIndex = sources.findIndex(([name]) => name === target);
       sources.splice(targetIndex >= 0 ? targetIndex : sources.length, targetIndex >= 0 ? 1 : 0,

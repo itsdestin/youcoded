@@ -219,7 +219,7 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
         try {
           deps.dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor,
             hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true,
-            reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
+            reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
         } catch (err) {
           // The page replay threw. Same outcome the App closure had (it sat in
           // its try), but now re-askable, and bounded by FIRST_PAGE_MAX_RUNS.
