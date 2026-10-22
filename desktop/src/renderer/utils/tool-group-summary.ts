@@ -71,6 +71,49 @@ const KIND_TABLE: Record<string, KindPhrasing> = {
     done: (n) => (n === 1 ? 'ran a sub-agent' : `ran ${n} sub-agents`),
     active: (n) => (n === 1 ? 'running a sub-agent' : `running ${n} sub-agents`),
   },
+  // Managing helpers and background work (2026-10-22, Destin: a status check or a note
+  // "still reports as 'hiring specialist', which makes it seem like were adding a new
+  // subagent when we arent"). Each management call is its own kind (callKindKey below).
+  'specialist-check': {
+    done: (n) => (n === 1 ? 'checked on its specialists' : `checked on its specialists ${n} times`),
+    active: () => 'checking on its specialists',
+  },
+  'specialist-note': {
+    done: (n) => (n === 1 ? 'sent a note to a specialist' : `sent ${n} notes to specialists`),
+    active: (n) => (n === 1 ? 'sending a note to a specialist' : `sending ${n} notes to specialists`),
+  },
+  'specialist-resume': {
+    done: (n) => (n === 1 ? 'resumed a specialist' : `resumed ${n} specialists`),
+    active: (n) => (n === 1 ? 'resuming a specialist' : `resuming ${n} specialists`),
+  },
+  'specialist-stop': {
+    done: (n) => (n === 1 ? 'stopped a specialist' : `stopped ${n} specialists`),
+    active: (n) => (n === 1 ? 'stopping a specialist' : `stopping ${n} specialists`),
+  },
+  'helper-message': {
+    done: (n) => (n === 1 ? 'sent a note to a sub-agent' : `sent ${n} notes to sub-agents`),
+    active: (n) => (n === 1 ? 'sending a note to a sub-agent' : `sending ${n} notes to sub-agents`),
+  },
+  'background-check': {
+    done: (n) => (n === 1 ? 'checked on a background task' : `checked on background tasks ${n} times`),
+    active: () => 'checking on a background task',
+  },
+  'background-stop': {
+    done: (n) => (n === 1 ? 'stopped a background task' : `stopped ${n} background tasks`),
+    active: (n) => (n === 1 ? 'stopping a background task' : `stopping ${n} background tasks`),
+  },
+  Monitor: {
+    done: (n) => (n === 1 ? 'ran a watcher' : `ran ${n} watchers`),
+    active: (n) => (n === 1 ? 'running a watcher' : `running ${n} watchers`),
+  },
+  ScheduleWakeup: {
+    done: () => 'set a time to check back',
+    active: () => 'setting a time to check back',
+  },
+  Workflow: {
+    done: (n) => (n === 1 ? 'ran a workflow' : `ran ${n} workflows`),
+    active: (n) => (n === 1 ? 'running a workflow' : `running ${n} workflows`),
+  },
   AskUserQuestion: {
     done: (n) => (n === 1 ? 'asked you a question' : `asked you ${n} questions`),
     active: (n) => (n === 1 ? 'asking you a question' : `asking you ${n} questions`),
@@ -112,17 +155,34 @@ function mcpPhrasing(server: string): KindPhrasing {
 // phrase each, and so every mcp__<server>__* action groups with same-server
 // siblings while still reading as its own kind next to Gmail, Todoist, etc.
 function kindKey(toolName: string): string {
-  if (toolName === 'TaskCreate' || toolName === 'TaskUpdate' || toolName === 'TodoWrite') return 'todo';
+  if (toolName === 'TaskCreate' || toolName === 'TaskUpdate' || toolName === 'TodoWrite'
+    || toolName === 'TaskList' || toolName === 'TaskGet') return 'todo';
+  if (toolName === 'TaskOutput' || toolName === 'BashOutput') return 'background-check';
+  if (toolName === 'TaskStop' || toolName === 'KillShell') return 'background-stop';
+  if (toolName === 'SendMessage') return 'helper-message';
   if (toolName === 'max_steps' || toolName === 'doom_loop') return 'checkin';
   if (browserToolOf(toolName)) return 'browser';
   if (toolName.startsWith('mcp__')) return `mcp:${toolName.slice(5).split('__')[0] || ''}`;
   return toolName;
 }
 
-function phrasingFor(toolName: string): KindPhrasing {
+/** A CALL's bucket: the native Task tool is a hire only when it names no `task_id` and
+ *  does not ask for the `list` — otherwise it manages an existing specialist, and its
+ *  own result says whether a `task_id` prompt was a note ("Steer delivered to …") or a
+ *  resume (tools/task.ts). */
+function callKindKey(t: Pick<ToolCallState, 'toolName' | 'input' | 'response' | 'status'>): string {
+  if (t.toolName !== 'Task') return kindKey(t.toolName);
+  const input = t.input ?? {};
+  if (input.list === true && !input.task_id) return 'specialist-check';
+  if (!input.task_id) return 'Task';
+  if (input.interrupt === true) return 'specialist-stop';
+  const resp = t.status === 'complete' ? (t.response ?? '') : '';
+  return resp && !resp.startsWith('Steer delivered') ? 'specialist-resume' : 'specialist-note';
+}
+
+function phrasingFor(toolName: string, key = kindKey(toolName)): KindPhrasing {
   if (browserToolOf(toolName)) return KIND_TABLE.browser;
   if (toolName.startsWith('mcp__')) return mcpPhrasing(toolName.slice(5).split('__')[0] || '');
-  const key = kindKey(toolName);
   return (
     KIND_TABLE[key] ??
     // Unknown/future tool — Q4's generic fallback applies here too.
@@ -178,7 +238,7 @@ export function buildToolGroupHeadline(tools: ToolCallState[]): string {
   const order: string[] = [];
   const buckets = new Map<string, ToolCallState[]>();
   for (const t of tools) {
-    const key = kindKey(t.toolName);
+    const key = callKindKey(t);
     if (!buckets.has(key)) {
       order.push(key);
       buckets.set(key, []);
@@ -190,7 +250,7 @@ export function buildToolGroupHeadline(tools: ToolCallState[]): string {
     const activeKinds = order.filter((k) => buckets.get(k)!.some(isRunning));
     const activePhrase = activeKinds.map((k) => {
       const running = buckets.get(k)!.filter(isRunning);
-      return phrasingFor(running[0].toolName).active(running.length);
+      return phrasingFor(running[0].toolName, k).active(running.length);
     });
     const lead = capitalize(joinWithAnd(activePhrase)) || 'Working';
 
@@ -205,7 +265,7 @@ export function buildToolGroupHeadline(tools: ToolCallState[]): string {
   const restKinds = order.slice(2);
   const namedPhrase = namedKinds.map((k) => {
     const items = buckets.get(k)!;
-    return phrasingFor(items[0].toolName).done(items.length);
+    return phrasingFor(items[0].toolName, k).done(items.length);
   });
   const lead = capitalize(joinWithAnd(namedPhrase)) || 'Did some work';
   return restKinds.length > 0 ? `${lead} (+${restKinds.length} more)` : lead;
