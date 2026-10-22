@@ -676,6 +676,7 @@ describe('SubagentWatcher default: existing helper files are not replayed', () =
 
   it('still reads a helper that first appears after start from its first byte', async () => {
     watcher.start();
+    await wait(20); // a helper made in the very same instant as start() counts as already there
     index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
     writeMeta(subagentsDir, 'fresh', 'Find bug', 'Explore');
     appendLine(subagentsDir, 'fresh', toolUseLine('u1', 'toolu_F1', 'Read', { file_path: '/a' }));

@@ -13,7 +13,7 @@ function agentIdOf(name: string): string {
 }
 
 /** Most bytes one helper-transcript read takes at once. */
-export const SUBAGENT_READ_CAP_BYTES = 1024 * 1024;
+const SUBAGENT_READ_CAP_BYTES = 1024 * 1024;
 
 interface PerFileState {
   agentId: string;
@@ -92,6 +92,7 @@ export class SubagentWatcher {
   // Set by start(); consumed by the first directory scan only.
   private startAtEndOnce = false;
   private readonly replayExisting: boolean;
+  private startedAtMs = 0;
 
   constructor(opts: SubagentWatcherOptions) {
     this.sessionId = opts.sessionId;
@@ -112,6 +113,7 @@ export class SubagentWatcher {
     // the chat through getHistory (transcript-page.ts) exactly as the parent transcript's does, and the
     // parent tailer already starts at its end for the same reason. Helpers that appear LATER still read
     // from byte 0, and a file that grows is read from where it stood.
+    this.startedAtMs = Date.now();
     this.startAtEndOnce = !this.replayExisting;
     void this.scanDirectory();
     this.attachDirWatcher();
@@ -366,8 +368,13 @@ export class SubagentWatcher {
     if (fresh.length === 0) return;
     // Sizes are taken right after the listing, alongside the meta reads, so the start point is as close
     // to "now" as possible and a file watch can never read from 0 in the gap.
+    // A file CREATED after start() is a new helper, not history: it is read from its first byte even if this
+    // (async) scan only reaches it a moment later. Only files that were already there get the end-of-file start.
+    // The 2 ms margin keeps a file made in the same instant as start() on the end-of-file side (its lines also
+    // reach the chat through the page reader), so the clock's rounding can never make an old file look new.
     const sizesP = startAtEnd
-      ? Promise.all(fresh.map((id) => fs.promises.stat(path.join(this.subagentsDir, `agent-${id}.jsonl`)).then((st) => st.size, () => 0)))
+      ? Promise.all(fresh.map((id) => fs.promises.stat(path.join(this.subagentsDir, `agent-${id}.jsonl`)).then(
+          (st) => ((st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs) >= this.startedAtMs + 2 ? 0 : st.size), () => 0)))
       : null;
     const metas = await Promise.all(fresh.map((id) => this.readMeta(id)));
     const sizes = sizesP ? await sizesP : null;
