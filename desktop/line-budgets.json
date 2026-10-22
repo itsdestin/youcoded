@@ -36,7 +36,7 @@
     "renderer/components/SessionDrawer.tsx": 1614,
     "main/preload.ts": 2636,
     "renderer/components/StatusBar.tsx": 1812,
-    "renderer/components/ToolCard.tsx": 1642,
+    "renderer/components/ToolCard.tsx": 1674,
     "main/doc-comments/docx-comments.ts": 2031,
     "main/doc-comments/xlsx-comments.ts": 2317
   }
