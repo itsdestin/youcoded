@@ -216,7 +216,7 @@ const queueEnqueue = JSON.stringify({
   content: notice('<task-id>b61arikpe</task-id>\n<tool-use-id>toolu_Q</tool-use-id>\n<status>completed</status>\n<summary>Background command "build" completed (exit code 0)</summary>'),
 });
 
-describe('parseTranscriptLine — more background shapes (2026-10-22 audit)', () => {
+describe('parseTranscriptLine — Workflow, Monitor, TaskStop and queued notices', () => {
   it('A5: a Workflow launch receipt carries its task id', () => {
     expect(looseData(parseTranscriptLine(workflowReceipt, 's')[0]).backgroundTaskId).toBe('wmvrqe407');
   });

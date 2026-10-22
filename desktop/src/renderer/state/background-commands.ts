@@ -15,7 +15,7 @@ import type { ShellRunView, ToolCallState } from '../../shared/types';
 import type { SessionChatState } from './chat-types';
 import { shellEndKind, shellFacts } from './native-run-facts';
 
-export type BackgroundCommandStatus = 'running' | 'completed' | 'failed' | 'stopped';
+type BackgroundCommandStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface BackgroundCommand {
   /** Stable for the life of the command: `<provider>:<launching toolUseId>`. */
@@ -61,7 +61,7 @@ export type BackgroundCommands = Record<string, BackgroundCommand>;
 const MAX_LABEL = 80;
 
 /** "Dev server" (the call's own description) or the command's first line, shortened. */
-export function commandLabel(input: Record<string, unknown> | undefined, fallback = 'Background command'): string {
+function commandLabel(input: Record<string, unknown> | undefined, fallback = 'Background command'): string {
   const desc = typeof input?.description === 'string' ? input.description.trim() : '';
   const cmd = typeof input?.command === 'string' ? input.command.trim() : '';
   const text = desc || cmd.split('\n')[0] || fallback;
