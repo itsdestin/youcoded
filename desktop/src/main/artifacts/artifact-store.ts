@@ -66,6 +66,10 @@ export async function readSidecar(projectRoot: string): Promise<ReadResult> {
 export const SIDECAR_CACHE_IDLE_MS = 60_000;
 
 interface SharedSidecar {
+  // WHY ino + ctime in the key too (review 2026-10-22): an atomic replace by another process changes the inode and
+  // ctime even when size and mtime happen to match, so such a write can no longer pass for our own.
+  ino: number;
+  ctimeMs: number;
   mtimeMs: number;
   size: number;
   value: ReadResult;
@@ -78,7 +82,10 @@ function sidecarPath(projectRoot: string): string {
   return join(projectRoot, SIDECAR_RELATIVE);
 }
 
-function retain(path: string, stat: { mtimeMs: number; size: number }, value: ReadResult): void {
+type StatKey = { mtimeMs: number; size: number; ino: number; ctimeMs: number };
+const sameStat = (a: StatKey, b: StatKey) => a.mtimeMs === b.mtimeMs && a.size === b.size && a.ino === b.ino && a.ctimeMs === b.ctimeMs;
+
+function retain(path: string, stat: StatKey, value: ReadResult): void {
   const prev = sharedSidecars.get(path);
   if (prev) clearTimeout(prev.idleTimer);
   const idleTimer = setTimeout(() => {
@@ -86,7 +93,7 @@ function retain(path: string, stat: { mtimeMs: number; size: number }, value: Re
     if (sharedSidecars.get(path)?.idleTimer === idleTimer) sharedSidecars.delete(path);
   }, SIDECAR_CACHE_IDLE_MS);
   idleTimer.unref?.();
-  sharedSidecars.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, value, idleTimer });
+  sharedSidecars.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, ctimeMs: stat.ctimeMs, value, idleTimer });
 }
 
 function touch(entry: SharedSidecar): void {
@@ -100,7 +107,7 @@ function touch(entry: SharedSidecar): void {
  */
 export async function readSidecarShared(projectRoot: string): Promise<ReadResult> {
   const path = sidecarPath(projectRoot);
-  let stat: { mtimeMs: number; size: number };
+  let stat: StatKey;
   try {
     stat = await fs.stat(path);
   } catch (e: any) {
@@ -112,7 +119,7 @@ export async function readSidecarShared(projectRoot: string): Promise<ReadResult
     throw e;
   }
   const cached = sharedSidecars.get(path);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (cached && sameStat(cached, stat)) {
     touch(cached);
     return cached.value;
   }
@@ -134,14 +141,36 @@ export async function readSidecarShared(projectRoot: string): Promise<ReadResult
   }
 }
 
+/** How much of the file's head is read to confirm whose write is on disk (updatedAt is a top-level key written early). */
+const HEAD_PROBE_BYTES = 4096;
+
 async function seedSharedSidecar(projectRoot: string, value: ProjectSidecar): Promise<void> {
   const path = sidecarPath(projectRoot);
   try {
-    const stat = await fs.stat(path);
-    retain(path, stat, value);
+    // WHY verify before seeding (review 2026-10-22): the file is stat'ed AFTER our write. If another process replaced
+    // it in that gap, keying our object by THEIR stat would show our content as theirs, and the next appends would
+    // retry against stale data. So the file's own updatedAt (it sits in the first bytes of what we write) must still
+    // be ours, and the stat must not move while we look; otherwise nothing is cached and the next reader parses.
+    const before = await fs.stat(path);
+    const fh = await fs.open(path, 'r');
+    let head: string;
+    try {
+      const buf = Buffer.alloc(HEAD_PROBE_BYTES);
+      const { bytesRead } = await fh.read(buf, 0, HEAD_PROBE_BYTES, 0);
+      head = buf.subarray(0, bytesRead).toString('utf8');
+    } finally { await fh.close(); }
+    const after = await fs.stat(path);
+    if (extractUpdatedAt(head) === value.updatedAt && sameStat(before, after)) retain(path, after, value);
+    else evictShared(path);
   } catch {
     // Not fatal — the next reader parses from disk.
   }
+}
+
+function evictShared(path: string): void {
+  const prev = sharedSidecars.get(path);
+  if (prev) { clearTimeout(prev.idleTimer); sharedSidecars.delete(path); }
+  sharedInFlight.delete(path);
 }
 
 /** Tests only: drop every shared copy and timer. */
@@ -236,6 +265,8 @@ export async function writeSidecar(
   // The object we just wrote IS the on-disk state — hand it to every reader
   // that follows (LIST_SESSION fires after every tracked write) for free.
   if (result.committed) await seedSharedSidecar(projectRoot, next);
+  // A refused write means the file is not what we last read: whatever we hold for it is stale.
+  else evictShared(path);
   return { committed: result.committed };
 }
 

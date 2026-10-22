@@ -824,3 +824,49 @@ describe('appendVersion — shared parsed copy + compact file', () => {
     expect(JSON.parse(JSON.stringify(sc, null, 2))).toEqual(JSON.parse(text));
   });
 });
+
+// Review 2026-10-22: a writer from another process can replace the sidecar between our committed write and the
+// stat that seeds the shared copy. Our object must never end up cached under THEIR file's stat.
+describe('shared sidecar cache — a replace racing our seed', () => {
+  let projectRoot: string;
+  beforeEach(() => { projectRoot = mkdtempSync(join(tmpdir(), 'as-race-')); _resetSidecarCacheForTests(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('does not cache our content under the other writer\'s stat, and the next append still commits', async () => {
+    await appendVersion(projectRoot, 'p', 'n', { path: 'a.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    const file = join(projectRoot, '.youcoded/artifacts.json');
+    const current = JSON.parse(readFileSync(file, 'utf8'));
+    // The other process's version of the file: different content, newer token.
+    const theirs = { ...current, updatedAt: new Date(Date.now() + 60_000).toISOString(), artifacts: [...current.artifacts, { ...current.artifacts[0], id: 'THEIRS', path: 'theirs.md' }] };
+    // Replace the file right after our next write commits, before the seed's stat runs.
+    const realRename = fsPromises.rename;
+    let swapped = false;
+    vi.spyOn(fsPromises, 'rename').mockImplementation(async (from: any, to: any) => {
+      await realRename(from, to);
+      if (!swapped && String(to).endsWith('artifacts.json')) {
+        swapped = true;
+        writeFileSync(file + '.theirs', JSON.stringify(theirs));
+        await realRename(file + '.theirs', file);
+      }
+    });
+    await appendVersion(projectRoot, 'p', 'n', { path: 'b.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    vi.restoreAllMocks();
+    // Readers must see what is on disk (theirs), not the object we wrote.
+    const seen = (await readSidecarShared(projectRoot)) as ProjectSidecar;
+    expect(seen.artifacts.some((a) => a.id === 'THEIRS')).toBe(true);
+    // And appending again must work against the real file (not loop on a stale cache).
+    const r = await appendVersion(projectRoot, 'p', 'n', { path: 'c.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    expect(r.committed).toBe(true);
+    expect(((await readSidecar(projectRoot)) as ProjectSidecar).artifacts.some((a) => a.path === 'c.md')).toBe(true);
+  });
+
+  it('a refused (CAS conflict) write drops the cached copy', async () => {
+    await appendVersion(projectRoot, 'p', 'n', { path: 'a.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+    const cached = (await readSidecarShared(projectRoot)) as ProjectSidecar;
+    const r = await writeSidecar(projectRoot, '1999-01-01T00:00:00.000Z', { ...cached });  // wrong token: refused
+    expect(r.committed).toBe(false);
+    const parse = vi.spyOn(JSON, 'parse');
+    await readSidecarShared(projectRoot);
+    expect(parse.mock.calls.some(([t]) => typeof t === 'string' && t.length > 100)).toBe(true); // had to re-read: nothing was cached
+  });
+});
