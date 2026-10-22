@@ -15,6 +15,7 @@ import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
   startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, scanOpenList, listSplitOf, type ListScan, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
+  countLines, overHighlightLimit,
 } from './markdown-blocks';
 
 /**
@@ -163,7 +164,50 @@ function hastText(node: unknown): string {
  * output (same library, same languages, same options) without the rebuild.
  */
 const sharedHighlight = (rehypeHighlight as unknown as () => (tree: Root, file: unknown) => void)();
-const rehypeHighlightShared: Plugin<[], Root> = () => sharedHighlight as any;
+/**
+ * WHY a wrapper (freeze hunt 2026-10-22, item 2): a fence over the size limit
+ * (markdown-blocks.ts HIGHLIGHT_MAX_LINES / _CHARS) skips colouring so one huge
+ * block cannot freeze the page for seconds. rehype-highlight only touches a code
+ * element that names a language, so the big block's language class is dropped
+ * BEFORE it runs - the block then comes out exactly like a fence written with no
+ * language (no .hljs class, same box, same Copy button). Only direct text is
+ * counted, which is all an uncoloured fence holds.
+ */
+function dropLanguageFromHugeFences(tree: Root) {
+  visitParents(tree, 'element', (node, ancestors) => {
+    const el = node as Element;
+    if (el.tagName !== 'code' || !Array.isArray(el.properties?.className)) return;
+    const parent = ancestors[ancestors.length - 1] as Element | undefined;
+    if (parent?.type !== 'element' || parent.tagName !== 'pre') return;
+    let chars = 0;
+    let lines = 1;
+    for (const child of el.children) {
+      if (child.type !== 'text') continue;
+      chars += child.value.length;
+      lines += countLines(child.value) - 1;
+      if (overHighlightLimit(lines, chars)) break;
+    }
+    if (!overHighlightLimit(lines, chars)) return;
+    const rest = (el.properties.className as string[]).filter((c) => !/^(?:lang|language)-/.test(String(c)));
+    // An empty class list would print class="" - delete it so the markup equals a no-language fence's.
+    if (rest.length) el.properties.className = rest;
+    else delete el.properties.className;
+  });
+}
+const rehypeHighlightShared: Plugin<[], Root> = () => (tree: Root, file: unknown) => {
+  dropLanguageFromHugeFences(tree);
+  sharedHighlight(tree, file);
+};
+/** The plugin list without colouring: for the pieces of a streaming fence already over the limit. */
+const uncolouredCache = new WeakMap<PluggableList, PluggableList>();
+function withoutColour(plugins: PluggableList): PluggableList {
+  let u = uncolouredCache.get(plugins);
+  if (!u) {
+    u = plugins.filter((p) => p !== rehypeHighlightShared);
+    uncolouredCache.set(plugins, u);
+  }
+  return u;
+}
 
 // Stable plugin arrays — avoids re-creating on every render. URL linkification
 // runs in EVERY context (it needs no session), so it lives in the stable array;
@@ -623,7 +667,7 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, listScan, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, listScan, rehypePlugins: basePlugins, components }: {
   source: string;
   /** How far a scan of this piece as a growing list has got (see scanOpenList); null = draw it whole. */
   listScan: ListScan | null;
@@ -643,6 +687,14 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
   // until the reply ends. A reply that stops with its fence still open (Stop, an
   // error, a truncated or old message) must draw as one block, like any other.
   const split = defs || !live ? null : splitOpenFence(source, fenceAt);
+  // WHY decided here from the WHOLE fence (frozen head + live tail), not per 20-line chunk
+  // (freeze hunt item 2): a chunk is tiny, so the plugin alone would colour every one of
+  // them, and the fence would turn grey at the end when it is drawn as one block. Once the
+  // fence passes the limit it stays uncoloured for the rest of the stream, as it will be
+  // when finished. The earlier coloured chunks are redrawn plain once, at the crossing.
+  const rehypePlugins = split && overHighlightLimit(countLines(split.frozen) + countLines(split.tail) - 1, split.frozen.length + split.tail.length)
+    ? withoutColour(basePlugins)
+    : basePlugins;
   const frozenText = split?.frozen ?? '';
   const opening = split?.opening ?? '';
   const prefix = split?.prefix ?? '';

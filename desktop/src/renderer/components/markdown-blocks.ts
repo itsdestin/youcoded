@@ -897,6 +897,32 @@ export function splitOpenFence(whole: string, fenceAt = 0): OpenFenceSplit | nul
   return { prefix: whole.slice(0, fenceAt), opening: open[0], frozen: source.slice(openingLen, end), tail: source.slice(end) };
 }
 
+/**
+ * Size limit for syntax colouring of ONE code fence.
+ *
+ * WHY (freeze hunt 2026-10-22, item 2): highlight.js is the whole cost of a
+ * labelled fence, runs in one synchronous step, and grows with size - measured
+ * 5,000 lines 0.83 s, 20,000 lines 7.5 s, a 718 KB JSON fence 8 s (a fence with no
+ * language: 0.18 s). At 1,500 lines / 100 KB the pass costs ~0.2 s, so anything
+ * bigger is drawn like a fence with no language: same box, same Copy button, no
+ * colours. The decision is made on the WHOLE fence, never on a 20-line streaming
+ * chunk, so a fence is never coloured while it streams and grey once it ends.
+ */
+export const HIGHLIGHT_MAX_LINES = 1500;
+export const HIGHLIGHT_MAX_CHARS = 100_000;
+
+/** True when a fence's code (given as its line and character counts) is too big to colour. */
+export function overHighlightLimit(lines: number, chars: number): boolean {
+  return lines > HIGHLIGHT_MAX_LINES || chars > HIGHLIGHT_MAX_CHARS;
+}
+
+/** Count the line endings in a string (a cheap scan, no allocation). */
+export function countLines(text: string): number {
+  let n = 0;
+  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) n++;
+  return n + 1;
+}
+
 /** The frozen head cut into its chunks of OPEN_FENCE_CHUNK_LINES lines (each line ends with "\n"). */
 export function fenceChunks(frozen: string): string[] {
   const chunks: string[] = [];
