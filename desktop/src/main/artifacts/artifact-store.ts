@@ -299,6 +299,8 @@ interface ProjectQueue {
   projectId: string;
   projectName: string;
   pending: PendingAppend[];
+  /** Maintenance jobs (sidecar cleanup) run between append batches, never beside one. */
+  jobs: Array<() => Promise<void>>;
   draining: boolean;
 }
 const appendQueues = new Map<string, ProjectQueue>();
@@ -312,7 +314,7 @@ export function appendVersion(
   return new Promise<AppendVersionResult>((resolve, reject) => {
     let q = appendQueues.get(projectRoot);
     if (!q) {
-      q = { projectId, projectName, pending: [], draining: false };
+      q = { projectId, projectName, pending: [], jobs: [], draining: false };
       appendQueues.set(projectRoot, q);
     }
     // Same root ⇒ same project; the latest caller's identity is as good as any.
@@ -323,12 +325,38 @@ export function appendVersion(
   });
 }
 
+/**
+ * Run `job` on this project's append queue: it never overlaps an append cycle, and appends wait their
+ * turn behind it only if they arrive while it runs. The job must NOT call appendVersion (it would wait
+ * on itself); it may use readSidecarShared and writeSidecar. WHY (sidecar cleanup, 2026-10-22): the
+ * cleanup's one write has to be ordered with the append path so the two can never interleave.
+ */
+export function enqueueMaintenance<T>(projectRoot: string, job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let q = appendQueues.get(projectRoot);
+    if (!q) {
+      q = { projectId: '', projectName: '', pending: [], jobs: [], draining: false };
+      appendQueues.set(projectRoot, q);
+    }
+    q.jobs.push(async () => { try { resolve(await job()); } catch (e) { reject(e); } });
+    if (!q.draining) void drainAppendQueue(projectRoot, q);
+  });
+}
+
+/** True when no append is waiting or being written for this project (cleanup runs only then). */
+export function isAppendQueueIdle(projectRoot: string): boolean {
+  return !appendQueues.has(projectRoot);
+}
+
 async function drainAppendQueue(projectRoot: string, q: ProjectQueue): Promise<void> {
   q.draining = true;
   try {
     // Anything pushed while a batch is being written is picked up by the next
     // iteration — appendVersion only starts a drainer when none is running.
-    while (q.pending.length > 0) {
+    while (q.pending.length > 0 || q.jobs.length > 0) {
+      // Appends first; a maintenance job runs only when no append is waiting, and appends that arrive
+      // during it are picked up by the next iteration.
+      if (q.pending.length === 0) { await q.jobs.shift()!(); continue; }
       const batch = q.pending.splice(0);
       let results: AppendVersionResult[];
       try {
@@ -345,7 +373,7 @@ async function drainAppendQueue(projectRoot: string, q: ProjectQueue): Promise<v
     q.draining = false;
     // The loop only exits with an empty queue and nothing async runs between
     // that check and here, so the map entry can go; the next call makes a new one.
-    if (q.pending.length === 0) appendQueues.delete(projectRoot);
+    if (q.pending.length === 0 && q.jobs.length === 0) appendQueues.delete(projectRoot);
   }
 }
 
