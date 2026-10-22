@@ -227,16 +227,15 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       if (active && active !== id && session.toolCalls.has(active)) continue;
       const tools: AskSegment[] = [];
       for (const seg of tool.subagentSegments ?? []) if (seg.type === 'tool') tools.push(seg);
-      // CC subagent asks never nest (Claude Code does not tell the app WHICH
-      // subagent raised a permission prompt — chat-types.ts PERMISSION_REQUEST
-      // `specialist` is set only by the native ask router), so this list is
-      // always empty for a CC helper and its chip never turns amber. Decided
-      // with Destin 2026-09-05: working/finished only, rather than guess at
-      // attribution and risk pinning an ask on the wrong helper.
+      // CC subagent asks nest when Claude Code says which helper asked: it stamps `agent_id` on
+      // a subagent's PermissionRequest hook (hook-dispatcher.ts, 2026-10-22 audit A4), and the
+      // reducer pins the ask on the Agent card carrying that id. The old decision (2026-09-05)
+      // was "never guess": an ask with no `agent_id` still becomes a top-level card, so this
+      // list holds only asks Claude Code itself attributed.
       // needsUserAnswer, not a bare requestId check: a nested password ask
       // (the helper's own sudo) is 'awaiting-approval' too but keeps its id
       // inside `passwordAsk`, not `requestId` (coordinator, 2026-09-26).
-      const asks = cc ? [] : tools.filter(needsUserAnswer);
+      const asks = tools.filter(needsUserAnswer);
       // An open ask always means 'needs-you', whatever the run status says.
       const group: HelperView['group'] = asks.length > 0 ? 'needs-you' : run.status === 'running' ? 'working' : 'finished';
       helpers.push({

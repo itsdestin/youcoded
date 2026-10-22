@@ -45,7 +45,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       // Validate the shape rather than trust the wire — a payload missing the
       // child id degrades to a plain (top-level) ask, never to a mis-nested one.
       const rawSpecialist = payload.specialist as Record<string, unknown> | undefined;
-      const specialist = rawSpecialist && typeof rawSpecialist.childId === 'string'
+      const nativeSpecialist = rawSpecialist && typeof rawSpecialist.childId === 'string'
         ? {
             childId: rawSpecialist.childId,
             agentType: typeof rawSpecialist.agentType === 'string' ? rawSpecialist.agentType : 'specialist',
@@ -53,6 +53,21 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
             parentToolCallId: typeof rawSpecialist.parentToolCallId === 'string' ? rawSpecialist.parentToolCallId : undefined,
           }
         : undefined;
+      // A4 (2026-10-22): Claude Code stamps `agent_id` on a hook payload only when the hook fires
+      // INSIDE a subagent (its own schema: "Present only when the hook fires from within a subagent…
+      // Absent for the main thread"; verified in CLI 2.1.308 — docs/cc-dependencies.md). It is the
+      // helper's task id, which is what the Agent card carries as agentId, so the ask can be pinned
+      // on that helper and its row/chip can say "needs you". The reducer finds the card by that id;
+      // an id it cannot find degrades to a plain top-level ask, never a guess.
+      const ccAgentId = typeof payload.agent_id === 'string' && payload.agent_id ? payload.agent_id : undefined;
+      const specialist = nativeSpecialist ?? (ccAgentId
+        ? {
+            childId: ccAgentId,
+            agentType: typeof payload.agent_type === 'string' && payload.agent_type ? payload.agent_type : 'subagent',
+            title: typeof payload.agent_type === 'string' && payload.agent_type ? payload.agent_type : 'A subagent',
+            parentToolCallId: undefined,
+          }
+        : undefined);
 
       return {
         type: 'PERMISSION_REQUEST',
@@ -94,7 +109,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       // own specialist field above — a peer on another build degrades to an
       // unlabelled top-level ask rather than a mis-nested one.
       const rawSpecialist = payload.specialist as Record<string, unknown> | undefined;
-      const specialist = rawSpecialist && typeof rawSpecialist.childId === 'string'
+      const nativeSpecialist = rawSpecialist && typeof rawSpecialist.childId === 'string'
         ? {
             childId: rawSpecialist.childId,
             agentType: typeof rawSpecialist.agentType === 'string' ? rawSpecialist.agentType : 'specialist',
@@ -102,6 +117,21 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
             parentToolCallId: typeof rawSpecialist.parentToolCallId === 'string' ? rawSpecialist.parentToolCallId : undefined,
           }
         : undefined;
+      // A4 (2026-10-22): Claude Code stamps `agent_id` on a hook payload only when the hook fires
+      // INSIDE a subagent (its own schema: "Present only when the hook fires from within a subagent…
+      // Absent for the main thread"; verified in CLI 2.1.308 — docs/cc-dependencies.md). It is the
+      // helper's task id, which is what the Agent card carries as agentId, so the ask can be pinned
+      // on that helper and its row/chip can say "needs you". The reducer finds the card by that id;
+      // an id it cannot find degrades to a plain top-level ask, never a guess.
+      const ccAgentId = typeof payload.agent_id === 'string' && payload.agent_id ? payload.agent_id : undefined;
+      const specialist = nativeSpecialist ?? (ccAgentId
+        ? {
+            childId: ccAgentId,
+            agentType: typeof payload.agent_type === 'string' && payload.agent_type ? payload.agent_type : 'subagent',
+            title: typeof payload.agent_type === 'string' && payload.agent_type ? payload.agent_type : 'A subagent',
+            parentToolCallId: undefined,
+          }
+        : undefined);
       return { type: 'PASSWORD_REQUEST', sessionId, requestId, toolUseId, command, via, triesLeft, specialist };
     }
 
