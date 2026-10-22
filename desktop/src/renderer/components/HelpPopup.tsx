@@ -139,7 +139,14 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
               description="Start with a conversation, not code"
               onClick={() => { onOpenContribute(); onClose(); }}
             />
-            {/* #183 Q-switch: the auto-install switch sits beside Get beta builds. */}
+          </div>
+        </section>
+        {/* #183: the two update switches get their own group (auto-updates-review#Q-group,
+            "own-group"): automatic updates are not about helping build YouCoded, and
+            "Updates" is the name the update popup already gives the same two rows. */}
+        <section>
+          <SectionLabel className="mb-2">Updates</SectionLabel>
+          <div className="space-y-2">
             <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
             <AutoInstallRow variant="nav" icon={<RefreshIcon />} />
           </div>

@@ -1633,9 +1633,11 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           {updateStatus.update_available ? (
             // Normal words on the amber tint (small-fixes-3#SF3-10); sentence case (decisions "Sentence case").
             <span className="text-fg font-medium">
-              {/* #183 Q-chip "keep-pulse": same tint and pulse, words say it is already here. */}
+              {/* #183 Q-chip "keep-pulse": same tint and pulse, words say it is already here.
+                  Wording is Destin's (auto-updates-review#R-1): "Ready - Restart Needed", in
+                  sentence case; the version moves to the tooltip and the popup's button. */}
               {updateStatus.downloaded
-                ? <>v{updateStatus.latest} ready — restart to update</>
+                ? <>Ready - restart needed</>
                 : <>v{updateStatus.latest} — Update available</>}
             </span>
           ) : (
