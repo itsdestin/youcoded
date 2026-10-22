@@ -16,6 +16,7 @@ import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 import { markPage, startConnection, markConnection, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
+import { setConnectionMode } from './platform';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -1490,9 +1491,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // server tells every client `platform: 'desktop'`, so getPlatform() cannot answer
           // this. connectToHost still declares it explicitly for the Android-paired case,
           // which IS file:// and IS remote.
-          if (!isAndroidLocal()) {
-            void import('./platform').then(({ setConnectionMode }) => setConnectionMode('remote'));
-          }
+          // WHY at once, not through a dynamic import (2026-10-22 phone speed): the import landed AFTER the app had mounted, so its
+          // local→remote listener flushed everything — the session list, the open conversation, the fill already running — and
+          // listed and filled again. Every phone-browser load paid that twice, and an early-answered conversation was thrown away.
+          if (!isAndroidLocal()) setConnectionMode('remote');
 
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be

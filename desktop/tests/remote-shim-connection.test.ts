@@ -507,6 +507,17 @@ describe('remote-shim — client:ready', () => {
       } finally { delete (globalThis as any).sessionStorage; }
     });
 
+    it('is in remote mode the moment it is signed in, before the app mounts', async () => {
+      // The switch used to land after the app had mounted, and its local→remote listener flushed and refilled everything.
+      const platform = await import('../src/renderer/platform');
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      expect(platform.isRemoteMode()).toBe(true);
+      await p;
+    });
+
     it('drops a frame from a socket that is no longer the current one', async () => {
       const p1 = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
