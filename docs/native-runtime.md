@@ -1071,6 +1071,25 @@ bucket's revoke behaviour), `permission-store.test.ts` (bucket routing and reads
 
 Rule: `.claude/rules/native-specialists.md` → "Specialists (plan 1c)".
 
+### Run-view accuracy (audit 2026-10-22)
+
+What a helper's card can rely on in `SpecialistRunView` (tests: `specialist-run-status.test.ts`):
+
+- **Stop is "interrupted", never "failed"** — a foreground child that sees the user's Stop throws a
+  `stoppedByUser` error and `runDelegation` records `interrupted` (no `failureText`).
+- **One ledger row per helper, so a resume rewrites it.** `runNumber` counts runs (1 = the hire),
+  `activeToolCallId` names the card carrying the live run (the resume call; its activity and asks are
+  stamped with it), `parentToolCallId` stays the ORIGINAL card, `resumedAt` is when the newest run
+  began, and `reportStale` says the report on the original card belongs to an earlier run.
+- **`reportPending`** ('waiting-for-turn' | 'held-after-stop'): a finished background run whose
+  report the assistant has not yet been given. Stop re-pushes such cards so they show "held".
+- **Replay sends the NEWEST 500 records**, not the first 30 (the spawn budget resets each start; the
+  ledger does not).
+- **A failed final-status write is retried (3 times, async) and the card is told the true status from
+  memory at once** (`recoverOutcomeWrite` / `unwrittenOutcomes`); it can no longer spin until restart.
+- **`seq` is seeded from the clock** (`Date.now() * 1000`), so it never goes backwards across a host
+  restart for a screen that stayed connected and kept its cards (the reducer drops `seq <=` held).
+
 ## Background Bash (ledger G-1, shipped 2026-08-28)
 
 Design: workspace `docs/archive/specs/2026-08-28-bash-background-execution-design.md`; plan
@@ -1126,25 +1145,46 @@ cap is gone). `BashOutput` reads new output since the last look (or lists this c
 - **`BashOutput` is exempt from the doom-loop window and capped at 8 reads per turn (D7)** —
   a poll is supposed to repeat; the flat cap covers the chatty-build case the old
   "three empty checks" idea missed. Both companions are always-allowed (`rulesForMode`).
-- **IPC.** `native:kill-shell` rides the request parity (preload, remote-shim, remote-server WS,
-  `SessionService.kt` → not-implemented-on-mobile; pinned in `ipc-channels.test.ts`), NOT gated
-  on `native.supported` so a phone can Stop a desktop command. `native:shell-event` is a push in
-  the `specialists:event` shape (window + `remoteServer.bufferShellRun` + broadcast; replayed on
-  connect, pinned in `remote-server.test.ts`) and re-sent on `TRANSCRIPT_REPLAY` via
-  `nativeHost.shellRunsFor`.
-- **Resume rule.** After replay, a Bash card whose result announced a shell id and got no live
-  record renders "Stopped when the app quit" (`markOrphanedShellRuns`); a card with a
-  `shell-complete` turn in the transcript rebuilds its exit from the turn's meta.
+- **IPC.** `native:kill-shell` is a plain request channel on the shared table (preload,
+  remote-shim, the remote WS door; pinned in `ipc-channels.test.ts`), NOT gated on
+  `native.supported`, so a phone can Stop a desktop command. Android needs no separate
+  implementation: since the 2026-10-14 rebuild it runs this same backend (`docs/android-runtime.md`),
+  so there is no "not implemented on mobile" stub for it. `native:shell-event` is a push through
+  `publish(sessionId, …)` in `ipc-handlers.ts` (every window showing the session plus every
+  connected phone), and is re-sent when a screen opens the conversation: `session:open` calls
+  `nativeHost.shellRunsForAsync` (live conversation) or `persistedShellRunsFor` (not live here).
+  (`bufferShellRun` named in older text no longer exists.)
+- **Saved records (audit 2026-10-22 D2-D5).** Each root conversation keeps
+  `sessions/<slug>/<sessionId>.shells.json` (`shell-sidecar.ts`): one small record per command —
+  command, description, exit code / signal / stop reason, a 40-line tail, pid and (Linux) process start
+  stamp. Writes are async: start/exit/stop at once, output refreshes at most every 5 s, and app quit
+  flushes them (bounded) after the `app-quit` kills. On the next start `ShellRegistry.restoreFrom`
+  judges each record: finished ones keep their real outcome; one still saying "running" is checked
+  with signal 0 on its process group — verified alive (Linux: same start stamp, or leader gone but
+  group members alive) → shown running and Stop signals the group; alive but unverifiable (macOS,
+  Windows) → "ended, exit code unknown, may still be running" and never signalled; gone → "ended, exit
+  code unknown". Restored records carry `restored: true` (output no longer streams — the pipe died with
+  the old app). Specialist children are not saved. `ShellRunView` also carries `command`,
+  `description` and `signal` so a signal-killed command is not drawn as "Exit ?".
+- **Resume rule.** The renderer's `markOrphanedShellRuns` renders a Bash card that announced a shell
+  id and got no live record as "Stopped when the app quit"; with saved records that label is only
+  true for a record that really says `stopped` / `app-quit` — the screen should trust a restored
+  `ShellRunView` over the guess. A card with a `shell-complete` turn rebuilds its exit from the
+  turn's meta.
 
 ### Accepted limitations (declared, not bugs)
 
-- **App crash (not quit) leaves commands running with no owner** — nothing in userland runs on
-  SIGKILL or power loss. A close followed by a quit inside the 2 s SIGTERM→SIGKILL window IS
+- **App crash (not quit) leaves commands running with no owner until the conversation is
+  reopened** — nothing in userland runs on SIGKILL or power loss. Reopening it re-attaches a
+  surviving process group (shown running, Stop works) on Linux; elsewhere it is reported "may still
+  be running" and left alone. A close followed by a quit inside the 2 s SIGTERM→SIGKILL window IS
   covered: `drainingShellRegistries` holds the registry until its kill settles.
-- **After a restart, a run that was stopped by KillShell or by the Stop button before the quit
-  also reads "Stopped when the app quit"** — the run's final state is never persisted; only the
-  finished notice is. The same label appears on the OTHER device after a takeover while the
-  command keeps running on the first one.
+- **A re-attached command has no live output and is invisible to the assistant's tools** —
+  `BashOutput`/`KillShell` still answer "unknown shell" for it (the registry's `get`/`list` hold live
+  runs only); only the card (Stop, last saved tail, log path) can act on it. Deliberate for now.
+- **A conversation not live on this host shows saved records read-only** — a still-running
+  command is shown running but Stop needs the conversation open here. The same applies to the
+  OTHER device after a takeover while the command keeps running on the first one.
 - **Concurrent writes** by a background command to files the assistant is editing are not detected.
 - **Windows tree kill** relies on `taskkill /T`; the grandchild test is POSIX-only, the Windows
   path is unit-mocked.

@@ -18,7 +18,8 @@ import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { stampSubagent } from '../../shared/types';
 import type { TranscriptEvent, EventOf, StampableEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { readPersistedShells, ShellSidecar } from './shell-sidecar';
+import { ShellRegistry, persistedRunViews, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
@@ -563,6 +564,10 @@ export class NativeSessionHost extends EventEmitter {
    *  need an owner that can kill them at app quit and re-attach them if the
    *  same conversation is resumed in this process. */
   private shellRegistries = new Map<string, ShellRegistry>();
+  /** D2: the on-disk record writer per root conversation (flushed at app quit). */
+  private shellSidecars = new Map<string, ShellSidecar>();
+  /** D2/D3: in-flight restore of a conversation's saved commands, awaited by session:open. */
+  private shellRestores = new Map<string, Promise<void>>();
   /** G-1: registries whose conversation was closed and whose kill is still in
    *  flight. Why a second collection: a close sends SIGTERM and escalates to
    *  SIGKILL two seconds later, but the registry leaves shellRegistries at
@@ -1706,10 +1711,15 @@ export class NativeSessionHost extends EventEmitter {
 
   /** G-1: the registry for a session id — created on first use, kept across
    *  destroy({keepShells}) so a taken-over conversation's runs stay owned. */
-  private shellsFor(sessionId: string): ShellRegistry {
+  private shellsFor(sessionId: string, cwd?: string): ShellRegistry {
     const existing = this.shellRegistries.get(sessionId);
     if (existing) return existing;
+    // D2: a root conversation saves one small record per background command next
+    // to its other files, so a restart can show real outcomes. Specialist
+    // children (no cwd passed) die with their parent and are not saved.
+    const sidecar = this.nativeHome && cwd ? new ShellSidecar(this.nativeHome, cwd, sessionId) : undefined;
     const registry = new ShellRegistry(sessionId, {
+      sidecar,
       // admin-password design §2.3/§6/§7/§11 task 5: the SAME RunningCalls
       // instance tools/bash.ts's own foreground spawn path registers into,
       // and the SAME `wipeUpfront` the tool layer calls — kept as a bound
@@ -1726,6 +1736,17 @@ export class NativeSessionHost extends EventEmitter {
     registry.on('exit', (run: ShellRun) => this.onShellExit(sessionId, registry, run));
     registry.on('long-running', (run: ShellRun, elapsedMs: number) => this.onShellLongRunning(sessionId, run, elapsedMs));
     this.shellRegistries.set(sessionId, registry);
+    if (sidecar && this.nativeHome && cwd) {
+      this.shellSidecars.set(sessionId, sidecar);
+      // D2/D3: bring in what the last run saved (finished outcomes; still-running
+      // process groups re-attached). Async; screens get each record as a change
+      // event and session:open waits for this before answering.
+      const home = this.nativeHome;
+      this.shellRestores.set(sessionId, readPersistedShells(home, cwd, sessionId)
+        .then((records) => registry.restoreFrom(records))
+        .then(() => undefined)
+        .catch((err) => log('WARN', 'NativeSessionHost', 'could not restore saved background commands', { sessionId, error: String(err) })));
+    }
     return registry;
   }
 
@@ -1769,9 +1790,11 @@ export class NativeSessionHost extends EventEmitter {
   async killShell(sessionId: string, shellId: string): Promise<{ ok: true } | { ok: false; reason: 'not-live' | 'unknown-shell' | 'not-running' }> {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return { ok: false, reason: 'not-live' };
-    const run = reg.get(shellId);
-    if (!run) return { ok: false, reason: 'unknown-shell' };
-    if (run.status !== 'running') return { ok: false, reason: 'not-running' };
+    // statusOf also knows commands re-attached after a restart (D3), which have
+    // no live ShellRun object but can still be stopped.
+    const status = reg.statusOf(shellId);
+    if (!status) return { ok: false, reason: 'unknown-shell' };
+    if (status !== 'running') return { ok: false, reason: 'not-running' };
     await reg.kill(shellId, 'user');
     return { ok: true };
   }
@@ -1782,7 +1805,24 @@ export class NativeSessionHost extends EventEmitter {
   shellRunsFor(sessionId: string): ShellRunView[] {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return [];
-    return reg.list().map((r) => reg.toView(r));
+    // Commands carried over from before a restart ride along (restored: true).
+    return [...reg.restoredViews(), ...reg.list().map((r) => reg.toView(r))];
+  }
+
+  /** shellRunsFor once the saved records of a just-resumed conversation have been
+   *  taken in (what session:open answers with, so a first open is never missing them). */
+  async shellRunsForAsync(sessionId: string): Promise<ShellRunView[]> {
+    await this.shellRestores.get(sessionId);
+    return this.shellRunsFor(sessionId);
+  }
+
+  /** D4: the saved commands of a conversation that is NOT live on this host
+   *  (e.g. opened on a phone while closed here) — real outcomes from disk, with a
+   *  still-running process reported as running. Read-only: Stop needs the
+   *  conversation open. `cwd` comes from the caller's session record. */
+  async persistedShellRunsFor(sessionId: string, cwd: string): Promise<ShellRunView[]> {
+    if (this.live.has(sessionId) || !this.nativeHome) return this.shellRunsForAsync(sessionId);
+    return persistedRunViews(await readPersistedShells(this.nativeHome, cwd, sessionId));
   }
 
   /** Task 4 — format one claimed ledger record into the text runNotice()
@@ -2798,7 +2838,7 @@ export class NativeSessionHost extends EventEmitter {
   private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[], skillCatalog: SkillCatalog): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
     return {
       // G-1: this session's background-command registry, host-owned.
-      shells: this.shellsFor(sessionId),
+      shells: this.shellsFor(sessionId, cwd),
       // admin-password design §2.3/§11 task 5: the ONE process-wide
       // RunningCalls instance — always present, cheap bookkeeping even when
       // AskpassServer never attaches (nothing will ever be verified against
@@ -5313,6 +5353,7 @@ export class NativeSessionHost extends EventEmitter {
       const reg = this.shellRegistries.get(sessionId);
       if (reg) {
         this.shellRegistries.delete(sessionId);
+        this.shellRestores.delete(sessionId);
         // Held until the kill settles so app-quit can still reach a process
         // that is ignoring SIGTERM inside the 2 s escalation window.
         this.drainingShellRegistries.add(reg);
@@ -5423,16 +5464,27 @@ export class NativeSessionHost extends EventEmitter {
     // G-1 (D2): app quit stops every background command with the honest
     // reason. SIGKILL at once: the process is exiting and a deferred
     // escalation timer would never fire.
+    const quitKills: Promise<unknown>[] = [];
     for (const [id, reg] of this.shellRegistries) {
-      void reg.killAll('app-quit', { graceMs: 0 }).catch((err) => log('WARN', 'NativeSessionHost', 'killAll on quit failed', { sessionId: id, error: String(err) }));
+      quitKills.push(reg.killAll('app-quit', { graceMs: 0 }).catch((err) => log('WARN', 'NativeSessionHost', 'killAll on quit failed', { sessionId: id, error: String(err) })));
     }
     this.shellRegistries.clear();
     // A conversation closed seconds ago is still escalating SIGTERM->SIGKILL;
     // finish the job now rather than let the escalation timer die with us.
     for (const reg of this.drainingShellRegistries) {
-      void reg.killAll('app-quit', { graceMs: 0 }).catch(() => { /* already gone */ });
+      quitKills.push(reg.killAll('app-quit', { graceMs: 0 }).catch(() => { /* already gone */ }));
     }
     this.drainingShellRegistries.clear();
+    // D2: let the exits land in the registries (SIGKILL is immediate) and then
+    // get every saved record onto disk, so the next start reports "stopped when
+    // the app quit" from fact. Bounded: a stuck disk must not hold up quitting.
+    await Promise.race([Promise.allSettled(quitKills), new Promise<void>((res) => setTimeout(res, 3_000).unref())]);
+    await Promise.race([
+      Promise.allSettled([...this.shellSidecars.values()].map((sc) => sc.flush())),
+      new Promise<void>((res) => setTimeout(res, 3_000).unref()),
+    ]);
+    this.shellSidecars.clear();
+    this.shellRestores.clear();
     // Fix (Task 4 fix pass 3): belt-and-suspenders sweep on top of the
     // per-session cleanup destroy() now does above. Covers the one case that
     // loop can't: a fallback entry whose parent's destroy() already ran

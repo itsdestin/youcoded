@@ -611,7 +611,7 @@ export const BashTool = defineTool({
         return { text: 'Bash rejected: background execution is not available in this session.', isError: true };
       }
       const started = ctx.shells.start({
-        toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, cwd: startCwd,
+        toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, description: args.description, cwd: startCwd,
         shellCmd: launch.cmd, shellArgs: launch.args, env: spawnEnv,
       });
       if (!started.ok) {
@@ -1071,7 +1071,7 @@ export const BashTool = defineTool({
         let run;
         try {
           run = ctx.shells.adopt({
-            toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, cwd: startCwd, child, startedAt,
+            toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, description: args.description, cwd: startCwd, child, startedAt,
             seedLog: spillStream ? null : headBuf,
             recent: tailBuf, logPath: spillPath, logStream: spillStream, captureEnv,
           });

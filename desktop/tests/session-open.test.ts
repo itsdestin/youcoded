@@ -90,6 +90,18 @@ describe('openSession: a first open (page)', () => {
     expect(reply.after.at(-1).payload.pendingRequestIds).toEqual(['native-r1']);
   });
 
+  it('a conversation the host is not running still gets its saved background commands, and a live one waits for its restore', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    const saved = { shellId: 'sh-old', status: 'exited', exitCode: 2, restored: true } as any;
+    const notLive = ok(await openSession(deps(r, { persistedShellRuns: async () => [saved] }), { sessionId: S }));
+    expect(notLive.after.filter((p: any) => p.type === 'native:shell-event').map((p: any) => p.payload.run.shellId)).toEqual(['sh-old']);
+    // A live session's records may still be loading from disk: the answer waits for them.
+    const live: NativeLive = { askEvents: () => [], specialistRuns: () => [], shellRuns: () => new Promise((res) => setTimeout(() => res([saved]), 10)), usageProgress: () => null, sessionContext: () => null, idle: () => true, queue: () => [], permissionMode: () => null };
+    const reply = ok(await openSession(deps(r, { native: () => live }), { sessionId: S }));
+    expect(reply.after.filter((p: any) => p.type === 'native:shell-event')).toHaveLength(1);
+  });
+
   it('never replays a password ask to a phone (its command line); a window gets it', async () => {
     const r = new SessionRecords();
     r.begin(S);

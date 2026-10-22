@@ -176,7 +176,7 @@ function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive |
   return {
     askEvents: () => host.pendingAskEventsFor(sessionId),
     specialistRuns: () => host.specialistRunsFor(sessionId),
-    shellRuns: () => host.shellRunsFor(sessionId),
+    shellRuns: () => host.shellRunsForAsync(sessionId),
     usageProgress: () => host.currentUsageProgressFor(sessionId),
     sessionContext: () => host.sessionContextFor(sessionId),
     idle: () => host.isIdle(sessionId),
@@ -419,6 +419,10 @@ const sessionEntries: MainChannelDef[] = [
           knows: (id) => !!o.sessionManager.getSession(id),
           page: (r) => o.transcriptPage({ sessionId: r.sessionId, beforeCursor: null, claudeSessionId: r.claudeSessionId, projectSlug: r.projectSlug, toEnd: true }),
           native: (id) => nativeLiveFor(rt.nativeHost as NativeSessionHost, id),
+          persistedShellRuns: async (id) => {
+            const info = o.sessionManager.getSession(id);
+            return info?.provider === 'native' && info.cwd ? (rt.nativeHost as NativeSessionHost | undefined)?.persistedShellRunsFor(id, info.cwd) ?? [] : [];
+          },
         }, req, { remote: ctx.door === 'remote' });
       } catch (err) {
         if (audience && sessionId) rt.fills.release(audience.key, sessionId);
