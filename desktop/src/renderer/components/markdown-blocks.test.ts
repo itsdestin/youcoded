@@ -425,4 +425,19 @@ describe('splitOpenList', () => {
     const s = splitOpenList(`Intro:\n\n${l}`)!;
     expect(s.prefix + s.chunks.join('') + s.tail).toBe(`Intro:\n\n${l}`);
   });
+
+  it('reads fences by character and length, and refuses definitions in front', () => {
+    const l = list(50);
+    expect(openListStart('```\n~~~\n\nfoo\n\n' + l)).toBe(-1); // ~~~ does not close a backtick fence
+    expect(openListStart('```\ncode\n```\n\n' + l)).toBeGreaterThan(0);
+    expect(openListStart('````\n```\n\nx\n\n' + l)).toBe(-1); // shorter run does not close it
+    expect(openListStart('[foo]: http://x.com\n\nHi\n\n' + l)).toBe(-1);
+    expect(openListStart('Hi[^1]\n\n[^1]: note\n\n' + l)).toBe(-1);
+  });
+
+  it('stops chunking when a carriage return arrives after the start', () => {
+    const first = scanOpenList(list(60), null)!;
+    expect(first.bad).toBe(false);
+    expect(scanOpenList(list(60) + '- a\r\n- b\r\n', first)!.bad).toBe(true);
+  });
 });

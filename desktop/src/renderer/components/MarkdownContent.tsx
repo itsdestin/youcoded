@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -616,6 +616,8 @@ interface FrozenList {
   /** Line (1-based) of the document react-markdown is drawing where the live list starts: the head belongs to THAT list only. */
   line: number;
   ordered: boolean;
+  /** Set by the live list when it drew the head; if it never does, the chunk falls back to the whole list. */
+  claimed: { current: boolean };
   /** The whole list's first number (the live tail would otherwise claim the number of ITS first item). */
   start: number;
   node: React.ReactNode;
@@ -635,6 +637,9 @@ function liveListComponents(components: NonNullable<React.ComponentProps<typeof 
       const Base: any = (components as any)[tag] ?? tag;
       return function LiveList(props: any) {
         const head = useContext(FrozenListContext);
+        const takes = !!head && head.ordered === (tag === 'ol') && isListAt(props.node, head.line);
+        // WHY: the head must be drawn by exactly one list; MarkdownChunk checks this after drawing.
+        useLayoutEffect(() => { if (takes) head!.claimed.current = true; });
         if (!head || head.ordered !== (tag === 'ol') || !isListAt(props.node, head.line)) return <Base {...props} />;
         // start: only the real first number, and none when it is 1 (as react-markdown leaves it).
         const start = tag === 'ol' ? { start: head.start === 1 ? undefined : head.start } : {};
@@ -751,7 +756,9 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
   // drawn once, in chunks of 20, and react-markdown re-reads only the newest ones (splitOpenList).
   // The scan comes from the parent (see MarkdownContent) and is null unless the reply is live and
   // this group is the last one, so a finished reply and every other group draw as before.
-  const listSplit = !split && !defs && listScan?.source === source ? listSplitOf(source, listScan) : null;
+  // WHY failedAt: a list whose finished head no live list claimed (see below) is drawn whole from then on.
+  const [failedAt, setFailedAt] = useState(-1);
+  const listSplit = !split && !defs && listScan?.source === source && listScan.at !== failedAt ? listSplitOf(source, listScan) : null;
   const listChunks = listSplit?.chunks;
   const listOrdered = listSplit?.ordered ?? false;
   const listStart = listSplit?.start ?? 1;
@@ -761,6 +768,7 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
   const frozenList = useMemo<FrozenList | null>(() => {
     if (!listChunks || !components) return null;
     return {
+      claimed: { current: false },
       line: listLine,
       ordered: listOrdered,
       start: listStart,
@@ -769,6 +777,13 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
       )),
     };
   }, [listChunks, listOrdered, listStart, listLine, rehypePlugins, components]);
+
+  // WHY a safety net: whatever sits in front of the list (an open HTML block, a fence the scan misread)
+  // can stop react-markdown from making the live list at the line we expect. The head would then be
+  // silently missing from the page, so redraw the whole text before it is ever painted.
+  useLayoutEffect(() => {
+    if (frozenList && listScan && !frozenList.claimed.current) setFailedAt(listScan.at);
+  }, [frozenList, listScan]);
 
   const markdown = (
     <ReactMarkdown

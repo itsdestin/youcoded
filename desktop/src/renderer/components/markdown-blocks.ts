@@ -995,10 +995,23 @@ export function openListStart(source: string): number {
     if (line.trim() === '') break;
     if (/^[ \t]/.test(line) || /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(line)) return -1;
   }
-  // ...and no code fence left open above.
-  let fences = 0;
-  for (const _ of source.slice(0, at).matchAll(/(?:^|\n) {0,3}(?:`{3,}|~{3,})/g)) fences++;
-  return fences % 2 === 1 ? -1 : at;
+  // ...and no code fence left open above (a fence only closes with its own character and at least its own length).
+  const before = source.slice(0, at);
+  let open: { ch: string; len: number } | null = null;
+  for (const m of before.matchAll(/(?:^|\n) {0,3}(`{3,}|~{3,})([^\n]*)/g)) {
+    const ch = m[1][0];
+    if (open) {
+      if (ch === open.ch && m[1].length >= open.len && m[2].trim() === '') open = null;
+    } else if (!(ch === '`' && m[2].includes('`'))) {
+      open = { ch, len: m[1].length };
+    }
+  }
+  if (open) return -1;
+  // ...and no link definition or footnote definition: it would define words INSIDE the finished chunks,
+  // which are drawn as documents of their own and would show the literal "[foo]" (the group's other
+  // definitions are handed to the chunk as `defs`, but these sit in the same group).
+  if (/(?:^|\n)[ \t>*+\-0-9.)]*\[[^\]\n]*\]:/.test(before)) return -1;
+  return at;
 }
 
 /** A fresh scan of `source`, or `prev` carried forward when `source` only appends to it. */
@@ -1006,6 +1019,8 @@ export function scanOpenList(source: string, prev?: ListScan | null): ListScan |
   let s: ListScan;
   if (prev && source.startsWith(prev.source)) {
     if (prev.bad) return prev; // a bad line is final, whatever follows it
+    // WHY: the start was checked for line endings other than \n once; text that arrives later is not.
+    if (source.indexOf('\r', prev.source.length) !== -1) return { ...prev, source, bad: true };
     s = { ...prev, source };
     s.itemStarts.length = s.itemCount;
   } else {
