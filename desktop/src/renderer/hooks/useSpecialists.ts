@@ -3,6 +3,7 @@ import { useChatStore } from '../state/chat-context';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
 import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import { needsUserAnswer } from '../utils/specialist-cards';
+import { liveReport, specialistFacts } from '../state/native-run-facts';
 
 // Specialists 1c — narrow selectors over the chat store. A Task card carries
 // ITS OWN run record on the tool prop (ToolCallState.specialistRun), so these
@@ -193,7 +194,7 @@ export function ccRunFromCard(
  *  "completed" run (the popup's own pill reads it the same way). */
 export function helperOutcome(run: SpecialistRunView, tool: ToolCallState): HelperView['outcome'] {
   if (run.status === 'interrupted') return 'stopped';
-  if (run.status === 'failed' || tool.specialistReport?.status === 'failed') return 'failed';
+  if (run.status === 'failed' || liveReport(tool)?.status === 'failed') return 'failed';
   return 'completed';
 }
 
@@ -220,6 +221,10 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       const cc = tool.specialistRun ? undefined : ccRunFromCard(id, tool);
       const run = tool.specialistRun ?? cc?.run;
       if (!run) continue;
+      // A resumed child's run sits on its original hire card AND on the resume call's card (the one
+      // carrying the live run). It is ONE helper: the live card's row wins (its Activity and asks).
+      const active = tool.specialistRun ? specialistFacts(tool.specialistRun).activeToolCallId : undefined;
+      if (active && active !== id && session.toolCalls.has(active)) continue;
       const tools: AskSegment[] = [];
       for (const seg of tool.subagentSegments ?? []) if (seg.type === 'tool') tools.push(seg);
       // CC subagent asks never nest (Claude Code does not tell the app WHICH

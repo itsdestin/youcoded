@@ -20,6 +20,7 @@ import { localUserMessage } from './local-user-message';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
+import { specialistFacts } from './native-run-facts';
 import { ccCommandFromLaunch, nativeCommandFromRun, putCommand, settleCommands } from './background-commands';
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
@@ -746,10 +747,11 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
  *  but that carries no live run record after replay was running when the app
  *  quit (a live registry would have replayed its record before this point).
  *  Returns null when no card changes so the reducer can keep its Map ref. */
-export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>): Map<string, ToolCallState> | null {
+export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>, parked?: Map<string, unknown>): Map<string, ToolCallState> | null {
   let out: Map<string, ToolCallState> | null = null;
   for (const [id, card] of toolCalls) {
-    if (card.toolName !== 'Bash' || card.shellRun || !card.response) continue;
+    // A record the host refilled (session:open) is parked until its card appears: it is the truth, not "stopped when the app quit".
+    if (card.toolName !== 'Bash' || card.shellRun || !card.response || parked?.has(id)) continue;
     const m = /\(shell id (sh-[0-9a-f]+)\)/.exec(card.response);
     if (!m) continue;
     out ??= new Map(toolCalls);
@@ -777,7 +779,16 @@ function findSpecialistCard(
   opts?: { carrierFirst?: boolean },
 ): string | null {
   if (opts?.carrierFirst && ref.childId) {
-    for (const [id, tool] of toolCalls) if (tool.specialistRun?.childId === ref.childId) return id;
+    let first: string | null = null;
+    for (const [id, tool] of toolCalls) {
+      if (tool.specialistRun?.childId !== ref.childId) continue;
+      // After a resume the run sits on BOTH the original card and the resume call's; the host
+      // names the live one (activeToolCallId) — that is where the child's traffic belongs.
+      const active = specialistFacts(tool.specialistRun).activeToolCallId;
+      if (!active || active === id) return id;
+      first ??= id;
+    }
+    if (first) return first;
   }
   if (ref.parentToolCallId && toolCalls.has(ref.parentToolCallId)) return ref.parentToolCallId;
   if (ref.childId) {
@@ -2419,7 +2430,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // idleness, so an unknown session is left exactly as it was.
       // G-1 (spec §5.7): applied whether or not the session is idle — it only
       // touches cards that got NO live record from the replay just before this.
-      const orphaned = markOrphanedShellRuns(session.toolCalls);
+      const orphaned = markOrphanedShellRuns(session.toolCalls, session.parkedShellRuns);
       // The command list shows the same "stopped when the app quit" the card does.
       let orphanCommands = session.backgroundCommands;
       if (orphaned) {
@@ -3060,8 +3071,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // applyParkedSpecialistRuns for why dropping it lost a helper's notes.
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // A resumed child's LIVE run is carried by the resume call's card (activeToolCallId, set by the
+      // native host); the original hire card keeps the record too (below). Hosts that send no such
+      // fact fall back to parentToolCallId, exactly as before.
+      const activeId = specialistFacts(action.run).activeToolCallId;
       const cardId = findSpecialistCard(session.toolCalls, {
-        parentToolCallId: action.run.parentToolCallId,
+        parentToolCallId: activeId && session.toolCalls.has(activeId) ? activeId : action.run.parentToolCallId,
         childId: action.run.childId,
       });
       if (!cardId) {
@@ -3132,6 +3147,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // a time — reconcileNoteSegments skips any note already present.
         subagentSegments: reconcileNoteSegments(card.subagentSegments, action.run.notes, action.run.childId),
       });
+      // The original hire card keeps the run record too when the live run sits on a resume call's
+      // card: its Activity and status stay truthful, and `reportStale` (from the host) lets it
+      // show the earlier report as earlier instead of reading Failed from it.
+      const origId = action.run.parentToolCallId;
+      const orig = origId !== cardId ? toolCalls.get(origId) : undefined;
+      if (orig) toolCalls.set(origId, { ...orig, specialistRun: action.run, agentId: orig.agentId ?? action.run.childId, agentType: orig.agentType ?? action.run.agentType });
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }

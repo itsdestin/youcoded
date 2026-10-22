@@ -1,4 +1,5 @@
 import type { ToolCallState } from '../../shared/types';
+import { liveReport, shellEndKind } from '../state/native-run-facts';
 
 /** How one tool card's WORK ended — which is not always what its own result says. */
 export type ToolOutcome = 'running' | 'completed' | 'failed' | 'stopped';
@@ -23,14 +24,13 @@ export function toolOutcome(t: ToolCallState): ToolOutcome {
       case 'interrupted': return 'stopped';
       case 'failed': return 'failed';
       // A delivered report that says it failed outranks a "completed" run.
-      default: return t.specialistReport?.status === 'failed' ? 'failed' : 'completed';
+      default: return liveReport(t)?.status === 'failed' ? 'failed' : 'completed';
     }
   }
   // Native background command: its run record, once it exists.
   if (t.shellRun) {
-    if (t.shellRun.status === 'running') return 'running';
-    if (t.shellRun.status === 'stopped') return 'stopped';
-    return t.shellRun.exitCode === 0 ? 'completed' : 'failed';
+    // Signal kills / unknown exits are stopped, not failed (native-run-facts.ts).
+    return shellEndKind(t.shellRun);
   }
   if (t.status === 'failed') return 'failed';
   // Claude Code background work: only meaningful once the launch receipt landed.

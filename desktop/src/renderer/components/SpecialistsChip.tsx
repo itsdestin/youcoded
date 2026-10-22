@@ -10,6 +10,7 @@ import { Callout, CARD_LEVEL_1, Dialog, Pill, SectionLabel, Tooltip } from './ui
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
+import { liveReport } from '../state/native-run-facts';
 
 /**
  * Specialists 1c — the status-bar chip (spec §6 "attention, not vigilance")
@@ -156,7 +157,7 @@ function StatusPill({ h }: { h: HelperView }) {
   // confirmed by building the stylesheet and finding zero `danger` output) — this
   // pill rendered with NO color at all. `destructive` is the app's real semantic
   // token for this state (see globals.css comment above --color-destructive-fg).
-  if (h.run.status === 'failed' || h.tool.specialistReport?.status === 'failed') return <Pill tone="danger" className="gap-1"><FailIcon className="w-3 h-3" />Failed</Pill>;
+  if (h.run.status === 'failed' || liveReport(h.tool)?.status === 'failed') return <Pill tone="danger" className="gap-1"><FailIcon className="w-3 h-3" />Failed</Pill>;
   return <Pill tone="neutral" className="gap-1"><CheckIcon className="w-3 h-3" />Finished</Pill>;
 }
 
@@ -235,7 +236,7 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
             : <StatusPill h={h} />}
         </div>
         {run.description && <div className="text-xs text-fg-2">{run.description}</div>}
-        <RunStatusLine run={run} report={tool.specialistReport} elapsedUnknown={h.elapsedUnknown} />
+        <RunStatusLine run={run} report={liveReport(tool)} elapsedUnknown={h.elapsedUnknown} />
         {/* The chat card's own Briefing / Activity / Report sections, verbatim
             (Destin, round 9: one representation of a helper's work). Ask
             buttons inside Activity are suppressed — the band below has them. */}
