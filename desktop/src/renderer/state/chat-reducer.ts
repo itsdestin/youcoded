@@ -509,13 +509,24 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       && action.type !== 'TRANSCRIPT_ASSISTANT_REASONING') {
     return state;
   }
-  const parentId = (action as any).parentAgentToolUseId as string | undefined;
+  let parentId = (action as any).parentAgentToolUseId as string | undefined;
   if (!parentId) return state;
 
   const session = state.get(action.sessionId);
   if (!session) return state;
-  const parent = session.toolCalls.get(parentId);
+  let parent = session.toolCalls.get(parentId);
   if (!parent) return state;
+  // B3 (audit): a RESUMED native child's events are stamped with the NEW resume-call
+  // Task card, which carries no run of its own, while the child's run (and its
+  // Activity trail) lives on the card that first hired it. Follow the child id to the
+  // card that carries its run. Scoped to a run-less native Task parent so the common
+  // path (and every Claude Code subagent event) pays no scan.
+  const stampedChild = (action as { agentId?: string }).agentId;
+  if (stampedChild && parent.toolName === 'Task' && !parent.specialistRun) {
+    for (const [id, tool] of session.toolCalls) {
+      if (tool.specialistRun?.childId === stampedChild) { parentId = id; parent = tool; break; }
+    }
+  }
 
   // Fix (external review, 2026-08-13): a subagent event used to skip the
   // seenUuids dedup every other replay-fed entry point passes (see
@@ -759,7 +770,15 @@ export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>): Ma
 function findSpecialistCard(
   toolCalls: Map<string, ToolCallState>,
   ref: { parentToolCallId?: string; childId?: string },
+  // B3 (audit): for the child's OWN traffic (its asks, its delivered report) the card
+  // that carries the child's run record wins over the call the traffic was stamped
+  // with. A RESUMED child is stamped with the NEW resume-call card, which has no run
+  // of its own — so its asks nested there and the chip never turned amber for them.
+  opts?: { carrierFirst?: boolean },
 ): string | null {
+  if (opts?.carrierFirst && ref.childId) {
+    for (const [id, tool] of toolCalls) if (tool.specialistRun?.childId === ref.childId) return id;
+  }
   if (ref.parentToolCallId && toolCalls.has(ref.parentToolCallId)) return ref.parentToolCallId;
   if (ref.childId) {
     for (const [id, tool] of toolCalls) {
@@ -1564,7 +1583,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.injectedMeta.parentToolCallId,
           childId: action.injectedMeta.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const toolCalls = new Map(session.toolCalls);
@@ -2456,7 +2475,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.specialist.parentToolCallId,
           childId: action.specialist.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const segs = card.subagentSegments ? [...card.subagentSegments] : [];
@@ -2703,7 +2722,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.specialist.parentToolCallId,
           childId: action.specialist.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const segs = card.subagentSegments;
@@ -3081,8 +3100,13 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // that is not strictly newer than what the card holds is a straggler.
       // Both sides must carry a stamp: a card replayed from a build without
       // one cannot be ordered, and refusing an update there would freeze it.
+      // B2 (audit): a RESUMED child restarts the same ledger row (running, startedAt reset).
+      // That is a NEWER RUN, whatever its stamp says — the host's stamp counter restarts with
+      // the host, and refusing the update would freeze the card on the finished first run.
+      const newerRun = !!card.specialistRun && action.run.startedAt > card.specialistRun.startedAt;
       if (
         card.specialistRun
+        && !newerRun
         && action.run.seq !== undefined
         && card.specialistRun.seq !== undefined
         && action.run.seq <= card.specialistRun.seq
@@ -3090,8 +3114,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         return state;
       }
       const toolCalls = new Map(session.toolCalls);
+      // B2: the first run's delivered report is not the resumed run's. Dropped when the child
+      // starts again, or when the run now shown began after that report was delivered; the
+      // resumed run's own report lands later through the normal fold.
+      const { specialistReport: priorReport, ...cardNoReport } = card;
+      const staleReport = !!priorReport && (newerRun || (action.run.status === 'running' && card.specialistRun?.status !== 'running')
+        || priorReport.timestamp < action.run.startedAt);
       toolCalls.set(cardId, {
-        ...card,
+        ...(staleReport ? cardNoReport : card),
         specialistRun: action.run,
         agentId: card.agentId ?? action.run.childId,
         agentType: card.agentType ?? action.run.agentType,
