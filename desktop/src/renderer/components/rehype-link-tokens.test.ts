@@ -34,7 +34,7 @@ function oldPass(tree: Root, filepaths: boolean) {
 
 const run = (tree: Root, filepaths: boolean) => (rehypeLinkTokens as any)({ filepaths })(tree);
 const t = (value: string): Text => ({ type: 'text', value });
-const el = (tagName: string, children: RootContent[]): Element => ({ type: 'element', tagName, properties: {}, children });
+const el = (tagName: string, children: any[]): Element => ({ type: 'element', tagName, properties: {}, children });
 
 // Small seeded PRNG so a failure reproduces.
 function rng(seed: number) { return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32; }
@@ -83,7 +83,7 @@ describe('rehypeLinkTokens', () => {
         },
       });
       const code = el('code', []);
-      code.children = counted as RootContent[];
+      code.children = counted as any;
       const tree: Root = { type: 'root', children: [el('pre', [code])] };
       run(tree, true);
       return { count, total: kids.length };
