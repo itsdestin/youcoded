@@ -53,6 +53,19 @@ export function writeRecoveryDraft(key: string, draft: RecoveryDraft): void {
   } catch { /* no window/storage in an unavailable browser context */ }
 }
 
+// WHY (perf, 2026-10-22): every 250 ms flush re-parsed EVERY other stored draft in full just to
+// read its `at` stamp — up to 32 drafts of up to 2.25 M characters each, tens of ms apiece, while
+// the user typed. Records this module wrote start with `{"v":1,"at":<number>,` (JSON.stringify
+// writes keys in insertion order), so the stamp is read from that prefix. Anything not in that
+// shape, or not ending like an object, takes the old full-parse path, so odd/damaged records
+// behave exactly as before (a failed parse sorts first, to be evicted first).
+const AT_PREFIX_RE = /^\{"v":1,"at":(\d+),/;
+export function storedAt(raw: string): number {
+  const m = raw.charCodeAt(raw.length - 1) === 125 /* } */ ? AT_PREFIX_RE.exec(raw.slice(0, 48)) : null;
+  if (m) return Number(m[1]);
+  try { return JSON.parse(raw).at ?? 0; } catch { /* discard malformed records first */ return 0; }
+}
+
 export function flushRecoveryDrafts(): void {
   if (timer) clearTimeout(timer);
   timer = undefined;
@@ -66,8 +79,7 @@ export function flushRecoveryDrafts(): void {
         const k = store.key(i);
         if (!k?.startsWith(PREFIX) || k === key) continue;
         const raw = store.getItem(k) ?? '';
-        let at = 0;
-        try { at = JSON.parse(raw).at ?? 0; } catch { /* discard malformed records first */ }
+        const at = storedAt(raw);
         older.push({ key: k, at, size: raw.length + k.length });
       }
       older.sort((a, b) => a.at - b.at);
