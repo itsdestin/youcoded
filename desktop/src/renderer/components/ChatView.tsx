@@ -1037,7 +1037,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 <StatusStrip
                   tone="busy"
                   detail="Your draft is kept. Press Send again once you’re reconnected."
-                  action={onUsePhoneOnly && isAndroid() ? <Button size="sm" variant="ghost" onClick={onUsePhoneOnly}>Use this phone only</Button> : undefined}
+                  // WHY outlined and on its own line (review P-1): borderless, it read as loose text, and beside the
+                  // words it squeezed "Reconnecting to your computer…" onto two lines at phone width.
+                  actionBelow
+                  action={onUsePhoneOnly && isAndroid() ? <Button size="sm" variant="secondary" className="w-full justify-center" onClick={onUsePhoneOnly}>Use this phone only</Button> : undefined}
                 >
                   Reconnecting to your computer…
                 </StatusStrip>

@@ -30,7 +30,7 @@ export const APP: readonly ScreenEntry[] = [
   { name: 'dev/open-tasks#native', tags: ['dev'], mark: 'chat/open-tasks', params: { tasks: 'native' } },
   // The phone's start-up screens (dev/workbench/GatePractice.tsx) and its two new notices (ToastPractice.tsx): the real gate / toast over
   // pretend connections, at phone size. Phone-reliability review deck, 2026-10-22.
-  ...(['connecting', 'unreachable', 'tab'] as const).map((g) => ({
+  ...(['connecting', 'unreachable', 'tab', 'login'] as const).map((g) => ({
     name: `dev/gate#${g}`, tags: ['dev', 'narrow'], viewport: { width: 390, height: 844 }, params: { gate: g }, newIn: 'after' as const,
   })),
   ...(['lost', 'password'] as const).map((t) => ({

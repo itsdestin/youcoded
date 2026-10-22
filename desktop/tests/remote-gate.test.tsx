@@ -39,7 +39,7 @@ async function mount(f: ReturnType<typeof fakeShim>) {
   await act(async () => {});
 }
 
-const passwordBox = () => screen.queryByPlaceholderText('Password');
+const passwordBox = () => screen.queryByLabelText('Password');
 
 describe('RemoteGate', () => {
   beforeEach(() => {
@@ -87,9 +87,9 @@ describe('RemoteGate', () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.report({ type: 'failed', kind: 'unreachable' });
-    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
-    expect(screen.getByText('Trying again…')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    expect(screen.getByText("Can't reach your computer")).toBeTruthy();
+    expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(f.shim.retrySavedKeyNow).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Enter password instead' }));
     expect(f.shim.stopSavedKeySignIn).toHaveBeenCalled();
@@ -138,7 +138,7 @@ describe('RemoteGate', () => {
     expect(screen.getByText('This computer no longer accepts this device. Enter the password to connect again.')).toBeTruthy();
   });
 
-  it('a page older than its computer says so and offers Refresh, which reloads', async () => {
+  it('a page older than its computer says so and offers a reload, which reloads', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.setState('connected');
@@ -147,25 +147,27 @@ describe('RemoteGate', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: { ...orig, reload } });
     try {
       f.refuseCredential('unsupported-version');
-      expect(screen.getByText("This page is older than your computer's YouCoded. Refresh to update.")).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(screen.getByText('This page needs a refresh')).toBeTruthy();
+      // No password box: a password cannot fix an old page (review P-5).
+      expect(passwordBox()).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Reload this tab' }));
       expect(reload).toHaveBeenCalledTimes(1);
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: orig });
     }
   });
 
-  it('"Try now" shows it is trying, and the password stays one tap away', async () => {
+  it('"Try again" shows it is trying, and the password stays one tap away', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
     f.report({ type: 'failed', kind: 'unreachable' });
-    fireEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(screen.getByText('Trying to connect…')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Enter password instead' })).toBeTruthy();
     f.report({ type: 'failed', kind: 'unreachable' });
-    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText("Can't reach your computer")).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('a refusal the page cannot explain, or an unexpected error, does not blame the password', async () => {
@@ -217,8 +219,8 @@ describe('RemoteGate', () => {
       const f = fakeShim({ savedKey: false });
       (f.shim.connectToHost as any).mockRejectedValue(Object.assign(new Error('timed out'), { signInFailure: { kind: 'unreachable' } }));
       await mountAndroid(f);
-      await waitFor(() => expect(screen.getByText("Can't reach Home PC.")).toBeTruthy());
-      expect(screen.getByText('Trying again…')).toBeTruthy();
+      await waitFor(() => expect(screen.getByText("Can't reach Home PC")).toBeTruthy());
+      expect(screen.getByText('It keeps trying by itself every few seconds.')).toBeTruthy();
       expect(screen.queryByText('THE APP')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Use this phone only' }));
       await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());
