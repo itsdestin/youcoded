@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import {
   splitMarkdownBlocks, blockChunks, definitionsOf, withDefinitions, startStream, advanceStream,
-  splitOpenList, scanOpenList, OPEN_LIST_CHUNK_ITEMS, type ListScan,
+  splitOpenList, scanOpenList, openListStart, OPEN_LIST_CHUNK_ITEMS, type ListScan,
   type MarkdownBlocks, type StreamView,
 } from './markdown-blocks';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
@@ -389,7 +389,6 @@ describe('splitOpenList', () => {
   it('refuses shapes that markdown reads across items', () => {
     const base = list(60);
     for (const [name, extra] of [
-      ['a blank line', '\n- more\n'],
       ['another bullet', '* star\n'],
       ['a task', '- [ ] todo\n'],
       ['a rule', '---\n'],
@@ -401,13 +400,29 @@ describe('splitOpenList', () => {
       expect(splitOpenList(base + extra), name).toBeNull();
     }
     // once refused, still refused as text follows
-    const bad = scanOpenList(base + '\n', null)!;
+    const bad = scanOpenList(base + '* star\n', null)!;
     expect(bad.bad).toBe(true);
-    expect(splitOpenList(base + '\n- x\n', bad)).toBeNull();
+    expect(splitOpenList(base + '* star\n- x\n', bad)).toBeNull();
   });
 
   it('accepts nested items and lazy continuation lines', () => {
     const s = splitOpenList(Array.from({ length: 50 }, (_, i) => `- p${i}\n  - child\n    deeper\n- q${i}\nlazy`).join('\n') + '\n');
     expect(s).not.toBeNull();
+  });
+
+  it('finds a list that ends the text after other paragraphs, and refuses one that could join an earlier list', () => {
+    const l = list(50);
+    expect(openListStart(l)).toBe(0);
+    expect(openListStart(`Intro:\n\nMore.\n\n${l}`)).toBe('Intro:\n\nMore.\n\n'.length);
+    expect(openListStart(`Intro:\n${l}`)).toBe(-1); // no blank line: the list starts inside the paragraph's block
+    expect(openListStart(`- first\n\n${l}`)).toBe(-1); // one loose list, not two
+    expect(openListStart(`1. a\n   more\n\n${l}`)).toBe(-1);
+    expect(openListStart('```\ncode\n\n' + l)).toBe(-1); // inside an open fence
+    // text that starts with blank lines must not hang the backwards walk
+    expect(openListStart('\n\n')).toBe(-1);
+    expect(openListStart(`\n${l}`)).toBeGreaterThanOrEqual(-1);
+    expect(openListStart('\n')).toBe(-1);
+    const s = splitOpenList(`Intro:\n\n${l}`)!;
+    expect(s.prefix + s.chunks.join('') + s.tail).toBe(`Intro:\n\n${l}`);
   });
 });

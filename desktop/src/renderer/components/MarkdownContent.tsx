@@ -532,7 +532,6 @@ interface FrozenFence {
   /** The same lines drawn once each, as the children that come first inside <code>. */
   node: React.ReactNode;
 }
-const LIST_START = /^(?:[-+*]|\d{1,9}[.)]) /;
 const FrozenFenceContext = createContext<FrozenFence | null>(null);
 
 /** The finished lines that come first inside a still-open fence's <code> (nothing elsewhere). */
@@ -614,6 +613,8 @@ const mdPreviewComponents = {
  * continues, `space-y-*` spacing and every sibling selector see the same tree.
  */
 interface FrozenList {
+  /** Line (1-based) of the document react-markdown is drawing where the live list starts: the head belongs to THAT list only. */
+  line: number;
   ordered: boolean;
   /** The whole list's first number (the live tail would otherwise claim the number of ITS first item). */
   start: number;
@@ -621,8 +622,8 @@ interface FrozenList {
 }
 const FrozenListContext = createContext<FrozenList | null>(null);
 
-/** Is this the list that starts the document react-markdown is drawing (not one nested inside an item)? */
-const isFirstList = (node: any) => node?.position?.start?.line === 1 && node?.position?.start?.column === 1;
+/** Is this the top-level list that starts on `line` of the document react-markdown is drawing (not one nested inside an item)? */
+const isListAt = (node: any, line: number) => node?.position?.start?.line === line && node?.position?.start?.column === 1;
 
 const liveListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
 const chunkListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
@@ -634,7 +635,7 @@ function liveListComponents(components: NonNullable<React.ComponentProps<typeof 
       const Base: any = (components as any)[tag] ?? tag;
       return function LiveList(props: any) {
         const head = useContext(FrozenListContext);
-        if (!head || head.ordered !== (tag === 'ol') || !isFirstList(props.node)) return <Base {...props} />;
+        if (!head || head.ordered !== (tag === 'ol') || !isListAt(props.node, head.line)) return <Base {...props} />;
         // start: only the real first number, and none when it is 1 (as react-markdown leaves it).
         const start = tag === 'ol' ? { start: head.start === 1 ? undefined : head.start } : {};
         return <Base {...props} {...start}>{head.node}{props.children}</Base>;
@@ -652,7 +653,7 @@ function chunkListComponents(components: NonNullable<React.ComponentProps<typeof
     const make = (tag: 'ul' | 'ol') => {
       const Base: any = (components as any)[tag] ?? tag;
       return function ChunkList(props: any) {
-        if (!isFirstList(props.node)) return <Base {...props} />;
+        if (!isListAt(props.node, 1)) return <Base {...props} />;
         // WHY the trailing newline is dropped: the live list's own children start with one, so
         // head + tail give exactly the "\n<li>\n<li>\n" a single list has.
         const kids = React.Children.toArray(props.children);
@@ -708,8 +709,10 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, listScan, rehypePlugins, components }: {
   source: string;
+  /** How far a scan of this piece as a growing list has got (see scanOpenList); null = draw it whole. */
+  listScan: ListScan | null;
   /** The reply is still streaming — the only time a long open fence may be drawn in chunks. */
   live: boolean;
   /** Where an open top-level fence starts in `source` when text comes before it (see DrawnGroup.fenceAt). */
@@ -746,28 +749,26 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
 
   // A long tight list still being typed (not a fence, no definitions in front): finished items are
   // drawn once, in chunks of 20, and react-markdown re-reads only the newest ones (splitOpenList).
-  // WHY gated on `live`, like the fence: a list that stops, or a finished message, draws as one list.
-  // WHY a ref: it only remembers how far the scan got so an update reads just the new lines; the
-  // answer is the same with or without it (scanOpenList checks the text), so a discarded render
-  // cannot leave anything stale.
-  const scanRef = useRef<ListScan | null>(null);
-  const listScan = live && !defs && !split ? scanOpenList(source, scanRef.current) : null;
-  scanRef.current = listScan;
-  const listSplit = listSplitOf(source, listScan);
+  // The scan comes from the parent (see MarkdownContent) and is null unless the reply is live and
+  // this group is the last one, so a finished reply and every other group draw as before.
+  const listSplit = !split && !defs && listScan?.source === source ? listSplitOf(source, listScan) : null;
   const listChunks = listSplit?.chunks;
   const listOrdered = listSplit?.ordered ?? false;
   const listStart = listSplit?.start ?? 1;
+  // The list's line in the document drawn below (text before it, if any, comes first).
+  const listLine = listSplit ? listSplit.prefix.split('\n').length : 1;
   // WHY memoised on the chunk list: it is the same array until a whole new chunk freezes.
   const frozenList = useMemo<FrozenList | null>(() => {
     if (!listChunks || !components) return null;
     return {
+      line: listLine,
       ordered: listOrdered,
       start: listStart,
       node: listChunks.map((chunk, i) => (
         <FrozenListChunk key={i} source={chunk} rehypePlugins={rehypePlugins} components={components} />
       )),
     };
-  }, [listChunks, listOrdered, listStart, rehypePlugins, components]);
+  }, [listChunks, listOrdered, listStart, listLine, rehypePlugins, components]);
 
   const markdown = (
     <ReactMarkdown
@@ -775,7 +776,7 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
       rehypePlugins={rehypePlugins}
       components={listSplit && components ? liveListComponents(components) : components}
     >
-      {split ? prefix + opening + split.tail : listSplit ? listSplit.tail : withDefinitions(source, defs)}
+      {split ? prefix + opening + split.tail : listSplit ? listSplit.prefix + listSplit.tail : withDefinitions(source, defs)}
     </ReactMarkdown>
   );
   // WHY the Provider is ALWAYS the root (null when there is no head): swapping the
@@ -878,6 +879,10 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // function at once with the new view, before drawing any child, so the cost
   // is one extra call of this function, not a second draw.
   const [streamState, setStreamState] = useState<StreamView>(() => startStream(content));
+  // Where the last group's scan as a growing list has got to, so an update reads only the new lines.
+  // WHY a ref: it only remembers progress; scanOpenList checks the text itself, so the answer is the
+  // same with or without it and a render React discards cannot leave anything stale.
+  const listScanRef = useRef<ListScan | null>(null);
   let stream = streamState;
   if (incremental && stream.drawn !== content) {
     stream = advanceStream(stream, content);
@@ -896,6 +901,12 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     // same element the single-document render used, so nothing drawn before the
     // message started growing is rebuilt.
     let painted = false;
+    // WHY the scan is made here and not by the chunk: only the LAST group of a live reply can be a list
+    // that is still growing. When the reply ends the scan turns null and just that group is redrawn whole;
+    // a plain `live` flag would have redrawn the last group of every reply (it stays null for those).
+    const lastGroup = stream.groups[stream.groups.length - 1];
+    const listScan = live && lastGroup && lastGroup.fenceAt === undefined ? scanOpenList(lastGroup.draw, listScanRef.current) : null;
+    listScanRef.current = listScan;
     return (
       <>
         {stream.groups.map((g) => {
@@ -914,9 +925,8 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                   // WHY live only for the group holding an open fence: the turn ending flips `live` for the
                   // whole bubble, and every other group would miss its memo and be re-parsed and
                   // re-coloured in one commit — a hitch at the end of every reply.
-                  // A long list at the very end of the reply is chunked the same way (only the last group, and only a
-                  // group that starts with a list marker, so nothing else is redrawn when the reply ends).
-                  live={live && (g.fenceAt !== undefined || (g === stream.groups[stream.groups.length - 1] && LIST_START.test(g.draw)))}
+                  live={live && g.fenceAt !== undefined}
+                  listScan={g === lastGroup ? listScan : null}
                   fenceAt={g.fenceAt}
                   rehypePlugins={rehypePlugins}
                   components={components}

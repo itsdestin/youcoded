@@ -925,6 +925,8 @@ export const OPEN_LIST_CHUNK_ITEMS = 20;
 export interface ListScan {
   /** The text scanned so far (the new text must start with this to resume). */
   source: string;
+  /** Where the list starts in `source` (0, or the line after the last blank line when text comes before it). */
+  at: number;
   /** The list cannot be drawn in chunks (and never will be, however much text follows). */
   bad: boolean;
   ordered: boolean;
@@ -959,6 +961,46 @@ const LIST_ITEM_NOT_PLAIN = /^(?:[`~]{3}|#{1,6}(?:\s|$)|>|[-+*](?:\s|$)|\d{1,9}[
 // letter or any non-ASCII character, never a character that can open another kind of block.
 const LAZY_START = /^[A-Za-z -￿]/;
 
+/**
+ * Where a list that ENDS `source` starts, or -1: 0 when the text begins with a list marker, else the line
+ * after the last blank line, provided that line begins a list and the block before it cannot be a list
+ * (a blank line between two lists' items would join them into one loose list, which changes the page).
+ * WHY a prefix at all: a bubble that mounts part-way through a reply (the renderer was busy, a hidden
+ * chat) draws everything it was given as ONE group, so the list has the reply's first paragraphs in
+ * front of it (perf-lab pathlist-stream, 2026-10-22: 5000-item rungs).
+ */
+export function openListStart(source: string): number {
+  // Complete lines, last to first, as [start, end) offsets; the line still being typed is not looked at.
+  let lineEnd = source.lastIndexOf('\n');
+  const lineBefore = (): [number, number] | null => {
+    if (lineEnd < 0) return null;
+    const end = lineEnd;
+    // WHY the end===0 case: lastIndexOf with a negative start still looks at index 0, which would loop forever on a text that begins with a blank line.
+    const start = end === 0 ? 0 : source.lastIndexOf('\n', end - 1) + 1;
+    lineEnd = start - 1;
+    return [start, end];
+  };
+  let at = -1;
+  for (let l = lineBefore(); l; l = lineBefore()) {
+    if (source.slice(l[0], l[1]).trim() === '') { at = l[1] + 1; break; }
+  }
+  if (at < 0) return LIST_MARKER.test(source.slice(0, 40)) ? 0 : -1;
+  if (!LIST_MARKER.test(source.slice(at, at + 40))) return -1;
+  // The block just before the blank line(s): no list marker or indented line in it...
+  lineEnd = at - 1;
+  let l = lineBefore();
+  while (l && source.slice(l[0], l[1]).trim() === '') l = lineBefore();
+  for (; l; l = lineBefore()) {
+    const line = source.slice(l[0], l[1]);
+    if (line.trim() === '') break;
+    if (/^[ \t]/.test(line) || /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(line)) return -1;
+  }
+  // ...and no code fence left open above.
+  let fences = 0;
+  for (const _ of source.slice(0, at).matchAll(/(?:^|\n) {0,3}(?:`{3,}|~{3,})/g)) fences++;
+  return fences % 2 === 1 ? -1 : at;
+}
+
 /** A fresh scan of `source`, or `prev` carried forward when `source` only appends to it. */
 export function scanOpenList(source: string, prev?: ListScan | null): ListScan | null {
   let s: ListScan;
@@ -967,12 +1009,14 @@ export function scanOpenList(source: string, prev?: ListScan | null): ListScan |
     s = { ...prev, source };
     s.itemStarts.length = s.itemCount;
   } else {
-    const first = LIST_MARKER.exec(source);
-    if (!first || source.includes('\r')) return null;
+    if (source.includes('\r')) return null;
+    const at = openListStart(source);
+    if (at < 0) return null;
+    const first = LIST_MARKER.exec(source.slice(at, at + 40))!;
     s = {
-      source, bad: false, ordered: first[2] !== undefined, marker: first[1] ?? first[3],
+      source, at, bad: false, ordered: first[2] !== undefined, marker: first[1] ?? first[3],
       start: first[2] !== undefined ? Number(first[2]) : 1,
-      itemStarts: [], itemCount: 0, scanned: 0, lastKind: 'marker', offset: 0, chunks: [],
+      itemStarts: [], itemCount: 0, scanned: at, lastKind: 'marker', offset: 0, chunks: [],
     };
   }
   const fail = () => { s.bad = true; return s; };
@@ -1020,6 +1064,8 @@ export function scanOpenList(source: string, prev?: ListScan | null): ListScan |
 }
 
 export interface OpenListSplit {
+  /** Everything before the list (empty when the text starts with it). */
+  prefix: string;
   ordered: boolean;
   /** The first item's number: the real `<ol start>` of the whole list. */
   start: number;
@@ -1049,5 +1095,5 @@ export function splitOpenList(whole: string, prev?: ListScan | null): OpenListSp
 export function listSplitOf(whole: string, scan: ListScan | null): OpenListSplit | null {
   if (!scan || scan.bad || scan.chunks.length === 0) return null;
   const tailAt = scan.itemStarts[scan.chunks.length * OPEN_LIST_CHUNK_ITEMS];
-  return { ordered: scan.ordered, start: scan.start, chunks: scan.chunks, tail: whole.slice(tailAt), scan };
+  return { prefix: whole.slice(0, scan.at), ordered: scan.ordered, start: scan.start, chunks: scan.chunks, tail: whole.slice(tailAt), scan };
 }
