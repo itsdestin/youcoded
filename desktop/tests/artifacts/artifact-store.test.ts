@@ -825,7 +825,7 @@ describe('appendVersion — shared parsed copy + compact file', () => {
   });
 });
 
-// Review 2026-10-22: a writer from another process can replace the sidecar between our committed write and the
+// A writer from another process can replace the sidecar between our committed write and the
 // stat that seeds the shared copy. Our object must never end up cached under THEIR file's stat.
 describe('shared sidecar cache — a replace racing our seed', () => {
   let projectRoot: string;

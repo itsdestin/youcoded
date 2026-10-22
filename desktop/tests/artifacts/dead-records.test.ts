@@ -199,7 +199,7 @@ describe('selectArchivable — invariants', () => {
   });
 });
 
-describe('selectArchivable — offline volumes and stubs (review 2026-10-22)', () => {
+describe('selectArchivable — offline volumes and stubs', () => {
   const old = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => rec(`${prefix}${i}`, 90, { path: `${prefix}/f${i}.md` }));
 
   it.each([

@@ -318,7 +318,7 @@ describe('scripts/restore-artifact-archive.mjs', () => {
   });
 });
 
-describe('review 2026-10-22: archive files, durable restore, last look, stubs', () => {
+describe('archive files, durable restore, last look at commit, and offline-drive stubs', () => {
   it('every run writes a NEW archive file and never rewrites an earlier one', async () => {
     seed(12);
     await twoStrikes();

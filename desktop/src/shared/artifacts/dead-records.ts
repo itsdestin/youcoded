@@ -68,7 +68,7 @@ export interface SelectOptions {
 
 type Blocked = 'outage-suspected' | 'below-floor' | 'braked';
 
-export function groupKey(target: string | null, projectRoot: string): string {
+function groupKey(target: string | null, projectRoot: string): string {
   if (!target) return '(unresolved)';
   const t = fwd(target); const root = fwd(projectRoot).replace(/\/+$/, '');
   if (t.startsWith(root + '/')) return 'in:' + t.slice(root.length + 1).split('/')[0];
