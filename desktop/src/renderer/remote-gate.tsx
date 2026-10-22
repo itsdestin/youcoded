@@ -34,6 +34,8 @@ const OLD_PAGE_NOTICE = "This page is older than your computer's YouCoded. Refre
 // WHY (2026-10-22): the computer now closes an older connection when the same browser signs in again, so a second tab
 // takes over from the first. Only a reload of THIS tab brings it back; the password is not needed.
 const OTHER_TAB_NOTICE = 'YouCoded is open in another tab of this browser. Reload this tab to use it here.';
+// WHY exported: the photo-only screen list shows this toast with these very words (dev/workbench/ToastPractice).
+export const savedPasswordRefusedNotice = (name: string) => `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`;
 const RELOAD_NOTICES = new Set([OLD_PAGE_NOTICE, OTHER_TAB_NOTICE]);
 const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
 
@@ -272,7 +274,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setResume('none');
         const { announce } = await import('./utils/announce');
         // After the app has mounted its toast.
-        window.setTimeout(() => announce(`${c.name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`, 8000), 1500);
+        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name), 8000), 1500);
         return;
       }
       setComputerTrouble(true);

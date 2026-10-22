@@ -238,6 +238,9 @@ export function splitSentContent(content: string, attachments: readonly string[]
  *  The listener sets `detail.restored` when it took them, so a caller can tell (it only takes them into an empty box). */
 export const RESTORE_UNSENT_EVENT = 'youcoded:restore-unsent-text';
 
+// WHY exported: the photo-only screen list (dev/workbench/ToastPractice) shows this toast with these very words, so the picture cannot drift from the app.
+export const LOST_SEND_NOTICE = "An earlier message didn't reach your computer. It's back in the message box.";
+
 let settling: Promise<void> | null = null;
 
 /**
@@ -269,7 +272,7 @@ export function settleSavedQueueSends(onlySessionId?: string): Promise<void> {
       if (!detail.restored) continue; // the box is busy or not on screen: kept for the next check, never lost
       clearPendingQueueSend(sessionId, request);
       announce(sure
-        ? "An earlier message didn't reach your computer. It's back in the message box."
+        ? LOST_SEND_NOTICE
         : "An earlier message may not have reached your computer. It's back in the message box — check the conversation before sending it again.", 6000);
     }
   })().finally(() => { settling = null; });
