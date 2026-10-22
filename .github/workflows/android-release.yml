@@ -73,7 +73,7 @@ jobs:
           docker pull alpine:3.24
           echo 'YOUCODED_APK_VERSION=docker run --rm alpine:3.24 apk version -t' >> "$GITHUB_ENV"
       - name: Cache runtime downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: app/build/runtime-cache
           key: android-runtime-${{ hashFiles('app/runtime/pins.env') }}
