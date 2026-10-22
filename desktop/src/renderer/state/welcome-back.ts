@@ -7,7 +7,6 @@
 // are the renderer's side of it plus the pure pieces a batch resume needs.
 import type { ModelBinding } from '../../shared/provider-types';
 import type { PortableModelRef } from '../../shared/types';
-import { claudeAliasForModelId } from '../../shared/model-ids';
 
 // main/preload/remote-shim all carry the two channels now (design §3), so
 // window.claude.session is fully typed — no `as any` needed.
@@ -56,11 +55,4 @@ export function resolveNativeBinding(
     return !!p && p.type === ref.providerType && m.id === ref.modelId;
   });
   return match ? { providerId: match.providerId, modelId: match.id } : null;
-}
-
-/** The Claude model a batch resume launches a Claude Code row on: the one it
- *  last ran on when that maps to an alias, else the app default — the rule the
- *  Resume browser's own form applies (ResumeOptions.tsx modelForRow). */
-export function claudeModelFor(ref: PortableModelRef | undefined, fallback: string | undefined): string {
-  return (ref ? claudeAliasForModelId(ref.modelId) : null) || fallback || 'sonnet';
 }

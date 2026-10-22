@@ -51,6 +51,28 @@ export function isPlaceholderModelId(id: string): boolean {
 }
 
 /**
+ * The model a live Claude Code assistant-text event says the CONVERSATION is
+ * on, or null when the event says nothing about that.
+ *
+ * WHY (found 2026-10-21): the transcript watcher forwards a helper agent's
+ * (subagent's) messages through the same event stream as the main
+ * conversation's, stamped with `parentAgentToolUseId`/`agentId`
+ * (transcript-event-types.ts stampSubagent). Helpers run on their own model —
+ * YouCoded starts them on Sonnet (pty-worker.js CLAUDE_CODE_SUBAGENT_MODEL) —
+ * so recording their model flipped an Opus conversation's saved model to
+ * Sonnet every time a helper spoke. A crash while helpers were still working
+ * left it there, and Welcome back reopened the conversation on Sonnet.
+ * Placeholder ids (`<synthetic>`) are not a model either.
+ */
+export function conversationModelOf(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as { model?: unknown; parentAgentToolUseId?: unknown; agentId?: unknown };
+  if (d.parentAgentToolUseId || d.agentId) return null;
+  if (typeof d.model !== 'string' || !d.model || isPlaceholderModelId(d.model)) return null;
+  return d.model;
+}
+
+/**
  * Map a raw Claude Code model id onto one of the aliases above, or null.
  *
  * WHY: a transcript records the CONCRETE model a turn ran on

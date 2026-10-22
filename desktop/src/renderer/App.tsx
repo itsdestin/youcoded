@@ -98,7 +98,7 @@ import SettingsPanel from './components/SettingsPanel';
 import { readBuddyStyle } from './components/BuddyStyleRow';
 import ResumeBrowser from './components/ResumeBrowser';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
-import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -2724,9 +2724,12 @@ function AppInner() {
       return true;
     }
 
-    // Use explicitly chosen resume model; fall back to the current session's model.
-    // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
-    const m = resumeModel || realModelAlias(currentModel);
+    // Only a model the person chose in a resume form is sent. WHY: with none,
+    // main reopens the conversation on the model it last ran on
+    // (main/conversations/resume-model.ts). Filling the gap here with the open
+    // tab's model — or Sonnet when no tab was open — reopened Opus
+    // conversations on Sonnet (2026-10-21).
+    const m = resumeModel || undefined;
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
     const newSession = await resume(buildSessionCreateArgs({
@@ -2749,7 +2752,7 @@ function AppInner() {
     // pass the locator the page handler can resolve the file from.
     void loadFirstPage(newSession.id, { claudeSessionId, projectSlug });
     return true;
-  }, [currentModel, askTakeover, loadFirstPage, adoptCreatedSession]);
+  }, [askTakeover, loadFirstPage, adoptCreatedSession]);
 
   // Cards deep in the chat tree ask for a resume by event — the same
   // deep-component→destination pattern as youcoded:open-library (~:397).
@@ -3186,7 +3189,11 @@ function AppInner() {
       }
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
-        claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
+        // No model: this screen offers no picker, so main reopens each
+        // conversation on the model its own transcript last ran on
+        // (resume-model.ts). The row's lastUsedModel can be a record an older
+        // build let a helper agent's Sonnet overwrite — the 2026-10-21 bug.
+        undefined,
         // WHY always false: this screen shows no Skip permissions switch, so a
         // default of "skip" would have reopened every session with approvals off,
         // unseen. Resuming one row through its own card still shows the switch.
@@ -3199,7 +3206,7 @@ function AppInner() {
       launched: rows.filter((_, i) => results[i] === 'launched').map((r) => r.sessionId),
       needModel: rows.filter((_, i) => results[i] === 'need-model').map((r) => r.sessionId),
     };
-  }, [handleResumeSession, sessionDefaults]);
+  }, [handleResumeSession]);
   const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
     : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);

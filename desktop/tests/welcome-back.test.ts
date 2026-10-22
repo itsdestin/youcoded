@@ -5,7 +5,7 @@
 // ResumeBrowser-welcome-back.test.tsx and app-welcome-back-gating.test.tsx,
 // which mount real components against a mocked window.claude.session.
 import { describe, it, expect } from 'vitest';
-import { resolveNativeBinding, claudeModelFor } from '../src/renderer/state/welcome-back';
+import { resolveNativeBinding } from '../src/renderer/state/welcome-back';
 
 describe('resolveNativeBinding', () => {
   const providers = [
@@ -65,23 +65,5 @@ describe('resolveNativeBinding', () => {
       { modelId: 'llama-4', providerType: 'ollama', providerLabel: 'Ollama' },
       providers, catalog,
     )).toBeNull();
-  });
-});
-
-describe('claudeModelFor', () => {
-  it('maps a recorded Claude family model to its alias', () => {
-    expect(claudeModelFor({ modelId: 'claude-opus-5', providerType: 'claude-code', providerLabel: 'Claude Code' }, 'sonnet')).toBe('opus[1m]');
-  });
-
-  it('falls back to the given default when the row records no model (native row, unresolved binding)', () => {
-    expect(claudeModelFor(undefined, 'haiku')).toBe('haiku');
-  });
-
-  it('falls back to the given default for a model id outside the four Claude families', () => {
-    expect(claudeModelFor({ modelId: '<synthetic>', providerType: 'claude-code', providerLabel: 'Claude Code' }, 'sonnet')).toBe('sonnet');
-  });
-
-  it('falls back to "sonnet" when there is neither a mapped alias nor a caller-supplied default', () => {
-    expect(claudeModelFor(undefined, undefined)).toBe('sonnet');
   });
 });

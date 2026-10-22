@@ -15,7 +15,7 @@ import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-
 import { SAFE_ID_RE } from './session-browser';
 import { HookRelay } from './hook-relay';
 import { IPC, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
-import { isPlaceholderModelId } from '../shared/model-ids';
+import { conversationModelOf } from '../shared/model-ids';
 import { setPermissionOverrides, forgetSessionAttention } from './app-signals';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
@@ -117,7 +117,8 @@ import { getUpdateService } from './update-service';
 // Shared cap so a local folder's description can't drift from the synced
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
-import { setPermissionOverridesSink } from './prefs-service';
+import { setPermissionOverridesSink, readDefaults } from './prefs-service';
+import { resolveResumeModel } from './conversations/resume-model';
 import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { createPublish } from './publish';
@@ -616,7 +617,7 @@ export function registerIpcHandlers(
     // pending only in the brief window right after app launch.
     await adminCapabilityReady();
     checkWindow();
-    const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    let opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // WHY (2026-10-02): setup no longer installs Node for everyone, and Claude
     // Code and Terminal sessions run through it (the PTY worker). Usually the
     // Claude sign-in already installed it; this is the safety net for anyone
@@ -629,6 +630,21 @@ export function registerIpcHandlers(
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
+    // WHY: a resume that names no model reopens on the model the conversation
+    // itself last ran on, decided here for every screen and both doors —
+    // never the open tab's model or a hard-coded Sonnet (resume-model.ts).
+    // A model the person picked in a resume form always wins.
+    if (opts.provider === 'claude' && opts.resumeSessionId && !opts.model) {
+      const conversationId = opts.resumeSessionId;
+      const jsonlPath = resumeBoundary?.jsonlPath;
+      const model = await resolveResumeModel({
+        transcriptModelId: async () => (jsonlPath ? (await readSessionTranscriptMeta(jsonlPath, false)).lastModelId : null),
+        storedModelId: async () => (await getConversationStore()?.get('claude', conversationId))?.lastUsedModel?.modelId,
+        defaultModel: () => readDefaults().model,
+      });
+      checkWindow();
+      if (model) opts = { ...opts, model };
+    }
     const info = sessionManager.createSession(opts);
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // WHY: a holder takeover can arrive during the FIRST native await or before
@@ -1562,7 +1578,9 @@ export function registerIpcHandlers(
     // providerType is 'claude-code' — deliberately not a native provider type,
     // so the resume prefill can never match it against the local model catalog.
     if (claudeId && event.type === 'assistant-text') {
-      const model = (event.data as { model?: unknown } | undefined)?.model;
+      // A helper agent's message, or a placeholder, yields null: neither says
+      // which model the conversation itself is on (conversationModelOf).
+      const model = conversationModelOf(event.data);
       // Deduped: assistant-text fires per TEXT BLOCK, several times a turn, and
       // noteModelUsed does a store read + write each call. The model only
       // changes on an explicit /model switch, so writing on every block would
@@ -1575,8 +1593,7 @@ export function registerIpcHandlers(
       // single limit notice would print `<synthetic>` as the card's model and
       // sync that to every other device. Read side is guarded too
       // (store-core.ts sanitizeModelRef) to heal records written before this.
-      if (typeof model === 'string' && model && !isPlaceholderModelId(model)
-          && lastModelSeen.get(claudeId) !== model) {
+      if (model && lastModelSeen.get(claudeId) !== model) {
         lastModelSeen.set(claudeId, model);
         noteModelUsed(claudeId, { modelId: model, providerType: 'claude-code', providerLabel: 'Claude Code' });
       }
