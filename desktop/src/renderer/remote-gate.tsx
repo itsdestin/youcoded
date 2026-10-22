@@ -283,7 +283,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
     }
   }, []);
 
-  const usePhoneOnly = useCallback(async () => {
+  const choosePhoneOnly = useCallback(async () => {
     const r = computerRetry.current;
     r.cancelled = true;
     if (r.timer) { clearTimeout(r.timer); r.timer = null; }
@@ -363,7 +363,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         computerName={resume.name}
         otherLabel="Use this phone only"
         onTryNow={() => { void tryComputer(shim, resume); }}
-        onPassword={() => { void usePhoneOnly(); }}
+        onPassword={() => { void choosePhoneOnly(); }}
       />
     );
   }
