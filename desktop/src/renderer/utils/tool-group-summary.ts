@@ -1,5 +1,6 @@
 import { browserToolOf } from '../../shared/browser-types';
 import { ToolCallState } from '../../shared/types';
+import { toolOutcome } from './tool-outcome';
 
 // Plain-language headline for a collapsed tool group (2+ tool calls sharing
 // one bubble). Replaces the raw "N tools (Bash, Write) — all complete" line
@@ -152,22 +153,11 @@ export function toolActionLabel(toolName: string, active: boolean): string {
   return capitalize(active ? phrasing.active(1) : phrasing.done(1));
 }
 
-/** A Task card whose helper is still working counts as running even though
- *  its own tool result (the launch ack) already landed — mirrors
- *  CollapsedToolGroup's stillWorking check so the two never disagree. */
-function isRunning(t: ToolCallState): boolean {
-  // WHY a Task card may remain `running` while its stopped helper's final tool
-  // result is still unwinding. The ledger's terminal run status is authoritative
-  // for that card, so it must clear the group spinner immediately.
-  if (t.specialistRun) return t.specialistRun.status === 'running';
-  // A Claude Code background helper/command is still out there after its call
-  // returned (2026-09-24) — the headline reads "Running…", not "Ran…".
-  if (t.status === 'complete' && t.ccBackground?.status === 'running') return true;
-  return t.status === 'running';
-}
-function isDone(t: ToolCallState): boolean {
-  return !isRunning(t) && (t.status === 'complete' || t.specialistRun?.status === 'completed');
-}
+// Running / done / failed all come from toolOutcome (utils/tool-outcome.ts), the
+// one rule the group header's icon and "— N failed" suffix also read, so the
+// headline and the header can never disagree about a background helper.
+const isRunning = (t: ToolCallState): boolean => toolOutcome(t) === 'running';
+const isDone = (t: ToolCallState): boolean => toolOutcome(t) === 'completed';
 
 /**
  * The plain-language headline for a tool group — everything before the
@@ -205,7 +195,7 @@ export function buildToolGroupHeadline(tools: ToolCallState[]): string {
     const lead = capitalize(joinWithAnd(activePhrase)) || 'Working';
 
     const doneCount = tools.filter(isDone).length;
-    const failedCount = tools.filter((t) => t.status === 'failed').length;
+    const failedCount = tools.filter((t) => toolOutcome(t) === 'failed').length;
     if (failedCount > 0) return `${lead} (+${doneCount} completed, ${failedCount} failed)`;
     if (doneCount > 0) return `${lead} (+${doneCount} completed)`;
     return lead;

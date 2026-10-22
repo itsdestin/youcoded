@@ -50,6 +50,14 @@ export interface HelperView {
   /** Total tool calls so far (a live step count the ledger only writes at the end). */
   toolCalls: number;
   group: 'needs-you' | 'working' | 'finished';
+  /** How a settled helper ended — the chip's counts and icon read this, so a
+   *  failure is never summarised as "finished" (audit B4). 'completed' while
+   *  the helper is still going or asking; the group says that. */
+  outcome: 'completed' | 'failed' | 'stopped';
+  /** True when this helper's Task card is not loaded yet (an older history page
+   *  has not been fetched) — the row exists only as a parked run record (audit
+   *  B6), so "show in chat" has nowhere to go. */
+  parked?: boolean;
   /** Which engine hired this helper. 'native' helpers come with a real ledger
    *  record (name, model, background flag) and can be steered or stopped;
    *  'claude-code' ones are SYNTHESIZED below from the Agent card alone, so
@@ -73,7 +81,11 @@ export interface SpecialistSummary {
   helpers: HelperView[];
   needsYou: number;
   working: number;
+  /** Settled cleanly. Failed and stopped helpers are counted apart (audit B4):
+   *  the chip used to call every non-running helper "finished" with a check. */
   finished: number;
+  failed: number;
+  stopped: number;
   /** The word this session's helpers are called, singular. Destin (2026-09-05):
    *  a Claude Code session says "subagents" because that is what Claude Code
    *  itself calls them everywhere else in its own output; the app's native
@@ -83,7 +95,7 @@ export interface SpecialistSummary {
   noun: 'specialist' | 'subagent';
 }
 
-const EMPTY: SpecialistSummary = { helpers: [], needsYou: 0, working: 0, finished: 0, noun: 'specialist' };
+const EMPTY: SpecialistSummary = { helpers: [], needsYou: 0, working: 0, finished: 0, failed: 0, stopped: 0, noun: 'specialist' };
 
 function asText(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -135,10 +147,19 @@ export function ccRunFromCard(
   }
   const elapsedUnknown = startedAt === Infinity;
 
+  // WHY ccBackground (audit A1): a CC Agent call's own result is only the LAUNCH
+  // receipt, so `tool.status` reads 'complete' about a second after launch. The
+  // helper's real state is ccBackground — running until its notice, then
+  // completed / failed / stopped — exactly what the card itself already reads.
+  // Before this the chip showed "Finished" while the helper was still working.
+  const bg = tool.status === 'complete' ? tool.ccBackground?.status : undefined;
   const status: SpecialistRunView['status'] =
     tool.status === 'running' ? 'running'
       : tool.status === 'failed' ? 'failed'
-        : 'completed';
+        : bg === 'running' ? 'running'
+          : bg === 'failed' ? 'failed'
+            : bg === 'stopped' ? 'interrupted'
+              : 'completed';
 
   return {
     run: {
@@ -166,6 +187,14 @@ export function ccRunFromCard(
     agentTypeLabel: agentType,
     elapsedUnknown,
   };
+}
+
+/** How a settled helper ended. A delivered report that says it failed outranks a
+ *  "completed" run (the popup's own pill reads it the same way). */
+export function helperOutcome(run: SpecialistRunView, tool: ToolCallState): HelperView['outcome'] {
+  if (run.status === 'interrupted') return 'stopped';
+  if (run.status === 'failed' || tool.specialistReport?.status === 'failed') return 'failed';
+  return 'completed';
 }
 
 /** Everything the status-bar chip + popup need for one session. Recomputed on
@@ -206,7 +235,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       // An open ask always means 'needs-you', whatever the run status says.
       const group: HelperView['group'] = asks.length > 0 ? 'needs-you' : run.status === 'running' ? 'working' : 'finished';
       helpers.push({
-        run, parentToolCallId: id, tool, asks, toolCalls: tools.length, group,
+        run, parentToolCallId: id, tool, asks, toolCalls: tools.length, group, outcome: helperOutcome(run, tool),
         kind: cc ? 'claude-code' : 'native',
         agentTypeLabel: cc?.agentTypeLabel,
         elapsedUnknown: cc?.elapsedUnknown,
@@ -229,7 +258,24 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
         tools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.response ? t.response.length : ''}`).join('+'),
         asks.map(a => a.requestId ?? a.passwordAsk?.requestId).join('+'),
         tool.status, tool.response?.length ?? '', tool.specialistReport ? tool.specialistReport.status + tool.specialistReport.text.length : '',
+        // A1: a CC helper's state changes with ONLY this record (receipt → notice), nothing else on the card.
+        tool.ccBackground?.status ?? '',
       ].join(':'));
+    }
+    // B6 (audit): a run whose card is not loaded (an older history page, or a
+    // reload where the records beat the history) is parked in session state. It
+    // is still a real helper doing real work, so the chip counts it. The row
+    // gets a stand-in card carrying the run, enough for the popup to draw it.
+    if (session.parkedSpecialistRuns?.size) {
+      for (const [childId, run] of session.parkedSpecialistRuns) {
+        if (helpers.some(h => h.run.childId === childId)) continue;
+        const tool = { toolUseId: run.parentToolCallId, toolName: 'Task', input: {}, status: run.status === 'running' ? 'running' : 'complete', specialistRun: run } as ToolCallState;
+        helpers.push({
+          run, parentToolCallId: run.parentToolCallId, tool, asks: [], toolCalls: 0, kind: 'native', parked: true,
+          group: run.status === 'running' ? 'working' : 'finished', outcome: helperOutcome(run, tool),
+        });
+        keyParts.push(`parked:${childId}:${run.status}:${run.seq ?? ''}:${run.steps ?? ''}:${run.stale ? 's' : ''}`);
+      }
     }
     const key = keyParts.join('|');
     if (key === cache.current.key) return cache.current.value;
@@ -237,7 +283,9 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       helpers,
       needsYou: helpers.filter(h => h.group === 'needs-you').length,
       working: helpers.filter(h => h.group === 'working').length,
-      finished: helpers.filter(h => h.group === 'finished').length,
+      finished: helpers.filter(h => h.group === 'finished' && h.outcome === 'completed').length,
+      failed: helpers.filter(h => h.group === 'finished' && h.outcome === 'failed').length,
+      stopped: helpers.filter(h => h.group === 'finished' && h.outcome === 'stopped').length,
       noun: helpers.some(h => h.kind === 'native') ? 'specialist' : 'subagent',
     };
     cache.current = { key, value };

@@ -17,6 +17,7 @@ import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllTog
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
+import { toolOutcome } from '../utils/tool-outcome';
 
 interface Props {
   turn: AssistantTurn;
@@ -167,19 +168,19 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   // them was mid-job. A helper waiting on the user is called out too.
   // Claude Code background helpers/commands (2026-09-24) are the same case:
   // a group of parallel Agents read ✓ while all of them were still working.
-  const stillWorking = (t: ToolCallState) => t.specialistRun?.status === 'running'
-    || (t.status === 'complete' && t.ccBackground?.status === 'running');
-  // WHY a stopped Task can retain `status: 'running'` until its interrupted
-  // tool result arrives. Its specialist run is the authoritative lifecycle,
-  // so a terminal run must immediately settle this group's spinner.
-  const groupRunning = (t: ToolCallState) => t.specialistRun ? stillWorking(t) : t.status === 'running' || stillWorking(t);
-  const runningCount = tools.filter(groupRunning).length;
-  const failedCount = tools.filter((t) => t.status === 'failed').length;
+  // WHY one shared rule (2026-10-22 audit A3/B9): the work's own record — not the
+  // launch receipt's `status` — says whether it is running, failed or stopped, and
+  // the headline text (tool-group-summary.ts) reads the very same function so the
+  // icon, the "— N failed" suffix and the headline can never disagree.
+  const outcomes = tools.map(toolOutcome);
+  const runningCount = outcomes.filter((o) => o === 'running').length;
+  // Exclusive buckets: a stopped Task (whose card unwinds to `failed`) is stopped only.
+  const failedCount = outcomes.filter((o) => o === 'failed').length;
   // WHY the group icon reflects only the latest call: an earlier failure is
   // already preserved in the group's detail text, while the top-level status
   // should describe the most recent result.
-  const latestToolFailed = tools.at(-1)?.status === 'failed';
-  const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted' || t.ccBackground?.status === 'stopped').length;
+  const latestToolFailed = outcomes.at(-1) === 'failed';
+  const stoppedCount = outcomes.filter((o) => o === 'stopped').length;
   const askingCount = tools.filter(hasNestedAsk).length;
   // Plain-language "Created a file and ran a command" in place of the raw
   // "N tools (Bash, Write)" — Q1-Q5, 2026-09-06 tool-group-readability deck.

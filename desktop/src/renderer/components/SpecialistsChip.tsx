@@ -32,7 +32,7 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
   useEscClose(open, () => setOpen(false));
   if (summary.helpers.length === 0) return null;
 
-  const { needsYou, working, finished, noun } = summary;
+  const { needsYou, working, finished, failed, stopped, noun } = summary;
   // Destin (2026-09-05): a Claude Code session says "subagents", because that
   // is the word Claude Code uses for them in its own output — one chip meaning
   // one thing beats one word used two ways. Native hires stay "specialists".
@@ -42,12 +42,19 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
     ? `${needsYou} need${needsYou === 1 ? 's' : ''} you`
     : working > 0
       ? `${working} ${working === 1 ? noun : plural}`
-      : `${finished} finished`;
+      // B4: failures and stops are said as such, never folded into "finished" with
+      // a check. Failures first — they are what a person scans for.
+      : [failed > 0 && `${failed} failed`, stopped > 0 && `${stopped} stopped`, finished > 0 && `${finished} finished`]
+        .filter(Boolean).join(' · ');
   const tooltip = needsYou > 0
     ? `${needsYou} ${noun} ask${needsYou === 1 ? '' : 's'} waiting on you — click to answer`
     : working > 0
       ? `${working} ${working === 1 ? noun : plural} working — click to manage`
-      : `${Noun} finished in the background — click to see`;
+      : failed > 0
+        ? `${failed} ${failed === 1 ? noun : plural} failed — click to see`
+        : stopped > 0 && finished === 0
+          ? `${stopped} ${stopped === 1 ? noun : plural} stopped — click to see`
+          : `${Noun} finished in the background — click to see`;
 
   return (
     <>
@@ -63,7 +70,11 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
         aria-label={tooltip}
         data-testid="specialists-chip"
       >
-        {needsYou > 0 ? <QuestionIcon className="w-3 h-3" /> : working > 0 ? <BrailleSpinner size="xs" /> : <CheckIcon className="w-3 h-3" />}
+        {needsYou > 0 ? <QuestionIcon className="w-3 h-3" />
+          : working > 0 ? <BrailleSpinner size="xs" />
+          : failed > 0 ? <FailIcon className="w-3 h-3" />
+          : stopped > 0 && finished === 0 ? <StoppedIcon className="w-3 h-3" />
+          : <CheckIcon className="w-3 h-3" />}
         <span>{label}</span>
       </button>
       </Tooltip>
@@ -76,6 +87,8 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
           subtitle={[
             needsYou > 0 ? `${needsYou} waiting on you` : null,
             working > 0 ? `${working} working` : null,
+            failed > 0 ? `${failed} failed` : null,
+            stopped > 0 ? `${stopped} stopped` : null,
             finished > 0 ? `${finished} finished` : null,
           ].filter(Boolean).join(' · ')}
           size="document"

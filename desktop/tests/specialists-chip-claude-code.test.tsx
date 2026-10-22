@@ -209,3 +209,72 @@ describe('the chip in a Claude Code session', () => {
     expect(chipLabel()).toBe('1 subagent');
   });
 });
+
+// ── 2026-10-22 audit A1 / B4 / B6 ────────────────────────────────────────────
+// The chip must read the work's REAL state (ccBackground / the run record), and a
+// failure must never be summarised as "N finished" with a check.
+describe('ccRunFromCard reads the background record (A1)', () => {
+  const launched = (bg: NonNullable<ToolCallState['ccBackground']>) => agentCard({ status: 'complete', ccBackground: bg });
+  it('a helper whose launch receipt landed is still WORKING until its notice', () => {
+    const out = ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'running' }))!;
+    expect(out.run.status).toBe('running');
+    // …and a working helper has no end time, so its clock keeps ticking.
+    expect(out.run.endedAt).toBeUndefined();
+  });
+  it('failed / stopped / completed map onto the run statuses the popup knows', () => {
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'failed' }))!.run.status).toBe('failed');
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'stopped' }))!.run.status).toBe('interrupted');
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'completed' }))!.run.status).toBe('completed');
+  });
+});
+
+describe('the chip tells failures from finishes (B4) and tracks ccBackground (A1)', () => {
+  const launchAgent = (id = 'a1'): ChatAction[] => [
+    toolUse(id, 'Agent', { description: `Job ${id}`, subagent_type: 'Explore' }),
+    { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: 's1', uuid: `r-${id}`, toolUseId: id, result: 'Async agent launched', isError: false, backgroundTaskId: `task-${id}` } as ChatAction,
+  ];
+  const end = (id: string, status: 'completed' | 'failed' | 'stopped'): ChatAction =>
+    ({ type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId: 's1', uuid: `n-${id}`, toolUseId: id, taskIds: [`task-${id}`], status } as ChatAction);
+
+  it('a helper still working after its launch receipt reads as working', () => {
+    renderChip(launchAgent());
+    expect(chipLabel()).toBe('1 subagent');
+  });
+  it('a failed helper says failed, with no check', () => {
+    renderChip([...launchAgent(), end('a1', 'failed')]);
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('a stopped helper says stopped', () => {
+    renderChip([...launchAgent(), end('a1', 'stopped')]);
+    expect(chipLabel()).toBe('1 stopped');
+  });
+  it('a clean finish still says finished', () => {
+    renderChip([...launchAgent(), end('a1', 'completed')]);
+    expect(chipLabel()).toBe('1 finished');
+  });
+  it('mixed outcomes list each, failures first', () => {
+    renderChip([...launchAgent('a1'), ...launchAgent('a2'), end('a1', 'completed'), end('a2', 'failed')]);
+    expect(chipLabel()).toBe('1 failed · 1 finished');
+  });
+  it('redraws when the notice lands AFTER the chip first rendered', () => {
+    let dispatch!: (a: ChatAction) => void;
+    function Grab() { dispatch = useChatDispatch(); return null; }
+    render(<ChatProvider><Grab /><Harness actions={[{ type: 'SESSION_INIT', sessionId: 's1' }, ...launchAgent()]} /></ChatProvider>);
+    expect(chipLabel()).toBe('1 subagent');
+    React.act(() => dispatch(end('a1', 'failed')));
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('a failed native specialist says failed too', () => {
+    renderChip([
+      toolUse('t1', 'Task', { description: 'Sweep', agent: 'explorer' }),
+      { type: 'SPECIALIST_RUN_CHANGED', sessionId: 's1', run: { childId: 'c1', parentToolCallId: 't1', agentType: 'explorer', title: 'Nadia', background: false, status: 'failed', startedAt: 1, endedAt: 2 } },
+    ]);
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('counts a run whose card is not loaded yet (B6)', () => {
+    renderChip([
+      { type: 'SPECIALIST_RUN_CHANGED', sessionId: 's1', run: { childId: 'c9', parentToolCallId: 'unloaded', agentType: 'explorer', title: 'Nadia', background: true, status: 'running', startedAt: 1 } },
+    ]);
+    expect(chipLabel()).toBe('1 specialist');
+  });
+});
