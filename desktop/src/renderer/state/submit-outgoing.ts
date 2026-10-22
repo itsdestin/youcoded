@@ -13,7 +13,7 @@ import { SEND_CHECK_EVENT } from './send-reconcile';
 import { runPending, optimisticScreen } from './pending-action';
 import { requestClaudeControl } from './claude-control';
 import { screenInputBlock } from './pty-input-gate';
-import { pendingQueueSend, savePendingQueueSend, clearPendingQueueSend } from './pending-queue-send';
+import { pendingQueueSend, savePendingQueueSend, clearPendingQueueSend, allPendingQueueSends } from './pending-queue-send';
 import { getNativeStartup } from './native-startup-store';
 import { nativeStartupBlocked } from '../../shared/native-startup';
 import { sendFailureCopy } from './native-send-copy';
@@ -72,8 +72,9 @@ const inFlightQueueSends = new Set<string>();
 async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> {
   let allowLegacyFallback=false; let activeSendId: string | undefined;
   try {
+    // The same draft resumes its saved send (same sendId: the queue cannot take it twice). A different draft is never held
+    // back by an older unconfirmed one any more; that one is settled by asking the queue once this send is on its way.
     let request=pendingQueueSend(o.sessionId,o.originalText??o.ptyText,o.paths,inFlightQueueSends);
-    if(request&&(request.payload.originalText!==(o.originalText??o.ptyText)||JSON.stringify(request.payload.attachments)!==JSON.stringify(o.paths)))throw Error('An earlier queued send is unconfirmed. Retry that saved message before sending a different draft.');
     if(!request){
      allowLegacyFallback=true;
      const identity = await window.claude.session.queue.action(o.sessionId,{kind:'identity'});
@@ -85,7 +86,7 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     }
     activeSendId=request.payload.sendId; inFlightQueueSends.add(activeSendId);
     const result = await window.claude.session.queue.action(o.sessionId,request);
-    if (result.status === 'queued') {clearPendingQueueSend(o.sessionId,request);return;} // host strip/transcript only
+    if (result.status === 'queued') {clearPendingQueueSend(o.sessionId,request);void settleSavedQueueSends(o.sessionId);return;} // host strip/transcript only
     if (result.status === 'unavailable') throw Error('Queue availability changed. Check the conversation before sending again.');
     throw Error('message' in result ? result.message : 'Queued delivery could not be confirmed.');
   } catch (error) {
@@ -233,8 +234,47 @@ export function splitSentContent(content: string, attachments: readonly string[]
   return { ptyText: text, paths: used };
 }
 
-/** Fired by Discard so the composer can take the words back (InputBar listens). Never carries anything that sends. */
+/** Fired by Discard so the composer can take the words back (InputBar listens). Never carries anything that sends.
+ *  The listener sets `detail.restored` when it took them, so a caller can tell (it only takes them into an empty box). */
 export const RESTORE_UNSENT_EVENT = 'youcoded:restore-unsent-text';
+
+let settling: Promise<void> | null = null;
+
+/**
+ * Settle the saved Claude Code sends whose answer never came (2026-10-22 phone reliability, cause 4): ask the conversation's
+ * queue whether it ever accepted each one. Accepted: forget it. Not accepted, or the queue can no longer tell: its words go
+ * back into that conversation's empty message box and it is forgotten; if the box is not empty (or not on screen) it waits for
+ * the next check. A conversation that no longer exists is forgotten. No answer at all (no connection): nothing changes.
+ * Never sends anything. Runs on a reconnect, at start and after a successful send; one run at a time.
+ */
+export function settleSavedQueueSends(onlySessionId?: string): Promise<void> {
+  if (settling) return settling;
+  settling = (async () => {
+    const queue = (window.claude?.session as { queue?: { action?: (s: string, a: unknown) => Promise<any> } } | undefined)?.queue;
+    if (typeof queue?.action !== 'function') return;
+    for (const { sessionId, request } of allPendingQueueSends()) {
+      if (onlySessionId && sessionId !== onlySessionId) continue;
+      if (inFlightQueueSends.has(request.payload.sendId)) continue;
+      let reply: any;
+      try { reply = await queue.action(sessionId, { kind: 'lookup', queueId: request.queueId, sendId: request.payload.sendId }); }
+      catch { continue; } // no answer: ask again next time
+      if (reply?.status === 'lookup' && reply.found && reply.identity?.sendEpoch === request.payload.sendEpoch) {
+        clearPendingQueueSend(sessionId, request);
+        continue;
+      }
+      if (reply?.status === 'unavailable') { clearPendingQueueSend(sessionId, request); continue; }
+      const sure = reply?.status === 'lookup' && reply.identity?.sendEpoch === request.payload.sendEpoch;
+      const detail: { sessionId: string; text: string; paths: string[]; restored?: boolean } = { sessionId, text: request.payload.originalText, paths: [...request.payload.attachments] };
+      window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT, { detail }));
+      if (!detail.restored) continue; // the box is busy or not on screen: kept for the next check, never lost
+      clearPendingQueueSend(sessionId, request);
+      announce(sure
+        ? "An earlier message didn't reach your computer. It's back in the message box."
+        : "An earlier message may not have reached your computer. It's back in the message box — check the conversation before sending it again.", 6000);
+    }
+  })().finally(() => { settling = null; });
+  return settling;
+}
 
 /**
  * "Discard" on a message the computer provably never got: the words go back into the composer if it is empty (InputBar decides; it never overwrites a

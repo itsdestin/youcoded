@@ -8,12 +8,15 @@ export type ConversationQueueAction =
   | { kind: 'send-now'; itemId: string }
   | { kind: 'checkout'; itemId: string; token: QueueCheckout }
   | { kind: 'ack' | 'cancel'; token: QueueCheckout }
-  | { kind: 'stop' | 'clear' };
+  | { kind: 'stop' | 'clear' }
+  // Did this queue ever accept this send? Asked for a saved send whose answer was lost (submit-outgoing.ts settleSavedQueueSend).
+  | { kind: 'lookup'; queueId: string; sendId: string };
 export type ConversationQueueReply =
   | { status: 'unavailable' }
   | { status: 'identity'; identity: ConversationQueueIdentity }
   | { status: 'queued'; identity: ConversationQueueIdentity; itemId: string; sendId: string }
   | { status: 'reserved'; item: QueueItem }
+  | { status: 'lookup'; identity: ConversationQueueIdentity; found: boolean }
   | { status: 'done' }
   | { status: 'rejected' | 'unknown'; message: string };
 export interface ConversationQueueBridge { action(sessionId: string, action: ConversationQueueAction): Promise<ConversationQueueReply> }

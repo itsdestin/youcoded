@@ -10,6 +10,7 @@ const request = z.object({ sessionId: id, action: z.discriminatedUnion('kind', [
  z.object({ kind: z.literal('identity') }).strict(), z.object({ kind: z.literal('enqueue'), queueId: z.string().uuid(), payload }).strict(),
  z.object({ kind: z.enum(['remove','send-now','dismiss']), itemId: id }).strict(), z.object({ kind: z.literal('checkout'), itemId: id, token }).strict(),
  z.object({ kind: z.enum(['ack','cancel']), token }).strict(), z.object({ kind: z.enum(['stop','clear']) }).strict(),
+ z.object({ kind: z.literal('lookup'), queueId: z.string().uuid(), sendId: payload.shape.sendId }).strict(),
 ]) }).strict();
 export const queueChannels = [defineChannel({ name: IPC.SESSION_QUEUE_ACTION, kind: 'handle', handler: async (value,ctx): Promise<ConversationQueueReply> => {
  const parsed = request.safeParse(value); if (!parsed.success) return { status: 'rejected', message: 'Invalid queue action.' };

@@ -123,6 +123,14 @@ export class ClaudeQueueRuntime {
    }
    const identity = { queueId: root, sendEpoch: snapshot.sendEpoch };
    if (action.kind === 'identity') return { status: 'identity', identity };
+   // WHY (2026-10-22 phone reliability): a phone whose send lost its answer (a frozen laptop, a drop) kept the request and
+   // refused every different message until the exact text was retyped. The queue's items and tombstones are durable and
+   // keyed by sendId, so it can say whether it ever accepted that send — read-only, nothing is resent.
+   if (action.kind === 'lookup') {
+    if (action.queueId !== root) return { status: 'unknown', message: 'Conversation identity changed.' };
+    const found = snapshot.items.some(i => i.sendId === action.sendId) || snapshot.tombstones.some(t => t.sendId === action.sendId);
+    return { status: 'lookup', identity, found };
+   }
    if (action.kind === 'enqueue') {
     if (action.queueId !== root || b.transitioning) throw Error('Conversation identity changed. Review the message before sending again.');
     const result = await queue.enqueue(root, action.payload,p=>retainQueueAttachments(this.options.userDataRoot(),root,p.attachments), !this.options.working(id) && this.options.inputSafe(id) && !queue.hasWriteBarrier(root)); this.options.noteSend(id,action.payload.sendId); transport.requestIdle(id);

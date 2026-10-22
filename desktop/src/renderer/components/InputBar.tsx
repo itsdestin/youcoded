@@ -603,10 +603,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // No focus() on purpose: on a phone that would pop the keyboard up over a button press that was meant to get rid of something.
   useEffect(() => {
     const listener = (e: Event) => {
-      const d = (e as CustomEvent<{ sessionId?: string; text?: string; paths?: string[] }>).detail;
+      const d = (e as CustomEvent<{ sessionId?: string; text?: string; paths?: string[]; restored?: boolean }>).detail;
       if ((!d?.text && !d?.paths?.length) || d.sessionId !== sessionId || d.sessionId !== draftAuthority.current.snapshot().sessionId || !draftAuthority.current.snapshot().empty) return;
       setText(d.text ?? '');
       if(d.paths)setAttachments(d.paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
+      // Tells settleSavedQueueSends the words are back on screen, so it may forget its saved copy.
+      d.restored = true;
     };
     window.addEventListener(RESTORE_UNSENT_EVENT, listener);
     return () => window.removeEventListener(RESTORE_UNSENT_EVENT, listener);
