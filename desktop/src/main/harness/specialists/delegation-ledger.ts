@@ -103,6 +103,14 @@ export interface DelegationRecord {
    *  write-capable run — in auto-edit with no card at all, because a task_id
    *  call carries no work_dir and so has no permission subject to match. */
   definitionFingerprint?: string;
+  /** Audit 2026-10-22 B2/B3: 1 for the original hire, +1 per task_id resume.
+   *  Absent = 1 (records written before this field existed). */
+  runNumber?: number;
+  /** The Task call carrying the live run (the resume call after a resume).
+   *  Absent = parentToolCallId. */
+  activeToolCallId?: string;
+  /** When the newest run started, for a resume. */
+  resumedAt?: number;
 }
 
 // Full body cap for the copy that rides IN the ledger file. mutateJson is a
@@ -684,15 +692,34 @@ export class DelegationLedger {
  * structure to evict from, for no extra guarantee.
  *
  * NOT `Date.now()`: two projections inside one millisecond tie, and a tie
- * reads as "not newer", which would drop a real update. Not persisted either
- * — it resets to 0 on restart, which is correct, because the renderer's cards
- * are rebuilt from replay at the same moment.
+ * reads as "not newer", which would drop a real update. Not persisted: it is
+ * re-seeded from the clock at each start (see below), because a screen that
+ * stayed connected across the restart keeps its cards and their old stamps.
  */
-let runViewSeq = 0;
+// WHY time-seeded (audit 2026-10-22 B9): the counter used to restart at 0 with
+// every app start, but a phone or second window that STAYED connected keeps its
+// cards (and their last seq, e.g. 80) across the host's restart — the renderer
+// then dropped every fresh update (seq 1, 2, 3 <= 80) and the card froze.
+// Starting from the clock (microsecond-ish scale, ~1.8e15, well inside the
+// 9e15 safe-integer range) puts a new process above any earlier one, and the
+// max() keeps it strictly increasing even for projections inside one millisecond.
+let runViewSeq = Date.now() * 1000;
+function nextRunViewSeq(): number {
+  runViewSeq = Math.max(runViewSeq + 1, Date.now() * 1000);
+  return runViewSeq;
+}
 
-export function toRunView(rec: DelegationRecord): SpecialistRunView {
+/** `held` = the parent's deliveries are held after a Stop (host knowledge the
+ *  record itself does not carry) — only changes `reportPending`. */
+export function toRunView(rec: DelegationRecord, opts: { held?: boolean } = {}): SpecialistRunView {
+  const runNumber = rec.runNumber ?? 1;
+  // A background report is handed to the assistant at an idle boundary; until
+  // confirmDelivered flips `delivered`, the assistant has not read it (B8).
+  const reportPending = rec.background && !rec.delivered && (rec.status === 'completed' || rec.status === 'failed')
+    ? (opts.held ? 'held-after-stop' as const : 'waiting-for-turn' as const)
+    : undefined;
   return {
-    seq: ++runViewSeq,
+    seq: nextRunViewSeq(),
     childId: rec.childId,
     parentToolCallId: rec.parentToolCallId,
     agentType: rec.agentType,
@@ -706,5 +733,13 @@ export function toRunView(rec: DelegationRecord): SpecialistRunView {
     stale: rec.stale,
     model: rec.model,
     notes: rec.notes,
+    runNumber,
+    activeToolCallId: rec.activeToolCallId ?? rec.parentToolCallId,
+    resumedAt: rec.resumedAt,
+    // The original card's report belongs to an earlier run once a resume has
+    // happened, unless the new run was a background one whose report has now
+    // been folded onto that same card.
+    reportStale: runNumber > 1 && !(rec.background && rec.delivered),
+    reportPending,
   };
 }

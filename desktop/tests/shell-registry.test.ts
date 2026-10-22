@@ -309,7 +309,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     if (!r.ok) throw new Error('start failed');
     await r.run.exited;
     const v = reg.toView(r.run);
-    expect(Object.keys(v).sort()).toEqual(['admin', 'detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
+    expect(Object.keys(v).sort()).toEqual(['admin', 'command', 'description', 'detached', 'endedAt', 'exitCode', 'logPath', 'shellId', 'signal', 'startedAt', 'status', 'stopReason', 'tail', 'toolUseId']);
     expect(v.detached).toBe(false);
   });
 });
@@ -535,5 +535,105 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     await waitFor(() => marks.length === 2);
     expect(marks[0]).toBeGreaterThanOrEqual(100 - JITTER_MS);
     expect(marks[1]).toBeGreaterThanOrEqual(140 - JITTER_MS);
+  });
+});
+
+// ---- Audit 2026-10-22 D2-D5: what a card can say after the app restarted -----
+import { NativeHome } from '../src/main/native-home';
+import { ShellSidecar, readPersistedShells, type PersistedShellRun } from '../src/main/harness/shell-sidecar';
+
+describe.skipIf(!posix)('ShellRegistry record fidelity and restart recovery', () => {
+  let dir: string; let home: NativeHome; const CWD = '/work/proj'; const SID = 'sess-1';
+  const regs: ShellRegistry[] = [];
+  const mk = (id = SID) => {
+    const sidecar = new ShellSidecar(home, CWD, id, 20);
+    const r = new ShellRegistry(`t-${path.basename(dir)}-${id}`, { sidecar });
+    regs.push(r);
+    return { r, sidecar };
+  };
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-persist-')); home = new NativeHome(dir); });
+  afterEach(async () => {
+    for (const r of regs.splice(0)) await r.killAll('app-quit', { graceMs: 0 });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+
+  it('the run view names the command and its description (D5)', async () => {
+    const { r } = mk();
+    const res = r.start({ ...startSpec('echo hi', dir), description: 'say hi' });
+    if (!res.ok) throw new Error('start failed');
+    const v = r.toView(res.run);
+    expect(v.command).toBe('echo hi');
+    expect(v.description).toBe('say hi');
+    await res.run.exited;
+  });
+
+  it('a command killed by a signal nobody sent reports the signal, not "Exit ?" (D5)', async () => {
+    const { r } = mk();
+    const res = r.start(startSpec('kill -9 $$', dir));
+    if (!res.ok) throw new Error('start failed');
+    await res.run.exited;
+    const v = r.toView(res.run);
+    expect(v.status).toBe('exited');
+    expect(v.exitCode).toBeUndefined();
+    expect(v.signal).toBe('SIGKILL');
+  });
+
+  it('writes the real outcome to disk so a restart can show it (D2)', async () => {
+    const { r, sidecar } = mk();
+    const res = r.start(startSpec('echo done; exit 3', dir, 'tu-9'));
+    if (!res.ok) throw new Error('start failed');
+    await res.run.exited; await sidecar.flush();
+    const saved = await readPersistedShells(home, CWD, SID);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ shellId: res.run.shellId, toolUseId: 'tu-9', command: 'echo done; exit 3', status: 'exited', exitCode: 3 });
+    expect(saved[0].tail).toContain('done');
+  });
+
+  it('after a restart a finished command keeps its real exit code and stop reason (D2)', async () => {
+    const { r, sidecar } = mk();
+    const a = r.start(startSpec('exit 7', dir, 'tu-a')); const b = r.start(startSpec('sleep 30', dir, 'tu-b'));
+    if (!a.ok || !b.ok) throw new Error('start failed');
+    await a.run.exited; await r.kill(b.run.shellId, 'assistant'); await sidecar.flush();
+
+    const { r: after } = mk(); // a fresh registry = the app restarted
+    const views = await after.restoreFrom(await readPersistedShells(home, CWD, SID));
+    const byTool = (id: string) => views.find((v) => v.toolUseId === id)!;
+    expect(byTool('tu-a')).toMatchObject({ status: 'exited', exitCode: 7, restored: true });
+    expect(byTool('tu-b')).toMatchObject({ status: 'stopped', stopReason: 'assistant', restored: true });
+  });
+
+  it('a command still running after a crash is reported running and Stop works (D3)', async () => {
+    if (process.platform !== 'linux') return; // identity check is Linux-only; other systems say "may still be running"
+    const { r, sidecar } = mk();
+    const res = r.start(startSpec('sleep 60', dir, 'tu-live'));
+    if (!res.ok) throw new Error('start failed');
+    await vi.waitFor(async () => expect((await readPersistedShells(home, CWD, SID))[0]?.procStart).toBeTruthy());
+    await sidecar.flush();
+    const pid = res.run.child.pid!;
+    // Simulate a crash: the old app is gone (its record claims "running" from another instance), the process lives on.
+    const saved = (await readPersistedShells(home, CWD, SID)).map((p) => ({ ...p, ownerInstance: 'dead-instance' }));
+    (r as any).runs.delete(res.run.shellId); // forget it without killing it
+
+    const { r: after } = mk();
+    const views = await after.restoreFrom(saved);
+    expect(views[0]).toMatchObject({ status: 'running', restored: true });
+    expect(alive(pid)).toBe(true);
+
+    const killed = await after.kill(res.run.shellId, 'user');
+    expect(killed.ok).toBe(true);
+    expect(alive(pid)).toBe(false);
+    expect(after.restoredViews()[0]).toMatchObject({ status: 'stopped', stopReason: 'user' });
+  });
+
+  it('a command that is gone is "ended, exit code unknown", never "stopped when the app quit" (D2)', async () => {
+    const { r } = mk();
+    const rec: PersistedShellRun = {
+      shellId: 'sh-dead', toolUseId: 'tu-d', command: 'make', cwd: dir, status: 'running', detached: false,
+      startedAt: 1, logPath: '/nope', tail: 'partial output', pid: 2 ** 22 + 12345, procStart: '1', ownerInstance: 'dead-instance',
+    };
+    const [v] = await r.restoreFrom([rec]);
+    expect(v).toMatchObject({ status: 'exited', exitUnknown: true, restored: true, tail: 'partial output' });
+    expect(v.exitCode).toBeUndefined();
+    expect(v.stopReason).toBeUndefined();
   });
 });

@@ -16,6 +16,8 @@ import { spillDirFor, sweepOldSpillFilesOnce } from './tools/spill-paths';
 import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from './tools/shell-text';
 import { RunningCalls } from './askpass/running-calls';
 import { forgetOnCallExit } from './askpass/admin-forget';
+import { OWNER } from './specialists/delegation-ledger';
+import { groupAlive, judgeOrphan, processStartStamp, type PersistedShellRun, type ShellPersistence } from './shell-sidecar';
 
 /** Explicit background starts allowed at once (spec §3.6). Hand-offs never count (D5). */
 export const MAX_EXPLICIT_RUNNING = 5;
@@ -59,8 +61,13 @@ export interface ShellRun {
   shellId: string;
   toolUseId: string;
   command: string;
+  /** The Bash call's one-line description, when it had one (card + restart record). */
+  description?: string;
   cwd: string;
   child: ChildProcess;
+  /** Linux process start stamp, read just after spawn — lets a restart prove a
+   *  surviving process group is this command's and not a reused pid (D3). */
+  procStart?: string;
   logPath: string;
   logStream: fs.WriteStream;
   /** Last RING_LINES complete lines (ANSI-stripped, sentinels included — filtered on read). */
@@ -109,6 +116,7 @@ export interface ShellRun {
 export interface ShellStartSpec {
   toolUseId: string;
   command: string;
+  description?: string;
   cwd: string;
   shellCmd: string;
   shellArgs: string[];
@@ -118,6 +126,7 @@ export interface ShellStartSpec {
 export interface ShellAdoptSpec {
   toolUseId: string;
   command: string;
+  description?: string;
   cwd: string;
   /** The SAME process bash.ts spawned — never restarted. */
   child: ChildProcess;
@@ -137,7 +146,51 @@ export type ShellStartResult =
   | { ok: false; reason: 'cap'; running: string[] }
   | { ok: false; reason: 'spawn-failed'; detail: string };
 
-export type KillResult = { ok: true; run: ShellRun } | { ok: false; run?: ShellRun };
+/** `run` is absent when the stopped command was one restored after a restart
+ *  (it has no live process object in this registry). */
+export type KillResult = { ok: true; run?: ShellRun } | { ok: false; run?: ShellRun };
+
+/** A command carried over from a previous app run (audit D2/D3): its record from
+ *  disk, plus — only when its process group was verified still alive — the poll
+ *  that notices when it ends. */
+interface RestoredRun { rec: PersistedShellRun; watcher?: NodeJS.Timeout; stopReason?: ShellStopReason }
+/** How often a re-attached orphan is checked for having ended. */
+const ORPHAN_POLL_MS = 2_000;
+
+/** A saved record as the card sees it. `restored` says its output no longer streams. */
+function persistedToView(p: PersistedShellRun): ShellRunView {
+  return {
+    toolUseId: p.toolUseId, shellId: p.shellId, status: p.status, exitCode: p.exitCode, stopReason: p.stopReason,
+    detached: p.detached, startedAt: p.startedAt, endedAt: p.endedAt, tail: p.tail, logPath: p.logPath,
+    command: p.command, description: p.description, signal: p.signal,
+    restored: true, exitUnknown: p.exitUnknown, maybeStillRunning: p.maybeStillRunning,
+  };
+}
+
+/** Judge one saved record against the machine (see ShellRegistry.restoreFrom).
+ *  null = skip it (a running record written by THIS process: another registry here owns it).
+ *  `rec` is the same object when nothing changed. */
+async function classifyPersisted(rec: PersistedShellRun): Promise<{ rec: PersistedShellRun; watch: boolean } | null> {
+  if (rec.status !== 'running') return { rec, watch: false };
+  if (rec.ownerInstance === OWNER.instanceId) return null;
+  const verdict = await judgeOrphan(rec);
+  if (verdict === 'running') return { rec, watch: true };
+  return {
+    rec: { ...rec, status: 'exited', exitUnknown: true, maybeStillRunning: verdict === 'maybe-running' || undefined, endedAt: rec.endedAt ?? Date.now() },
+    watch: false,
+  };
+}
+
+/** Read-only version for a conversation that is not live on this host (D4):
+ *  the same verdicts, no watchers, nothing written, nothing signalled. */
+export async function persistedRunViews(records: PersistedShellRun[]): Promise<ShellRunView[]> {
+  const out: ShellRunView[] = [];
+  for (const rec of records) {
+    const judged = await classifyPersisted(rec);
+    if (judged) out.push(persistedToView(judged.rec));
+  }
+  return out;
+}
 
 /** spawn() in its own process group on POSIX. Why: a plain spawn puts the
  *  shell in OUR group, so a kill reaches only the outer bash and a `node` it
@@ -260,6 +313,12 @@ export class ShellRegistry extends EventEmitter {
    *  RunningCalls' mere-delivery bookkeeping (which says nothing about
    *  whether sudo actually accepted it). Cleared per-toolCallId on exit. */
   private readonly acceptedToolCallIds = new Set<string>();
+  /** Where per-command records are saved for the next start (D2); absent in
+   *  bare constructions (most tests) and for specialist children. */
+  private readonly sidecar?: ShellPersistence;
+  /** Commands restored from a previous run — separate from `runs` because they
+   *  have no ChildProcess, log stream or ring, only a record (and maybe a pid). */
+  private readonly restored = new Map<string, RestoredRun>();
 
   /** `longRunNoticeMs` is a test seam — production callers pass nothing and
    *  get LONG_RUN_NOTICE_MS. `runningCalls`/`wipeUpfront` are optional so
@@ -269,9 +328,10 @@ export class ShellRegistry extends EventEmitter {
    *  tools/bash.ts's own foreground spawn path registers into. */
   constructor(
     private readonly sessionId: string,
-    opts: { longRunNoticeMs?: readonly number[]; runningCalls?: RunningCalls; wipeUpfront?: (toolCallId: string) => void } = {},
+    opts: { longRunNoticeMs?: readonly number[]; runningCalls?: RunningCalls; wipeUpfront?: (toolCallId: string) => void; sidecar?: ShellPersistence } = {},
   ) {
     super();
+    this.sidecar = opts.sidecar;
     this.longRunNoticeMs = opts.longRunNoticeMs ?? LONG_RUN_NOTICE_MS;
     this.runningCalls = opts.runningCalls ?? new RunningCalls();
     this.wipeUpfront = opts.wipeUpfront;
@@ -307,7 +367,7 @@ export class ShellRegistry extends EventEmitter {
     }
     try {
       const run = this.register({
-        toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child,
+        toolUseId: spec.toolUseId, command: spec.command, description: spec.description, cwd: spec.cwd, child,
         startedAt: Date.now(), seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false,
       }, { detached: false, explicit: true });
       return { ok: true, run, runningExplicit: running.length + 1 };
@@ -353,7 +413,7 @@ export class ShellRegistry extends EventEmitter {
     let resolveExited: () => void = () => {};
     const exited = new Promise<void>((res) => { resolveExited = res; });
     const run: ShellRun = {
-      shellId, toolUseId: spec.toolUseId, command: spec.command, cwd: spec.cwd, child: spec.child,
+      shellId, toolUseId: spec.toolUseId, command: spec.command, description: spec.description, cwd: spec.cwd, child: spec.child,
       logPath, logStream, tail: [], partial: '', lastReadBytes: 0, captureEnv: spec.captureEnv,
       startedAt: spec.startedAt, status: 'running', detached: flags.detached, explicit: flags.explicit,
       // design §7, review fix T5-4: seeded true when this call's password
@@ -392,6 +452,14 @@ export class ShellRegistry extends EventEmitter {
     if (spec.seedLog && !spec.logStream) this.writeLog(run, stripAnsi(normalizeNewlines(spec.seedLog)));
     if (spec.recent) this.ingest(run, spec.recent, false);
     this.runs.set(shellId, run);
+    // D2: record the start at once; the process-identity stamp follows (async) so
+    // a later restart can tell a surviving group from a reused pid (D3).
+    this.persist(run, true);
+    if (spec.child.pid) {
+      void processStartStamp(spec.child.pid).then((stamp) => {
+        if (stamp && run.status === 'running') { run.procStart = stamp; this.persist(run, true); }
+      });
+    }
     spec.child.stdout?.on('data', (d) => this.ingest(run, String(d), true));
     spec.child.stderr?.on('data', (d) => this.ingest(run, String(d), true));
     spec.child.on('error', (err) => {
@@ -422,7 +490,7 @@ export class ShellRegistry extends EventEmitter {
 
   private mintId(): string {
     let id: string;
-    do { id = `sh-${randomBytes(2).toString('hex')}`; } while (this.runs.has(id));
+    do { id = `sh-${randomBytes(2).toString('hex')}`; } while (this.runs.has(id) || this.restored.has(id));
     return id;
   }
 
@@ -486,6 +554,8 @@ export class ShellRegistry extends EventEmitter {
     // delete is async now, and read() awaits logDone — so no BashOutput after
     // exit can observe the file still there, same as the old sync unlink.
     run.logDone = run.captureEnv ? Promise.all([logClosed, this.unlinkEnvFile(run)]).then(() => undefined) : logClosed;
+    // D2: the real outcome (exit code / signal / who stopped it) goes to disk now.
+    this.persist(run, true);
     this.emitChangeNow(run);
     run.resolveExited();
     this.emit('exit', run);
@@ -509,7 +579,11 @@ export class ShellRegistry extends EventEmitter {
 
   private scheduleChange(run: ShellRun): void {
     if (run.changeTimer) return;
-    run.changeTimer = setTimeout(() => { run.changeTimer = null; this.emit('change', this.toView(run)); }, CHANGE_DEBOUNCE_MS);
+    run.changeTimer = setTimeout(() => {
+      run.changeTimer = null;
+      this.emit('change', this.toView(run));
+      this.persist(run, false); // output refresh of the saved tail — throttled by the sidecar
+    }, CHANGE_DEBOUNCE_MS);
   }
 
   private emitChangeNow(run: ShellRun): void {
@@ -530,7 +604,77 @@ export class ShellRegistry extends EventEmitter {
       admin: run.admin,
       startedAt: run.startedAt, endedAt: run.endedAt,
       tail: this.tailText(run, WIRE_TAIL_LINES), logPath: run.logPath,
+      // D5: enough for a card/list that never saw the tool call, and an honest
+      // reason when the process was killed by a signal we did not send.
+      command: run.command, description: run.description, signal: run.signal,
     };
+  }
+
+  private persist(run: ShellRun, urgent: boolean): void {
+    if (!this.sidecar) return;
+    this.sidecar.upsert({
+      shellId: run.shellId, toolUseId: run.toolUseId, command: run.command, description: run.description, cwd: run.cwd,
+      status: run.status, exitCode: run.exitCode, signal: run.signal, stopReason: run.stopReason, detached: run.detached,
+      startedAt: run.startedAt, endedAt: run.endedAt, logPath: run.logPath, tail: this.tailText(run, WIRE_TAIL_LINES),
+      pid: run.child.pid, procStart: run.procStart, ownerInstance: OWNER.instanceId,
+    }, urgent);
+  }
+
+  private restoredView(r: RestoredRun): ShellRunView { return persistedToView(r.rec); }
+
+  /** Views of commands carried over from a previous run (see restoreFrom). */
+  restoredViews(): ShellRunView[] { return [...this.restored.values()].map((r) => this.restoredView(r)); }
+
+  /** 'running' | 'exited' | 'stopped' for a live OR restored command, else undefined. */
+  statusOf(shellId: string): ShellRun['status'] | undefined {
+    return this.runs.get(shellId)?.status ?? this.restored.get(shellId)?.rec.status;
+  }
+
+  /** Audit D2/D3: take in the records a previous app run saved. A finished
+   *  record keeps its real outcome. A record that still said "running" was
+   *  written by a process that is gone, so it is judged against the machine:
+   *   - its process group is alive and verifiably the same -> still running,
+   *     re-attached: a poll notices its end and Stop signals the group;
+   *   - alive but unverifiable (no /proc on this OS) -> reported ended with
+   *     `maybeStillRunning`, never signalled;
+   *   - gone -> ended, `exitUnknown` (we were not watching when it finished).
+   *  Output no longer streams for these (the pipe died with the old app), which
+   *  every returned view says with `restored: true`. Emits a change per view. */
+  async restoreFrom(records: PersistedShellRun[]): Promise<ShellRunView[]> {
+    const out: ShellRunView[] = [];
+    for (const rec0 of records) {
+      if (this.runs.has(rec0.shellId) || this.restored.has(rec0.shellId)) continue;
+      const judged = await classifyPersisted(rec0);
+      if (!judged) continue;
+      const { rec, watch } = judged;
+      if (rec !== rec0) this.sidecar?.upsert(rec, true); // a running record resolved to "ended": save that
+      const entry: RestoredRun = { rec };
+      this.restored.set(rec.shellId, entry);
+      if (watch) this.watchOrphan(entry);
+      const view = this.restoredView(entry);
+      out.push(view);
+      this.emit('change', view);
+    }
+    return out;
+  }
+
+  private watchOrphan(entry: RestoredRun): void {
+    entry.watcher = setInterval(() => {
+      if (entry.rec.pid && groupAlive(entry.rec.pid)) return;
+      this.finishRestored(entry);
+    }, ORPHAN_POLL_MS);
+    entry.watcher.unref();
+  }
+
+  /** A re-attached command's group is gone: record how it ended as far as we know. */
+  private finishRestored(entry: RestoredRun): void {
+    if (entry.watcher) { clearInterval(entry.watcher); entry.watcher = undefined; }
+    if (entry.rec.status !== 'running') return;
+    entry.rec = entry.stopReason
+      ? { ...entry.rec, status: 'stopped', stopReason: entry.stopReason, endedAt: Date.now() }
+      : { ...entry.rec, status: 'exited', exitUnknown: true, endedAt: Date.now() };
+    this.sidecar?.upsert(entry.rec, true);
+    this.emit('change', this.restoredView(entry));
   }
 
   /** admin-password design §7: called from AdminPasswordService's
@@ -627,7 +771,7 @@ export class ShellRegistry extends EventEmitter {
    *  recorded BEFORE the signal so the exit handler labels it 'stopped'. */
   async kill(shellId: string, reason: ShellStopReason, opts: { graceMs?: number } = {}): Promise<KillResult> {
     const run = this.runs.get(shellId);
-    if (!run) return { ok: false };
+    if (!run) return this.killRestored(shellId, reason, opts);
     if (run.status !== 'running') return { ok: false, run };
     run.stopReason = reason;
     killTree(run.child, opts);
@@ -635,7 +779,24 @@ export class ShellRegistry extends EventEmitter {
     return { ok: true, run };
   }
 
+  /** Stop a re-attached command: signal its (verified) process group, then wait
+   *  for the group to vanish. Only ever reached for a record judgeOrphan proved ours. */
+  private async killRestored(shellId: string, reason: ShellStopReason, opts: { graceMs?: number }): Promise<KillResult> {
+    const entry = this.restored.get(shellId);
+    if (!entry || entry.rec.status !== 'running' || !entry.rec.pid) return { ok: false };
+    const pid = entry.rec.pid;
+    entry.stopReason = reason;
+    // killTree needs only a pid and the ability to signal; the real ChildProcess died with the old app.
+    const stub = { pid, exitCode: null, signalCode: null, kill: (sig?: NodeJS.Signals) => process.kill(pid, sig) } as unknown as ChildProcess;
+    killTree(stub, opts);
+    const deadline = Date.now() + KILL_WAIT_MS;
+    while (groupAlive(pid) && Date.now() < deadline) await new Promise<void>((res) => setTimeout(res, 50));
+    if (!groupAlive(pid)) this.finishRestored(entry);
+    return { ok: true };
+  }
+
   async killAll(reason: ShellStopReason, opts: { graceMs?: number } = {}): Promise<void> {
-    await Promise.all(this.list().filter((r) => r.status === 'running').map((r) => this.kill(r.shellId, reason, opts)));
+    const orphans = [...this.restored.values()].filter((r) => r.rec.status === 'running').map((r) => this.killRestored(r.rec.shellId, reason, opts));
+    await Promise.all([...this.list().filter((r) => r.status === 'running').map((r) => this.kill(r.shellId, reason, opts)), ...orphans]);
   }
 }

@@ -37,7 +37,8 @@ export type { Push, OpenRequest, OpenReply } from '../shared/session-open-types'
 export interface NativeLive {
   askEvents(): HookEvent[];
   specialistRuns(): SpecialistRunView[];
-  shellRuns(): ShellRunView[];
+  /** Async: a just-resumed conversation's saved commands are read from disk first (D2/D4). */
+  shellRuns(): ShellRunView[] | Promise<ShellRunView[]>;
   usageProgress(): TranscriptEvent | null;
   sessionContext(): unknown | null;
   /** True only when the host can affirm nothing is in flight (never guessed). */
@@ -55,6 +56,8 @@ export interface OpenDeps {
   /** The newest page of history, read to the END of the file (a screen that opens missed the live stream). */
   page(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string }): Promise<TranscriptPageResult>;
   native(sessionId: string): NativeLive | null;
+  /** D4: saved background commands of a native conversation this host is NOT running (real outcomes from disk). */
+  persistedShellRuns?(sessionId: string): Promise<ShellRunView[]>;
 }
 
 const idOf = (e: unknown): string | undefined => {
@@ -137,7 +140,7 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
   const after: Push[] = [...asks];
   if (native) {
     for (const run of native.specialistRuns()) after.push({ type: 'specialists:event', payload: { kind: 'run', sessionId, run } });
-    for (const run of native.shellRuns()) after.push({ type: 'native:shell-event', payload: { sessionId, run } });
+    for (const run of await native.shellRuns()) after.push({ type: 'native:shell-event', payload: { sessionId, run } });
     // Progress never entered the transcript, so only the host can restore it (sent after history, before the marker).
     const progress = native.usageProgress();
     if (progress) after.push({ type: 'transcript:event', payload: progress });
@@ -147,6 +150,10 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
     after.push({ type: 'session:live', payload: { sessionId, kind: 'queue', queue: native.queue() } });
     const mode = native.permissionMode();
     if (mode) after.push({ type: 'native:permission-mode', payload: { sessionId, mode } });
+  } else if (deps.persistedShellRuns) {
+    // D4: a native conversation this host is not running still has its saved
+    // background commands; without this a screen opening it saw no cards' outcomes.
+    for (const run of await deps.persistedShellRuns(sessionId)) after.push({ type: 'native:shell-event', payload: { sessionId, run } });
   }
   // One-core R5-4a: what is still true of the session and is not a transcript line: the model label, a Claude Code session's mode, the cards
   // still open and a compaction in progress (the spinner a phone that joins mid-compaction lost in R5-2).

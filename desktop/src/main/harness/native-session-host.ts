@@ -18,7 +18,8 @@ import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { stampSubagent } from '../../shared/types';
 import type { TranscriptEvent, EventOf, StampableEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { readPersistedShells, ShellSidecar } from './shell-sidecar';
+import { ShellRegistry, persistedRunViews, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
@@ -274,6 +275,10 @@ export interface SpecialistRunResult {
  *  worked for several turns (Destin, 2026-09-16). */
 export interface SpecialistRunError extends Error {
   specialistUsage?: SpecialistRunResult['usage'];
+  /** Audit 2026-10-22 B1: the run ended because the USER pressed Stop (the
+   *  child saw a user-interrupt), not because anything went wrong. The ledger
+   *  records that as 'interrupted' ("Stopped"), never 'failed'. */
+  stoppedByUser?: true;
 }
 
 interface LiveEntry {
@@ -371,6 +376,13 @@ function persistedUuidsAfterLastClear(events: TranscriptEvent[]): string[] {
   events.forEach((event, index) => { if (event.type === 'context-clear') start = index + 1; });
   return events.slice(start).map((event) => event.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0);
 }
+
+/** Upper bound on ledger records replayed to a screen (newest kept). */
+const SPECIALIST_REPLAY_MAX_RECORDS = 500;
+
+/** Pauses between retries of a failed run-OUTCOME ledger write (audit B7):
+ *  three bounded retries, async, so a busy lock never wedges the Task call. */
+const OUTCOME_RETRY_DELAYS_MS: readonly number[] = [500, 2_000, 8_000];
 
 // The no-op opener kickIdleDeliveryPass dispatches purely to reach runTurns'
 // delivery tail. A named constant so runTurns can tell "a user started this
@@ -552,6 +564,10 @@ export class NativeSessionHost extends EventEmitter {
    *  need an owner that can kill them at app quit and re-attach them if the
    *  same conversation is resumed in this process. */
   private shellRegistries = new Map<string, ShellRegistry>();
+  /** D2: the on-disk record writer per root conversation (flushed at app quit). */
+  private shellSidecars = new Map<string, ShellSidecar>();
+  /** D2/D3: in-flight restore of a conversation's saved commands, awaited by session:open. */
+  private shellRestores = new Map<string, Promise<void>>();
   /** G-1: registries whose conversation was closed and whose kill is still in
    *  flight. Why a second collection: a close sends SIGTERM and escalates to
    *  SIGKILL two seconds later, but the registry leaves shellRegistries at
@@ -1021,6 +1037,8 @@ export class NativeSessionHost extends EventEmitter {
     // exact packet for token-checked unstarted rollback; this host has not
     // called runDelegation yet and must never restore a stale record snapshot.
     // Without a ledger, only the existing pre-lock snapshot is available.
+    // A new run starts: any earlier unwritten outcome (B7) no longer applies.
+    this.unwrittenOutcomes.delete(opts.childId);
     let missedSteers: string[];
     if (this.ledger && parent.cwd) {
       try {
@@ -1058,6 +1076,14 @@ export class NativeSessionHost extends EventEmitter {
           // for the identical reason (delegation-ledger.ts's own comment).
           injectionAttempted: undefined, reportPath: undefined, rawReport: undefined,
           steps: undefined, stale: undefined, claimedBy: undefined, claimedAt: undefined,
+          // Audit 2026-10-22 B2/B3: say plainly that this is a NEW run of the
+          // same helper and which card carries it. `parentToolCallId` is left
+          // alone (it is the card's identity and where a background report is
+          // folded); the live activity and asks go to the resume call's card,
+          // so that is what `activeToolCallId` names.
+          runNumber: (record.runNumber ?? 1) + 1,
+          activeToolCallId: opts.parentToolCallId,
+          resumedAt: Date.now(),
         });
       } catch (err) {
         // No child turn has started, so tear down only this live construction.
@@ -1259,13 +1285,16 @@ export class NativeSessionHost extends EventEmitter {
         // mutateJson call (see update()'s own WHY) — they now commit
         // together or, on a lock failure, neither commits, same as before
         // this field existed.
+        const completion: Partial<DelegationRecord> = {
+          status: 'completed', endedAt: Date.now(), steps: run.steps, rawReport: run.report,
+          ...(reportPath ? { reportPath } : {}),
+        };
         try {
-          await this.ledger.update(parentCwd, parentId, childId, {
-            status: 'completed', endedAt: Date.now(), steps: run.steps, rawReport: run.report,
-            ...(reportPath ? { reportPath } : {}),
-          }, missedSteers);
+          await this.ledger.update(parentCwd, parentId, childId, completion, missedSteers);
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record specialist completion (including any steers missed during this run) in the ledger — the report is still returned to the caller', { childId, parentId, error: String(ledgerErr) });
+          // B7: never leave the card spinning, and keep trying in the background.
+          this.recoverOutcomeWrite(parentCwd, parentId, childId, completion, missedSteers, false);
         }
       }
       return run;
@@ -1297,14 +1326,21 @@ export class NativeSessionHost extends EventEmitter {
         // mutateJson call: they commit together or, on failure, neither
         // does (see updateIfRunning's own WHY for why the append half still
         // isn't gated on `status === 'running'` the way the patch half is).
-        try {
-          await this.ledger.updateIfRunning(parentCwd, parentId, childId, {
+        // B1: a run that ended because the user pressed Stop is "interrupted"
+        // (the card says Stopped), not "failed" — failureText stays unset so
+        // nothing reads as an error.
+        const outcome: Partial<DelegationRecord> = (err as SpecialistRunError)?.stoppedByUser
+          ? { status: 'interrupted', endedAt: Date.now() }
+          : {
             // Specific and accurate (error-message-standards.md): the real
             // thrown message, never a guessed cause.
             status: 'failed', endedAt: Date.now(), failureText: err?.message ?? String(err),
-          }, missedSteers);
+          };
+        try {
+          await this.ledger.updateIfRunning(parentCwd, parentId, childId, outcome, missedSteers);
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record specialist failure (including any steers missed during this run) in the ledger', { childId, parentId, error: String(ledgerErr) });
+          this.recoverOutcomeWrite(parentCwd, parentId, childId, outcome, missedSteers, true);
         }
       }
       throw err;
@@ -1321,6 +1357,60 @@ export class NativeSessionHost extends EventEmitter {
         log('ERROR', 'NativeSessionHost', 'specialist teardown failed after the run finished', { childId, parentId, error: String(err) });
       }
     }
+  }
+
+  /** Pauses between outcome-write retries; an instance field only so a test can
+   *  shorten them. */
+  private outcomeRetryDelaysMs: readonly number[] = OUTCOME_RETRY_DELAYS_MS;
+  /** Final statuses that could not be written (B7), by childId — see runViewFor. */
+  private readonly unwrittenOutcomes = new Map<string, Partial<DelegationRecord>>();
+
+  /** Audit 2026-10-22 B7. A run's final status write (completed / failed /
+   *  interrupted) failed — typically a busy file lock. Before this, it was only
+   *  logged: the ledger kept saying 'running', so the helper's card spun until the
+   *  app restarted. Two things now happen, neither blocking the caller:
+   *   1. the screens are told the TRUE status at once, from memory (the same
+   *      event a successful write would have produced), so nothing spins;
+   *   2. the write is retried a bounded number of times (async, unref'd timers),
+   *      stopping early once the record already shows a finished status.
+   *  If every retry fails the in-memory push above is all that is left, and the
+   *  next restart's reconcile marks the stale 'running' row interrupted. */
+  private recoverOutcomeWrite(
+    parentCwd: string, parentId: string, childId: string, patch: Partial<DelegationRecord>,
+    appendSteers: string[], onlyIfRunning: boolean,
+  ): void {
+    const ledger = this.ledger;
+    if (!ledger) return;
+    this.unwrittenOutcomes.set(childId, patch);
+    try {
+      const base = ledger.listFor(parentCwd, parentId).find((r) => r.childId === childId);
+      if (base) this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: toRunView({ ...base, ...patch }, { held: !!this.live.get(parentId)?.holdDeliveries }) } satisfies SpecialistsEvent);
+    } catch (readErr) {
+      log('WARN', 'NativeSessionHost', 'could not read the ledger to push an in-memory outcome', { childId, parentId, error: String(readErr) });
+    }
+    const delays = this.outcomeRetryDelaysMs;
+    const attempt = (n: number): void => {
+      if (n >= delays.length) {
+        log('ERROR', 'NativeSessionHost', 'gave up recording a specialist outcome in the ledger after retries — the card shows the in-memory outcome', { childId, parentId });
+        return;
+      }
+      const t = setTimeout(() => {
+        void (async () => {
+          try {
+            // A retry must not re-append steers or overwrite a newer status when an
+            // earlier attempt actually committed before it threw.
+            const cur = ledger.listFor(parentCwd, parentId).find((r) => r.childId === childId);
+            if (!cur || cur.status !== 'running') return;
+            if (onlyIfRunning) await ledger.updateIfRunning(parentCwd, parentId, childId, patch, appendSteers);
+            else await ledger.update(parentCwd, parentId, childId, patch, appendSteers);
+          } catch {
+            attempt(n + 1);
+          }
+        })();
+      }, delays[n]);
+      t.unref();
+    };
+    attempt(0);
   }
 
   /** Report one delegated run's spend to the parent that paid for it (spec §2).
@@ -1621,10 +1711,15 @@ export class NativeSessionHost extends EventEmitter {
 
   /** G-1: the registry for a session id — created on first use, kept across
    *  destroy({keepShells}) so a taken-over conversation's runs stay owned. */
-  private shellsFor(sessionId: string): ShellRegistry {
+  private shellsFor(sessionId: string, cwd?: string): ShellRegistry {
     const existing = this.shellRegistries.get(sessionId);
     if (existing) return existing;
+    // D2: a root conversation saves one small record per background command next
+    // to its other files, so a restart can show real outcomes. Specialist
+    // children (no cwd passed) die with their parent and are not saved.
+    const sidecar = this.nativeHome && cwd ? new ShellSidecar(this.nativeHome, cwd, sessionId) : undefined;
     const registry = new ShellRegistry(sessionId, {
+      sidecar,
       // admin-password design §2.3/§6/§7/§11 task 5: the SAME RunningCalls
       // instance tools/bash.ts's own foreground spawn path registers into,
       // and the SAME `wipeUpfront` the tool layer calls — kept as a bound
@@ -1641,6 +1736,17 @@ export class NativeSessionHost extends EventEmitter {
     registry.on('exit', (run: ShellRun) => this.onShellExit(sessionId, registry, run));
     registry.on('long-running', (run: ShellRun, elapsedMs: number) => this.onShellLongRunning(sessionId, run, elapsedMs));
     this.shellRegistries.set(sessionId, registry);
+    if (sidecar && this.nativeHome && cwd) {
+      this.shellSidecars.set(sessionId, sidecar);
+      // D2/D3: bring in what the last run saved (finished outcomes; still-running
+      // process groups re-attached). Async; screens get each record as a change
+      // event and session:open waits for this before answering.
+      const home = this.nativeHome;
+      this.shellRestores.set(sessionId, readPersistedShells(home, cwd, sessionId)
+        .then((records) => registry.restoreFrom(records))
+        .then(() => undefined)
+        .catch((err) => log('WARN', 'NativeSessionHost', 'could not restore saved background commands', { sessionId, error: String(err) })));
+    }
     return registry;
   }
 
@@ -1684,9 +1790,11 @@ export class NativeSessionHost extends EventEmitter {
   async killShell(sessionId: string, shellId: string): Promise<{ ok: true } | { ok: false; reason: 'not-live' | 'unknown-shell' | 'not-running' }> {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return { ok: false, reason: 'not-live' };
-    const run = reg.get(shellId);
-    if (!run) return { ok: false, reason: 'unknown-shell' };
-    if (run.status !== 'running') return { ok: false, reason: 'not-running' };
+    // statusOf also knows commands re-attached after a restart (D3), which have
+    // no live ShellRun object but can still be stopped.
+    const status = reg.statusOf(shellId);
+    if (!status) return { ok: false, reason: 'unknown-shell' };
+    if (status !== 'running') return { ok: false, reason: 'not-running' };
     await reg.kill(shellId, 'user');
     return { ok: true };
   }
@@ -1697,7 +1805,24 @@ export class NativeSessionHost extends EventEmitter {
   shellRunsFor(sessionId: string): ShellRunView[] {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return [];
-    return reg.list().map((r) => reg.toView(r));
+    // Commands carried over from before a restart ride along (restored: true).
+    return [...reg.restoredViews(), ...reg.list().map((r) => reg.toView(r))];
+  }
+
+  /** shellRunsFor once the saved records of a just-resumed conversation have been
+   *  taken in (what session:open answers with, so a first open is never missing them). */
+  async shellRunsForAsync(sessionId: string): Promise<ShellRunView[]> {
+    await this.shellRestores.get(sessionId);
+    return this.shellRunsFor(sessionId);
+  }
+
+  /** D4: the saved commands of a conversation that is NOT live on this host
+   *  (e.g. opened on a phone while closed here) — real outcomes from disk, with a
+   *  still-running process reported as running. Read-only: Stop needs the
+   *  conversation open. `cwd` comes from the caller's session record. */
+  async persistedShellRunsFor(sessionId: string, cwd: string): Promise<ShellRunView[]> {
+    if (this.live.has(sessionId) || !this.nativeHome) return this.shellRunsForAsync(sessionId);
+    return persistedRunViews(await readPersistedShells(this.nativeHome, cwd, sessionId));
   }
 
   /** Task 4 — format one claimed ledger record into the text runNotice()
@@ -1957,7 +2082,7 @@ export class NativeSessionHost extends EventEmitter {
      *  can. */
     const throwIfEnded = (): void => {
       if (errorText) throw new Error(`${errorText} (specialist session ${childId})`);
-      if (interrupted) throw new Error(`the specialist was stopped before it could report (specialist session ${childId}).`);
+      if (interrupted) throw Object.assign(new Error(`the specialist was stopped before it could report (specialist session ${childId}).`), { stoppedByUser: true as const });
       // The parent was destroyed / quiesced mid-run, which cascade-destroys its
       // children — there is no session left to nudge or read from.
       if (!this.live.has(childId)) throw new Error(`the specialist session ${childId} was torn down before it could report.`);
@@ -2310,7 +2435,7 @@ export class NativeSessionHost extends EventEmitter {
     this.ledger = nativeHome
       ? new DelegationLedger(nativeHome, (cwd, parentId, changed) => {
           for (const rec of changed) {
-            this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: toRunView(rec) } satisfies SpecialistsEvent);
+            this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: this.runViewFor(parentId, rec) } satisfies SpecialistsEvent);
           }
         })
       : undefined;
@@ -2713,7 +2838,7 @@ export class NativeSessionHost extends EventEmitter {
   private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[], skillCatalog: SkillCatalog): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
     return {
       // G-1: this session's background-command registry, host-owned.
-      shells: this.shellsFor(sessionId),
+      shells: this.shellsFor(sessionId, cwd),
       // admin-password design §2.3/§11 task 5: the ONE process-wide
       // RunningCalls instance — always present, cheap bookkeeping even when
       // AskpassServer never attaches (nothing will ever be verified against
@@ -4771,7 +4896,16 @@ export class NativeSessionHost extends EventEmitter {
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
-    if (entry && !entry.parentSessionId) entry.holdDeliveries = true;
+    if (entry && !entry.parentSessionId) {
+      entry.holdDeliveries = true;
+      // B8: finished background helpers whose reports are now held back should
+      // say so — nothing else would push their cards (no ledger write happens).
+      for (const rec of records) {
+        if (rec.background && !rec.delivered && (rec.status === 'completed' || rec.status === 'failed')) {
+          this.emit('specialists-event', { kind: 'run', sessionId, run: this.runViewFor(sessionId, rec) } satisfies SpecialistsEvent);
+        }
+      }
+    }
     return !!entry;
   }
 
@@ -5030,19 +5164,36 @@ export class NativeSessionHost extends EventEmitter {
    *  left to act on their status, so this matches that same "only when it IS
    *  live" contract instead of inventing a second one.
    *
-   *  Capped at SPECIALIST_SPAWN_BUDGET_PER_SESSION defensively: in
-   *  production the ledger can never hold more than that many records for
-   *  one parent — trySpendSpecialistSpawnBudget spends the budget BEFORE
-   *  recordStart ever runs (see its own comment), so every recordStart call
-   *  is already budget-gated. This slice is a belt-and-braces bound against
-   *  replay ever growing past what a single turn could actually have
-   *  spawned, not a correction for a real overflow. */
+   *  Bounded to the newest SPECIALIST_REPLAY_MAX_RECORDS. NOT the spawn budget:
+   *  that budget resets with every app start while the ledger keeps growing, so
+   *  capping at it (as this once did, keeping the OLDEST 30) hid the newest runs
+   *  — see the slice below. */
   specialistRunsFor(sessionId: string): SpecialistRunView[] {
     const entry = this.live.get(sessionId);
     if (!entry || !this.ledger) return [];
+    // WHY newest-N, not the first 30 (audit 2026-10-22 B5): the old
+    // `.slice(0, 30)` kept the OLDEST records. The spawn budget (30) resets with
+    // every app start while the ledger file keeps growing (real ledgers hold
+    // 31-82 records), so the newest runs — including ones still running — got no
+    // status on reopen, on a phone or in a second window. A generous bound on
+    // the NEWEST records keeps replay cheap without hiding current work.
     return this.ledger.listFor(entry.cwd, sessionId)
-      .slice(0, SPECIALIST_SPAWN_BUDGET_PER_SESSION)
-      .map(toRunView);
+      .slice(-SPECIALIST_REPLAY_MAX_RECORDS)
+      .map((rec) => this.runViewFor(sessionId, rec));
+  }
+
+  /** The card-facing view of one ledger record, with the one fact only the host
+   *  knows: whether this parent's deliveries are held after a Stop (B8). */
+  private runViewFor(parentId: string, rec: DelegationRecord): SpecialistRunView {
+    // B7: an outcome whose disk write failed still wins over the stale 'running'
+    // row, so a later unrelated write (e.g. delivery bookkeeping) cannot flip
+    // the card back to spinning. Dropped as soon as the disk shows a final status.
+    const unwritten = this.unwrittenOutcomes.get(rec.childId);
+    if (unwritten) {
+      if (rec.status === 'running') rec = { ...rec, ...unwritten };
+      else this.unwrittenOutcomes.delete(rec.childId);
+    }
+    return toRunView(rec, { held: !!this.live.get(parentId)?.holdDeliveries });
   }
 
   /** True only when we can AFFIRM this native session has no work in flight —
@@ -5202,6 +5353,7 @@ export class NativeSessionHost extends EventEmitter {
       const reg = this.shellRegistries.get(sessionId);
       if (reg) {
         this.shellRegistries.delete(sessionId);
+        this.shellRestores.delete(sessionId);
         // Held until the kill settles so app-quit can still reach a process
         // that is ignoring SIGTERM inside the 2 s escalation window.
         this.drainingShellRegistries.add(reg);
@@ -5312,16 +5464,27 @@ export class NativeSessionHost extends EventEmitter {
     // G-1 (D2): app quit stops every background command with the honest
     // reason. SIGKILL at once: the process is exiting and a deferred
     // escalation timer would never fire.
+    const quitKills: Promise<unknown>[] = [];
     for (const [id, reg] of this.shellRegistries) {
-      void reg.killAll('app-quit', { graceMs: 0 }).catch((err) => log('WARN', 'NativeSessionHost', 'killAll on quit failed', { sessionId: id, error: String(err) }));
+      quitKills.push(reg.killAll('app-quit', { graceMs: 0 }).catch((err) => log('WARN', 'NativeSessionHost', 'killAll on quit failed', { sessionId: id, error: String(err) })));
     }
     this.shellRegistries.clear();
     // A conversation closed seconds ago is still escalating SIGTERM->SIGKILL;
     // finish the job now rather than let the escalation timer die with us.
     for (const reg of this.drainingShellRegistries) {
-      void reg.killAll('app-quit', { graceMs: 0 }).catch(() => { /* already gone */ });
+      quitKills.push(reg.killAll('app-quit', { graceMs: 0 }).catch(() => { /* already gone */ }));
     }
     this.drainingShellRegistries.clear();
+    // D2: let the exits land in the registries (SIGKILL is immediate) and then
+    // get every saved record onto disk, so the next start reports "stopped when
+    // the app quit" from fact. Bounded: a stuck disk must not hold up quitting.
+    await Promise.race([Promise.allSettled(quitKills), new Promise<void>((res) => setTimeout(res, 3_000).unref())]);
+    await Promise.race([
+      Promise.allSettled([...this.shellSidecars.values()].map((sc) => sc.flush())),
+      new Promise<void>((res) => setTimeout(res, 3_000).unref()),
+    ]);
+    this.shellSidecars.clear();
+    this.shellRestores.clear();
     // Fix (Task 4 fix pass 3): belt-and-suspenders sweep on top of the
     // per-session cleanup destroy() now does above. Covers the one case that
     // loop can't: a fallback entry whose parent's destroy() already ran

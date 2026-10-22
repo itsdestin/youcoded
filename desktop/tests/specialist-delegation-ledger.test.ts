@@ -644,6 +644,13 @@ describe('DelegationLedger', () => {
       stale: true,
       model: { label: 'Sonnet 5', via: 'named', fallback: false },
       notes: [note],
+      // Audit 2026-10-22: resume + report-freshness facts (a never-resumed run is run 1 on its own card).
+      runNumber: 1,
+      activeToolCallId: 'tc-1',
+      reportStale: false,
+      // delivered: true, so nothing is pending (reportPending omitted by toEqual's undefined handling).
+      resumedAt: undefined,
+      reportPending: undefined,
     });
     // Monotonic, and it advances on every projection — that is what lets the
     // reducer tell a straggler from a real update.
