@@ -198,3 +198,58 @@ describe('selectArchivable — invariants', () => {
     }
   });
 });
+
+describe('selectArchivable — offline volumes and stubs (review 2026-10-22)', () => {
+  const old = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => rec(`${prefix}${i}`, 90, { path: `${prefix}/f${i}.md` }));
+
+  it.each([
+    ['a symlink in the way', { viaSymlink: true }],
+    ['a mount point', { mountPoint: true }],
+    ['an empty folder that is not the project (an unmounted drive\'s stub)', { empty: true }],
+  ])('an ancestor that is %s makes the file "could not tell", not "gone"', (_n, extra) => {
+    const r = rec('a', 90);
+    const p = gone(r, { ancestor: { path: '/mnt/x', sameDevice: true, readable: true, ...extra } });
+    expect(classifyMissing(p, ['/tmp'])).toBe('unknown');
+  });
+
+  it('an empty PROJECT ROOT ancestor is still trusted (its health is checked separately)', () => {
+    const r = rec('a', 90);
+    expect(classifyMissing(gone(r, { ancestor: { path: ROOT, sameDevice: true, readable: true, empty: true, isProjectRoot: true } }), ['/tmp'])).toBe('file-gone');
+  });
+
+  it.each(['/mnt/usb/a.md', '/media/me/DRIVE/a.md', '/run/media/me/D/a.md', '/Volumes/X/a.md'])('anything under %s might simply be offline: kept', (target) => {
+    const r = rec('a', 90);
+    expect(classifyMissing(gone(r, { target }), ['/tmp'])).toBe('unknown');
+  });
+
+  it('a whole top-level folder that is entirely missing (a drive that went offline) is held back, the rest still cleans', () => {
+    const drive = old(30, 'usbdrive');           // all missing, none present
+    const worktrees = old(30, 'worktrees');      // mostly missing but some alive: normal clean-up
+    const liveWt = rec('lw', 1, { path: 'worktrees/alive.md' });
+    const probes = probesOf([
+      ...drive.map((r): [ArtifactRecord, Probe] => [r, gone(r)]),
+      ...worktrees.map((r): [ArtifactRecord, Probe] => [r, gone(r)]),
+      [liveWt, present(liveWt)],
+    ]);
+    const all = [...drive, ...worktrees, liveWt, ...living(5)];
+    for (const l of living(5)) probes.set(l.id, present(l));
+    const out = selectArchivable(all, probes, struck(...drive.map((d) => d.id), ...worktrees.map((d) => d.id)), NOW, opts());
+    expect(out.vanishedGroups).toEqual(['in:usbdrive']);
+    expect(out.ids.sort()).toEqual(worktrees.map((w) => w.id).sort());
+  });
+
+  it('paths under the temp folders never count as a vanished folder (gone by design)', () => {
+    const tmpRecs = Array.from({ length: 40 }, (_, i) => rec(`t${i}`, 90, { kind: 'external', absolutePath: `/tmp/scratch/f${i}.md`, path: `f${i}.md` }));
+    const probes = probesOf(tmpRecs.map((r): [ArtifactRecord, Probe] => [r, gone(r, { target: `/tmp/scratch/${r.path}` })]));
+    const out = selectArchivable([...tmpRecs, ...living(40)], new Map([...probes, ...living(40).map((l): [string, Probe] => [l.id, present(l)])]), struck(...tmpRecs.map((t) => t.id)), NOW, opts());
+    expect(out.vanishedGroups).toEqual([]);
+    expect(out.ids).toHaveLength(40);
+  });
+
+  it('a restored record is left alone until its protection date, and archivable after', () => {
+    const r = rec('a', 90);
+    const args = [[r, ...living(10)], probesOf([[r, gone(r)], ...living(10).map((l): [ArtifactRecord, Probe] => [l, present(l)])]), struck('a'), NOW] as const;
+    expect(selectArchivable(...args, opts({ keepUntil: { a: iso(-10 * DAY) } })).ids).toEqual([]);
+    expect(selectArchivable(...args, opts({ keepUntil: { a: iso(1 * DAY) } })).ids).toEqual(['a']);
+  });
+});

@@ -317,3 +317,72 @@ describe('scripts/restore-artifact-archive.mjs', () => {
     expect(out2).toContain('0 to bring back');
   });
 });
+
+describe('review 2026-10-22: archive files, durable restore, last look, stubs', () => {
+  it('every run writes a NEW archive file and never rewrites an earlier one', async () => {
+    seed(12);
+    await twoStrikes();
+    const first = fs.readdirSync(archiveDir(root)).filter((n) => n.endsWith('.jsonl.gz'));
+    const firstBytes = first.map((n) => fs.readFileSync(path.join(archiveDir(root), n)));
+    const sc = onDisk();
+    for (let i = 0; i < 3; i++) sc.artifacts.push(record(`X${i}`, `more/x${i}.md`, 90));
+    sc.updatedAt = iso(T0 + 9 * DAY);
+    fs.writeFileSync(sidecarFile(root), JSON.stringify(sc));
+    _resetSidecarCacheForTests();
+    await runCleanup(root, { nowMs: T0 + 10 * DAY, limits: LIMITS });          // first strike for X*
+    expect((await runCleanup(root, { nowMs: T0 + 18 * DAY, limits: LIMITS })).status).toBe('archived');
+    const all = fs.readdirSync(archiveDir(root)).filter((n) => n.endsWith('.jsonl.gz'));
+    expect(all.length).toBe(2);
+    first.forEach((n, i) => expect(fs.readFileSync(path.join(archiveDir(root), n)).equals(firstBytes[i])).toBe(true));
+    expect(readArchive().map((r) => r.id).sort()).toEqual([...Array.from({ length: 12 }, (_, i) => `D${i}`), 'X0', 'X1', 'X2'].sort());
+  });
+
+  it('removes archive temp files left by an interrupted write (older than an hour) but not fresh ones', async () => {
+    seed();
+    fs.mkdirSync(archiveDir(root), { recursive: true });
+    const old = path.join(archiveDir(root), '2026-10-x.jsonl.gz.tmp.999');
+    const fresh = path.join(archiveDir(root), '2026-12-y.jsonl.gz.tmp.998');
+    fs.writeFileSync(old, 'x'); fs.writeFileSync(fresh, 'y');
+    // The run's clock is injected (T0 + 8 days); age the files relative to that.
+    fs.utimesSync(old, new Date(T0 + 8 * DAY - 3 * 3600_000), new Date(T0 + 8 * DAY - 3 * 3600_000));
+    fs.utimesSync(fresh, new Date(T0 + 8 * DAY - 60_000), new Date(T0 + 8 * DAY - 60_000));
+    await twoStrikes();
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it('restored records are protected: not archived again, even though their files are still missing', async () => {
+    const { dead } = seed();
+    await twoStrikes();
+    await restoreArchive(root);
+    const r = await runCleanup(root, { nowMs: T0 + 20 * DAY, limits: LIMITS });          // first strike pass
+    const r2 = await runCleanup(root, { nowMs: T0 + 30 * DAY, limits: LIMITS });         // would be archivable, but protected
+    expect([r.status, r2.status]).not.toContain('archived');
+    expect(onDisk().artifacts.filter((a) => a.id.startsWith('D'))).toHaveLength(dead.length);
+    // After the 90 days are over they become archivable again.
+    expect((await runCleanup(root, { nowMs: Date.now() + 100 * DAY, limits: LIMITS })).status).not.toBe('skipped-recent');
+  });
+
+  it('a file that comes back after the survey but before the commit is dropped from the batch', async () => {
+    const { dead } = seed();
+    const r = await twoStrikes({ hooks: { beforeCommit: () => {
+      fs.mkdirSync(path.join(root, 'gone/dir'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'gone/dir/d3.md'), 'back');
+    } } });
+    expect(r.archivedRecords).toBe(dead.length - 1);
+    expect(onDisk().artifacts.some((a) => a.id === 'D3')).toBe(true);
+  });
+
+  it('survey: an empty stub folder and a symlinked folder are not trusted as ancestors', async () => {
+    fs.writeFileSync(path.join(root, 'keep.md'), 'x');
+    fs.mkdirSync(path.join(root, 'stub'));                                   // empty: what an unmounted drive leaves
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'real-target-'));
+    fs.symlinkSync(real, path.join(root, 'link'));
+    const recs = [record('s', 'stub/a.md', 90), record('l', 'link/b.md', 90), record('n', 'normal/c.md', 90)];
+    const p = await surveyProject(root, recs);
+    expect(p.get('s')?.ancestor).toMatchObject({ path: path.join(root, 'stub'), empty: true });
+    expect(p.get('l')?.ancestor).toMatchObject({ path: path.join(root, 'link'), viaSymlink: true });
+    expect(p.get('n')?.ancestor).toMatchObject({ path: root, isProjectRoot: true, empty: false });
+    fs.rmSync(real, { recursive: true, force: true });
+  });
+});

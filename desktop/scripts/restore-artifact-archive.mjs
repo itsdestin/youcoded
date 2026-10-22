@@ -57,4 +57,13 @@ sidecar.updatedAt = new Date(Math.max(Date.now(), Date.parse(sidecar.updatedAt) 
 const tmp = `${sidecarPath}.restore.${process.pid}.tmp`;
 fs.writeFileSync(tmp, JSON.stringify(sidecar));
 fs.renameSync(tmp, sidecarPath);
+// A durable undo: protect the restored records from the next cleanup for 90 days (the app reads this ledger).
+const ledgerPath = path.join(root, '.youcoded', 'artifacts-sweep.json');
+let ledger = { strikes: {} };
+try { const l = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')); if (l && l.strikes) ledger = l; } catch { /* none yet */ }
+const until = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+ledger.keepUntil = { ...(ledger.keepUntil ?? {}), ...Object.fromEntries(add.map((r) => [r.id, until])) };
+for (const r of add) delete ledger.strikes[r.id];
+fs.writeFileSync(`${ledgerPath}.tmp`, JSON.stringify(ledger));
+fs.renameSync(`${ledgerPath}.tmp`, ledgerPath);
 console.log(`restored ${add.length} records into ${sidecarPath}`);

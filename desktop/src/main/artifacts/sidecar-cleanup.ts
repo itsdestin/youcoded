@@ -12,6 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
+import { randomBytes } from 'crypto';
 import { promisify } from 'util';
 import type { ArtifactRecord, ProjectSidecar } from '../../shared/artifacts/types';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
@@ -28,6 +29,8 @@ const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** A record the owner restores is left alone this long (it is also left alone once it is touched again). */
+const RESTORE_GRACE_DAYS = 90;
 /** At most one run per project per this long. */
 const CLEANUP_INTERVAL_MS = DAY_MS;
 /** Wait this long after the project is first used before surveying (idle time). */
@@ -46,7 +49,7 @@ export const preCleanupBackup = (root: string) => path.join(youcodedDir(root), '
 // ---------------------------------------------------------------------------
 // Ledger: first-seen-missing dates + when the last run happened
 // ---------------------------------------------------------------------------
-interface LedgerFile { strikes: Ledger; lastRunAt?: string }
+interface LedgerFile { strikes: Ledger; lastRunAt?: string; /** restored ids -> ISO date they are protected until */ keepUntil?: Record<string, string> }
 
 async function readLedgerFile(root: string): Promise<LedgerFile> {
   try {
@@ -77,7 +80,16 @@ function targetOf(root: string, rec: ArtifactRecord): string | null {
 export async function surveyProject(
   root: string, records: readonly ArtifactRecord[], signal?: AbortSignal,
 ): Promise<Map<string, Probe>> {
-  const rootDev = (await fs.promises.stat(root)).dev;
+  const rootStat = await fs.promises.stat(root);
+  const rootDev = rootStat.dev;
+  const rootReal = await fs.promises.realpath(root).catch(() => root);
+  // Temp folders are usually their own filesystem (tmpfs): a file missing under /tmp is judged against /tmp's device,
+  // not the project's. The temp folder itself is an expected mount point, not an offline-drive stub.
+  const tmpRoots = await Promise.all([os.tmpdir(), '/tmp', '/var/tmp'].map(async (d) => {
+    const st = await fs.promises.stat(d).catch(() => null);
+    return st ? { dir: path.resolve(d), dev: st.dev } : null;
+  }));
+  const tmpOf = (dir: string) => tmpRoots.find((t) => t && (path.resolve(dir) === t.dir || path.resolve(dir).startsWith(t.dir + path.sep))) ?? null;
   const ancestors = new Map<string, Promise<AncestorInfo | null>>();
   const ancestorOf = (dir: string): Promise<AncestorInfo | null> => {
     const hit = ancestors.get(dir);
@@ -87,7 +99,19 @@ export async function surveyProject(
         const st = await fs.promises.stat(dir);
         if (!st.isDirectory()) return await nextUp(dir);   // a FILE where a folder should be: keep looking upward
         const readable = await fs.promises.access(dir, fs.constants.R_OK).then(() => true, () => false);
-        return { path: dir, sameDevice: st.dev === rootDev, readable };
+        // WHY these extra facts (review 2026-10-22): an unmounted drive leaves an empty stub folder (or a symlink to
+        // nothing) that is readable and on the root's device, so "ancestor exists" alone would call everything on the
+        // drive gone for good. Each fact below is one way to tell a real folder from such a stub.
+        const real = await fs.promises.realpath(dir).catch(() => dir);
+        const rel = path.relative(root, dir);
+        const expected = rel.startsWith('..') ? path.resolve(dir) : path.join(rootReal, rel); // inside the project: judged against its real path
+        const viaSymlink = path.resolve(real) !== path.resolve(expected);
+        const parentStat = await fs.promises.stat(path.dirname(dir)).catch(() => null);
+        const tmp = tmpOf(dir);
+        const mountPoint = !!parentStat && parentStat.dev !== st.dev && !(tmp && tmp.dir === path.resolve(dir));
+        const isProjectRoot = path.resolve(dir) === path.resolve(root);
+        const empty = readable && !isProjectRoot ? (await fs.promises.readdir(dir).catch(() => ['?'])).length === 0 : false;
+        return { path: dir, sameDevice: st.dev === rootDev || (!!tmp && st.dev === tmp.dev), readable, viaSymlink, mountPoint, empty, isProjectRoot };
       } catch { return await nextUp(dir); }
     })();
     ancestors.set(dir, p);
@@ -130,23 +154,40 @@ export interface CleanupHooks {
   writeSidecar?: typeof writeSidecar;
 }
 
-/** Append `records` to this month's archive chunk: new gzip member, fsync'd temp file, rename. */
+/** fsync a folder so a rename inside it survives a power cut. Not every platform allows it; that is fine. */
+async function fsyncDir(dir: string): Promise<void> {
+  try { const fh = await fs.promises.open(dir, 'r'); try { await fh.sync(); } finally { await fh.close(); } } catch { /* best effort */ }
+}
+
+/** Orphaned temp files from an archive write that was interrupted (older than an hour, so never one in flight). */
+async function sweepArchiveTmp(dir: string, nowMs: number): Promise<void> {
+  let names: string[] = [];
+  try { names = await fs.promises.readdir(dir); } catch { return; }
+  for (const n of names) {
+    if (!/\.tmp\./.test(n)) continue;
+    const st = await fs.promises.stat(path.join(dir, n)).catch(() => null);
+    if (st && nowMs - st.mtimeMs > 60 * 60 * 1000) await fs.promises.rm(path.join(dir, n), { force: true }).catch(() => {});
+  }
+}
+
+/** Write `records` as a NEW archive file (<month>-<time>-<random>.jsonl.gz): temp file, fsync, rename, fsync folder.
+ *  An existing archive file is never rewritten, so two app instances (dev + built) can never overwrite each other's. */
 async function archiveRecords(root: string, records: readonly ArtifactRecord[], nowMs: number, hooks?: CleanupHooks): Promise<string> {
   const dir = archiveDir(root);
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const month = new Date(nowMs).toISOString().slice(0, 7);
-  const file = path.join(dir, `${month}.jsonl.gz`);
+  await sweepArchiveTmp(dir, nowMs);
+  const stamp = new Date(nowMs).toISOString().replace(/[:.]/g, '-');
+  const file = path.join(dir, `${stamp.slice(0, 7)}-${stamp}-${randomBytes(4).toString('hex')}.jsonl.gz`);
   const member = await gzip(Buffer.from(records.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8'));
-  let existing: Buffer = Buffer.alloc(0);
-  try { existing = await fs.promises.readFile(file); } catch (e) { if (errCode(e) !== 'ENOENT') throw e; }
   const tmp = `${file}.tmp.${process.pid}`;
-  const fh = await fs.promises.open(tmp, 'w', 0o600);
+  const fh = await fs.promises.open(tmp, 'wx', 0o600);
   try {
-    await fh.writeFile(Buffer.concat([existing, member])); // concatenated gzip members decode as one stream
+    await fh.writeFile(member);
     await fh.sync();
   } finally { await fh.close(); }
   await hooks?.beforeArchiveRename?.();
   await fs.promises.rename(tmp, file);
+  await fsyncDir(dir);
   return file;
 }
 
@@ -213,10 +254,10 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
 
   const pinned = new Set([...(sidecar.manualIncludes ?? []).map((m) => m.path), ...(sidecar.manualExcludes ?? [])].map((p) => canonicalize(p, null)));
   const sel = selectArchivable(records, probes, ledgerData.strikes, nowMs, {
-    pinned, projectRoot: root, tmpDirs: [os.tmpdir(), '/tmp', '/var/tmp'], ...opts.limits,
+    pinned, projectRoot: root, tmpDirs: [os.tmpdir(), '/tmp', '/var/tmp'], keepUntil: ledgerData.keepUntil, ...opts.limits,
   });
   // Strikes and the run date are recorded even when nothing is archived: that is how the 7-day gap elapses.
-  await writeLedgerFile(root, { strikes: sel.ledger, lastRunAt: new Date(nowMs).toISOString() });
+  await writeLedgerFile(root, { strikes: sel.ledger, lastRunAt: new Date(nowMs).toISOString(), keepUntil: ledgerData.keepUntil });
   if (sel.blocked === 'outage-suspected') return { status: 'outage-suspected' };
   if (sel.ids.length === 0) return { status: sel.blocked === 'below-floor' ? 'below-floor' : 'nothing-changed' };
 
@@ -225,13 +266,14 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
   catch (e) { if (errCode(e) !== 'EEXIST') throw e; }
 
   // Remember what each candidate looked like at survey time; the commit drops any that changed since.
-  const surveyed = new Map(records.filter((r) => sel.ids.includes(r.id)).map((r) => [r.id, { n: r.versions.length, lm: r.lastModified }]));
+  const chosen = new Set(sel.ids);
+  const surveyed = new Map(records.filter((r) => chosen.has(r.id)).map((r) => [r.id, { n: r.versions.length, lm: r.lastModified }]));
   await opts.hooks?.beforeCommit?.();
   const result = await enqueueMaintenance(root, () => commit(root, surveyed, nowMs, opts.hooks));
   if (result.status === 'archived' && result.archivedIds) {
     // Only now, with the sidecar write committed, do the archived records leave the strike ledger.
     const done = new Set(result.archivedIds);
-    await writeLedgerFile(root, { strikes: Object.fromEntries(Object.entries(sel.ledger).filter(([id]) => !done.has(id))), lastRunAt: new Date(nowMs).toISOString() });
+    await writeLedgerFile(root, { strikes: Object.fromEntries(Object.entries(sel.ledger).filter(([id]) => !done.has(id))), lastRunAt: new Date(nowMs).toISOString(), keepUntil: ledgerData.keepUntil });
   }
   return { ...result, braked: sel.blocked === 'braked' };
 }
@@ -241,17 +283,28 @@ async function commit(
 ): Promise<CleanupResult> {
   const current = await readSidecarShared(root);
   if (!current || 'corrupted' in current) return { status: 'no-sidecar' };
-  const doomed = current.artifacts.filter((r) => {
+  let doomed = current.artifacts.filter((r) => {
     const s = surveyed.get(r.id);
     return !!s && s.n === r.versions.length && s.lm === r.lastModified; // changed since the survey: keep
   });
-  if (doomed.length === 0) return { status: 'nothing-changed' };
+  // WHY a second look at the disk (review 2026-10-22): the survey is minutes old and the 7-day strike is days old.
+  // A file that came back since (or whose state is now unclear) is kept.
+  const stillGone = await mapLimit(doomed, SURVEY_CONCURRENCY, async (r) => {
+    const target = targetOf(root, r);
+    if (!target) return false;
+    try { await fs.promises.stat(target); return false; }
+    catch (e) { const c = errCode(e); return c === 'ENOENT' || c === 'ENOTDIR'; }
+  });
+  const doomedNow = doomed.filter((_, i) => stillGone[i]);
+  if (doomedNow.length === 0) return { status: 'nothing-changed' };
+  doomed = doomedNow;
   const archivePath = await archiveRecords(root, doomed, nowMs, hooks); // archive FIRST
   await hooks?.afterArchive?.();
   const gone = new Set(doomed.map((r) => r.id));
   const next: ProjectSidecar = { ...current, artifacts: current.artifacts.filter((r) => !gone.has(r.id)) };
   const write = hooks?.writeSidecar ?? writeSidecar;
   const w = await write(root, current.updatedAt, next);
+  await fsyncDir(youcodedDir(root));
   if (!w.committed) { // lost the CAS race to another writer: no retry loop; tomorrow's run starts over
     log('INFO', 'ArtifactCleanup', 'sidecar changed during cleanup; will retry on a later run', { root });
     return { status: 'conflict' };
@@ -289,9 +342,16 @@ export async function restoreArchive(root: string, filter: RestoreFilter = {}, h
     if (add.length === 0) return { status: 'restored', restored: 0, skipped: wanted.length };
     const next: ProjectSidecar = { ...current, artifacts: [...current.artifacts, ...add] };
     const w = await (hooks?.writeSidecar ?? writeSidecar)(root, current.updatedAt, next);
-    return w.committed
-      ? { status: 'restored', restored: add.length, skipped: wanted.length - add.length }
-      : { status: 'conflict', restored: 0, skipped: wanted.length };
+    if (!w.committed) return { status: 'conflict', restored: 0, skipped: wanted.length };
+    // A durable undo: the restored records are protected for RESTORE_GRACE_DAYS (and once touched again they are no
+    // longer idle), so a restored record whose file is still missing is not archived again a week later.
+    const ledger = await readLedgerFile(root);
+    const until = new Date(Date.now() + RESTORE_GRACE_DAYS * DAY_MS).toISOString();
+    const keepUntil = { ...(ledger.keepUntil ?? {}), ...Object.fromEntries(add.map((r) => [r.id, until])) };
+    const restoredIds = new Set(add.map((r) => r.id));
+    const strikes = Object.fromEntries(Object.entries(ledger.strikes).filter(([id]) => !restoredIds.has(id)));
+    await writeLedgerFile(root, { ...ledger, strikes, keepUntil });
+    return { status: 'restored', restored: add.length, skipped: wanted.length - add.length };
   });
 }
 
