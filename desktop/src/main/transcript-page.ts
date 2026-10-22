@@ -191,7 +191,10 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
       if (offset < startByte) continue;
       const line = text.trim();
       if (!line) continue;
-      const parsed = format === 'native' ? nativeLineEvents(line, sessionId) : parseTranscriptLine(line, sessionId, pageUsage);
+      // WHY 'recorded': a page is history; stamping it with the read time showed every
+      // old message at the moment the chat was reopened (card #2). Native lines already
+      // carry the time they were saved with.
+      const parsed = format === 'native' ? nativeLineEvents(line, sessionId) : parseTranscriptLine(line, sessionId, pageUsage, 'recorded');
       if (parsed.length === 0) continue;
       const lineUuid = parsed[0].uuid;
       const isRepeat = !!lineUuid && seenUuids.has(lineUuid);

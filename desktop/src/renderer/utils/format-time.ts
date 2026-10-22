@@ -1,4 +1,10 @@
-/** Format an epoch-ms timestamp as a short time string for chat bubbles (e.g. "2:34 PM"). */
+/**
+ * Format an epoch-ms timestamp for a chat bubble: "2:34 PM" today, "Yesterday at 2:34 PM" yesterday, and
+ * just the date before that ("Oct 3", with the year when it is not this year: "Oct 3, 2025").
+ *
+ * WHY the day (Destin, 2026-10-21): a reopened chat from last week read "2:34 PM" exactly like a message
+ * sent a minute ago. Days are the computer's local calendar days, so "Yesterday" means before midnight.
+ */
 export function formatBubbleTime(timestamp: number): string {
   // WHY a cached formatter (2026-10-04, perf fix 5): toLocaleTimeString builds a brand-new Intl formatter on
   // EVERY call, and the streaming bubble calls this on every redraw (60+ a second while a reply streams). The
@@ -17,17 +23,34 @@ export function formatBubbleTime(timestamp: number): string {
   const now = Date.now();
   if (!bubbleTimeFormat || Math.abs(now - bubbleTimeCheckedAt) >= 60_000) {
     bubbleTimeCheckedAt = now;
-    const offset = new Date(now).getTimezoneOffset();
+    const today = new Date(now);
+    const offset = today.getTimezoneOffset();
     if (!bubbleTimeFormat || offset !== bubbleTimeOffset) {
       bubbleTimeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+      bubbleDateFormat = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric' });
+      bubbleDateYearFormat = new Intl.DateTimeFormat([], { month: 'short', day: 'numeric', year: 'numeric' });
       bubbleTimeOffset = offset;
     }
+    // WHY re-read on the same once-a-minute check: past midnight, "today" moves within a minute.
+    // Built from calendar fields (not now minus 24 h) so a daylight-saving day is still one day.
+    todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    yesterdayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime();
+    thisYear = today.getFullYear();
   }
-  return bubbleTimeFormat.format(d);
+  const time = bubbleTimeFormat.format(d);
+  // A time a little ahead of this computer's clock (another device's) still reads as today.
+  if (timestamp >= todayStart) return time;
+  if (timestamp >= yesterdayStart) return `Yesterday at ${time}`;
+  return (d.getFullYear() === thisYear ? bubbleDateFormat! : bubbleDateYearFormat!).format(d);
 }
 let bubbleTimeFormat: Intl.DateTimeFormat | null = null;
+let bubbleDateFormat: Intl.DateTimeFormat | null = null;
+let bubbleDateYearFormat: Intl.DateTimeFormat | null = null;
 let bubbleTimeOffset = NaN;
 let bubbleTimeCheckedAt = 0;
+let todayStart = 0;
+let yesterdayStart = 0;
+let thisYear = 0;
 
 /**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then

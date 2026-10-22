@@ -64,6 +64,15 @@ describe('readTranscriptPage — CC transcript', () => {
     expect(page.cursor).not.toBeNull();
   });
 
+  it('stamps each message with the time it was written, not the time the page was read', async () => {
+    jsonlPath = writeTranscript(3);
+    const page = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });
+    const user2 = page.events.find((e) => e.type === 'user-message' && e.data.text === 'prompt 2');
+    const reply2 = page.events.find((e) => e.type === 'assistant-text' && e.data.text === 'reply 2');
+    expect(user2?.timestamp).toBe(1_700_000_000_002);
+    expect(reply2?.timestamp).toBe(1_700_000_000_003);
+  });
+
   it('the cursor pages backward to the beginning, then stops', async () => {
     jsonlPath = writeTranscript(PAGE_TURNS + 20);
     const first = await readTranscriptPage({ jsonlPath, sessionId: 's1', endOffset: null });

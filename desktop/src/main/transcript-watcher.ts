@@ -48,11 +48,20 @@ export function emptyTurnUsageTally(): TurnUsageTally {
  * on each WatchedSession). Every assistant line's usage is added to it, and a
  * turn-complete both reports and resets it. Omitting it keeps the OLD
  * one-request behaviour, which is only ever what a single-line unit test wants.
+ *
+ * `stamp: 'recorded'` stamps every event with the time Claude Code wrote on the
+ * line instead of the time it was read. WHY (card #2, Destin 2026-10-21): history
+ * pages read old lines NOW, so a reopened chat showed every message at the moment
+ * it was reopened. The live tailer keeps 'read' (the default): its stamps feed
+ * host bookkeeping that compares them with the host's own clock (session-live's
+ * prompt-dismiss, session-record's progress fence), and a live line is read
+ * within a second of being written, so the shown time is the same either way.
  */
 export function parseTranscriptLine(
   line: string,
   sessionId: string,
   tally: TurnUsageTally = emptyTurnUsageTally(),
+  stamp: 'read' | 'recorded' = 'read',
 // WHY StampableEvent[] (M5): a Claude Code transcript line can only yield the types
 // SubagentWatcher stamps onto a specialist's events — never replay-complete,
 // session-error, context-clear, skill-invoked or subagent-usage. Declaring that
@@ -65,6 +74,14 @@ export function parseTranscriptLine(
     return [];
   }
 
+  // The line's own time. Fail closed (0) when absent/unparseable — a result
+  // with no recorded time is treated as history, never as fresh.
+  const parsedTs = Date.parse(parsed?.timestamp);
+  const recordedAt = Number.isFinite(parsedTs) ? parsedTs : 0;
+  // A line with no recorded time falls back to the read time even for history:
+  // a wrong-but-recent time beats no time at all.
+  const timestamp = stamp === 'recorded' && recordedAt ? recordedAt : Date.now();
+
   // A message typed while Claude is still working. Claude Code records it ONLY as a queued_command
   // attachment (no ordinary user line follows), and skipping it with every other non-user line left
   // the typing device's bubble unconfirmed at the bottom of its chat while every other device never
@@ -76,13 +93,13 @@ export function parseTranscriptLine(
   // to be read here or that task's card spins forever (2026-09-24).
   const queuedNotice = queuedTaskNotificationText(parsed);
   if (queuedNotice !== null) {
-    return taskNotificationEvents(queuedNotice, sessionId, parsed.uuid || '');
+    return taskNotificationEvents(queuedNotice, sessionId, parsed.uuid || '', timestamp);
   }
 
   const queuedText = queuedPromptText(parsed);
   if (queuedText !== null) {
     if (!queuedText) return [];
-    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp: Date.now(), data: { text: queuedText } }];
+    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp, data: { text: queuedText } }];
   }
 
   // Only process user / assistant message lines
@@ -94,11 +111,6 @@ export function parseTranscriptLine(
   }
 
   const uuid: string = parsed.uuid || '';
-  const timestamp = Date.now();
-  // The line's own time. Fail closed (0) when absent/unparseable — a result
-  // with no recorded time is treated as history, never as fresh.
-  const parsedTs = Date.parse(parsed.timestamp);
-  const recordedAt = Number.isFinite(parsedTs) ? parsedTs : 0;
   const message = parsed.message;
   const events: StampableEvent[] = [];
 
@@ -188,7 +200,7 @@ export function parseTranscriptLine(
       // Background task end notices ride in as user lines (origin
       // 'task-notification'). Their tags strip to nothing below, which used to
       // drop them entirely — the only record that a background helper finished.
-      events.push(...taskNotificationEvents(raw, sessionId, uuid));
+      events.push(...taskNotificationEvents(raw, sessionId, uuid, timestamp));
       const text = stripSystemTags(raw);
       if (!text) {
         // A slash command: Claude Code wraps it in command tags, which strip to nothing, so its
@@ -404,7 +416,7 @@ const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>
  * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
  * a helper a <result> holding its final report. Mirrored in TranscriptWatcher.kt.
  */
-function taskNotificationEvents(raw: string, sessionId: string, uuid: string): StampableEvent[] {
+function taskNotificationEvents(raw: string, sessionId: string, uuid: string, timestamp: number): StampableEvent[] {
   if (!raw || !raw.includes('<task-notification>')) return [];
   const out: StampableEvent[] = [];
   let i = 0;
@@ -433,7 +445,7 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string): S
       sessionId,
       // Suffixed so two notices in one line stay distinct for uuid dedup.
       uuid: i === 0 ? uuid : `${uuid}:${i}`,
-      timestamp: Date.now(),
+      timestamp,
       data: {
         ...(toolUseId ? { toolUseId } : {}),
         backgroundTask: {

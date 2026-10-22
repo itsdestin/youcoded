@@ -215,6 +215,7 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         type: 'TRANSCRIPT_TOOL_RESULT',
         sessionId,
         uuid,
+        timestamp,
         toolUseId: ev.data.toolUseId,
         result: ev.data.toolResult || '',
         isError: ev.data.isError || false,

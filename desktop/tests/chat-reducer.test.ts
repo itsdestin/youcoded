@@ -295,6 +295,65 @@ describe('transient native usage progress', () => {
   });
 });
 
+describe('a reply shows the time it was last updated', () => {
+  const turnTime = (s: ChatState, turnId: string) => s.get(SESSION)!.assistantTurns.get(turnId)!.timestamp;
+
+  it('moves forward with each text, tool step, tool result and the end of the reply', () => {
+    const M = 60_000; // the bubble shows whole minutes, so the time moves a minute at a time
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'Looking', timestamp: 1 * M });
+    const turnId = s.get(SESSION)!.currentTurnId!;
+    expect(turnTime(s, turnId)).toBe(1 * M);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', toolName: 'Bash', toolInput: {}, timestamp: 2 * M });
+    expect(turnTime(s, turnId)).toBe(2 * M);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u1', toolUseId: 't1', result: 'ok', isError: false, timestamp: 40 * M });
+    expect(turnTime(s, turnId)).toBe(40 * M);
+    s = dispatch(s, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a3', text: 'Done', timestamp: 41 * M });
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'a3', timestamp: 42 * M,
+      stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    expect(s.get(SESSION)!.currentTurnId).toBeNull();
+    expect(turnTime(s, turnId)).toBe(42 * M);
+  });
+
+  it('a tool result within the same minute leaves the reply untouched (no copy of every reply)', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a1', toolUseId: 't1', toolName: 'Bash', toolInput: {}, timestamp: 600_000 });
+    const before = s.get(SESSION)!.assistantTurns;
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u1', toolUseId: 't1', result: 'ok', isError: false, timestamp: 630_000 });
+    expect(s.get(SESSION)!.assistantTurns).toBe(before);
+  });
+
+  it('a reopened reply that starts with a tool step shows that step\'s time, not the moment it was reopened', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.UTC(2026, 9, 21, 22, 8));
+      const yesterday = Date.UTC(2026, 9, 21, 0, 14);
+      let s = dispatch(initState(), { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a1', toolUseId: 't1', toolName: 'Read', toolInput: {}, timestamp: yesterday });
+      const turnId = s.get(SESSION)!.currentTurnId!;
+      expect(turnTime(s, turnId)).toBe(yesterday);
+      s = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', result: 'ok', isError: false, timestamp: yesterday + 240_000 });
+      expect(turnTime(s, turnId)).toBe(yesterday + 240_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never moves backward for a late or replayed event', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'Hi', timestamp: 5_000 });
+    const turnId = s.get(SESSION)!.currentTurnId!;
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'a2', toolUseId: 't1', toolName: 'Bash', toolInput: {}, timestamp: 4_000 });
+    expect(turnTime(s, turnId)).toBe(5_000);
+  });
+
+  it('leaves a finished reply alone when a later reply is running', () => {
+    let s = dispatch(initState(), { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a1', text: 'First', timestamp: 60_000 });
+    const first = s.get(SESSION)!.currentTurnId!;
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'a1', timestamp: 180_000,
+      stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    s = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u2', text: 'next', timestamp: 240_000 } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'a2', text: 'Second', timestamp: 600_000 });
+    expect(turnTime(s, first)).toBe(180_000);
+  });
+});
+
 describe('TRANSCRIPT_TURN_COMPLETE metadata', () => {
   let state: ChatState;
 

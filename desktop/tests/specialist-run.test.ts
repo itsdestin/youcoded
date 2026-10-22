@@ -1137,6 +1137,7 @@ describe('background execution + idle-boundary delivery', () => {
       undefined, undefined, undefined, undefined, undefined, home,
     );
     await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const events = collect();
 
     const { childId, title } = await host.spawnSpecialistBackground('root-1', {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root,
@@ -1158,6 +1159,12 @@ describe('background execution + idle-boundary delivery', () => {
       const rec = (host as any).ledger.listFor(root, 'root-1').find((d: any) => d.childId === childId);
       expect(rec?.status).toBe('completed');
     });
+    // WHY also wait for the report to reach the parent, then for that pass to end (ubuntu CI 2026-10-21:
+    // ENOTEMPTY in teardown): a finished child kicks an idle delivery pass on root-1, which writes under
+    // .youcoded/sessions. "completed" lands BEFORE that pass, so ending here let its write race
+    // teardown's remove on a slow runner. The injected report, then the pass's own promise, are the signal.
+    await vi.waitFor(() => expect(events.some((e) => e.sessionId === 'root-1' && e.data?.injected === 'specialist-report')).toBe(true));
+    await (host as any).live.get('root-1')?.running;
   });
 
   it('a background completion is injected as a user-role turn when the parent goes idle — never mid-turn', async () => {
