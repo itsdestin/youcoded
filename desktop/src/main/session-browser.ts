@@ -763,7 +763,7 @@ export async function listPastSessions(
           // Native uses nativeStoreSlug + ~/.youcoded/sessions (its own frozen
           // slug convention, deliberately diverging from ccProjectSlug — see
           // harness/session-store.ts).
-          const storeLocal = resolveLocal(rec);
+          const storeLocal = await resolveLocal(rec);
           if (isNative) {
             if (storeLocal && await exists(nativeJsonlPath(storeLocal, rec.id))) {
               legacy.projectPath = storeLocal;
@@ -782,7 +782,7 @@ export async function listPastSessions(
           // missing transcript just errors out. The probe path is
           // provider-specific: ~/.claude/projects for CC, ~/.youcoded/sessions
           // for native (see nativeJsonlPath).
-          const localPath = resolveLocal(rec);
+          const localPath = await resolveLocal(rec);
           const transcriptHere = localPath
             ? (isNative
                 ? await exists(nativeJsonlPath(localPath, rec.id))
