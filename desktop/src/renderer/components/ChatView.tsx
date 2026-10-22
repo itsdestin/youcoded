@@ -2,7 +2,7 @@ import { KeepGoingRow } from './KeepGoingRow';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
+import { shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
 import { workbenchQueuePreview } from '../workbench-mode';
 import ToolCard from './ToolCard';
@@ -18,6 +18,7 @@ import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
+import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -622,7 +623,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
+  // WHY a first-draw plan (freeze hunt 2026-10-22, item 3): opening a long conversation drew all of its
+  // ~30-turn page at once, for every open session, shown or not. Now only the newest screens are drawn;
+  // older entries start as spacers and are drawn as the reader scrolls near them. Decided ONCE, on mount
+  // (useState initialiser): later entries and pages follow the ordinary folding rules. Why it cannot
+  // jump: state/first-draw-plan.ts header.
+  const [firstDraw] = useState(() => planFirstDraw(presentation.timeline, presentation.assistantTurns, streamingTurnId));
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive, firstDraw);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -1089,44 +1096,28 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
                 // re-renders only the entry that changed (see its header).
-                let key: string;
                 let turn: AssistantTurn | undefined;
-                switch (entry.kind) {
-                  case 'user': key = entry.message.id; break;
-                  case 'assistant-turn':
-                    turn = presentation.assistantTurns.get(entry.turnId);
-                    // Shared gate (chat-types.ts): a segment-less turn renders
-                    // only when its abnormal stopReason gives the footer row
-                    // something to say — the empty_response fix.
-                    if (!shouldRenderAssistantTurn(turn)) return null;
-                    key = entry.turnId;
-                    break;
-                  case 'prompt':
-                    // Perf cycle 2: the "See previous messages" marker is retired —
-                    // older turns now stream in as the top of the list scrolls into
-                    // view. A timeline persisted by an OLDER build can still carry
-                    // one, so it is skipped rather than rendered as a dead prompt.
-                    if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
-                    key = entry.prompt.promptId;
-                    break;
-                  // /cost and /usage snapshot — entryId is the stable key since the
-                  // same snapshot object is kept in state across re-renders.
-                  case 'usage-card': key = entry.snapshot.entryId; break;
-                  case 'system-marker': key = entry.marker.id; break;
-                  case 'skill-invocation':
-                  case 'compacting':
-                  case 'copy-picker':
-                    key = entry.id; break;
+                // The key switch lives in first-draw-plan.ts so the plan and this list cannot disagree.
+                // null = a retired "See previous messages" marker (an older build can still persist one).
+                const entryKey = timelineEntryKey(entry);
+                if (entryKey === null) return null;
+                if (entry.kind === 'assistant-turn') {
+                  turn = presentation.assistantTurns.get(entry.turnId);
+                  // Shared gate (chat-types.ts): a segment-less turn renders
+                  // only when its abnormal stopReason gives the footer row
+                  // something to say — the empty_response fix.
+                  if (!shouldRenderAssistantTurn(turn)) return null;
                 }
+                const key = entryKey;
                 // Folded rows pass their held height; an unfolded row passes
                 // undefined — a primitive either way, so the memo holds.
-                const foldHeight = folding.isFolded(key!) ? folding.heightOf(key!) : undefined;
+                const foldHeight = folding.isFolded(key) ? folding.heightOf(key) : undefined;
                 const isAssistant = entry.kind === 'assistant-turn';
                 return (
                   <ChatTimelineRow
-                    key={key!}
+                    key={key}
                     entry={entry}
-                    entryKey={key!}
+                    entryKey={key}
                     turn={turn}
                     // Assistant rows only: a new toolCalls Map (any tool event)
                     // must not re-render marker and card rows.

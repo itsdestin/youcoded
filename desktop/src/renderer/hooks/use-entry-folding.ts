@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 /**
  * Perf cycle 3 — stop DRAWING conversation entries that are far off screen,
@@ -111,14 +111,25 @@ export function useEntryFolding(
   enabled: boolean,
   rootRef: React.RefObject<HTMLElement | null>,
   active = true,
+  /**
+   * Entries that start FOLDED on the very first render, with the height to hold for them
+   * (state/first-draw-plan.ts). Read once, on mount: later changes are ignored. WHY: a long
+   * conversation draws only its newest entries on open; the observer below draws the rest
+   * as they come near the viewport, exactly as it does for entries folded later.
+   */
+  seed?: ReadonlyArray<readonly [string, number]>,
 ): EntryFolding {
-  const [state, setState] = useState<FoldState>(EMPTY);
+  const [state, setState] = useState<FoldState>(() => (seed?.length
+    ? { folded: new Set(seed.map(([k]) => k)), heights: new Map(seed) }
+    : EMPTY));
 
   // Everything the observer writes lives in refs. A setState per intersection
   // would be one render per entry per scroll — the observer fires for hundreds
   // of elements at a time, and this hook exists to make rendering cheaper.
-  const heights = useRef(new Map<string, number>());
-  const folded = useRef(new Set<string>());
+  // WHY seeded from the same list as `state`: flushFold/flushUnfold read these refs, not the state.
+  const heights = useRef<Map<string, number>>(null as unknown as Map<string, number>);
+  const folded = useRef<Set<string>>(null as unknown as Set<string>);
+  if (heights.current === null) { heights.current = new Map(state.heights); folded.current = new Set(state.folded); }
   // MEMBERSHIP, not a queue — and that distinction is the whole correctness
   // argument. The first version drained a `pendingFold` queue and cleared it,
   // skipping any entry with no measured height yet. An entry prepended above the
@@ -153,6 +164,31 @@ export function useEntryFolding(
   const publish = useCallback(() => {
     setState({ folded: new Set(folded.current), heights: new Map(heights.current) });
   }, []);
+  // An entry unfolds from a spacer of a GUESSED height (state/first-draw-plan.ts) to its real body. When
+  // that happens above what the reader is looking at, the view must not move. The browser's own scroll
+  // anchoring usually absorbs it, but not in every browser (the remote web view may lack
+  // `overflow-anchor`), so this holds the topmost visible entry and puts it back, like ChatView's
+  // `prependAnchorRef` does for a prepended page. Idempotent: when the browser already compensated, the
+  // measured drift is 0 and nothing is written.
+  const anchor = useRef<{ el: HTMLElement; top: number } | null>(null);
+  /** Keys unfolded since the last commit, whose real height is read once they are drawn. */
+  const justUnfolded = useRef(new Set<string>());
+  const captureAnchor = useCallback(() => {
+    const root = rootRef.current;
+    anchor.current = null;
+    if (!root) return;
+    const rootTop = root.getBoundingClientRect().top;
+    const entries = root.querySelectorAll<HTMLElement>('[data-entry-key]');
+    // Entries are in layout order, so binary search for the first one still on screen.
+    let lo = 0, hi = entries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (entries[mid].getBoundingClientRect().bottom > rootTop) hi = mid;
+      else lo = mid + 1;
+    }
+    const el = entries[lo];
+    if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop };
+  }, [rootRef]);
   const removalPublishPending = useRef(false);
   const publishRemovals = useCallback(() => {
     if (removalPublishPending.current) return;
@@ -169,10 +205,13 @@ export function useEntryFolding(
     unfoldTimer.current = null;
     let changed = false;
     for (const key of folded.current) {
-      if (!outOfView.current.has(key)) { folded.current.delete(key); changed = true; }
+      if (!outOfView.current.has(key)) {
+        if (!changed) captureAnchor();
+        folded.current.delete(key); justUnfolded.current.add(key); changed = true;
+      }
     }
     if (changed) publish();
-  }, [publish]);
+  }, [publish, captureAnchor]);
 
   const flushFold = useCallback(() => {
     foldTimer.current = null;
@@ -307,7 +346,9 @@ export function useEntryFolding(
       if (b.bottom < top) break;
       const key = el.dataset.entryKey;
       if (!key || !folded.current.has(key)) continue;
+      if (!changed) captureAnchor();
       folded.current.delete(key);
+      justUnfolded.current.add(key);
       // Also out of `outOfView`, or the next fold flush would fold it straight
       // back. The observer still believes it is out of view, so its own
       // "now visible" report follows within a frame and agrees.
@@ -315,7 +356,7 @@ export function useEntryFolding(
       changed = true;
     }
     if (changed) publish();
-  }, [publish, rootRef]);
+  }, [publish, rootRef, captureAnchor]);
 
   // Suspending folding must unfold what is already folded, synchronously enough
   // that the find bar never walks a DOM with holes in it.
@@ -373,6 +414,25 @@ export function useEntryFolding(
     io.observe(el);
     return () => { io.unobserve(el); cleanup(); };
   }, [publishRemovals]);
+
+  // After an unfold is drawn: (1) put the anchor entry back where it was, (2) record the real height of
+  // what was just drawn. WHY (2): the observer never re-reports an entry that stays in view, so without this
+  // the height held for it would stay the guessed one, and a later fold would use a wrong spacer. A hidden
+  // pane reads 0 (it is not laid out) and keeps what it had.
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    anchor.current = null;
+    const root = rootRef.current;
+    if (a && root && a.el.isConnected) {
+      const drift = a.el.getBoundingClientRect().top - root.getBoundingClientRect().top - a.top;
+      if (Math.abs(drift) > 0.5) root.scrollTop += drift;
+    }
+    for (const key of justUnfolded.current) {
+      const h = elements.current.get(key)?.offsetHeight ?? 0;
+      if (h > 0) heights.current.set(key, h);
+    }
+    justUnfolded.current.clear();
+  }, [state, rootRef]);
 
   const isFolded = useCallback((key: string) => state.folded.has(key), [state]);
   const heightOf = useCallback((key: string) => state.heights.get(key), [state]);

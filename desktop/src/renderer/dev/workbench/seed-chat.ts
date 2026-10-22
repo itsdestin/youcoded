@@ -73,6 +73,29 @@ function providerErrorRequested(): string | null {
   return new URLSearchParams(location.search).get('providerError');
 }
 
+/** `?seed=long-<N>`: wb-2 holds N finished turns of very different heights (short answers, long ones, tool
+ *  steps, code). WHY: the first-draw plan (state/first-draw-plan.ts) draws only the newest screens of a long
+ *  conversation, so proving it cannot jump needs real layout over a long, uneven transcript
+ *  (tests/journeys/first-draw-stability.json, scripts/first-draw-scroll-probe.mjs). Deterministic: no randomness. */
+export function longConversation(turns: number): string {
+  const lines: string[] = [];
+  for (let i = 0; i < turns; i++) {
+    lines.push(JSON.stringify({ type: 'user_message', text: `Question ${i}: ${'please look at this part of the project and tell me what you find '.repeat(1 + (i % 4))}` }));
+    // Sized like a real working conversation (a few hundred words and fenced code per answer), not a toy:
+    // the point of the first-draw plan is the cost of drawing that much markdown and colouring that much code.
+    const words = [30, 240, 90, 520, 150, 700, 60][i % 7];
+    const prose = Array.from({ length: words }, (_, w) => `word${(i * 7 + w) % 97}`).join(' ');
+    if (i % 3 === 0) {
+      lines.push(JSON.stringify({ type: 'tool_use', id: `t${i}`, name: 'Bash', input: { command: `ls -la dir${i}`, description: `List dir ${i}` } }));
+      lines.push(JSON.stringify({ type: 'tool_result', tool_use_id: `t${i}`, content: `file-a\nfile-b\nfile-c ${i}` }));
+    }
+    const code = i % 2 === 0 ? `\n\n\`\`\`ts\n${Array.from({ length: 30 + (i % 25) }, (_, l) => `const v${l} = compute(${l + i}, "item-${l}"); // note ${l}`).join('\n')}\n\`\`\`\n` : '';
+    lines.push(JSON.stringify({ type: 'assistant_text', partId: `p${i}`, text: `Answer ${i}. ${prose}.${code}` }));
+    lines.push(JSON.stringify({ type: 'turn_complete' }));
+  }
+  return lines.join('\n');
+}
+
 function seedRequested(): string | null {
   if (typeof location === 'undefined') return null;
   return new URLSearchParams(location.search).get('seed');
@@ -158,6 +181,7 @@ export function buildHydratePayload(): SerializedChatState {
   // scenario (see bubbleConvos above). Everything else loads as usual.
   const seed = seedRequested();
   const bubbleName = seed?.startsWith('bubbles-') ? seed.slice('bubbles-'.length) : null;
+  const longTurns = seed?.startsWith('long-') ? Number(seed.slice('long-'.length)) : 0;
   const sources: Array<[name: string, raw: string, sessionId: string | undefined]> = Object.entries(convos)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, raw]) => {
@@ -168,6 +192,10 @@ export function buildHydratePayload(): SerializedChatState {
       const readiness = phase !== null && ['opening', 'connecting', 'failed', 'ready'].includes(phase);
       return [name, name === 'native' && readiness ? `${raw}\n{"type":"turn_complete"}` : raw, SESSION_FOR[name]];
     });
+  if (longTurns > 0) {
+    const targetIndex = sources.findIndex(([name]) => name === 'native');
+    sources.splice(targetIndex >= 0 ? targetIndex : sources.length, targetIndex >= 0 ? 1 : 0, ['long', longConversation(longTurns), 'wb-2']);
+  }
   if (bubbleName) {
     const raw = bubbleConvos[`./fixtures/bubbles/${bubbleName}.jsonl`];
     if (raw) {

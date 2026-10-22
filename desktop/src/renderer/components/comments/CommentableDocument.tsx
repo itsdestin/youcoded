@@ -35,12 +35,14 @@ interface Props {
    *  CommentsMargin/ReadingHighlights so the real IPC calls know which
    *  project's sidecar (or tracked `.docx`/`.xlsx`) to reach. */
   projectRoot?: string;
+  /** The document is still being drawn a slice at a time (MarkdownContent `progressive`). */
+  loading?: boolean;
   children: ReactNode;
 }
 
 export function CommentableDocument({
   path, commentsMode = 'reading', onOpenComments, focusThreadId,
-  source, fill = false, contentClassName = '', children, projectRoot,
+  source, fill = false, contentClassName = '', children, projectRoot, loading = false,
 }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [rootRef, narrow] = useContainerNarrow<HTMLDivElement>(MARGIN_COLLAPSE_PX);
@@ -68,6 +70,11 @@ export function CommentableDocument({
       // inside a known project (two projects sharing a relative path, e.g.
       // both having a `README.md`, would then merge their comments).
       data-project-root={projectRoot ?? ''}
+      // WHY (freeze hunt 2026-10-22, item 4): a big file is drawn in slices. Comment highlights
+      // must wait for the last slice - anchoring against half a page would mark every comment
+      // on the missing half as "text no longer found". use-quote-marks.ts skips its pass while
+      // this is set and runs it once when the attribute goes away.
+      data-doc-loading={loading ? '' : undefined}
     >
       {children}
     </div>
