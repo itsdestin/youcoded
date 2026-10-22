@@ -141,6 +141,9 @@ function noteRefusedAfterConnecting(reason: string): void {
 let framesReceived = 0;
 /** When the last one arrived. The heartbeat below reads it: silence is what earns a question. */
 let lastFrameAt = 0;
+/** A large answer arriving as `remote:piece` frames (remote-server sendAnswer): its parts so far, by piece id. Each piece is a
+ *  complete frame, so a multi-MB load keeps proving the connection alive while it arrives instead of looking like silence. */
+const pieceParts = new Map<number, string[]>();
 
 function signInError(message: string, failure: SignInFailure): Error {
   return Object.assign(new Error(message), { signInFailure: failure });
@@ -995,6 +998,17 @@ function handleMessage(data: string, generation: number): void {
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
+  if (msg?.type === 'remote:piece') {
+    const { id: pieceId, i, n, data: part } = msg.payload ?? {};
+    if (typeof pieceId !== 'number' || typeof i !== 'number' || typeof n !== 'number' || typeof part !== 'string') return;
+    const parts = pieceParts.get(pieceId) ?? [];
+    parts[i] = part;
+    pieceParts.set(pieceId, parts);
+    // The computer sends a large answer's pieces back to back, so the last one completes it.
+    if (i === n - 1) { pieceParts.delete(pieceId); handleMessage(parts.join(''), generation); }
+    return;
+  }
+
   const { type, id, payload } = msg;
 
   // Auth responses are handled separately
@@ -1331,12 +1345,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
       // refillPush: this page refills one conversation on `session:refill`, so the computer need not hang up on it
-      // when one fill never completes (remote-server dropAudience, 2026-10-22).
+      // when one fill never completes (remote-server dropAudience, 2026-10-22). pieces: it puts a large answer back together
+      // from `remote:piece` frames, so a slow load never reads as silence (remote-server PIECE_CHARS).
       const authMsg = isLocalBridge && bridgeToken
-        ? { type: 'auth', token: bridgeToken, refillPush: true }
+        ? { type: 'auth', token: bridgeToken, refillPush: true, pieces: true }
         : isToken
-          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true }
-          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
       socket.send(JSON.stringify(authMsg));
     };
 
@@ -1402,6 +1417,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // Whether this connection continues the same host's session (a reconnect) or starts one: a different host's positions mean
           // nothing, so a first connect to it forgets the terminal's and every conversation's, BEFORE anything asks for a fill.
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          pieceParts.clear(); // a half-arrived answer from the last connection never completes
           openedHere.clear(); // every conversation is opened again on this connection
           ptyEarly.clear();
           if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); lastSessionSummaries = null; }

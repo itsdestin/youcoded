@@ -324,6 +324,26 @@ describe('RemoteServer — readiness', () => {
   const tick = () => new Promise((r) => setImmediate(r));
   afterEach(() => { vi.resetModules(); });
 
+  // A phone counts only a whole frame as a sign of life, so a multi-MB conversation load over a slow relay read as a dead
+  // computer and was asked for again, forever. A page that says it can is sent a large answer in pieces it puts back together.
+  it('sends a large answer in pieces to a page that can put them back together, and whole to one that cannot', async () => {
+    const server = await makeServer();
+    const modern = new FakeSocket();
+    server.addClient(modern, 'dev-1', '100.64.0.2', { pieces: true });
+    const older = new FakeSocket();
+    server.addClient(older, 'dev-2', '100.64.0.3');
+    // The cut falls between the emoji's two halves; the page still gets the emoji back whole.
+    const head = JSON.stringify({ type: 'session:open:response', id: 'dev:1:1', payload: { text: '' } }).indexOf('""') + 1;
+    const text = 'y'.repeat(256 * 1024 - 1 - head) + '😀' + 'z'.repeat(300 * 1024);
+    for (const ws of [modern, older]) server.respond([...server.clients].find((c: any) => c.ws === ws), 'session:open', 'dev:1:1', { text });
+
+    const pieces = modern.frames.filter((f) => f.type === 'remote:piece');
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.map((f) => f.payload.i)).toEqual(pieces.map((_, i) => i));
+    expect(JSON.parse(pieces.map((f) => f.payload.data).join(''))).toEqual({ type: 'session:open:response', id: 'dev:1:1', payload: { text } });
+    expect(older.frames).toEqual([{ type: 'session:open:response', id: 'dev:1:1', payload: { text } }]);
+  });
+
   it('sends nothing at connect: a push before the page is listening would be dropped', async () => {
     const server = await makeServer();
     const { ws } = connect(server);

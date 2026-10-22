@@ -478,6 +478,24 @@ describe('remote-shim — client:ready', () => {
       ws2.receive({ type: 'session:created', payload: { id: 'real' } });
       expect(seen.map((s) => s.id)).toEqual(['real']);
     });
+
+    // A long conversation's load used to arrive as one multi-MB frame; over a slow relay the page heard nothing until all of it
+    // was in, took that for a dead computer and reconnected. The computer now sends it in pieces, and the page puts them back.
+    it('says it can take a large answer in pieces, and puts the pieces back together into the one message', async () => {
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      expect(ws.sentOf('auth')[0].pieces).toBe(true);
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
+      const seen: any[] = [];
+      (window as any).claude.on.sessionCreated((s: any) => seen.push(s));
+      const whole = JSON.stringify({ type: 'session:created', payload: { id: 'big', name: 'x'.repeat(50) + '😀' } });
+      const cut = whole.indexOf('😀') + 1;                       // between the emoji's two halves
+      const parts = [whole.slice(0, 20), whole.slice(20, cut), whole.slice(cut)];
+      parts.forEach((data, i) => ws.receive({ type: 'remote:piece', payload: { id: 7, i, n: parts.length, data } }));
+      expect(seen.map((s) => s.name)).toEqual(['x'.repeat(50) + '😀']);
+    });
   });
 });
 

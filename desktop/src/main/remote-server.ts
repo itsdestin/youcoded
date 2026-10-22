@@ -96,6 +96,12 @@ const MAX_MISSED_PINGS = 3;
 // reconnecting. (The pause-and-poll gate the restore sequence used is gone with the restore: nothing sends in bulk now.)
 const BACKPRESSURE_CLOSE_BYTES = 32 * 1024 * 1024;
 const CLOSE_TOO_SLOW = 4009;
+// WHY (2026-10-22 phone reliability, cause 5): a phone counts only a COMPLETE frame as a sign of life, so one multi-MB answer (a
+// conversation load: history, recent tail and terminal) over a slow relay looked like a dead computer for as long as it took to
+// arrive — the phone gave up after ~20 s, reconnected and asked for the same load again, forever. Sent as pieces of this size,
+// every piece is a sign of life. 256K characters is ~60–90 KB on the wire after compression: well under a second on any link
+// that can carry a conversation at all, while a load stays a handful of frames.
+const PIECE_CHARS = 256 * 1024;
 /** How often to look for Tailscale again while it is installed but not connected. One `tailscale status`, off the main thread. */
 const TAILSCALE_RETRY_MS = 20_000;
 
@@ -129,6 +135,8 @@ interface AuthenticatedClient {
   helloSent?: boolean;
   /** The page refills one conversation on a `session:refill` push, so an expired fill hold need not hang up on it. */
   refillPush?: boolean;
+  /** The page puts a large answer back together from `remote:piece` frames (sendAnswer). */
+  pieces?: boolean;
 }
 
 /** The slice of WindowRegistry a phone connection needs: join on connect, leave on drop. */
@@ -882,7 +890,7 @@ export class RemoteServer {
         if (this.local) {
           if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
           releaseUnauth();
-          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true, refillPush: msg.refillPush === true });
+          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
         }
 
@@ -902,7 +910,7 @@ export class RemoteServer {
             this.clearFailedAttempts();
             releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
-            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true });
+            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
             // WHY one builder (R4-1): the two sign-in paths used to spell the handshake by hand and had to be kept
             // in step; a returning device paints the same UI as a newly paired one.
             ws.send(JSON.stringify(authOkMessage({ deviceId: result.device.id }, this.getFocusSessionId())));
@@ -932,7 +940,7 @@ export class RemoteServer {
           const paired = this.devices.pairAgain(msg.previousDeviceId) ?? this.devices.pair(msg.deviceName);
           releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
-          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true });
+          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: paired.deviceId, secret: paired.secret }, this.getFocusSessionId())));
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
@@ -1004,7 +1012,7 @@ export class RemoteServer {
     this.getNativeRuntime()?.fills.forget(`s${client.audienceId}`);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean; refillPush?: boolean } = {}): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean; refillPush?: boolean; pieces?: boolean } = {}): void {
     // A device that signed in again replaces its older connection, which is usually a dead one the ping has not caught
     // yet (60–80 s). Never the phone's own app on its own runtime ('local'), and never across devices.
     if (!opts.owner) {
@@ -1019,6 +1027,7 @@ export class RemoteServer {
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
       id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true, refillPush: opts.refillPush === true,
+      pieces: opts.pieces === true && !this.local,
     };
     this.clients.add(client);
     // Join the window registry as a member with a negative id (one-core R5-1). A phone is sent a session's pushes once it has
@@ -1125,7 +1134,7 @@ export class RemoteServer {
         desktop: client.owner ? ownerDesktopServices({ broadcast: (m) => this.broadcast(m), sessionRoots: () => this.sessionRoots(), sessionManager: this.sessionManager }) : undefined,
       }, { owner: client.owner === true });
       // Only an awaited request (it has an id) is answered.
-      if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
+      if (outcome.reply && id) this.respond(client, type, id, outcome.payload);
       for (const fn of afterReply) { try { fn(); } catch (err) { console.warn('[remote-server] after-reply callback failed:', String(err)); } }
       return;
     }
@@ -1164,7 +1173,7 @@ export class RemoteServer {
         // The phone's wake check (remote-shim checkConnectionAfterWake): any answer proves the
         // connection is alive. Answered at once and in every phase — a phone that is catching
         // up is exactly the one most likely to be asking.
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client, type, id, { ok: true });
         break;
       // --- Request/response ---
       // WHY (2026-09-30 one-core R3-6): handoff:*, native:*, permission(s):*, specialists:*, model:*, provider:*,
@@ -1198,7 +1207,7 @@ export class RemoteServer {
             ? this.outcomeOf(requestId)
             : 'unknown';
         }
-        this.respond(client.ws, type, id, { outcomes });
+        this.respond(client, type, id, { outcomes });
         break;
       }
       default: {
@@ -1227,7 +1236,7 @@ export class RemoteServer {
             this.warnedChannels.add(type);
             console.warn(`[RemoteServer] unhandled channel: ${type}`);
           }
-          this.respond(client.ws, type, id, {
+          this.respond(client, type, id, {
             ok: false,
             error: `This feature isn't available over remote access yet (${type}).`,
             unsupported: true,
@@ -1250,6 +1259,7 @@ export class RemoteServer {
   // Negative and descending: never a webContents id (those are positive).
   // WHY -1000 (R5-1 review): -1 is the `?? -1` stand-in ipc/buddy.ts uses for a missing sender; a phone must never own it.
   private nextWatchId = -1000;
+  private nextPieceId = 1;
 
   // Download links (§10). The revocation check reads the device store lazily,
   // at each GET, so a device unpaired while its link was alive is refused.
@@ -1290,11 +1300,22 @@ export class RemoteServer {
 
   // --- Helpers ---
 
-  private respond(ws: WebSocket, type: string, id: string, payload: any): void {
+  private respond(client: AuthenticatedClient, type: string, id: string, payload: any): void {
     this.noteCompleted(id);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: `${type}:response`, id, payload }));
+    if (client.ws.readyState === WebSocket.OPEN) {
+      this.sendAnswer(client, JSON.stringify({ type: `${type}:response`, id, payload }));
     }
+  }
+
+  /** One answer, in `remote:piece` frames when it is large and the page can put them back together (PIECE_CHARS says why). The
+   *  pieces go out back to back in one call, so nothing else lands between them; an older page gets the answer whole. */
+  private sendAnswer(client: AuthenticatedClient, data: string): void {
+    if (!client.pieces || data.length <= PIECE_CHARS) { client.ws.send(data); return; }
+    const pieceId = this.nextPieceId++;
+    const parts: string[] = [];
+    // A cut may fall between an emoji's two halves: JSON.stringify writes a lone half as an escape, and the page's join restores it.
+    for (let at = 0; at < data.length; at += PIECE_CHARS) parts.push(data.slice(at, at + PIECE_CHARS));
+    parts.forEach((part, i) => client.ws.send(JSON.stringify({ type: 'remote:piece', payload: { id: pieceId, i, n: parts.length, data: part } })));
   }
 
   /** Request ids are `<deviceId>:<generation>:<n>`, so the device is the ring's key. */
