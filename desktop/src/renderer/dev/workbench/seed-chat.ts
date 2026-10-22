@@ -77,7 +77,8 @@ function providerErrorRequested(): string | null {
  *  steps, code). WHY: the first-draw plan (state/first-draw-plan.ts) draws only the newest screens of a long
  *  conversation, so proving it cannot jump needs real layout over a long, uneven transcript
  *  (tests/journeys/first-draw-stability.json, scripts/first-draw-scroll-probe.mjs). Deterministic: no randomness. */
-export function longConversation(turns: number): string {
+// WHY not exported: only this file uses it; an unused export pushes knip over its ceiling.
+function longConversation(turns: number): string {
   const lines: string[] = [];
   for (let i = 0; i < turns; i++) {
     lines.push(JSON.stringify({ type: 'user_message', text: `Question ${i}: ${'please look at this part of the project and tell me what you find '.repeat(1 + (i % 4))}` }));
