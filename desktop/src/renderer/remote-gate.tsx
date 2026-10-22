@@ -9,7 +9,7 @@
 //
 // Only TYPES come from remote-shim. The caller loads the shim with a dynamic import, so the
 // desktop bundle never evaluates it (the same reason remote-events.ts exists).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, FieldError, TextInput } from './components/ui';
 import type { RemoteConnectionState, SavedKeySignInEvent, SignInFailure } from './remote-shim';
 
@@ -23,6 +23,8 @@ export interface RemoteGateShim {
   retrySavedKeyNow(): void;
   stopSavedKeySignIn(): void;
   onCredentialRefused(cb: (reason: string) => void): void;
+  connectToHost(host: string, port: number, password: string): Promise<void>;
+  disconnectFromHost(): Promise<void>;
 }
 
 /** Refusals that mean the computer will not take this device's key again. */
@@ -141,33 +143,58 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
   );
 }
 
-/** The saved key is signing in, or trying to. No password box: none is needed yet. */
-function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword }: {
+/** The saved key is signing in, or trying to. No password box: none is needed yet. Also the Android
+ *  app's way back to the computer it was last using (`computerName` set, the way out is the phone). */
+function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword, computerName, otherLabel = 'Enter password instead' }: {
   trouble: Trouble | null;
   /** "Try now" was pressed and that attempt has not finished (review finding 7). */
   attempting: boolean;
   onTryNow: () => void;
   onPassword: () => void;
+  /** The saved computer's own name, when the Android app is going back to it. */
+  computerName?: string;
+  otherLabel?: string;
 }) {
+  const unreachable = computerName ? `Can't reach ${computerName}.` : null;
   return (
     <div className="flex items-center justify-center h-full bg-panel text-fg">
       <div className="flex flex-col gap-3 w-72 text-center">
         <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
         {trouble ? (
           <>
-            <p className="text-sm text-fg-2" role="status">{attempting ? 'Trying to connect…' : troubleText(trouble)}</p>
+            <p className="text-sm text-fg-2" role="status">{attempting ? 'Trying to connect…' : (unreachable ?? troubleText(trouble))}</p>
             {!attempting && <p className="text-xs text-fg-muted">Trying again…</p>}
             <Button size="lg" className="justify-center" onClick={onTryNow} disabled={attempting}>Try now</Button>
             {/* The way out when the computer is gone for good, or this browser should pair
                 again. The saved key is kept: a reload tries it once more. */}
-            <Button variant="ghost" className="justify-center" onClick={onPassword}>Enter password instead</Button>
+            <Button variant="ghost" className="justify-center" onClick={onPassword}>{otherLabel}</Button>
           </>
         ) : (
-          <p className="text-sm text-fg-2" role="status">Connecting to your computer…</p>
+          <p className="text-sm text-fg-2" role="status">{computerName ? `Connecting to ${computerName}…` : 'Connecting to your computer…'}</p>
         )}
       </div>
     </div>
   );
+}
+
+/** A computer the Android app can go back to: the saved row from the phone's own list, password included. */
+interface SavedComputer { name: string; host: string; port: number; password: string }
+
+/** How long the Android app waits before trying its computer again, by attempt. The last value repeats. */
+const COMPUTER_RETRY_MS = [5_000, 10_000, 20_000, 30_000];
+
+/** The saved computer the app was last using, if it is still in the phone's list. Never throws. */
+async function findLastComputer(): Promise<SavedComputer | null> {
+  const { lastComputer } = await import('./last-computer');
+  const last = lastComputer();
+  if (!last) return null;
+  try {
+    const reply = await (window as any).claude?.android?.getPairedDevices?.();
+    const list: SavedComputer[] = reply?.devices ?? reply ?? [];
+    return list.find((d) => d.host === last.host && d.port === last.port) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** How long a saved-key sign-in shows only the spinner before it says what it is doing. */
@@ -215,6 +242,63 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   const [notice, setNotice] = useState<string | null>(null);
   // A saved-key sign-in still going after CONNECTING_WORDS_AFTER_MS.
   const [slow, setSlow] = useState(false);
+  // Android only: going back to the computer the app was last using. 'pending' until the phone's
+  // own runtime has answered and the saved list was read; then the computer being tried, or 'none'.
+  // WHY the app waits here (2026-10-22 phone reliability, cause 1 + review item 9): mounting the app
+  // on the phone's own runtime first would show the phone's conversations for seconds and let a
+  // message go to the wrong place before the switch.
+  const [resume, setResume] = useState<'pending' | 'none' | SavedComputer>(isAndroid ? 'pending' : 'none');
+  const [computerTrouble, setComputerTrouble] = useState(false);
+  const [computerAttempting, setComputerAttempting] = useState(false);
+  const computerRetry = useRef<{ timer: ReturnType<typeof setTimeout> | null; n: number; cancelled: boolean }>({ timer: null, n: 0, cancelled: false });
+
+  const tryComputer = useCallback(async (s: RemoteGateShim, c: SavedComputer) => {
+    const r = computerRetry.current;
+    if (r.timer) { clearTimeout(r.timer); r.timer = null; }
+    setComputerAttempting(true);
+    try {
+      await s.connectToHost(c.host, c.port, c.password);
+      // "Use this phone only" was pressed while this attempt was still going: honour it.
+      if (r.cancelled) { await s.disconnectFromHost().catch(() => {}); return; }
+      setResume('none');
+    } catch (err: any) {
+      if (r.cancelled) return;
+      if (err?.signInFailure?.kind === 'refused') {
+        // A changed password will not fix itself: open the phone's own runtime and say where to fix it.
+        setResume('none');
+        const { announce } = await import('./utils/announce');
+        // After the app has mounted its toast.
+        window.setTimeout(() => announce(`${c.name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`, 8000), 1500);
+        return;
+      }
+      setComputerTrouble(true);
+      const delay = COMPUTER_RETRY_MS[Math.min(r.n++, COMPUTER_RETRY_MS.length - 1)];
+      r.timer = setTimeout(() => { void tryComputer(s, c); }, delay);
+    } finally {
+      setComputerAttempting(false);
+    }
+  }, []);
+
+  const usePhoneOnly = useCallback(async () => {
+    const r = computerRetry.current;
+    r.cancelled = true;
+    if (r.timer) { clearTimeout(r.timer); r.timer = null; }
+    const { forgetLastComputer } = await import('./last-computer');
+    forgetLastComputer();
+    setResume('none');
+  }, []);
+
+  useEffect(() => () => { const t = computerRetry.current.timer; if (t) clearTimeout(t); }, []);
+
+  // The phone's own runtime answered: is there a computer to go back to?
+  useEffect(() => {
+    if (!isAndroid || !shim || !connected || resume !== 'pending') return;
+    void findLastComputer().then((c) => {
+      if (!c) { setResume('none'); return; }
+      setResume(c);
+      void tryComputer(shim, c);
+    });
+  }, [isAndroid, shim, connected, resume, tryComputer]);
   useEffect(() => {
     if (savedKey !== 'connecting') { setSlow(false); return; }
     const timer = setTimeout(() => setSlow(true), CONNECTING_WORDS_AFTER_MS);
@@ -266,8 +350,22 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
     await shim.connect(password);
   }, [shim]);
 
+  // Android: going back to the last computer, before the app shows anything.
+  if (isAndroid && shim && typeof resume === 'object') {
+    return (
+      <SavedKeyScreen
+        trouble={computerTrouble ? 'unreachable' : null}
+        attempting={computerAttempting && computerTrouble}
+        computerName={resume.name}
+        otherLabel="Use this phone only"
+        onTryNow={() => { void tryComputer(shim, resume); }}
+        onPassword={() => { void usePhoneOnly(); }}
+      />
+    );
+  }
+
   // Once connected, keep showing the app even during transient disconnections.
-  if (connected || hasConnectedOnce) return <>{renderApp()}</>;
+  if ((connected || hasConnectedOnce) && resume === 'none') return <>{renderApp()}</>;
 
   if (!shim || savedKey === 'pending') return <BootSpinner label="Loading YouCoded" />;
 

@@ -6,6 +6,7 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteGate, type RemoteGateShim } from '../src/renderer/remote-gate';
+import { queueBrowserStorage } from './helpers/queue-browser-storage';
 
 type Listener = Parameters<RemoteGateShim['startSavedKeySignIn']>[0];
 
@@ -22,6 +23,8 @@ function fakeShim(opts: { savedKey: boolean }) {
     retrySavedKeyNow: vi.fn(),
     stopSavedKeySignIn: vi.fn(),
     onCredentialRefused: vi.fn((cb: (reason: string) => void) => { refusedCb = cb; }),
+    connectToHost: vi.fn(async () => {}),
+    disconnectFromHost: vi.fn(async () => {}),
   };
   return {
     shim,
@@ -177,6 +180,57 @@ describe('RemoteGate', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
     expect(screen.getByText("Couldn't sign in.")).toBeTruthy();
     expect(screen.queryByText('Invalid password')).toBeNull();
+  });
+
+  describe('the Android app going back to the computer it was last using', () => {
+    const HOME_PC = { name: 'Home PC', host: '100.64.1.2', port: 9900, password: 'pw' };
+    beforeEach(() => {
+      // Node 26's own localStorage can mask jsdom's; give the page a plain one.
+      vi.stubGlobal('localStorage', queueBrowserStorage());
+      (window as any).claude = { android: { getPairedDevices: vi.fn(async () => ({ devices: [HOME_PC] })) } };
+    });
+
+    async function mountAndroid(f: ReturnType<typeof fakeShim>) {
+      render(<RemoteGate isAndroid loadShim={async () => f.shim} renderApp={() => <div>THE APP</div>} />);
+      await act(async () => {});
+      f.setState('connected'); // the phone's own runtime answered
+      await act(async () => {});
+    }
+
+    it('reconnects to it at launch without first showing the phone\'s own conversations', async () => {
+      const { rememberLastComputer } = await import('../src/renderer/last-computer');
+      rememberLastComputer('100.64.1.2', 9900);
+      const f = fakeShim({ savedKey: false });
+      let finish: () => void = () => {};
+      (f.shim.connectToHost as any).mockImplementationOnce(() => new Promise<void>((r) => { finish = r; }));
+      await mountAndroid(f);
+      expect(screen.getByText('Connecting to Home PC…')).toBeTruthy();
+      expect(screen.queryByText('THE APP')).toBeNull();
+      expect(f.shim.connectToHost).toHaveBeenCalledWith('100.64.1.2', 9900, 'pw');
+      await act(async () => { finish(); });
+      expect(screen.getByText('THE APP')).toBeTruthy();
+    });
+
+    it('an asleep computer: says so, keeps trying, and the phone alone is one tap away', async () => {
+      const { rememberLastComputer, lastComputer } = await import('../src/renderer/last-computer');
+      rememberLastComputer('100.64.1.2', 9900);
+      const f = fakeShim({ savedKey: false });
+      (f.shim.connectToHost as any).mockRejectedValue(Object.assign(new Error('timed out'), { signInFailure: { kind: 'unreachable' } }));
+      await mountAndroid(f);
+      await waitFor(() => expect(screen.getByText("Can't reach Home PC.")).toBeTruthy());
+      expect(screen.getByText('Trying again…')).toBeTruthy();
+      expect(screen.queryByText('THE APP')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Use this phone only' }));
+      await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());
+      expect(lastComputer()).toBeNull();
+    });
+
+    it('with no computer remembered, opens the phone\'s own runtime as before', async () => {
+      const f = fakeShim({ savedKey: false });
+      await mountAndroid(f);
+      await waitFor(() => expect(screen.getByText('THE APP')).toBeTruthy());
+      expect(f.shim.connectToHost).not.toHaveBeenCalled();
+    });
   });
 
   it('once connected, a later drop keeps the app on screen', async () => {

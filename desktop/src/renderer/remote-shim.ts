@@ -17,6 +17,7 @@ import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own backend (localBridgeUrl) and the Android app itself (invokeAndroidHost) — WHY there.
 import { localBridgeUrl, invokeAndroidHost, hasAndroidHost, setAndroidHostEventSink } from './android-local-bridge';
+import { rememberLastComputer, forgetLastComputer } from './last-computer';
 import type { FirstRunState } from '../shared/first-run-types';
 import { createRemotePagesBridge } from './remote-pages-bridge';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
@@ -1518,36 +1519,15 @@ function isTerminalClose(code: number): boolean {
 }
 
 function scheduleReconnect(token: string): void {
-  // WHY only a real local bridge falls back: this path deleted the saved address and
-  // credential and connected to 'android-local', which does not exist in a browser. A phone
-  // that lost signal in a lift came back unpaired.
-  const hasLocalBridge = location.protocol === 'file:';
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !hasLocalBridge) {
-    // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
-    // reason to forget who you are.
+  // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
+  // reason to forget who you are.
+  // WHY the Android app too (2026-10-22 phone reliability, cause 1): after ten failures it used
+  // to delete the paired computer and drop to the phone's own runtime — 3.5 to 6 minutes of a
+  // sleeping laptop, about six times a day — and nothing ever reconnected. Only a computer that
+  // refuses this phone's key (onSavedKeyAttemptFailed) or the person (disconnectFromHost) leaves now.
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
     reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-  }
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge) {
-    // Reconnect-fallback: switching to local bridge means any messages
-    // queued for the prior remote host are wrong-destination. Drop them
-    // here — disconnect() isn't on this path (ws.onclose only schedules
-    // the retry, doesn't disconnect).
-    if (pendingSendQueue.length > 0) {
-      console.warn('[remote-shim] discarding', pendingSendQueue.length,
-        'queued messages on reconnect fallback to local bridge');
-      pendingSendQueue = [];
-    }
-    reconnectAttempts = 0;
-    reconnectDelay = 1000;
-    targetUrl = null;
-    localStorage.removeItem('youcoded-remote-target');
-    localStorage.removeItem('youcoded-remote-token');
-    // Reconnect to local bridge
-    forgetConversationPhase();
-    // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
-    connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
-    return;
   }
 
   if (reconnectTimer) return;
@@ -1563,6 +1543,26 @@ function scheduleReconnect(token: string): void {
   }, reconnectDelay);
 }
 
+/** The Android app leaves a computer that refused its key for good, and goes back to its own runtime. */
+function fallBackToLocalRuntime(): void {
+  // Queued messages were for the computer: on the phone's own runtime they are wrong-destination.
+  // disconnect() is not on this path (onclose only schedules a retry), so drop them here.
+  if (pendingSendQueue.length > 0) {
+    console.warn('[remote-shim] discarding', pendingSendQueue.length, 'queued messages on fallback to the local runtime');
+    pendingSendQueue = [];
+  }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectAttempts = 0;
+  reconnectDelay = 1000;
+  targetUrl = null;
+  localStorage.removeItem('youcoded-remote-target');
+  localStorage.removeItem('youcoded-remote-token');
+  forgetLastComputer();
+  forgetConversationPhase();
+  // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
+  connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
+}
+
 /** One attempt with the saved key failed: tell the sign-in screen, then try again, unless the
  *  computer refused the key or the person chose to type the password instead. */
 function onSavedKeyAttemptFailed(err: unknown, token: string): void {
@@ -1572,11 +1572,10 @@ function onSavedKeyAttemptFailed(err: unknown, token: string): void {
     if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
     if (location.protocol === 'file:' && targetUrl) {
       // The Android app paired to a computer that will never take its key goes back to its own
-      // runtime now, which is where MAX_RECONNECT_ATTEMPTS used to land it after minutes. Any
-      // other refusal (remote access switched off on the computer) keeps the pairing and keeps
-      // trying slowly, as it always did: deleting it would unpair the phone (finding 1).
-      if (KEY_IS_DEAD.has(failure.reason)) reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
-      scheduleReconnect(token);
+      // runtime now. Any other refusal (remote access switched off on the computer) keeps the
+      // pairing and keeps trying slowly: deleting it would unpair the phone (finding 1).
+      if (KEY_IS_DEAD.has(failure.reason)) fallBackToLocalRuntime();
+      else scheduleReconnect(token);
     }
     return;
   }
@@ -1825,35 +1824,15 @@ function disconnect(): void {
 }
 
 /**
- * Check if a host IP is in the Tailscale CGNAT range (100.64.0.0/10)
- * and verify Tailscale VPN is connected before attempting connection.
- */
-async function checkTailscaleIfNeeded(host: string): Promise<void> {
-  const match = host.match(/^100\.(\d+)\./);
-  if (!match) return;
-  const secondOctet = parseInt(match[1]);
-  if (secondOctet < 64 || secondOctet > 127) return;
-
-  try {
-    const status = await invoke('remote:detect-tailscale');
-    if (!status?.connected) {
-      throw new Error('Tailscale VPN is not connected. Turn on Tailscale and try again.');
-    }
-  } catch (err: any) {
-    // Re-throw Tailscale-specific errors; swallow others (e.g. bridge timeout)
-    if (err.message?.includes('Tailscale')) throw err;
-  }
-}
-
-/**
  * Connect to a remote desktop server. Disconnects from the current server first.
  * __PLATFORM__ is preserved as 'android' so touch adaptations stay active.
+ *
+ * WHY no Tailscale pre-check any more (2026-10-22 phone reliability): it asked the phone's OWN
+ * backend `remote:detect-tailscale`, which runs a `tailscale` program that does not exist inside
+ * the Android app — so it could only ever answer "not connected". A computer that cannot be
+ * reached already fails the connect with "Can't reach your computer".
  */
 export async function connectToHost(host: string, port: number, password: string): Promise<void> {
-  // Pre-flight: check Tailscale before disconnecting from local bridge
-  // (invoke needs the current WebSocket connection)
-  await checkTailscaleIfNeeded(host);
-
   const { setConnectionMode } = await import('./platform');
 
   // Disconnect from current server (local bridge or previous remote)
@@ -1875,6 +1854,7 @@ export async function connectToHost(host: string, port: number, password: string
     await connect(password, false);
     // Connection succeeded — persist remote target for session restore
     localStorage.setItem('youcoded-remote-target', targetUrl);
+    rememberLastComputer(host, port);
     preservePlatform = false;
     setConnectionMode('remote');
   } catch (err) {
@@ -1918,6 +1898,8 @@ export async function disconnectFromHost(): Promise<void> {
   // Clear remote target — getWsUrl() falls back to localhost:9901
   targetUrl = null;
   localStorage.removeItem('youcoded-remote-target');
+  // The person chose to leave this computer: do not go back to it at the next launch.
+  forgetLastComputer();
   preservePlatform = false;
 
   // Reconnect to local bridge

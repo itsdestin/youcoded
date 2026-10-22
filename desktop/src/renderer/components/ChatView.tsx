@@ -39,6 +39,7 @@ import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
+import { isAndroid } from '../platform';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -107,6 +108,8 @@ interface Props {
   conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   /** Asks the host for a fresh copy — the strip's Refresh. */
   onRefreshConversation?: () => void;
+  /** The Android app leaves its unreachable computer for the phone's own runtime — shown on the reconnecting strip there only. */
+  onUsePhoneOnly?: () => void;
   /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
    *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
    *  Never set on the computer. */
@@ -120,7 +123,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, onUsePhoneOnly, filling, modelLoadingDemo, model, providerType }: Props) {
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -1023,7 +1026,15 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                   This conversation may be out of date.
                 </StatusStrip>
               ) : shownStrip === 'reconnecting' ? (
-                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
+                // WHY the wording (2026-10-22): it promised "It sends once you're reconnected", but
+                // nothing sends on its own after a drop (contract row R2) — people put the phone down
+                // expecting a message to go out. The Android app also gets a way to stop waiting,
+                // since it no longer drops to the phone's own runtime by itself.
+                <StatusStrip
+                  tone="busy"
+                  detail="Your draft is kept. Press Send again once you’re reconnected."
+                  action={onUsePhoneOnly && isAndroid() ? <Button size="sm" variant="ghost" onClick={onUsePhoneOnly}>Use this phone only</Button> : undefined}
+                >
                   Reconnecting to your computer…
                 </StatusStrip>
               ) : shownStrip === 'restoring' ? (

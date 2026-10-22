@@ -405,6 +405,11 @@ function AppInner() {
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
   }, []);
+  // The Android app's way out while its computer is unreachable (2026-10-22 phone reliability): it no
+  // longer drops to the phone's own runtime on a timer, so the person chooses it. Same call as Settings' Disconnect.
+  const handleUsePhoneOnly = useCallback(() => {
+    void import('./remote-shim').then((m) => m.disconnectFromHost()).catch(() => {});
+  }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
   // bubble's "Open settings" jump so Settings opens straight to that section.
@@ -3576,6 +3581,7 @@ function AppInner() {
                       onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
+                      onUsePhoneOnly={handleUsePhoneOnly}
                       filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />

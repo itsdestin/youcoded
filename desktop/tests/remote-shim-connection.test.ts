@@ -867,6 +867,31 @@ describe('remote-shim — overlapping connections', () => {
       expect(claude().capabilities).toMatchObject({ terminalTransport: 'raw-bytes', terminalScreenRead: true });
     });
 
+    it('keeps its computer through a long outage instead of falling back to its own runtime', async () => {
+      // A laptop asleep for 20 minutes used to cost the pairing after ten tries (3.5–6 min).
+      await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
+      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await pairing;
+      expect(JSON.parse(store['youcoded-last-computer'])).toEqual({ host: 'desk', port: 9900 });
+      latest().fireClose(1006);
+      for (let i = 0; i < 25; i++) {                   // far past the old limit of ten
+        await vi.advanceTimersByTimeAsync(60_000);
+        latest().fireClose(1006);
+      }
+      expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(0);
+      expect(latest().url).toBe('ws://desk:9900/ws');
+      expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
+      expect(store['youcoded-remote-token']).toBe('dev-1:s');
+    });
+
+    it('forgets the computer to come back to once it refuses the key', async () => {
+      await pairThenReconnectRefused('revoked');
+      expect(store['youcoded-last-computer']).toBeUndefined();
+    });
+
     it('keeps the pairing when the computer only switched remote access off', async () => {
       await pairThenReconnectRefused('no-password-configured');
       expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');
