@@ -177,10 +177,19 @@ export function applyTaskStop(
     toolCalls.set(cardId, { ...card, ccBackground: { ...card.ccBackground, status: 'stopped', ...(endedAt ? { endedAt } : {}) } });
   }
   const backgroundCommands = settleCommands(session.backgroundCommands, (c) => c.taskId === taskId, { status: 'stopped', summary, endedAt });
+  const stopped: CcBackgroundRun = { taskId, status: 'stopped', ...(summary ? { summary } : {}), ...(endedAt ? { endedAt } : {}) };
   const known = session.ccBackgroundOutcomes[taskId];
-  const ccBackgroundOutcomes = known && known.status !== 'running'
+  let ccBackgroundOutcomes = known && known.status !== 'running'
     ? session.ccBackgroundOutcomes
-    : { ...session.ccBackgroundOutcomes, [taskId]: { taskId, status: 'stopped' as const, ...(summary ? { summary } : {}), ...(endedAt ? { endedAt } : {}) } };
+    : { ...session.ccBackgroundOutcomes, [taskId]: stopped };
+  // WHY (review F2): a helper resumed by SendMessage settles its older launch card from the
+  // RESUME's outcome (ccBackgroundOnLaunch's reopen branch), not from the task id, whose entry
+  // still holds the first run's end. So the stop must be recorded under the resume too, or a
+  // launch card loaded later reads "running" forever.
+  const via = session.ccBackgroundOutcomes[reopenKey(taskId)]?.viaToolUseId;
+  if (via && (ccBackgroundOutcomes[via]?.status ?? 'running') === 'running') {
+    ccBackgroundOutcomes = { ...ccBackgroundOutcomes, [via]: stopped };
+  }
   if (toolCalls === session.toolCalls && backgroundCommands === session.backgroundCommands && ccBackgroundOutcomes === session.ccBackgroundOutcomes) return session;
   return { ...session, toolCalls, backgroundCommands, ccBackgroundOutcomes };
 }

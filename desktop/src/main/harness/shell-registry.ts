@@ -187,7 +187,8 @@ export async function persistedRunViews(records: PersistedShellRun[]): Promise<S
   const out: ShellRunView[] = [];
   for (const rec of records) {
     const judged = await classifyPersisted(rec);
-    if (judged) out.push(persistedToView(judged.rec));
+    // viewOnly: no registry here owns it, so killShell would refuse — screens hide Stop (review F1).
+    if (judged) out.push({ ...persistedToView(judged.rec), viewOnly: true });
   }
   return out;
 }
@@ -787,7 +788,13 @@ export class ShellRegistry extends EventEmitter {
     const pid = entry.rec.pid;
     entry.stopReason = reason;
     // killTree needs only a pid and the ability to signal; the real ChildProcess died with the old app.
-    const stub = { pid, exitCode: null, signalCode: null, kill: (sig?: NodeJS.Signals) => process.kill(pid, sig) } as unknown as ChildProcess;
+    // exitCode reads the group's real state (review F4): killTree escalates to SIGKILL only while
+    // exitCode is null, and a constant null would signal -pid 2s later even after the group had
+    // ended — by then the number may belong to an unrelated process group.
+    const stub = {
+      pid, signalCode: null, kill: (sig?: NodeJS.Signals) => process.kill(pid, sig),
+      get exitCode() { return groupAlive(pid) ? null : 0; },
+    } as unknown as ChildProcess;
     killTree(stub, opts);
     const deadline = Date.now() + KILL_WAIT_MS;
     while (groupAlive(pid) && Date.now() < deadline) await new Promise<void>((res) => setTimeout(res, 50));

@@ -17,7 +17,9 @@ import { asString } from '../utils/tool-input';
 
 // One index per (toolCalls, backgroundCommands) pair — both are replaced only when a card or a
 // command changes, never per streamed word (perf rule 4), so the scan runs once per real change
-// however many management cards read it.
+// however many management cards read it. Accepted cost (review F5): a helper's activity replaces
+// toolCalls per event, so while a management card is mounted each such event also rescans — the
+// same O(cards) order as the reducer's own Map copy for that event, not a new growth class.
 const cache = new WeakMap<object, { commands: object; index: Map<string, string> }>();
 
 function buildIndex(session: SessionChatState): Map<string, string> {

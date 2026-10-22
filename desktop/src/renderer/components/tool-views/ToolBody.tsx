@@ -457,7 +457,9 @@ function ShellView({ tool, commandField, sessionId }: {
         <StatusStrip
           tone="busy"
           detail={run.detached ? 'Hit its time limit and kept running in the background — you\'ll be told when it finishes.' : 'The assistant carries on meanwhile and is told when it finishes.'}
-          action={<Button size="sm" variant="danger-outline" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
+          // No Stop for a record shown from disk while its conversation is not live here: the
+          // host would refuse it (review F1). Reopening the conversation brings Stop back.
+          action={run.viewOnly ? undefined : <Button size="sm" variant="danger-outline" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
         >
           Running in the background{elapsed ? ` · ${elapsed}` : ''}
         </StatusStrip>

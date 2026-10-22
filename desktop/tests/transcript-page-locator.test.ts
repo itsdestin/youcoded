@@ -215,6 +215,19 @@ describe('transcript:page locator memory', () => {
     expect(page.reconcileBackground).toBeFalsy();
   });
 
+  it('a page for a live Claude Code session whose watcher is not attached yet does not', async () => {
+    // A running process of ours, but no watcher and no resume boundary (not a resume, or the
+    // pre-spawn snapshot failed): its background work may still be running, so nothing is settled.
+    writeTranscript(2);
+    const manager: any = {
+      createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []),
+      getSession: vi.fn(() => ({ id: 'desktop-4', provider: 'claude', cwd: '/home/destin/project', status: 'active' })),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    const page = await pageHandler(new WindowRegistry(), manager)(evt, { sessionId: 'desktop-4', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG });
+    expect(page.reconcileBackground).toBeFalsy();
+  });
+
   // The phone's session:create runs the desktop's own create path (the session:create table entry), so a
   // Claude Code resume started from a phone takes the same pre-spawn snapshot.
   it('a Claude Code resume started from a phone is bounded the same way', async () => {

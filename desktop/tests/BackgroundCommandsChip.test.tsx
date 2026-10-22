@@ -94,6 +94,16 @@ describe('the Background chip', () => {
     expect(screen.getByRole('button', { name: 'Stopping…' })).toBeTruthy();
   });
 
+  it('offers no Stop on a command shown from disk while its conversation is not live here', () => {
+    // review F1: killShell refuses a conversation that is not live, so a Stop there would do nothing.
+    const dispatch = setup();
+    const [use, changed] = nativeRun('n1', 'sh-1', 'running');
+    dispatch(use, { ...changed, run: { ...(changed as any).run, viewOnly: true } } as ChatAction);
+    fireEvent.click(screen.getByTestId('background-chip'));
+    expect(within(screen.getByRole('list', { name: 'Running commands' })).getByText('Running')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
   it('draws only the first chunk of a very long finished list', () => {
     // A real IntersectionObserver-shaped stub that never fires: the list must stay at one chunk.
     vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} unobserve() {} });

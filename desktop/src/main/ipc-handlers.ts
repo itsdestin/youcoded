@@ -1702,7 +1702,12 @@ export function registerIpcHandlers(
     // resume boundary means we did not just spawn one (a pre-hook resume has a boundary and a live
     // process). Then the conversation is only being viewed, so background work it never reported an
     // end for cannot still be running — see TranscriptPageResult.reconcileBackground.
-    const viewOnly = !source && !resumePageBoundaries.has(sessionId);
+    // Review F3: and no live Claude Code process of ours under this id either — a session whose
+    // watcher is not registered yet (or whose pre-spawn snapshot failed, so it has no boundary)
+    // is still running its work; settling it "stopped" here would be permanent.
+    const ours = sessionManager.getSession(sessionId);
+    const liveProcess = !!ours && ours.provider === 'claude' && ours.status !== 'destroyed';
+    const viewOnly = !source && !resumePageBoundaries.has(sessionId) && !liveProcess;
     if (!source) {
       // No watcher yet (pre-hook resume), anymore (exit), or ever (buddy).
       // Resolve from validated locator ids supplied now or on the first page;

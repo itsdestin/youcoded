@@ -4330,6 +4330,9 @@ export class NativeSessionHost extends EventEmitter {
             entry.holdDeliveries = false;
             await this.drainDeliveries(sessionId, entry, 'splice');
             if (this.live.get(sessionId) !== entry) return;
+            // Review F7: a report the splice could not hand over is no longer "held until you
+            // continue" — re-push those cards (a delivered one was already pushed by its write).
+            if (this.ledger) this.pushUndeliveredReports(sessionId, this.ledger.listFor(entry.cwd, sessionId));
           }
           try {
             if (typeof next === 'function') await next();
@@ -4900,11 +4903,7 @@ export class NativeSessionHost extends EventEmitter {
       entry.holdDeliveries = true;
       // B8: finished background helpers whose reports are now held back should
       // say so — nothing else would push their cards (no ledger write happens).
-      for (const rec of records) {
-        if (rec.background && !rec.delivered && (rec.status === 'completed' || rec.status === 'failed')) {
-          this.emit('specialists-event', { kind: 'run', sessionId, run: this.runViewFor(sessionId, rec) } satisfies SpecialistsEvent);
-        }
-      }
+      this.pushUndeliveredReports(sessionId, records);
     }
     return !!entry;
   }
@@ -5180,6 +5179,16 @@ export class NativeSessionHost extends EventEmitter {
     return this.ledger.listFor(entry.cwd, sessionId)
       .slice(-SPECIALIST_REPLAY_MAX_RECORDS)
       .map((rec) => this.runViewFor(sessionId, rec));
+  }
+
+  /** Re-push the card of every finished background helper whose report the assistant has
+   *  not read yet, so its "held" / "waiting" line follows a hold starting or lifting (B8). */
+  private pushUndeliveredReports(sessionId: string, records: DelegationRecord[]): void {
+    for (const rec of records) {
+      if (rec.background && !rec.delivered && (rec.status === 'completed' || rec.status === 'failed')) {
+        this.emit('specialists-event', { kind: 'run', sessionId, run: this.runViewFor(sessionId, rec) } satisfies SpecialistsEvent);
+      }
+    }
   }
 
   /** The card-facing view of one ledger record, with the one fact only the host

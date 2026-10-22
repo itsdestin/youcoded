@@ -52,6 +52,8 @@ export interface BackgroundCommand {
   exitUnknown?: boolean;
   /** Native, with exitUnknown: the process may still be alive. Stop is NOT possible. */
   maybeStillRunning?: boolean;
+  /** Native: shown from disk for a conversation not live here — no Stop (review F1). */
+  viewOnly?: boolean;
   /** Set when the command belongs to a helper rather than to the conversation itself. */
   ownerHelper?: { toolUseId: string; agentId?: string };
 }
@@ -166,6 +168,7 @@ export function nativeCommandFromRun(run: ShellRunView, card?: ToolCallState): B
     ...(extra.restored ? { restored: true } : {}),
     ...(extra.exitUnknown ? { exitUnknown: true } : {}),
     ...(extra.maybeStillRunning ? { maybeStillRunning: true } : {}),
+    ...(run.viewOnly ? { viewOnly: true } : {}),
     ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     ...(run.endedAt ? { endedAt: run.endedAt } : {}),
   };

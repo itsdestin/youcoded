@@ -157,8 +157,9 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
   const [stopping, setStopping] = useState(false);
   // Stop only where the app can really stop it: a native shell it still owns. Claude Code
   // runs its own background commands, and a record that may still be alive after a restart
-  // was never re-attached — offering Stop there would be a button that does nothing.
-  const canStop = running && c.provider === 'native' && !!c.shellId && !c.maybeStillRunning && !!sessionId;
+  // was never re-attached — offering Stop there would be a button that does nothing. Nor does
+  // a conversation shown from disk because it is not live here (viewOnly, review F1).
+  const canStop = running && c.provider === 'native' && !!c.shellId && !c.maybeStillRunning && !c.viewOnly && !!sessionId;
   const stop = async () => {
     if (!canStop) return;
     setStopping(true);

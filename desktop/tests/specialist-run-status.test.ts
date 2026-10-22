@@ -116,6 +116,18 @@ describe('B8: the run says when its report has not reached the assistant', () =>
     host.interrupt('root-1');
     expect(events.find((e) => e.run.childId === 'done-1')?.run.reportPending).toBe('held-after-stop');
   });
+  it('writing again lifts the hold, and a report still unread then says it is waiting, not held', async () => {
+    await boot(scripted([stream(...textChunks('t', 'x'), finishChunk('stop')), stream(...textChunks('t', 'y'), finishChunk('stop'))]));
+    await ledger().recordStart(root, 'root-1', rec({ childId: 'done-1', status: 'completed', endedAt: Date.now() }));
+    host.interrupt('root-1');
+    // The hand-over itself is out of scope here: make it deliver nothing, so the report stays unread.
+    (host as any).drainDeliveries = async () => {};
+    const events: any[] = [];
+    host.on('specialists-event', (e) => events.push(e));
+    host.send('root-1', 'carry on');
+    await vi.waitFor(() => expect(events.some((e) => e.run.childId === 'done-1')).toBe(true));
+    expect(events.filter((e) => e.run.childId === 'done-1').at(-1).run.reportPending).toBe('waiting-for-turn');
+  });
 });
 
 describe('B2/B3: a resumed specialist says which card shows the live run', () => {

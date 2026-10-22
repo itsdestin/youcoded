@@ -28,6 +28,7 @@ const result = (id: string, content: string, toolUseResult: unknown, extra: Reco
 const bashBg = (s: ChatState, id = 'toolu_B', task = 'bt1v7', input: Record<string, unknown> = { command: 'npm run dev', description: 'Dev server', run_in_background: true }) =>
   feed(addTool(s, id, 'Bash', input), result(id, `Command running in background with ID: ${task}.`, { stdout: '', backgroundTaskId: task }));
 const cmds = (s: ChatState) => backgroundCommandList(s.get(S)!);
+const stopResult = (task: string, type = 'local_bash') => result('toolu_S', JSON.stringify({ message: `Successfully stopped task: ${task} (x)`, task_id: task, task_type: type }), { message: `Successfully stopped task: ${task} (x)`, task_id: task, task_type: type, command: 'x' });
 
 describe('A5 / C2: Workflow and Monitor launches start as running', () => {
   it('a Workflow card is running after its receipt', () => {
@@ -41,7 +42,6 @@ describe('A5 / C2: Workflow and Monitor launches start as running', () => {
 });
 
 describe('C1: TaskStop', () => {
-  const stopResult = (task: string, type = 'local_bash') => result('toolu_S', JSON.stringify({ message: `Successfully stopped task: ${task} (x)`, task_id: task, task_type: type }), { message: `Successfully stopped task: ${task} (x)`, task_id: task, task_type: type, command: 'x' });
   it('a successful stop marks the command stopped (no notice ever follows)', () => {
     let s = bashBg(init());
     s = feed(addTool(s, 'toolu_S', 'TaskStop', { task_id: 'bt1v7' }), stopResult('bt1v7'));
@@ -85,6 +85,12 @@ describe('A2: a resume whose launch card is on an unloaded older page', () => {
     s = feed(s, noticeLine(notice('<task-id>a3ecf</task-id>\n<tool-use-id>toolu_SM</tool-use-id>\n<status>failed</status>\n<result>Second</result>'), 'n2'));
     s = load(s);
     expect(card(s, 'toolu_A').ccBackground).toMatchObject({ status: 'failed', result: 'Second' });
+  });
+  it('shows stopped when the resumed run was stopped before the older page loaded', () => {
+    let s = resumeLive(init());
+    s = feed(addTool(s, 'toolu_S', 'TaskStop', {}), stopResult('a3ecf'));
+    s = load(s);
+    expect(card(s, 'toolu_A').ccBackground?.status).toBe('stopped');
   });
 });
 

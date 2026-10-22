@@ -871,6 +871,10 @@ export interface ShellRunView {
    *  "may still be running"; Stop is NOT offered (we will not signal a process
    *  we cannot identify). */
   maybeStillRunning?: boolean;
+  /** Review F1: shown from the saved record of a conversation that is NOT live on
+   *  this host. Nothing here can signal it, so screens offer no Stop (the button
+   *  would only be refused as not-live); reopening the conversation re-attaches it. */
+  viewOnly?: boolean;
 }
 
 /** Structured companion to `injected: 'specialist-report'` (2026-08-16): who
