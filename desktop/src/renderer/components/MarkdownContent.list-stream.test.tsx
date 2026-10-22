@@ -168,6 +168,35 @@ describe('MarkdownContent while a long list streams in', { timeout: CPU_BOUND_WA
       });
     }
 
+    // A bubble that MOUNTS part-way through a reply (renderer busy, hidden chat) draws what it was given as
+    // one group with the reply's first paragraphs in front of the list (found by the 5000-item lab rungs).
+    it('stays bounded and equal to the whole message when the bubble mounts in the middle of the list', () => {
+      const mount = `Here are the files:\n\nA second paragraph.\n\n${lines(100, item)}\n`;
+      const live = render(<Bubble md={mount} incremental />);
+      const ul = () => live.container.querySelector('ul');
+      let md = mount;
+      const costs: number[] = [];
+      const whole = render(<></>);
+      const more = tokenDeltas(lines(45, (i) => item(i + 100)) + '\n');
+      more.forEach((d, i) => {
+        md += d;
+        markdownRenders.length = 0;
+        splitterParsed.chars = 0;
+        live.rerender(<Bubble md={md} incremental />);
+        costs.push(markdownRenders.reduce((n, x) => n + x.length, 0));
+        if (i === 0) costs.length = 0; // the update that first splits the message may parse it once
+        if (i % 200 === 0 || i === more.length - 1) {
+          whole.rerender(<Bubble key={i} md={md} />);
+          expect(canonical(live.container), `after word ${i}`).toBe(canonical(whole.container));
+        }
+      });
+      const itemLen = item(300).length + 1;
+      expect(Math.max(...costs.slice(1))).toBeLessThanOrEqual((2 * OPEN_LIST_CHUNK_ITEMS + 3) * itemLen + 100);
+      expect(ul()).not.toBeNull();
+      whole.unmount();
+      live.unmount();
+    });
+
     it('draws a finished or stopped reply as ONE list, whatever was chunked while it streamed', () => {
       const md = listMd(120);
       const live = render(<Bubble md="Here" incremental />);
