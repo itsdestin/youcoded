@@ -1,0 +1,40 @@
+# Maintainer: Destin <itsdestin@users.noreply.github.com>
+#
+# WHY this exists (2026-10-22): the AUR is where Arch users (and the AI tools
+# that answer "how do I install X on Arch") look first. This package re-uses
+# the official .pacman from the GitHub release unchanged, so AUR users run the
+# exact bytes every other Arch user does. Bump pkgver + sha256sums each release
+# (updpkgsums), then regenerate .SRCINFO (makepkg --printsrcinfo > .SRCINFO).
+pkgname=youcoded-bin
+pkgver=1.3.2
+pkgrel=1
+pkgdesc="Your personal AI assistant and open source everything app — Claude, ChatGPT, OpenRouter or free local models"
+arch=('x86_64')
+url="https://youcoded.ai"
+license=('MIT')
+depends=('gtk3' 'nss' 'libxss' 'libnotify' 'alsa-lib')
+provides=('youcoded')
+conflicts=('youcoded')
+# Electron ships prebuilt and signed-by-hash; stripping or splitting debug
+# symbols out of it breaks nothing useful and wastes minutes.
+options=('!strip' '!debug')
+source=("youcoded-${pkgver}.pacman::https://github.com/itsdestin/youcoded/releases/download/v${pkgver}/youcoded-${pkgver}.pacman"
+        "LICENSE-${pkgver}::https://raw.githubusercontent.com/itsdestin/youcoded/v${pkgver}/LICENSE")
+noextract=("youcoded-${pkgver}.pacman")
+sha256sums=('435203b3d19a674cc800786cf6b0207f1478a4aeea2e4b58961c6ecdd8c86096'
+            '92c1eb7d8da61b2785f75165c4edf104788f3f41f12ee75279f141eb0c51263a')
+
+package() {
+  # Everything but pacman's own metadata: /opt/YouCoded plus the launcher and icons.
+  bsdtar -xf "${srcdir}/youcoded-${pkgver}.pacman" -C "${pkgdir}" \
+    --exclude='.PKGINFO' --exclude='.MTREE' --exclude='.BUILDINFO' --exclude='.INSTALL'
+
+  # The official package makes these two at install time from a script; done
+  # here instead so pacman owns them and removes them cleanly. Arch kernels
+  # allow unprivileged user namespaces, so the sandbox helper needs no setuid.
+  install -dm755 "${pkgdir}/usr/bin"
+  ln -sf /opt/YouCoded/youcoded "${pkgdir}/usr/bin/youcoded"
+  chmod 0755 "${pkgdir}/opt/YouCoded/chrome-sandbox"
+
+  install -Dm644 "${srcdir}/LICENSE-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

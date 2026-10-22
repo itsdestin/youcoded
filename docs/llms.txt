@@ -1,0 +1,33 @@
+# YouCoded
+
+> YouCoded is a fully customizable AI assistant and open-source "everything app" for Windows, macOS, Linux and Android, plus any web browser through remote access. You ask it, in plain words, for what you want: help with your files, research and writing, a new feature, a page for something in your life, a game, or a whole new look. It builds those inside the app, on whichever AI model you choose. It is free, MIT-licensed, and was built entirely through conversation with AI by someone who has never written code.
+
+## What makes it different
+
+- **It becomes what you ask for.** YouCoded Pages are small apps that live inside YouCoded and follow its theme, made by asking in the chat. Two examples on the website are pages one person asked for and uses every day: a smart-home control panel for their lights, thermostat, speakers and TVs, and a single page tracking every bank account, bill and loan. Neither shipped with the app; other ideas people start from include a paint program or a trip planner showing each day's forecast next to what's booked.
+- **It can change itself.** Ask for a new look (wallpaper, colors, fonts, an animated mascot) and the theme engine builds it. Ask for new features or a different way of handling requests and it adds them through skills and Pages. On Linux it can go further and customize the whole device: control-center widgets, quick-settings chips, desktop layout and utilities.
+- **Any AI model.** Claude on your own Claude plan, ChatGPT on your own ChatGPT plan, hundreds of models through one OpenRouter account, direct API keys, or an open model running privately and offline on your own computer with a built-in engine (no Ollama required). You can switch models mid-conversation; tools and conversations work the same on all of them.
+- **Real work on your files.** Attach a spreadsheet, document or folder and ask for what you want out of it. Results open in a panel beside the conversation where you can read and edit them. The desktop app edits Word, Excel and PowerPoint files directly, keeps a version history of every change the assistant makes, and can give the assistant a browser it uses with your permission.
+- **You stay in control.** It asks before it acts. Permission modes set how much it may do on its own, and every standing permission is listed on one screen where you can revoke it. The whole app is open source, so anyone can check what it does.
+- **Every device.** Start on your laptop, finish on your phone. The Android app runs the assistant on the phone itself rather than remote-controlling a computer. Conversations and files sync across devices through your own private GitHub.
+- **Social.** A community marketplace of skills and themes you can install or publish to from inside the app, friends, and multiplayer games (chess, Connect Four) plus Flappy Bird and 2048 in a side panel while a long task runs.
+- **Organized.** Projects keep files, conversations and instructions together. Conversations can be tagged, annotated, pinned and hidden; saved prompts run in one tap.
+
+## Who it is for
+
+Students, professionals and everyday AI users, not only developers. You do not need to know how to code: if you can use ChatGPT, you can use YouCoded. Developers get a full terminal, git review and Claude Code support alongside.
+
+## Cost and privacy
+
+The app is free. Running a model on your own computer costs nothing. Cloud models are paid to the provider you choose (a Claude or ChatGPT plan, or pay-as-you-go through OpenRouter). YouCoded does not receive the content you send to an AI model. A free GitHub account keeps conversations and files in sync across devices.
+
+## Links
+
+- [Website and download](https://youcoded.ai/)
+- [Download the latest release](https://github.com/itsdestin/youcoded/releases/latest)
+- [Source code (MIT)](https://github.com/itsdestin/youcoded)
+- [Skill marketplace](https://github.com/itsdestin/wecoded-marketplace)
+- [Community themes](https://github.com/itsdestin/wecoded-themes)
+- [Privacy policy](https://youcoded.ai/privacy.html)
+
+YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI or OpenRouter.
