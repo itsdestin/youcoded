@@ -8,8 +8,26 @@ import pkg from './package.json';
 const portOffset = Number(process.env.YOUCODED_PORT_OFFSET ?? 0);
 const viteDevPort = 5173 + (Number.isFinite(portOffset) ? portOffset : 0);
 
+// WHY (2026-10-22 phone speed): a phone loads the connection code (remote-shim) by a dynamic import that only starts once the
+// whole entry has downloaded and run — one more round trip (~0.5 s measured over a 470 ms link) before it even begins to
+// connect. Naming that chunk and its own imports in the page lets the browser fetch them alongside the entry. The desktop
+// window reads the same page from disk, where this costs nothing measurable.
+const preloadConnectionCode = {
+  name: 'youcoded-preload-connection-code',
+  transformIndexHtml: {
+    order: 'post' as const,
+    handler(html: string, ctx: { bundle?: Record<string, { type: string; fileName: string; facadeModuleId?: string | null; imports?: string[] }> }) {
+      if (!ctx.bundle) return [];
+      const chunks = Object.values(ctx.bundle);
+      const shim = chunks.find((c) => c.type === 'chunk' && c.facadeModuleId?.endsWith('/remote-shim.ts'));
+      if (!shim) return [];
+      return [shim.fileName, ...(shim.imports ?? [])].filter((file) => !html.includes(file)).map((file) => ({ tag: 'link', attrs: { rel: 'modulepreload', crossorigin: true, href: `./${file}` }, injectTo: 'head' as const }));
+    },
+  },
+};
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), preloadConnectionCode],
   // WHY: Vite resolves --outDir from this root, not the shell directory. build:site
   // therefore needs ../../../docs/site; ../docs/site silently left the public embed stale.
   root: 'src/renderer',

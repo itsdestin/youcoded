@@ -1434,8 +1434,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
           : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
       socket.send(JSON.stringify(authMsg));
-      // A computer that held early requests last time gets the list and the conversation now, not a round trip later.
-      if (!localBridge && hostPipelines(getWsUrl())) { sendBeforeSignIn = true; startEarlyRequests(generation); }
+      // A computer that holds early requests gets the list and the conversation now, not a round trip later. A browser page was served
+      // by the computer it talks to (no target), so it is that computer's own version and always may; the Android app's page is its
+      // own build, so it waits until a computer has said so once.
+      if (!localBridge && (!targetUrl || hostPipelines(getWsUrl()))) { sendBeforeSignIn = true; startEarlyRequests(generation); }
     };
 
     let authResolved = false;
