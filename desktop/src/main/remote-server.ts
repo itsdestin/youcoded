@@ -51,6 +51,7 @@ import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
 import { log } from './logger';
+import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -126,6 +127,8 @@ interface AuthenticatedClient {
   audienceId?: number;
   /** The hello (session list, topics, status) has been sent on this connection. */
   helloSent?: boolean;
+  /** The page refills one conversation on a `session:refill` push, so an expired fill hold need not hang up on it. */
+  refillPush?: boolean;
 }
 
 /** The slice of WindowRegistry a phone connection needs: join on connect, leave on drop. */
@@ -868,7 +871,7 @@ export class RemoteServer {
         if (this.local) {
           if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
           releaseUnauth();
-          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true });
+          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true, refillPush: msg.refillPush === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
         }
 
@@ -888,7 +891,7 @@ export class RemoteServer {
             this.clearFailedAttempts();
             releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
-            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true });
+            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true });
             // WHY one builder (R4-1): the two sign-in paths used to spell the handshake by hand and had to be kept
             // in step; a returning device paints the same UI as a newly paired one.
             ws.send(JSON.stringify(authOkMessage({ deviceId: result.device.id }, this.getFocusSessionId())));
@@ -918,7 +921,7 @@ export class RemoteServer {
           const paired = this.devices.pairAgain(msg.previousDeviceId) ?? this.devices.pair(msg.deviceName);
           releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
-          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
+          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: paired.deviceId, secret: paired.secret }, this.getFocusSessionId())));
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
@@ -964,10 +967,18 @@ export class RemoteServer {
     }, PING_INTERVAL_MS);
   }
 
-  /** Hang up on one phone by its registry id so it reconnects and fills everything again (a fill of its that never completed). */
-  dropAudience(audienceId: number): void {
+  /** A phone's fill of a conversation never completed (its held pushes were dropped): have it fill that conversation again.
+   *  WHY not always a hang-up (2026-10-22 phone reliability): one slow conversation used to close the whole connection, so
+   *  every watched conversation refilled — a page that refills on `session:refill` refills just this one. Older pages,
+   *  which ignore that push, are still hung up on, or they would silently keep a copy with a hole in it. */
+  dropAudience(audienceId: number, sessionId?: string): void {
     for (const client of this.clients) {
       if (client.audienceId !== audienceId) continue;
+      if (client.refillPush && sessionId) {
+        this.logDevice(client, 'fill never completed; asked to fill that conversation again');
+        try { client.ws.send(JSON.stringify({ type: 'session:refill', payload: { sessionId } })); } catch { /* closing anyway */ }
+        continue;
+      }
       this.logDevice(client, 'fill never completed; closing so it reconnects and fills again');
       client.ws.close(4010, 'Catch-up needed');
       this.removeClient(client);
@@ -982,11 +993,21 @@ export class RemoteServer {
     this.getNativeRuntime()?.fills.forget(`s${client.audienceId}`);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean } = {}): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean; refillPush?: boolean } = {}): void {
+    // A device that signed in again replaces its older connection, which is usually a dead one the ping has not caught
+    // yet (60–80 s). Never the phone's own app on its own runtime ('local'), and never across devices.
+    if (!opts.owner) {
+      for (const old of [...this.clients]) {
+        if (old.owner || old.deviceId !== deviceId) continue;
+        this.logDevice(old, 'replaced by a newer connection from the same device');
+        try { old.ws.close(CLOSE_REPLACED, 'Replaced'); } catch { /* already gone */ }
+        this.removeClient(old);
+      }
+    }
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
-      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true,
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true, refillPush: opts.refillPush === true,
     };
     this.clients.add(client);
     // Join the window registry as a member with a negative id (one-core R5-1). A phone is sent a session's pushes once it has

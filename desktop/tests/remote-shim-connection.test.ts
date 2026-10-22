@@ -1141,5 +1141,30 @@ describe('remote-shim — overlapping connections', () => {
       ws.fireClose(4003);
       expect(refusals).toEqual(['revoked']);
     });
+
+    it('a tab another tab took over stops, keeps the key, and does not take it back', async () => {
+      await setup();
+      const refusals: string[] = [];
+      shim.onCredentialRefused((r) => refusals.push(r));
+      const ws = await signedIn();
+      ws.fireClose(4011);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(refusals).toEqual(['replaced']);
+      expect(FakeWebSocket.instances).toHaveLength(1);      // no reconnect that would kick the other tab
+      expect(store['youcoded-remote-token']).toBe('dev-1:secret');
+    });
+
+    it('the Android app whose old connection was replaced just reconnects', async () => {
+      await setup({ protocol: 'file:', search: '?bridgeToken=bt&bridgePort=9901' });
+      const pairing = shim.connectToHost('desk', 9900, 'pw');
+      for (let i = 0; i < 200 && FakeWebSocket.instances.length === 0; i++) await new Promise((r) => setImmediate(r));
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await pairing;
+      latest().fireClose(4011);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(latest().url).toBe('ws://desk:9900/ws');
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
   });
 });

@@ -117,6 +117,34 @@ describe('RemoteServer — pairing', () => {
       expect(second.last()!.secret).toBeUndefined();
     });
 
+    it('a device that signs in again replaces its older connection, and no other device\'s', async () => {
+      // A phone that reconnected after a silent drop left its dead connection on the computer for 60–80 s,
+      // still being sent to and counted as online.
+      const { CLOSE_REPLACED } = await import('../src/shared/remote-close-codes');
+      const { server } = await makeServer();
+      const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
+      const other = await connect(server, { password: 'correct-horse', deviceName: 'Tablet' });
+      const again = await connect(server, { deviceId: first.last()!.deviceId as string, secret: first.last()!.secret as string });
+      expect(again.last()!.type).toBe('auth:ok');
+      expect(first.closed).toEqual({ code: CLOSE_REPLACED, reason: 'Replaced' });
+      expect(other.closed).toBeNull();
+      expect((server as unknown as { clients: Set<unknown> }).clients.size).toBe(2);
+    });
+
+    it('a fill that never completed asks a page that can to refill that one conversation, and hangs up on one that cannot', async () => {
+      const { server } = await makeServer();
+      const modern = await connect(server, { password: 'correct-horse', deviceName: 'New page', refillPush: true });
+      const older = await connect(server, { password: 'correct-horse', deviceName: 'Old page' });
+      const clients = [...(server as unknown as { clients: Set<{ ws: unknown; audienceId?: number }> }).clients];
+      clients.find((c) => c.ws === modern)!.audienceId = -11;
+      clients.find((c) => c.ws === older)!.audienceId = -12;
+      server.dropAudience(-11, 's1');
+      server.dropAudience(-12, 's1');
+      expect(modern.closed).toBeNull();
+      expect(modern.last()).toEqual({ type: 'session:refill', payload: { sessionId: 's1' } });
+      expect(older.closed).toMatchObject({ code: 4010 });
+    });
+
     it('both sign-in paths tell the screen the protocol version and what it can do', async () => {
       const { server } = await makeServer();
       const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });

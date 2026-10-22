@@ -13,6 +13,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
+import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own backend (localBridgeUrl) and the Android app itself (invokeAndroidHost) — WHY there.
@@ -1329,11 +1330,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       // The token is in the URL so it's available before any JS runs (no race).
       const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
+      // refillPush: this page refills one conversation on `session:refill`, so the computer need not hang up on it
+      // when one fill never completes (remote-server dropAudience, 2026-10-22).
       const authMsg = isLocalBridge && bridgeToken
-        ? { type: 'auth', token: bridgeToken }
+        ? { type: 'auth', token: bridgeToken, refillPush: true }
         : isToken
-          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true }
-          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true }
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, previousDeviceId: deviceRowFor(getWsUrl()) };
       socket.send(JSON.stringify(authMsg));
     };
 
@@ -1499,13 +1502,19 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         return;
       }
 
-      if (isTerminalClose(event.code)) suppressReconnectingPhase = true;
+      // Another tab of this browser signed in with the same saved key and took over (CLOSE_REPLACED). Coming back would
+      // take it back again, forever; the key stays good for whichever tab the person uses. The Android app is one page,
+      // so for it this can only be its own dead connection being cleared: it reconnects as usual.
+      const replaced = event.code === CLOSE_REPLACED && !isAndroidPaired() && !localBridge;
+      if (isTerminalClose(event.code) || replaced) suppressReconnectingPhase = true;
       setConnectionState('disconnected');
       suppressReconnectingPhase = false;
       // Attempt reconnection — local bridge uses its own retry (token comes
       // from the URL each time), remote connections use stored session tokens.
       if (localBridge) {
         retryLocalBridge();
+      } else if (replaced) {
+        noteRefusedAfterConnecting('replaced');
       } else if (isTerminalClose(event.code)) {
         // Unpaired or retired: the credential can never work again. Forget it so the next
         // attempt asks for the password once, rather than retrying forever.
@@ -2079,7 +2088,11 @@ export function installShim(): void {
       // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.
       play: (pushes: Array<{ type: string; payload: unknown }>) => playPushes(pushes),
       // The host asks a PHONE to fill again by closing its connection (the reconnect fills everything), so this never fires here.
-      onRefill: (_cb: (sessionId: string) => void) => () => {},
+      // The computer's fill of one conversation never completed (its hold expired): App fills that one again.
+      onRefill: (cb: (sessionId: string) => void) => {
+        const handler = addListener('session:refill', (p: { sessionId?: unknown }) => { if (typeof p?.sessionId === 'string') cb(p.sessionId); });
+        return () => removeListener('session:refill', handler);
+      },
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
       // includeOpen: also list the chats open right now, marked `open` (a page's chat list; the Resume list leaves them out).
