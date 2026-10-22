@@ -448,8 +448,10 @@ describe.skipIf(process.platform === 'win32')('HookRelay.ensureListening — a d
     await reach({ hook_event_name: 'SessionStart', session_id: 'b' });
     await vi.waitFor(() => expect(events.map((e) => e.payload.session_id)).toEqual(['b']));
     // The replaced listener is left open: closing it would delete the new file.
+    const before = (await fs.promises.lstat(sockPath())).ino;
+    // Negative settle: nothing deletes or replaces the re-created file afterwards.
     await new Promise((r) => setTimeout(r, 50));
-    expect(fs.existsSync(sockPath())).toBe(true);
+    expect((await fs.promises.lstat(sockPath())).ino).toBe(before);
   });
 
   it('re-creates the whole folder if that was deleted too', async () => {
