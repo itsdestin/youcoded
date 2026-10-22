@@ -14,6 +14,8 @@ import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsu
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { markPage, startConnection, markConnection, takeReport } from './remote-timings';
+markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own backend (localBridgeUrl) and the Android app itself (invokeAndroidHost) — WHY there.
@@ -240,6 +242,8 @@ function reportFill(report: { round?: number; failed?: number } | undefined): vo
   if (report?.round !== undefined && report.round !== fillRound) return;   // an older round
   if (noFillTimer) { clearTimeout(noFillTimer); noFillTimer = null; }
   setConversationPhase((report?.failed ?? 0) > 0 ? 'incomplete' : 'complete');
+  // One frame on, the conversations are on screen: the computer logs how long this connection took (remote-timings.ts).
+  if (!isAndroidLocal()) requestAnimationFrame(() => { const r = takeReport(); if (r) send({ type: 'remote:timings', payload: r }); });
 }
 
 // Where each session stands on this page, as the host's own numbers: the epoch (which record) and the last event number applied.
@@ -657,6 +661,7 @@ function applyPtyCut(sid: string, pty: any): void {
 async function openPtyEarly(sid: string): Promise<void> {
   try {
     const reply = await invoke('session:open', { sessionId: sid, ptyOnly: true, pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {} });
+    markConnection('terminal');
     // Only this small answer qualifies (an older host answers a full open); and not once the ordinary answer has drawn the terminal.
     if (!reply?.ok || reply.ptyOnly !== true || openedHere.has(sid) || ptyEarly.has(sid)) return;
     ptyEarly.add(sid);
@@ -677,6 +682,7 @@ async function openSessionRemote(req: { sessionId: string; claudeSessionId?: str
     // The terminal rides the same answer: how far this page has drawn (empty = send all of it).
     pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {},
   });
+  markConnection('conversation');
   if (reply?.ok) {
     // Set BEFORE anything else runs: the host sends this session's held pushes right after this answer, and each one moves the cursor on.
     fillCursors.set(sid, { epoch: reply.epoch, seq: reply.headSeq });
@@ -1023,6 +1029,7 @@ function handleMessage(data: string, generation: number): void {
     const entry = pending.get(id)!;
     clearTimeout(entry.timeout);
     pending.delete(id);
+    if (entry.type === 'session:list') markConnection('list');
     // The host answered "I don't implement this channel" (remote-server's
     // default case). Surface it — otherwise the caller, which mostly doesn't
     // check, renders an empty panel with no explanation.
@@ -1312,6 +1319,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     // it; its late close set "disconnected". Every handler below is bound to its own socket.
     if (ws) retireSocket(ws);
     setConnectionState('connecting');
+    startConnection();
     const socket = new WebSocket(getWsUrl());
     ws = socket;
     const isCurrent = () => generation === connectionGeneration && ws === socket;
@@ -1341,6 +1349,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     socket.onopen = () => {
       if (!isCurrent()) return;
       didOpen = true;
+      markConnection('open');
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
       // Security: when connecting to the local Android bridge (file:// protocol),
@@ -1377,6 +1386,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           myDeviceId = msg.deviceId ?? myDeviceId;
           if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
+          markConnection('signed-in');
           // WHY here (one-core R4-1, S7): the host says what this screen can do, before anything announces the connection. An
           // older computer sends nothing and gets the conservative defaults. Replaced on EVERY auth:ok: a reconnect or a
           // switch between the Android app's own runtime and a paired computer takes the new host's answer.

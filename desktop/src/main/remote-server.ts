@@ -12,6 +12,7 @@ import path from 'path';
 import { sweepOldUploads } from './upload-store';
 import { randomUUID } from 'crypto';
 import { proxyHttpToVite, proxyUpgradesToVite } from './remote-dev-proxy';
+import { describePhoneTimings, describeAnswer } from './remote-timings';
 import { localTokenMatches, ownerDesktopServices, type LocalModeOptions } from './remote-local';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
@@ -1110,6 +1111,7 @@ export class RemoteServer {
       // WHY afterReply (one-core R5-2): session:open lets a screen's held pushes through once its answer has been SENT, so they
       // arrive after it on this socket. Callbacks are collected here and run right after respond() below.
       const afterReply: Array<() => void> = [];
+      const started = Date.now();
       const outcome = await serveRemoteChannel(tableDef, payload, {
         door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId, clientId: client.id,
         audienceId: client.audienceId, afterReply: (fn) => { afterReply.push(fn); },
@@ -1145,7 +1147,11 @@ export class RemoteServer {
         desktop: client.owner ? ownerDesktopServices({ broadcast: (m) => this.broadcast(m), sessionRoots: () => this.sessionRoots(), sessionManager: this.sessionManager }) : undefined,
       }, { owner: client.owner === true });
       // Only an awaited request (it has an id) is answered.
-      if (outcome.reply && id) this.respond(client, type, id, outcome.payload);
+      if (outcome.reply && id) {
+        const chars = this.respond(client, type, id, outcome.payload);
+        // How long a phone waited on what it needs to draw a conversation, and how much came back (remote-timings.ts).
+        if (!client.owner && (type === 'session:open' || type === 'session:list')) this.logDevice(client, describeAnswer(type, payload, Date.now() - started, chars));
+      }
       for (const fn of afterReply) { try { fn(); } catch (err) { console.warn('[remote-server] after-reply callback failed:', String(err)); } }
       return;
     }
@@ -1178,6 +1184,12 @@ export class RemoteServer {
         client.helloSent = true;
         this.logDevice(client, 'page ready');
         this.sendHello(client);
+        break;
+      }
+      case 'remote:timings': {
+        // Push, no reply: how long this phone took to show its conversations (renderer/remote-timings.ts), for the log.
+        const line = describePhoneTimings(payload);
+        if (line) this.logDevice(client, line);
         break;
       }
       case 'remote:ping':
@@ -1311,11 +1323,13 @@ export class RemoteServer {
 
   // --- Helpers ---
 
-  private respond(client: AuthenticatedClient, type: string, id: string, payload: any): void {
+  /** Returns how many characters were sent (0 when the socket had closed). */
+  private respond(client: AuthenticatedClient, type: string, id: string, payload: any): number {
     this.noteCompleted(id);
-    if (client.ws.readyState === WebSocket.OPEN) {
-      this.sendAnswer(client, JSON.stringify({ type: `${type}:response`, id, payload }));
-    }
+    if (client.ws.readyState !== WebSocket.OPEN) return 0;
+    const data = JSON.stringify({ type: `${type}:response`, id, payload });
+    this.sendAnswer(client, data);
+    return data.length;
   }
 
   /** One answer, in `remote:piece` frames when it is large and the page can put them back together (PIECE_CHARS says why). The
