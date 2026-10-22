@@ -33,6 +33,6 @@
       "dist": "/home/destin/youcoded-dev/worktrees/sessions/persona-prompt-eval/youcoded/desktop/dist-persona"
     }
   ],
-  "repeats": 2,
+  "repeats": 1,
   "judge": "x-ai/grok-4.5"
 }
