@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Arena</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --inset: #efede8; --fg: #1d1c1a; --fg2: #55524c; --dim: #8a867e;
+  --edge: #dedad2; --accent: #3d5afe; --on-accent: #fff; --good: #15803d; --bad: #b91c1c; --warn: #b45309;
+  --user: #e8ecff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151515; --panel: #1e1e1e; --inset: #262626; --fg: #ecebe8; --fg2: #b5b2ab; --dim: #85827b;
+    --edge: #333; --accent: #7c8cff; --on-accent: #0b0b0b; --good: #4ade80; --bad: #f87171; --warn: #f59e0b; --user: #262b45;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151515; --panel: #1e1e1e; --inset: #262626; --fg: #ecebe8; --fg2: #b5b2ab; --dim: #85827b;
+  --edge: #333; --accent: #7c8cff; --on-accent: #0b0b0b; --good: #4ade80; --bad: #f87171; --warn: #f59e0b; --user: #262b45;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 1px solid var(--edge); background: var(--panel); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--fg2); }
+button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+button.quiet { border-color: transparent; background: transparent; color: var(--fg2); padding: 4px 8px; }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .45; cursor: default; }
+input[type=text], input[type=password], input[type=number], select, textarea { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: 7px 10px; width: 100%; }
+textarea { resize: vertical; }
+label { display: block; font-size: 13px; color: var(--fg2); margin: 10px 0 4px; }
+header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--edge); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.pill { font-size: 13px; color: var(--fg2); background: var(--inset); border-radius: 999px; padding: 3px 10px; }
+.spacer { flex: 1; }
+.app { flex: 1; display: flex; min-height: 0; }
+aside { width: 250px; border-right: 1px solid var(--edge); overflow-y: auto; padding: 10px; flex-shrink: 0; }
+aside .t { display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 8px 10px; margin-bottom: 2px; }
+aside .t.on { background: var(--inset); }
+aside .t .n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+aside .t .s { font-size: 12px; color: var(--dim); }
+aside .empty { color: var(--dim); font-size: 13px; padding: 8px 10px; }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.blank { margin: auto; text-align: center; color: var(--fg2); max-width: 420px; padding: 24px; }
+.blank h2 { color: var(--fg); font-size: 18px; }
+.testbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--edge); flex-wrap: wrap; }
+.testbar .name { font-weight: 600; margin-right: auto; }
+.cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 16px; }
+.col { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.colhead { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--edge); }
+.colhead .title { font-weight: 600; margin-right: auto; }
+.colhead .who { font-size: 13px; color: var(--fg2); font-weight: 400; }
+.scroll { flex: 1; overflow-y: auto; padding: 8px 14px 14px; overflow-wrap: anywhere; }
+.msg-user { background: var(--user); border-radius: 12px; padding: 8px 12px; margin: 12px 0 4px auto; max-width: 85%; width: fit-content; white-space: pre-wrap; }
+.msg-ai { position: relative; margin: 8px 0; }
+.msg-ai pre { overflow-x: auto; background: var(--inset); padding: 8px; border-radius: 6px; font-size: 13px; }
+.msg-ai table { border-collapse: collapse; display: block; overflow-x: auto; }
+.msg-ai td, .msg-ai th { border: 1px solid var(--edge); padding: 4px 8px; }
+.msg-ai .cbtn { font-size: 12px; }
+.comment { font-size: 13px; background: color-mix(in srgb, var(--warn) 14%, transparent); border-left: 3px solid var(--warn); border-radius: 6px; padding: 6px 10px; margin: 4px 0 10px; white-space: pre-wrap; cursor: pointer; }
+.step { margin: 8px 0; font-size: 13px; color: var(--fg2); background: var(--inset); border-radius: 8px; padding: 5px 10px; }
+.step summary { cursor: pointer; }
+.step pre { white-space: pre-wrap; max-height: 240px; overflow: auto; font-size: 12px; }
+.step a { color: var(--accent); }
+.err { color: var(--bad); font-size: 13px; margin: 8px 0; }
+.typing { color: var(--dim); font-size: 13px; margin: 8px 0; }
+.ask { border-top: 1px solid var(--edge); padding: 10px 14px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.ask .q { font-weight: 600; margin: 4px 0 6px; }
+.ask .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.ask .opts button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.sidecomposer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--edge); }
+.composer { padding: 0 16px 10px; display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { min-height: 44px; max-height: 160px; }
+.verdict { padding: 8px 16px 12px; border-top: 1px solid var(--edge); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.scale { display: flex; gap: 4px; flex-wrap: wrap; }
+.scale button { font-size: 13px; padding: 5px 9px; }
+.scale button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.verdict input { flex: 1; min-width: 160px; }
+dialog { border: 1px solid var(--edge); border-radius: 14px; background: var(--panel); color: var(--fg); padding: 0; width: min(560px, calc(100vw - 32px)); }
+dialog.wide { width: min(980px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgb(0 0 0 / .35); }
+.dlg { padding: 16px 18px; }
+.dlg h2 { margin: 0 0 4px; font-size: 17px; }
+.dlg .help { color: var(--fg2); font-size: 13px; margin: 0 0 6px; }
+.dlg .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.lib { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+.lib .list button { display: block; width: 100%; text-align: left; margin-bottom: 4px; }
+.lib .list button.on { border-color: var(--accent); }
+.lib textarea { min-height: 320px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.radio { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
+.radio label, .check { display: flex; gap: 6px; align-items: center; color: var(--fg); margin: 4px 0; font-size: 14px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; z-index: 50; max-width: calc(100vw - 32px); }
+@media (max-width: 860px) {
+  .app { flex-direction: column; }
+  aside { width: auto; border-right: 0; border-bottom: 1px solid var(--edge); max-height: 140px; }
+  .cols { grid-template-columns: 1fr; }
+  .col { max-height: 70vh; }
+  .lib { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Prompt Arena</h1>
+  <span class="pill" id="spend"></span>
+  <span class="spacer"></span>
+  <button id="btnKey">Key &amp; limit</button>
+  <button id="btnPrompts">Prompts</button>
+  <button id="btnNew" class="primary">New test</button>
+</header>
+<div class="app">
+  <aside id="tests"></aside>
+  <main id="main"></main>
+</div>
+
+<dialog id="dlgKey"><form class="dlg" method="dialog">
+  <h2>OpenRouter key</h2>
+  <p class="help">Kept only in this tool's memory while it runs. Nothing writes it to disk, so you'll paste it again each time the tool starts.</p>
+  <label>Key</label><input type="password" id="keyInput" placeholder="sk-or-…" autocomplete="off">
+  <label>Stop spending after ($, this session)</label><input type="number" id="capInput" min="0.5" step="0.5">
+  <div class="actions"><button value="cancel">Cancel</button><button class="primary" id="keySave" value="ok">Save</button></div>
+</form></dialog>
+
+<dialog id="dlgNew"><form class="dlg" method="dialog">
+  <h2>New blind test</h2>
+  <p class="help">The two prompts are placed on the left and right at random. You won't see which is which until you reveal.</p>
+  <label>Name (optional)</label><input type="text" id="newName" placeholder="e.g. Hybrid vs persona, bakery question">
+  <label>Prompt 1</label><select id="newA"></select>
+  <label>Prompt 2</label><select id="newB"></select>
+  <label>Model</label><select id="newModelA"></select>
+  <label class="check"><input type="checkbox" id="newSplit"> Use a different model for Prompt 2</label>
+  <select id="newModelB" hidden></select>
+  <div class="actions"><button value="cancel">Cancel</button><button class="primary" id="newCreate" value="ok">Create</button></div>
+</form></dialog>
+
+<dialog id="dlgPrompts" class="wide"><div class="dlg">
+  <h2>Prompts</h2>
+  <p class="help">Saved here and reusable in any test. Editing a prompt never changes a test that already ran. Each test keeps its own copy.</p>
+  <div class="lib">
+    <div class="list" id="libList"></div>
+    <div id="libEdit"></div>
+  </div>
+  <div class="actions"><button id="libClose">Done</button></div>
+</div></dialog>
+
+<dialog id="dlgComment"><form class="dlg" method="dialog">
+  <h2>Comment</h2>
+  <p class="help">A note on this reply, only for you. Leave it empty to remove it.</p>
+  <textarea id="commentText" rows="5"></textarea>
+  <div class="actions"><button value="cancel">Cancel</button><button class="primary" id="commentSave" value="ok">Save</button></div>
+</form></dialog>
+
+<script>
+let S = { prompts: [], models: [], tests: [], hasKey: false, spent: 0, spendCap: 5 };
+let T = null;          // the open test's view
+let openId = null;
+let libSel = null;
+const askDraft = { left: {}, right: {} };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const md = (t) => (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(t)) : '<p style="white-space:pre-wrap">' + esc(t) + '</p>';
+
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(j.error || 'Something went wrong.'); throw new Error(j.error); }
+  return j;
+}
+let toastTimer;
+function toast(msg) {
+  document.querySelector('.toast')?.remove();
+  const d = document.createElement('div'); d.className = 'toast'; d.textContent = msg; document.body.append(d);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => d.remove(), 5000);
+}
+
+// ---------------------------------------------------------------- state ----
+async function loadState() {
+  S = await api('GET', '/api/state');
+  $('spend').textContent = '$' + S.spent.toFixed(2) + ' of $' + S.spendCap.toFixed(2) + ' spent';
+  renderTests();
+}
+function renderTests() {
+  $('tests').innerHTML = S.tests.length ? S.tests.map((t) => {
+    const status = t.waiting ? 'Waiting for your answer' : t.busy ? 'Replying…' : t.revealed ? (t.winner ? 'Revealed · ' + t.winner + ' won' : 'Revealed · even') : t.verdict != null ? 'Rated' : 'Not rated';
+    return '<button class="t' + (t.id === openId ? ' on' : '') + '" data-id="' + t.id + '"><div class="n">' + esc(t.name) + '</div><div class="s">' + esc(status) + '</div></button>';
+  }).join('') : '<div class="empty">No tests yet.</div>';
+}
+$('tests').onclick = (e) => { const b = e.target.closest('.t'); if (b) openTest(b.dataset.id); };
+
+// ----------------------------------------------------------------- test ----
+async function openTest(id) {
+  openId = id; T = await api('GET', '/api/tests/' + id);
+  renderTests(); renderTest(true);
+}
+function renderTest(full) {
+  if (!T) {
+    $('main').innerHTML = '<div class="blank"><h2>Blind-test two prompts</h2><p>Save prompts under <b>Prompts</b>, then start a <b>New test</b>. Each side is its own conversation with the real YouCoded assistant. Chat with both, comment on replies, rate, then reveal which was which.</p>' + (S.hasKey ? '' : '<p><button class="primary" onclick="openKey()">Add your OpenRouter key</button></p>') + '</div>';
+    return;
+  }
+  if (full || !$('colleft')) {
+    $('main').innerHTML =
+      '<div class="testbar"><span class="name">' + esc(T.name) + '</span>' +
+      '<button id="btnRerun" title="Start a fresh blind test with the same two prompts">Run again</button>' +
+      '<button id="btnResetBoth">Reset both</button><button id="btnDelete" class="danger">Delete</button></div>' +
+      '<div class="cols">' + ['left', 'right'].map((s) =>
+        '<section class="col" id="col' + s + '"><div class="colhead"><span class="title" id="head' + s + '"></span>' +
+        '<button class="quiet" data-stop="' + s + '">Stop</button><button class="quiet" data-reset="' + s + '">Reset</button></div>' +
+        '<div class="scroll" id="scroll' + s + '"></div><div id="ask' + s + '"></div>' +
+        '<div class="sidecomposer"><input type="text" id="only' + s + '" placeholder="Reply to ' + (s === 'left' ? 'Left' : 'Right') + ' only"><button data-only="' + s + '">Send</button></div></section>').join('') + '</div>' +
+      '<div class="composer"><textarea id="both" rows="2" placeholder="Message both sides (Enter to send, Shift+Enter for a new line)"></textarea><button class="primary" id="sendBoth">Send to both</button></div>' +
+      '<div class="verdict"><span style="font-size:13px;color:var(--fg2)">Overall:</span><div class="scale" id="scale"></div>' +
+      '<input type="text" id="note" placeholder="Why? (optional)"><button id="btnReveal">Reveal</button></div>';
+    wireTest();
+  }
+  for (const s of ['left', 'right']) renderSide(s);
+  const v = T.verdict;
+  $('scale').innerHTML = [[-2, 'Left much better'], [-1, 'Left a bit better'], [0, 'Even'], [1, 'Right a bit better'], [2, 'Right much better']]
+    .map(([n, l]) => '<button data-v="' + n + '"' + (v === n ? ' class="on"' : '') + '>' + l + '</button>').join('');
+  if (document.activeElement !== $('note')) $('note').value = T.note || '';
+  $('btnReveal').disabled = T.revealed;
+  $('btnReveal').textContent = T.revealed ? 'Revealed' : 'Reveal';
+}
+
+function stepLabel(it) {
+  const i = it.input || {};
+  switch (it.tool) {
+    case 'WebSearch': return 'Searched the web for “' + (i.query ?? '') + '”';
+    case 'WebFetch': return 'Opened a web page: ' + (i.url ?? '');
+    case 'AskUserQuestion': return 'Asked you: ' + (i.questions || []).map((q) => '“' + q.question + '”').join(' ');
+    case 'Read': return 'Read a file: ' + (i.file_path ?? '').split('/').pop();
+    case 'Write': return 'Made a file: ' + (i.file_path ?? '').split('/').pop();
+    case 'Edit': return 'Changed a file: ' + (i.file_path ?? '').split('/').pop();
+    case 'Bash': return 'Ran a command: ' + (i.description || i.command || '');
+    case 'TodoWrite': return 'Updated its to-do list';
+    case 'SendUserFile': return 'Sent you ' + ((i.files || []).length === 1 ? 'a file' : (i.files || []).length + ' files');
+    default: return 'Used ' + it.tool;
+  }
+}
+
+function renderSide(s) {
+  const side = T[s];
+  const r = T.reveal?.[s];
+  $('head' + s).innerHTML = (s === 'left' ? 'Left' : 'Right') + (r ? ' <span class="who">· ' + esc(r.prompt) + ' · ' + esc(r.model) + ' · $' + r.costUsd.toFixed(2) + '</span>' : '');
+  document.querySelector('[data-stop="' + s + '"]').hidden = !side.busy;
+  const sc = $('scroll' + s);
+  const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
+  let h = '';
+  if (side.stale) h += '<p class="err">This conversation is from before the tool restarted. You can still read and rate it, but the assistant no longer remembers it. Reset this side to keep chatting.</p>';
+  if (!side.items.length && !side.busy) h += '<p class="typing">Nothing yet. Send a message below.</p>';
+  for (const it of side.items) {
+    if (it.kind === 'user') h += '<div class="msg-user">' + esc(it.text) + '</div>';
+    else if (it.kind === 'assistant') {
+      h += '<div class="msg-ai">' + md(it.text) + '<button class="quiet cbtn" data-comment="' + it.id + '" data-side="' + s + '">' + (side.comments[it.id] ? 'Edit comment' : 'Comment') + '</button></div>';
+      if (side.comments[it.id]) h += '<div class="comment" data-comment="' + it.id + '" data-side="' + s + '">' + esc(side.comments[it.id]) + '</div>';
+    } else if (it.kind === 'tool') {
+      const files = (it.files || []).map((f) => f.rel ? '<a href="/files/' + T.id + '/' + s + '/' + f.rel.split('/').map(encodeURIComponent).join('/') + '" target="_blank">Open ' + esc(f.name) + '</a>' : esc(f.name)).join(' · ');
+      h += '<details class="step"><summary>' + esc(stepLabel(it)) + (files ? ' — ' + files : '') + '</summary><pre>' + esc(it.result ?? '(no result yet)') + '</pre></details>';
+    } else if (it.kind === 'error') h += '<p class="err">' + esc(it.text) + '</p>';
+  }
+  if (side.busy && !side.pendingAsk) h += '<p class="typing">Working…</p>';
+  sc.innerHTML = h;
+  if (atBottom) sc.scrollTop = sc.scrollHeight;
+  renderAsk(s);
+}
+
+// The question card lives outside the transcript so polling never wipes a
+// half-typed answer.
+function renderAsk(s) {
+  const ask = T[s].pendingAsk, box = $('ask' + s);
+  if (!ask) { box.innerHTML = ''; box.dataset.id = ''; return; }
+  if (box.dataset.id === ask.id) return;
+  box.dataset.id = ask.id; askDraft[s] = {};
+  box.innerHTML = '<div class="ask">' + ask.questions.map((q, qi) =>
+    '<div class="q">' + esc(q.question) + '</div><div class="opts">' + (q.options || []).map((o) =>
+      '<button data-q="' + qi + '" data-label="' + esc(o.label) + '" title="' + esc(o.description || '') + '">' + esc(o.label) + '</button>').join('') +
+    '</div><input type="text" data-other="' + qi + '" placeholder="Or type your own answer">').join('') +
+    '<div style="display:flex;gap:6px;margin-top:8px"><button class="primary" data-askok="' + s + '">Answer</button><button data-askno="' + s + '">Skip question</button></div></div>';
+}
+
+function wireTest() {
+  $('main').onclick = async (e) => {
+    const b = e.target.closest('button, .comment');
+    if (!b) return;
+    if (b.dataset.stop) T = await api('POST', '/api/tests/' + T.id + '/stop', { side: b.dataset.stop });
+    else if (b.dataset.reset) { if (!confirm('Clear this side\'s conversation and start it fresh? Its comments go too.')) return; T = await api('POST', '/api/tests/' + T.id + '/reset', { side: b.dataset.reset }); }
+    else if (b.dataset.only) return sendTo([b.dataset.only], $('only' + b.dataset.only));
+    else if (b.dataset.comment) return openComment(b.dataset.side, b.dataset.comment);
+    else if (b.dataset.v !== undefined) T = await api('POST', '/api/tests/' + T.id + '/verdict', { verdict: Number(b.dataset.v) });
+    else if (b.dataset.q !== undefined) {
+      const s = b.closest('[id^=ask]').id.slice(3);
+      b.parentElement.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+      askDraft[s][b.dataset.q] = b.dataset.label;
+      return;
+    } else if (b.dataset.askok || b.dataset.askno) {
+      const s = b.dataset.askok || b.dataset.askno, ask = T[s].pendingAsk;
+      let answers = null;
+      if (b.dataset.askok) {
+        answers = {};
+        ask.questions.forEach((q, qi) => {
+          const other = $('ask' + s).querySelector('[data-other="' + qi + '"]').value.trim();
+          answers[q.question] = other || askDraft[s][qi] || '';
+        });
+        if (Object.values(answers).some((a) => !a)) return toast('Pick or type an answer for each question.');
+      }
+      T = await api('POST', '/api/tests/' + T.id + '/answer', { side: s, answers });
+    } else if (b.id === 'btnReveal') {
+      if (T.verdict == null && !confirm('You haven\'t rated this test yet. Reveal anyway?')) return;
+      T = await api('POST', '/api/tests/' + T.id + '/reveal', {});
+    } else if (b.id === 'btnRerun') { T = await api('POST', '/api/tests/' + T.id + '/rerun', {}); openId = T.id; await loadState(); return renderTest(true); }
+    else if (b.id === 'btnResetBoth') { if (!confirm('Clear both conversations and start fresh?')) return; T = await api('POST', '/api/tests/' + T.id + '/reset', { sides: ['left', 'right'] }); }
+    else if (b.id === 'btnDelete') { if (!confirm('Delete this test and its conversations? This can\'t be undone.')) return; await api('DELETE', '/api/tests/' + T.id); T = null; openId = null; await loadState(); return renderTest(true); }
+    else if (b.id === 'sendBoth') return sendTo(['left', 'right'], $('both'));
+    else return;
+    renderTest(); loadState();
+  };
+  $('both').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTo(['left', 'right'], $('both')); } };
+  for (const s of ['left', 'right']) $('only' + s).onkeydown = (e) => { if (e.key === 'Enter') sendTo([s], $('only' + s)); };
+  let noteTimer;
+  $('note').oninput = () => { clearTimeout(noteTimer); noteTimer = setTimeout(() => api('POST', '/api/tests/' + T.id + '/verdict', { note: $('note').value }), 500); };
+}
+
+async function sendTo(sides, input) {
+  const text = input.value.trim();
+  if (!text) return;
+  try { T = await api('POST', '/api/tests/' + T.id + '/send', { sides, text }); input.value = ''; renderTest(); loadState(); } catch {}
+}
+
+let commentTarget = null;
+function openComment(side, itemId) {
+  commentTarget = { side, itemId };
+  $('commentText').value = T[side].comments[itemId] || '';
+  $('dlgComment').showModal();
+}
+$('commentSave').onclick = async () => {
+  if (!commentTarget) return;
+  T = await api('POST', '/api/tests/' + T.id + '/comment', { side: commentTarget.side, itemId: commentTarget.itemId, text: $('commentText').value });
+  renderTest();
+};
+
+// ------------------------------------------------------------- dialogs ----
+function openKey() { $('keyInput').value = ''; $('capInput').value = S.spendCap; $('dlgKey').showModal(); }
+$('btnKey').onclick = openKey;
+$('keySave').onclick = async () => { await api('POST', '/api/key', { key: $('keyInput').value, cap: $('capInput').value }); await loadState(); if (!T) renderTest(); };
+
+$('btnNew').onclick = () => {
+  if (!S.hasKey) return openKey();
+  const opts = S.prompts.map((p) => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+  $('newA').innerHTML = opts; $('newB').innerHTML = opts;
+  if (S.prompts[1]) $('newB').value = S.prompts[1].id;
+  const mo = S.models.map((m) => '<option value="' + m.id + '">' + esc(m.label) + '</option>').join('');
+  $('newModelA').innerHTML = mo; $('newModelB').innerHTML = mo;
+  const sonnet = S.models.find((m) => /sonnet/i.test(m.label));
+  if (sonnet) { $('newModelA').value = sonnet.id; $('newModelB').value = sonnet.id; }
+  $('newName').value = ''; $('newSplit').checked = false; $('newModelB').hidden = true;
+  $('dlgNew').showModal();
+};
+$('newSplit').onchange = () => { $('newModelB').hidden = !$('newSplit').checked; };
+$('newCreate').onclick = async () => {
+  const modelA = $('newModelA').value;
+  T = await api('POST', '/api/tests', { name: $('newName').value, promptA: $('newA').value, promptB: $('newB').value, modelA, modelB: $('newSplit').checked ? $('newModelB').value : modelA });
+  openId = T.id; await loadState(); renderTest(true);
+};
+
+$('btnPrompts').onclick = () => { libSel = libSel || S.prompts[0]?.id; renderLib(); $('dlgPrompts').showModal(); };
+$('libClose').onclick = () => $('dlgPrompts').close();
+function renderLib() {
+  $('libList').innerHTML = S.prompts.map((p) => '<button data-id="' + p.id + '"' + (p.id === libSel ? ' class="on"' : '') + '>' + esc(p.name) + '</button>').join('') + '<button data-id="__new">+ New prompt</button>';
+  const p = libSel === '__new' ? { id: '', name: '', text: '', mode: 'replace', includeEnv: true } : S.prompts.find((x) => x.id === libSel);
+  if (!p) { $('libEdit').innerHTML = ''; return; }
+  if (p.builtin) {
+    $('libEdit').innerHTML = '<p class="help"><b>' + esc(p.name) + '</b>: what the YouCoded assistant gets today. Read-only. To try a change, copy it into a new prompt.</p><textarea readonly>' + esc(p.text) + '</textarea><div class="actions"><button id="libCopy">Copy into a new prompt</button></div>';
+    $('libCopy').onclick = () => { libSel = '__new'; renderLib(); $('libName').value = 'Copy of stock'; $('libText').value = p.text; };
+    return;
+  }
+  $('libEdit').innerHTML =
+    '<label>Name</label><input type="text" id="libName" value="' + esc(p.name) + '">' +
+    '<label>How it\'s used</label><div class="radio">' +
+    '<label><input type="radio" name="mode" value="replace"' + (p.mode !== 'append' ? ' checked' : '') + '> Replaces the app\'s prompt entirely</label>' +
+    '<label><input type="radio" name="mode" value="append"' + (p.mode === 'append' ? ' checked' : '') + '> Added to the app\'s prompt</label></div>' +
+    '<label class="check" id="envRow"><input type="checkbox" id="libEnv"' + (p.includeEnv !== false ? ' checked' : '') + '> Also tell it today\'s date and its working folder</label>' +
+    '<label>Prompt text</label><textarea id="libText">' + esc(p.text) + '</textarea>' +
+    '<div class="actions">' + (p.id ? '<button class="danger" id="libDel">Delete</button>' : '') + '<button class="primary" id="libSave">Save</button></div>';
+  const syncEnv = () => { $('envRow').hidden = document.querySelector('input[name=mode]:checked').value === 'append'; };
+  document.querySelectorAll('input[name=mode]').forEach((r) => r.onchange = syncEnv); syncEnv();
+  $('libSave').onclick = async () => {
+    const saved = await api('POST', '/api/prompts', { id: p.id || undefined, name: $('libName').value, text: $('libText').value, mode: document.querySelector('input[name=mode]:checked').value, includeEnv: $('libEnv').checked });
+    libSel = saved.id; await loadState(); renderLib(); toast('Saved.');
+  };
+  if ($('libDel')) $('libDel').onclick = async () => { if (!confirm('Delete this prompt? Tests that used it keep their own copy.')) return; await api('DELETE', '/api/prompts/' + p.id); libSel = null; await loadState(); renderLib(); };
+}
+$('libList').onclick = (e) => { const b = e.target.closest('button'); if (b) { libSel = b.dataset.id; renderLib(); } };
+
+// -------------------------------------------------------------- polling ----
+// Fast while something is replying, slow otherwise.
+async function tick() {
+  try {
+    if (openId) {
+      const busy = T && (T.left.busy || T.right.busy || T.left.pendingAsk || T.right.pendingAsk);
+      if (busy || !tick.n || tick.n % 5 === 0) { T = await api('GET', '/api/tests/' + openId); renderTest(); }
+    }
+    if (!tick.n || tick.n % 5 === 0) await loadState();
+  } catch {}
+  tick.n = (tick.n || 0) + 1;
+  setTimeout(tick, 700);
+}
+loadState().then(() => { renderTest(true); if (!S.hasKey) openKey(); tick(); });
+</script>
+</body>
+</html>
