@@ -468,6 +468,16 @@ describe.skipIf(process.platform === 'win32')('HookRelay.ensureListening — a d
     expect((await fs.promises.lstat(sockPath())).ino).toBe(before);
   });
 
+  it('a repair racing shutdown leaves no socket behind', async () => {
+    await relay.start();
+    await fs.promises.unlink(sockPath());
+    const repair = relay.ensureListening();
+    relay.stop();
+    await repair;
+    expect(fs.existsSync(sockPath())).toBe(false);
+    expect((relay as any).server).toBeNull();
+  });
+
   it('never deletes a file it did not make', async () => {
     await relay.start();
     await fs.promises.unlink(sockPath());

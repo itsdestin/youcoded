@@ -292,8 +292,8 @@ export class AskpassServer extends EventEmitter {
   async ensureListening(): Promise<void> {
     if (!this._available || !this.server) return;
     const fresh = await relistenIfDeleted(this.socketPathValue, () => net.createServer((socket) => this.handleConnection(socket)),
-      { fileMode: 0o600, platform: this.platform });
-    if (!fresh) return;
+      { fileMode: 0o600, platform: this.platform, stillWanted: () => this._available && this.server !== null });
+    if (!fresh || !this.server) return;
     this.retired.push(this.server);
     this.server = fresh;
     log('WARN', 'AskpassServer', 'socket file was missing (something deleted it) — re-created it', { path: this.socketPathValue });

@@ -220,8 +220,8 @@ export class BrowserRelayServer {
   async ensureListening(): Promise<void> {
     if (!this.server) return;
     const fresh = await relistenIfDeleted(this.socketPath, () => net.createServer((sock) => this.onConnection(sock)),
-      { fileMode: 0o600, platform: this.opts.platform });
-    if (!fresh) return;
+      { fileMode: 0o600, platform: this.opts.platform, stillWanted: () => this.server !== null });
+    if (!fresh || !this.server) return;
     this.retired.push(this.server);
     this.server = fresh;
     this.opts.log?.('WARN', 'relay socket file was missing (something deleted it) — re-created it', { path: this.socketPath });

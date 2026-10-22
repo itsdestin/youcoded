@@ -362,7 +362,8 @@ export class HookRelay extends EventEmitter {
     if (!this.running) return;
     // Not start(): its EADDRINUSE retry deletes the file at the path, and
     // anything that appeared there since the check is not ours.
-    const fresh = await relistenIfDeleted(this.pipeName, () => this.createServer());
+    const fresh = await relistenIfDeleted(this.pipeName, () => this.createServer(),
+      { stillWanted: () => this.running });
     if (!fresh) return;
     if (this.server) this.retiredServers.push(this.server);
     this.server = fresh;

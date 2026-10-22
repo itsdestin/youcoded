@@ -57,8 +57,36 @@ describe.skipIf(process.platform === 'win32')('relistenIfDeleted', () => {
     expect(await connects(p)).toBe(true);
   });
 
+  it('closes the new server if its owner stopped meanwhile (session created during quit)', async () => {
+    const p = path.join(tempDir(), 's.sock');
+    expect(await relistenIfDeleted(p, () => net.createServer(), { stillWanted: () => false })).toBeNull();
+    expect(fs.existsSync(p)).toBe(false); // nothing left behind, nothing holding the process open
+  });
+
+  it('refuses a folder other users can enter', async () => {
+    const d = tempDir();
+    fs.chmodSync(d, 0o755);
+    expect(await relistenIfDeleted(path.join(d, 's.sock'), () => net.createServer())).toBeNull();
+    expect(fs.existsSync(path.join(d, 's.sock'))).toBe(false);
+  });
+
   it('is a no-op for Windows named pipes and an unset path', async () => {
     expect(await relistenIfDeleted('\\\\.\\pipe\\x', () => net.createServer(), { platform: 'win32' })).toBeNull();
     expect(await relistenIfDeleted(null, () => net.createServer())).toBeNull();
+  });
+});
+
+// The repair only helps if each long-lived socket is actually re-checked when a
+// session starts. Source scan, because the wiring lives in app startup files.
+describe('every long-lived socket is re-checked at session start', () => {
+  const src = (f: string) => fs.readFileSync(path.join(__dirname, '..', 'src', 'main', f), 'utf8');
+  it.each([
+    ['main.ts', /on\('session-created',[^\n]*hookRelay\.ensureListening\(\)/],
+    ['headless/headless-boot.ts', /on\('session-created',[^\n]*hookRelay\.ensureListening\(\)/],
+    ['assistant-browser/browser-main.ts', /on\('session-created',[^\n]*server\.ensureListening\(\)/],
+    ['harness/admin-password-startup.ts', /onSessionCreated\?\.\([^\n]*server\.ensureListening\(\)/],
+    ['create-runtime.ts', /sessionManager\.on\?\.\('session-created', cb\)/],
+  ])('%s', (file, pattern) => {
+    expect(src(file)).toMatch(pattern);
   });
 });
