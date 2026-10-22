@@ -28,17 +28,31 @@ import path from 'node:path';
  * @returns this device's absolute folder path, or null when the project isn't
  *          present locally (record synced, folder not on this device).
  */
-export function resolveLocalProject(
+export async function resolveLocalProject(
   rec: { projectName: string; originalPath: string },
   managed: Map<string, string>,
   saved: Array<{ path: string }>,
-): string | null {
+  // WHY an optional cache (2026-10-22 freeze hunt): the materialize sweep resolves ~2,600 records
+  // but they share a handful of project folders, so the same few paths were checked thousands of
+  // times with a blocking existsSync. A per-sweep/per-browse cache asks the disk once per path.
+  // Callers keep it only as long as one sweep/browse, so a folder created later is seen next time.
+  existsCache?: Map<string, Promise<boolean>>,
+): Promise<string | null> {
   // Same machine (or two devices sharing an identical path): originalPath wins.
-  if (rec.originalPath && fs.existsSync(rec.originalPath)) return rec.originalPath;
+  if (rec.originalPath && await pathExists(rec.originalPath, existsCache)) return rec.originalPath;
   // Cross-device / cross-OS: find this device's copy of the folder by name.
   const managedHit = managed.get(rec.projectName);
   if (managedHit) return managedHit;
   const hit = saved.find((f) => path.basename(f.path) === rec.projectName);
-  if (hit && fs.existsSync(hit.path)) return hit.path;
+  if (hit && await pathExists(hit.path, existsCache)) return hit.path;
   return null;
+}
+
+/** fs.existsSync, off the main thread. Same answer: any failure to see the path means "no". */
+export function pathExists(p: string, cache?: Map<string, Promise<boolean>>): Promise<boolean> {
+  const hit = cache?.get(p);
+  if (hit) return hit;
+  const probe = fs.promises.access(p).then(() => true, () => false);
+  cache?.set(p, probe);
+  return probe;
 }

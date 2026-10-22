@@ -6,7 +6,7 @@
 // absolute path (the creating device's, e.g. a Linux path on a Windows box) must
 // be ignored in favor of THIS device's copy of the folder, found by managed
 // name or saved-folder basename.
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,13 +34,13 @@ describe('resolveLocalProject', () => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
-  it('uses originalPath when it exists on THIS device (same machine)', () => {
-    const r = resolveLocalProject({ projectName: 'youcoded-dev', originalPath: savedDir }, new Map(), []);
+  it('uses originalPath when it exists on THIS device (same machine)', async () => {
+    const r = await resolveLocalProject({ projectName: 'youcoded-dev', originalPath: savedDir }, new Map(), []);
     expect(r).toBe(savedDir);
   });
 
-  it('falls back to a SAVED folder by basename when originalPath is foreign/absent (the cross-OS case)', () => {
-    const r = resolveLocalProject(
+  it('falls back to a SAVED folder by basename when originalPath is foreign/absent (the cross-OS case)', async () => {
+    const r = await resolveLocalProject(
       { projectName: 'youcoded-dev', originalPath: foreignOriginalPath },
       new Map(),
       [{ path: savedDir }],
@@ -48,8 +48,8 @@ describe('resolveLocalProject', () => {
     expect(r).toBe(savedDir);
   });
 
-  it('falls back to a MANAGED project by name when originalPath is foreign/absent', () => {
-    const r = resolveLocalProject(
+  it('falls back to a MANAGED project by name when originalPath is foreign/absent', async () => {
+    const r = await resolveLocalProject(
       { projectName: 'budget-app', originalPath: foreignOriginalPath },
       new Map([['budget-app', managedDir]]),
       [],
@@ -57,9 +57,9 @@ describe('resolveLocalProject', () => {
     expect(r).toBe(managedDir);
   });
 
-  it('prefers originalPath over the name/basename fallbacks when it exists here', () => {
+  it('prefers originalPath over the name/basename fallbacks when it exists here', async () => {
     // managed map points elsewhere, but originalPath is valid → originalPath wins.
-    const r = resolveLocalProject(
+    const r = await resolveLocalProject(
       { projectName: 'youcoded-dev', originalPath: savedDir },
       new Map([['youcoded-dev', managedDir]]),
       [],
@@ -67,8 +67,8 @@ describe('resolveLocalProject', () => {
     expect(r).toBe(savedDir);
   });
 
-  it('returns null when the project is not on this device at all', () => {
-    const r = resolveLocalProject(
+  it('returns null when the project is not on this device at all', async () => {
+    const r = await resolveLocalProject(
       { projectName: 'ghost-project', originalPath: foreignOriginalPath },
       new Map(),
       [{ path: savedDir }],
@@ -76,12 +76,22 @@ describe('resolveLocalProject', () => {
     expect(r).toBeNull();
   });
 
-  it('ignores a saved folder whose basename matches but whose path no longer exists on disk', () => {
-    const r = resolveLocalProject(
+  it('ignores a saved folder whose basename matches but whose path no longer exists on disk', async () => {
+    const r = await resolveLocalProject(
       { projectName: 'gone', originalPath: foreignOriginalPath },
       new Map(),
       [{ path: path.join(tmp, 'gone') }], // never created
     );
     expect(r).toBeNull();
+  });
+
+  it('asks the disk once per path when given a cache (the materialize sweep shares one)', async () => {
+    const cache = new Map<string, Promise<boolean>>();
+    const access = vi.spyOn(fs.promises, 'access');
+    for (let i = 0; i < 50; i++) {
+      await resolveLocalProject({ projectName: 'youcoded-dev', originalPath: savedDir }, new Map(), [], cache);
+    }
+    expect(access).toHaveBeenCalledTimes(1);
+    access.mockRestore();
   });
 });

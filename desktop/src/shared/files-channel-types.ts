@@ -79,7 +79,7 @@ export interface FilesChannelTypes {
   'project:read-context-file': { request: { projectPath: string; absolutePath: string }; response: Answer<typeof ProjectRead.readContext> };
   'project:write-context-file': { request: { projectPath: string; absolutePath: string; content: string }; response: Answer<typeof writeContextFile> };
   // ── Chat references ──
-  'chatsearch:resolve': { request: { shortIds: string[] }; response: ReturnType<typeof resolveConversations> };
+  'chatsearch:resolve': { request: { shortIds: string[] }; response: Answer<typeof resolveConversations> };
   'chatsearch:read': { request: ChatsearchReadRequest; response: Answer<typeof readConversation> };
   // ── Git (the computer's windows only) ──
   'git:file-status': { request: { projectRoot: string; relPath: string }; response: Answer<typeof GitService.gitFileStatus> };

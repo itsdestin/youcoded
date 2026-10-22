@@ -47,7 +47,7 @@ const deps = {
 };
 
 describe('readMetaFile', () => {
-  it('returns null for a missing or unparseable file, never throws', () => {
+  it('returns null for a missing or unparseable file, never throws', async () => {
     // Both are ordinary states, not bugs: no index has been built yet, or a
     // refresh was interrupted mid-write. Throwing here would take down the
     // whole resolve call, and with it every card in the message.
@@ -57,20 +57,20 @@ describe('readMetaFile', () => {
     expect(readMetaFile(dir, 'claude')).toBeNull();
   });
 
-  it('returns null for JSON that parses but is not a meta file', () => {
+  it('returns null for JSON that parses but is not a meta file', async () => {
     const dir = tmpIndex();
     fs.writeFileSync(path.join(dir, 'claude-meta.json'), JSON.stringify({ v: 1, provider: 'claude' }));
     expect(readMetaFile(dir, 'claude')).toBeNull();
   });
 
-  it('reads a well-formed file', () => {
+  it('reads a well-formed file', async () => {
     expect(Object.keys(readMetaFile(tmpIndex(), 'claude')!.conversations)).toHaveLength(3);
   });
 });
 
 describe('resolveShortIds', () => {
-  it('resolves exact, unique-prefix, ambiguous, and unknown', () => {
-    const r = resolveShortIds([A, 'c0ff', 'a3f2', 'zzzz'], { dir: tmpIndex(), ...deps });
+  it('resolves exact, unique-prefix, ambiguous, and unknown', async () => {
+    const r = await resolveShortIds([A, 'c0ff', 'a3f2', 'zzzz'], { dir: tmpIndex(), ...deps });
     expect(r[0]).toMatchObject({ status: 'ok', id: A, projectSlug: 'claude:/local/youcoded', projectPath: '/local/youcoded', missingProject: false, notSyncedYet: false });
     expect(r[1]).toMatchObject({ status: 'ok', id: C, tombstone: true });
     // 'a3f2' prefixes BOTH A and B — the CLI prints short ids, so this is a
@@ -79,7 +79,7 @@ describe('resolveShortIds', () => {
     expect(r[3]).toEqual({ status: 'unknown', query: 'zzzz' });
   });
 
-  it('prefers an exact id over a longer id it happens to prefix', () => {
+  it('prefers an exact id over a longer id it happens to prefix', async () => {
     // A full id that is also a prefix of nothing else must never come back
     // ambiguous just because some other row starts with the same characters.
     const dir = tmpIndex();
@@ -87,35 +87,35 @@ describe('resolveShortIds', () => {
     const file = JSON.parse(fs.readFileSync(path.join(dir, 'claude-meta.json'), 'utf8'));
     file.conversations[long] = entry(long);
     fs.writeFileSync(path.join(dir, 'claude-meta.json'), JSON.stringify(file));
-    expect(resolveShortIds([A], { dir, ...deps })[0]).toMatchObject({ status: 'ok', id: A });
+    expect((await resolveShortIds([A], { dir, ...deps }))[0]).toMatchObject({ status: 'ok', id: A });
   });
 
-  it('reports notSyncedYet when the folder exists but the transcript is not materialized', () => {
-    expect(resolveShortIds([B], { dir: tmpIndex(), ...deps })[0]).toMatchObject({ status: 'ok', missingProject: false, notSyncedYet: true });
+  it('reports notSyncedYet when the folder exists but the transcript is not materialized', async () => {
+    expect((await resolveShortIds([B], { dir: tmpIndex(), ...deps }))[0]).toMatchObject({ status: 'ok', missingProject: false, notSyncedYet: true });
   });
 
-  it('reports missingProject with empty slug/path when the folder is absent', () => {
-    expect(resolveShortIds([A], { dir: tmpIndex(), ...deps, resolveLocal: () => null })[0])
+  it('reports missingProject with empty slug/path when the folder is absent', async () => {
+    expect((await resolveShortIds([A], { dir: tmpIndex(), ...deps, resolveLocal: () => null }))[0])
       .toMatchObject({ status: 'ok', missingProject: true, notSyncedYet: false, projectSlug: '', projectPath: '' });
   });
 
-  it('refuses a query that is not hex — an id is the only thing this accepts', () => {
-    expect(resolveShortIds(['../etc'], { dir: tmpIndex(), ...deps })[0]).toEqual({ status: 'unknown', query: '../etc' });
-    expect(resolveShortIds(['abc'], { dir: tmpIndex(), ...deps })[0]).toEqual({ status: 'unknown', query: 'abc' });
+  it('refuses a query that is not hex — an id is the only thing this accepts', async () => {
+    expect((await resolveShortIds(['../etc'], { dir: tmpIndex(), ...deps }))[0]).toEqual({ status: 'unknown', query: '../etc' });
+    expect((await resolveShortIds(['abc'], { dir: tmpIndex(), ...deps }))[0]).toEqual({ status: 'unknown', query: 'abc' });
   });
 
-  it('answers "unknown" for every query when no index exists at all, rather than throwing', () => {
-    const r = resolveShortIds([A, 'c0ff'], { dir: '/nonexistent', ...deps });
+  it('answers "unknown" for every query when no index exists at all, rather than throwing', async () => {
+    const r = await resolveShortIds([A, 'c0ff'], { dir: '/nonexistent', ...deps });
     expect(r).toEqual([{ status: 'unknown', query: A }, { status: 'unknown', query: 'c0ff' }]);
   });
 
-  it('searches BOTH lanes, and reports the lane it found the conversation on', () => {
+  it('searches BOTH lanes, and reports the lane it found the conversation on', async () => {
     const dir = tmpIndex();
     const nid = '7a21eeee-0000-4000-8000-000000000000';
     fs.writeFileSync(path.join(dir, 'native-meta.json'), JSON.stringify({
       v: 1, provider: 'native', refreshedAt: '',
       conversations: { [nid]: entry(nid, { provider: 'native' }) },
     }));
-    expect(resolveShortIds(['7a21'], { dir, ...deps })[0]).toMatchObject({ status: 'ok', id: nid, provider: 'native' });
+    expect((await resolveShortIds(['7a21'], { dir, ...deps }))[0]).toMatchObject({ status: 'ok', id: nid, provider: 'native' });
   });
 });

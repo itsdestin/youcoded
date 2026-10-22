@@ -21,7 +21,7 @@ export interface ResumeModelSources {
    *  conversation synced in from another device. */
   storedModelId: () => Promise<string | null | undefined>;
   /** The app's saved default Claude model (Settings → defaults). */
-  defaultModel: () => string | null | undefined;
+  defaultModel: () => string | null | undefined | Promise<string | null | undefined>;
 }
 
 /** The alias to pass as `--model`, or undefined to leave the choice to Claude
@@ -39,7 +39,7 @@ export async function resolveResumeModel(src: ResumeModelSources): Promise<strin
     } catch { /* silent source — try the next */ }
   }
   try {
-    const fallback = src.defaultModel();
+    const fallback = await src.defaultModel();
     if (typeof fallback === 'string' && fallback) return fallback;
   } catch { /* no saved default */ }
   return undefined;
@@ -57,7 +57,7 @@ export async function withResumeModel<T extends { provider?: string; resumeSessi
   const model = await resolveResumeModel({
     transcriptModelId: async () => (jsonlPath ? (await readSessionTranscriptMeta(jsonlPath, false)).lastModelId : null),
     storedModelId: async () => (await getConversationStore()?.get('claude', conversationId))?.lastUsedModel?.modelId,
-    defaultModel: () => readDefaults().model,
+    defaultModel: async () => (await readDefaults()).model,
   });
   return model ? { ...opts, model } : opts;
 }

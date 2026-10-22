@@ -79,7 +79,7 @@ it('device B discovers, materializes, and (after a stop) detaches a project', as
 
   // Desktop pulls Personal → the registry file must arrive (proves ProjectSync/ syncs).
   await dEngine.syncSpace(dPersonal);
-  let registry = readProjectRegistry(desktop.personalRoot);
+  let registry = (await readProjectRegistry(desktop.personalRoot));
   expect(registry.map(e => e.name)).toEqual(['app']);
 
   // Desktop reconciles + materializes (mirrors runDiscovery, appBare stands in
@@ -102,7 +102,7 @@ it('device B discovers, materializes, and (after a stop) detaches a project', as
 
   // Desktop pulls Personal → registry says stopped → reconcile detaches, keeps folder.
   await dEngine.syncSpace(dPersonal);
-  registry = readProjectRegistry(desktop.personalRoot);
+  registry = (await readProjectRegistry(desktop.personalRoot));
   expect(registry.find(e => e.name === 'app')!.state).toBe('stopped');
   plan = planReconcile(registry, desktop.listProjects().map(p => p.name), dLiveNames());
   expect(plan.toStop).toEqual(['app']);
@@ -127,7 +127,7 @@ it('device B discovers, materializes, and (after a stop) detaches a project', as
   expect([...await readRemovedProjects(desktop.personalRoot)]).toEqual(['app']);
   // An older build reads only ProjectSync/*.json: it still sees one stopped record, so the
   // marker folder can never make it restart or drop the project.
-  expect(readProjectRegistry(desktop.personalRoot).map(e => [e.name, e.state])).toEqual([['app', 'stopped']]);
+  expect((await readProjectRegistry(desktop.personalRoot)).map(e => [e.name, e.state])).toEqual([['app', 'stopped']]);
   // Every device keeps its files, and the GitHub copy (the bare repo here) is untouched.
   expect(fs.readFileSync(path.join(desktop.projectsRoot, 'app', 'CLAUDE.md'), 'utf8')).toBe('# app\n');
   expect(fs.readFileSync(path.join(laptop.projectsRoot, 'app', 'CLAUDE.md'), 'utf8')).toBe('# app\n');

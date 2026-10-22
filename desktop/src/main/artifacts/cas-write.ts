@@ -197,7 +197,9 @@ async function atomicWrite(target: string, content: string): Promise<void> {
  */
 export async function mutateFileUnderLock(
   target: string,
-  mutate: (onDisk: string | null) => string | null,
+  // WHY may return a Promise (2026-10-22 freeze hunt): a mutator that needs async fs (claude-settings'
+  // corrupt-file backup rename) must not have to fall back to a blocking call. Sync mutators are unchanged.
+  mutate: (onDisk: string | null) => string | null | Promise<string | null>,
   // WHY: bounded/fatal-decoding readers must run INSIDE the write lock too;
   // validating outside it leaves a race with a replaced or growing document.
   readCurrent?: (target: string) => Promise<string | null>,
@@ -212,7 +214,7 @@ export async function mutateFileUnderLock(
     } catch (e: any) {
       if (e.code !== 'ENOENT') throw e;
     }
-    const next = mutate(onDisk);
+    const next = await mutate(onDisk);
     if (next !== null) await atomicWrite(target, next);
     return true;
   } finally {
