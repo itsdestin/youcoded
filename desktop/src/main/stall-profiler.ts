@@ -20,12 +20,14 @@ const WINDOW_MS = 25_000;
 const SAMPLE_INTERVAL_US = 20_000;
 const MAX_FILES = 10;
 const MAX_BYTES = 50 * 1024 * 1024;
+/** Stalls closer together than this share one saved profile instead of one file each. */
+const MIN_SAVE_GAP_MS = 20_000;
 
 export function stallProfilerDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.YOUCODED_STALL_PROFILER === '0';
 }
 
-interface Window { startedAt: number; endedAt: number; profile: object }
+interface Window { startedAt: number; endedAt: number; profile: object; saved?: boolean }
 
 export interface StallProfilerOptions {
   dir: string;
@@ -42,6 +44,9 @@ export class StallProfiler {
   private windowStart = 0;
   private done: Window[] = [];           // newest last, at most 2
   private writing: Promise<void> = Promise.resolve();
+  private lastSaveAt = 0;
+  private pending: { startedAt: number; endedAt: number; ms: number } | null = null;
+  private pendingTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
   private readonly o: Required<Omit<StallProfilerOptions, 'now'>>;
 
@@ -91,12 +96,35 @@ export class StallProfiler {
   /** A main-thread stall of `ms` ended at `endedAtMs`. Saves the profile window(s) that cover it. */
   onStall(endedAtMs: number, ms: number): Promise<void> {
     if (!this.session || ms < STALL_PROFILE_MIN_MS) return Promise.resolve();
-    const startedAtMs = endedAtMs - ms;
-    this.rotate(); // closes the window the stall is in (it is still running right now)
-    const covering = this.done.filter((w) => w.endedAt >= startedAtMs);
-    const stamp = new Date(endedAtMs).toISOString().replace(/[:.]/g, '-');
+    // WHY merged (review 2026-10-22): a burst of stalls used to close a window per stall and write a file per window,
+    // which both duplicated the same samples and pushed older, distinct profiles out of the 10-file cap. Stalls within
+    // MIN_SAVE_GAP_MS of the last save are folded into ONE later save that covers all of them.
+    const first = this.pending;
+    this.pending = { startedAt: Math.min(first?.startedAt ?? Infinity, endedAtMs - ms), endedAt: first?.endedAt ?? endedAtMs, ms: first?.ms ?? ms };
+    const wait = this.lastSaveAt + MIN_SAVE_GAP_MS - this.now();
+    if (wait > 0) {
+      if (!this.pendingTimer) {
+        this.pendingTimer = setTimeout(() => { this.pendingTimer = undefined; void this.flushPending(); }, wait);
+        this.pendingTimer.unref();
+      }
+      return Promise.resolve();
+    }
+    return this.flushPending();
+  }
+
+  private flushPending(): Promise<void> {
+    const p = this.pending;
+    this.pending = null;
+    if (!p || !this.session) return this.writing;
+    this.rotate(); // closes the window the stall(s) are in (still running right now)
+    // Each window is written at most once, however many stalls it covers.
+    const covering = this.done.filter((w) => w.endedAt >= p.startedAt && !w.saved);
+    if (covering.length === 0) return this.writing;
+    this.lastSaveAt = this.now();
+    const stamp = new Date(p.endedAt).toISOString().replace(/[:.]/g, '-');
     covering.forEach((w, i) => {
-      const name = `stall-${stamp}-${Math.round(ms)}ms${covering.length > 1 ? `-part${i + 1}` : ''}.cpuprofile`;
+      w.saved = true;
+      const name = `stall-${stamp}-${Math.round(p.ms)}ms${covering.length > 1 ? `-part${i + 1}` : ''}.cpuprofile`;
       this.writing = this.writing.then(() => this.save(name, w.profile)).catch(() => {});
     });
     return this.writing;
@@ -132,6 +160,8 @@ export class StallProfiler {
 
   /** Quit: stop profiling and wait for any file being written. */
   async stop(): Promise<void> {
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = undefined; }
+    if (this.pending) await this.flushPending().catch(() => {}); // a stall waiting for its save is not lost at quit
     this.teardown();
     this.done = [];
     await this.writing.catch(() => {});

@@ -42,22 +42,52 @@ describe('StallProfiler', () => {
 
   it('keeps at most maxFiles files, deleting the oldest', async () => {
     const dir = tmp();
-    const p = new StallProfiler({ dir, maxFiles: 3 });
+    let clock = Date.parse('2026-10-22T10:00:00Z');
+    const p = new StallProfiler({ dir, maxFiles: 3, now: () => clock });
     p.start();
     for (let i = 0; i < 6; i++) {
-      await p.onStall(Date.parse('2026-10-22T10:00:00Z') + i * 60_000, 3000);
+      clock += 60_000;                                   // each stall a minute apart: past the burst gap
+      await p.onStall(clock, 3000);
       await new Promise((r) => setTimeout(r, 15)); // distinct mtimes
     }
     await p.stop();
     const files = fs.readdirSync(dir).sort();
     expect(files).toHaveLength(3);
     // The oldest stalls' files are gone; the newest stall's remain. (A stall can save two files: the previous window too.)
-    expect(files.some((f) => /T10-0[012]-00/.test(f))).toBe(false);
-    expect(files.some((f) => f.includes('T10-05-00'))).toBe(true);
+    expect(files.some((f) => /T10-0[123]-00/.test(f))).toBe(false);
+    expect(files.some((f) => f.includes('T10-06-00'))).toBe(true);
   });
 
   it('YOUCODED_STALL_PROFILER=0 turns it off entirely', () => {
     expect(stallProfilerDisabled({ YOUCODED_STALL_PROFILER: '0' })).toBe(true);
     expect(startStallProfiler({ dir: tmp() }, { YOUCODED_STALL_PROFILER: '0' })).toBeNull();
+  });
+
+  it('a burst of stalls shares one saved profile and never writes the same window twice', async () => {
+    const dir = tmp();
+    let clock = Date.parse('2026-10-22T10:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, maxFiles: 10 });
+    p.start();
+    await p.onStall(clock, 3000);                          // first stall: saved at once
+    const afterFirst = fs.readdirSync(dir).length;
+    for (let i = 0; i < 8; i++) { clock += 1000; await p.onStall(clock, 2500); }   // eight more inside the gap
+    expect(fs.readdirSync(dir).length).toBe(afterFirst);   // nothing new written during the burst
+    await p.stop();                                         // quit saves the merged one stall profile
+    const names = fs.readdirSync(dir);
+    expect(names.length).toBeLessThanOrEqual(afterFirst + 2);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('older, distinct profiles survive a burst (the cap is not churned by duplicates)', async () => {
+    const dir = tmp();
+    let clock = Date.parse('2026-10-22T10:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, maxFiles: 10 });
+    p.start();
+    for (let i = 0; i < 3; i++) { clock += 60_000; await p.onStall(clock, 3000); }   // three well-spaced stalls
+    const before = fs.readdirSync(dir).filter((n) => !n.includes('T10-03')).sort();
+    for (let i = 0; i < 20; i++) { clock += 500; await p.onStall(clock, 2200); }       // a burst
+    await p.stop();
+    const after = new Set(fs.readdirSync(dir));
+    for (const n of before) expect(after.has(n)).toBe(true);
   });
 });
