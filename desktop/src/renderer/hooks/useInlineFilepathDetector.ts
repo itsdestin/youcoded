@@ -117,6 +117,17 @@ export function detectFilepaths(text: string): FilepathMatch[] {
   // Spaced whole-line paths go first and win any overlap: without that, the
   // plain rule would pill a meaningless tail of the same line.
   const out: FilepathMatch[] = spacedLinePaths(text);
+  // WHY a moving pointer instead of `out.some(...)` per match: that scan made a text with
+  // thousands of paths (a pasted log) quadratic — seconds at ~50k matches. Every pass below
+  // yields matches in increasing, non-overlapping order (regex exec resumes after its last
+  // match), and `out` starts sorted and non-overlapping, so one forward pointer finds the
+  // only entry a candidate can collide with. Results are identical to the old scan.
+  const spaced = out.slice();
+  let sp = 0;
+  const hitsSpaced = (start: number, end: number): boolean => {
+    while (sp < spaced.length && spaced[sp].end <= start) sp++;
+    return sp < spaced.length && spaced[sp].start < end;
+  };
   PATH_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PATH_RE.exec(text))) {
@@ -125,20 +136,28 @@ export function detectFilepaths(text: string): FilepathMatch[] {
     if (firstSegmentIsDomain(p)) continue;
     const start = m.index;
     const end = m.index + m[0].length;
-    if (out.some((o) => start < o.end && o.start < end)) continue;
+    if (hitsSpaced(start, end)) continue;
     out.push({ path: p, start, end });
   }
   // Paths ending in a known extensionless file (see KNOWN_EXTENSIONLESS_NAMES).
   // Their terminator lookahead refuses a following `.x`, so they can never
   // overlap an extension match; the overlap check is belt and braces.
   KNOWN_NAME_PATH_RE.lastIndex = 0;
+  // Pass 2 checks against everything accepted so far (spaced + plain), merged into start
+  // order, with the same forward pointer; its own accepted matches cannot overlap each other.
+  const earlier = out.slice().sort((a, b) => a.start - b.start);
+  let ep = 0;
+  let lastKnown: FilepathMatch | null = null;
   while ((m = KNOWN_NAME_PATH_RE.exec(text))) {
     const p = m[1];
     const start = m.index;
     const end = m.index + m[0].length;
     if (firstSegmentIsDomain(p)) continue;
-    if (out.some((o) => start < o.end && o.start < end)) continue;
-    out.push({ path: p, start, end });
+    while (ep < earlier.length && earlier[ep].end <= start) ep++;
+    if (ep < earlier.length && earlier[ep].start < end) continue;
+    if (lastKnown && start < lastKnown.end && lastKnown.start < end) continue;
+    lastKnown = { path: p, start, end };
+    out.push(lastKnown);
   }
   return out.sort((a, b) => a.start - b.start);
 }
