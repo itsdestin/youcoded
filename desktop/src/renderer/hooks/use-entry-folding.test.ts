@@ -41,6 +41,28 @@ function entry(key: string, height: number) {
 }
 
 describe('useEntryFolding', () => {
+  // Freeze hunt 2026-10-22, item 3: a long conversation opens with its older entries already folded.
+  it('starts seeded entries folded at their estimated height, and draws them when they come near', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old-1', 300], ['old-2', 500]]));
+    expect(result.current.isFolded('old-1')).toBe(true);
+    expect(result.current.heightOf('old-2')).toBe(500);
+    expect(result.current.isFolded('new-1')).toBe(false);
+    const a = entry('old-1', 300), b = entry('old-2', 500);
+    // The observer reports old-1 near the viewport and old-2 far away: only old-1 is drawn.
+    act(() => { result.current.registerEntry(a); result.current.registerEntry(b); fire([
+      { target: a, isIntersecting: true }, { target: b, isIntersecting: false },
+    ]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+    expect(result.current.isFolded('old-1')).toBe(false);
+    expect(result.current.isFolded('old-2')).toBe(true);
+  });
+
+  it('ignores a later change of the seed (it is read once, on mount)', () => {
+    const { result, rerender } = renderHook(({ seed }) => useEntryFolding(true, rootRef, true, seed), { initialProps: { seed: [['a', 100]] as Array<[string, number]> } });
+    rerender({ seed: [['b', 100]] });
+    expect(result.current.isFolded('a')).toBe(true);
+    expect(result.current.isFolded('b')).toBe(false);
+  });
+
   it('reveals just the requested row and pins it until release, then folds normally', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     const a = entry('a', 90), b = entry('b', 100);

@@ -111,14 +111,25 @@ export function useEntryFolding(
   enabled: boolean,
   rootRef: React.RefObject<HTMLElement | null>,
   active = true,
+  /**
+   * Entries that start FOLDED on the very first render, with the height to hold for them
+   * (state/first-draw-plan.ts). Read once, on mount: later changes are ignored. WHY: a long
+   * conversation draws only its newest entries on open; the observer below draws the rest
+   * as they come near the viewport, exactly as it does for entries folded later.
+   */
+  seed?: ReadonlyArray<readonly [string, number]>,
 ): EntryFolding {
-  const [state, setState] = useState<FoldState>(EMPTY);
+  const [state, setState] = useState<FoldState>(() => (seed?.length
+    ? { folded: new Set(seed.map(([k]) => k)), heights: new Map(seed) }
+    : EMPTY));
 
   // Everything the observer writes lives in refs. A setState per intersection
   // would be one render per entry per scroll — the observer fires for hundreds
   // of elements at a time, and this hook exists to make rendering cheaper.
-  const heights = useRef(new Map<string, number>());
-  const folded = useRef(new Set<string>());
+  // WHY seeded from the same list as `state`: flushFold/flushUnfold read these refs, not the state.
+  const heights = useRef<Map<string, number>>(null as unknown as Map<string, number>);
+  const folded = useRef<Set<string>>(null as unknown as Set<string>);
+  if (heights.current === null) { heights.current = new Map(state.heights); folded.current = new Set(state.folded); }
   // MEMBERSHIP, not a queue — and that distinction is the whole correctness
   // argument. The first version drained a `pendingFold` queue and cleared it,
   // skipping any entry with no measured height yet. An entry prepended above the
