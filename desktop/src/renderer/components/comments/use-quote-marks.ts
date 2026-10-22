@@ -204,6 +204,9 @@ function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make:
   return out;
 }
 
+// Set by CommentableDocument while a big file is still being drawn in slices.
+const LOADING_ATTR = 'data-doc-loading';
+
 /**
  * Wraps each visible comment's quote text in `<mark>`s inside `container` —
  * one per text node the quote touches, all sharing `data-comment-id`, so a
@@ -257,11 +260,16 @@ export function useQuoteMarks(
     // during our own pass, so our <mark> wrapping never re-triggers it.
     const observer = new MutationObserver(() => pass());
     const pass = () => {
+      // Still being drawn a slice at a time: anchoring now would judge comments against half
+      // the page. The attribute change below fires this again once drawing is finished.
+      if (root.hasAttribute(LOADING_ATTR)) return;
       observer.disconnect();
       setMarks(markAll(root, commentsRef.current));
       observer.takeRecords();
-      observer.observe(root, { childList: true, subtree: true });
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: [LOADING_ATTR] });
     };
+    // Watch the loading flag from the start, so finishing the draw triggers the first real pass.
+    observer.observe(root, { attributes: true, attributeFilter: [LOADING_ATTR] });
     pass();
     return () => {
       observer.disconnect();

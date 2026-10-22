@@ -923,6 +923,75 @@ export function countLines(text: string): number {
   return n + 1;
 }
 
+// ---------------------------------------------------------------------------
+// Drawing a big FINISHED document a slice at a time (the file viewer).
+
+/**
+ * WHY (freeze hunt 2026-10-22, item 4): a 1 MB .md / .txt went through ONE
+ * synchronous draw - 5-8 s frozen. Above PROGRESSIVE_MIN_CHARS the viewer hands the
+ * renderer a GROWING PREFIX of the file - the first PROGRESSIVE_FIRST_CHARS, then about
+ * PROGRESSIVE_BATCH_CHARS more per animation frame - exactly as a streaming reply grows,
+ * so it reuses the streaming path's rule that finished blocks are drawn once and only the
+ * new tail is parsed. (Cutting the finished text into blocks up front instead costs
+ * about as much as drawing it: measured 3.3 s for 1 MB.) The page ends identical.
+ */
+export const PROGRESSIVE_MIN_CHARS = 60_000;
+export const PROGRESSIVE_FIRST_CHARS = 12_000;
+export const PROGRESSIVE_BATCH_CHARS = 6_000;
+
+/**
+ * Whether a text may be drawn as a growing prefix. Footnotes and link definitions are the two
+ * things a block can depend on from FAR below it: a `[x]` above its definition would show as
+ * plain text until the slice holding the definition arrives, and a footnote makes the
+ * stream path redraw everything at once. Any line that looks like one (loosely, also inside a
+ * quote or list, also a false alarm inside a code block) sends the file down the whole-draw
+ * path it used before - the page is then identical, only not sliced.
+ */
+export function canDrawInSlices(text: string): boolean {
+  return !/^[ \t>]*\[[^\]\n]+\]:/m.test(text);
+}
+
+/**
+ * Every offset where a growing prefix of `text` may end: just after a blank line that is not inside a
+ * code fence. WHY blank lines: a prefix cut there reads, block for block, exactly as the whole text does,
+ * and WHY not in a fence: a fence cut open would be redrawn whole at every slice. Ascending; ends
+ * before `text.length` (the caller adds the end itself). One linear pass, no parsing.
+ */
+export function sliceCuts(text: string): number[] {
+  const cuts: number[] = [];
+  let fence: { ch: string; len: number } | null = null;
+  let at = 0;
+  while (at < text.length) {
+    let nl = text.indexOf('\n', at);
+    if (nl === -1) nl = text.length - 1;
+    const line = text.slice(at, nl + 1);
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/[\r\n]+$/, ''));
+    if (fence) {
+      if (m && m[1][0] === fence.ch && m[1].length >= fence.len && m[2].trim() === '') fence = null;
+    } else if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
+      fence = { ch: m[1][0], len: m[1].length };
+    } else {
+      const blank = /^[ \t\r]*\n?$/.test(line);
+      if (blank && at > 0 && nl + 1 < text.length) cuts.push(nl + 1);
+    }
+    at = nl + 1;
+  }
+  return cuts;
+}
+
+/** The end of the slice after the one ending at `from`: the first cut at least `budget` further on, else the end. */
+export function nextSliceEnd(cuts: readonly number[], from: number, budget: number, length: number): number {
+  let lo = 0;
+  let hi = cuts.length;
+  const target = from + budget;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cuts[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < cuts.length ? cuts[lo] : length;
+}
+
 /** The frozen head cut into its chunks of OPEN_FENCE_CHUNK_LINES lines (each line ends with "\n"). */
 export function fenceChunks(frozen: string): string[] {
   const chunks: string[] = [];

@@ -15,7 +15,7 @@ import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
   startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, scanOpenList, listSplitOf, type ListScan, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
-  countLines, overHighlightLimit,
+  countLines, overHighlightLimit, canDrawInSlices, sliceCuts, nextSliceEnd, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_BATCH_CHARS,
 } from './markdown-blocks';
 
 /**
@@ -659,6 +659,13 @@ interface Props {
    * stopped and history messages, which draw as one piece.
    */
   live?: boolean;
+  /**
+   * A big FINISHED document (the file viewer): draw the first screenful at once and the rest in
+   * small slices, one per animation frame, instead of one long freeze. Ends as the same page.
+   */
+  progressive?: boolean;
+  /** Called once with true when a progressive draw has drawn everything (false while it is still going). */
+  onProgressive?: (done: boolean) => void;
 }
 
 /**
@@ -804,7 +811,43 @@ const FrozenFenceChunk = React.memo(function FrozenFenceChunk({ source, rehypePl
   );
 });
 
-export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental, live = false }: Props) {
+/** Groups per memoised page of a progressively drawn file (see the render of MarkdownContent). */
+const GROUP_PAGE = 100;
+type DrawnGroupView = StreamView['groups'][number];
+
+/**
+ * One page of a progressive draw: the same keyed Fragment per group as the streaming path
+ * (so the finished DOM is the same), skipped whole while its groups are the same objects.
+ * WHY a group is the same object when unchanged: advanceStream's `finish` hands back the previous
+ * group for any group whose text and definitions did not change.
+ */
+const GroupPage = React.memo(function GroupPage({ groups, startsPainted, rehypePlugins, components }: {
+  groups: DrawnGroupView[];
+  startsPainted: boolean;
+  rehypePlugins: PluggableList;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}) {
+  let painted = startsPainted;
+  return (
+    <>
+      {groups.map((g) => {
+        const newline = g.paints && painted;
+        painted ||= g.paints;
+        return (
+          <React.Fragment key={g.key}>
+            {newline ? '\n' : null}
+            {g.paints && (
+              <MarkdownChunk source={g.draw} defs={g.defs} live={false} listScan={null} fenceAt={g.fenceAt} rehypePlugins={rehypePlugins} components={components} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}, (a, b) => a.startsPainted === b.startsPainted && a.rehypePlugins === b.rehypePlugins && a.components === b.components
+  && a.groups.length === b.groups.length && a.groups.every((g, i) => g === b.groups[i]));
+
+export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental, live = false, progressive = false, onProgressive }: Props) {
   // Memoize the rehype plugin array and the component map by sessionId so that:
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
@@ -854,18 +897,50 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // made during render is discarded along with that render. React re-runs this
   // function at once with the new view, before drawing any child, so the cost
   // is one extra call of this function, not a second draw.
-  const [streamState, setStreamState] = useState<StreamView>(() => startStream(content));
+  const [streamState, setStreamState] = useState<StreamView>(() => startStream(
+    // A progressive draw starts from its first slice, not the whole text (see the slices block below).
+    progressive && canDrawInSlices(content) ? content.slice(0, nextSliceEnd(sliceCuts(content), 0, PROGRESSIVE_FIRST_CHARS, content.length)) : content,
+  ));
   // Where the last group's scan as a growing list has got to, so an update reads only the new lines.
   // WHY a ref: it only remembers progress; scanOpenList checks the text itself, so the answer is the
   // same with or without it and a render React discards cannot leave anything stale.
   const listScanRef = useRef<ListScan | null>(null);
+  // Progressive draw of a finished document (file viewer; freeze hunt 2026-10-22, item 4): the text is
+  // handed to the streaming path below as a PREFIX that grows by a slice per animation frame (see
+  // PROGRESSIVE_* in markdown-blocks.ts for why a prefix and not a pre-cut document). A text a prefix
+  // cannot draw faithfully (canDrawInSlices) is drawn whole, as before.
+  const cuts = useMemo(() => (progressive && canDrawInSlices(content) ? sliceCuts(content) : null), [progressive, content]);
+  const [shown, setShown] = useState<{ content: string; end: number }>({ content: '', end: 0 });
+  let shownEnd = content.length;
+  if (cuts) {
+    shownEnd = shown.content === content ? shown.end : nextSliceEnd(cuts, 0, PROGRESSIVE_FIRST_CHARS, content.length);
+    // WHY state set during render (the same pattern as streamState above): a new text restarts the slices.
+    if (shown.content !== content) setShown({ content, end: shownEnd });
+  }
+  const progressiveDone = shownEnd >= content.length;
+  const onProgressiveRef = useRef(onProgressive);
+  onProgressiveRef.current = onProgressive;
+  useEffect(() => {
+    if (!progressive) return;
+    onProgressiveRef.current?.(progressiveDone);
+    if (!cuts || progressiveDone) return;
+    // WHY rAF: one slice per frame keeps scrolling and typing alive between slices, and a hidden
+    // window stops drawing altogether (performance.md rule 2).
+    const id = requestAnimationFrame(() => {
+      setShown((cur) => (cur.content === content ? { content, end: nextSliceEnd(cuts, cur.end, PROGRESSIVE_BATCH_CHARS, content.length) } : cur));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [progressive, cuts, content, progressiveDone, shownEnd]);
+  const drawnText = cuts ? content.slice(0, shownEnd) : content;
+  const sliced = !!cuts;
+
   let stream = streamState;
-  if (incremental && stream.drawn !== content) {
-    stream = advanceStream(stream, content);
+  if ((incremental || sliced) && stream.drawn !== drawnText) {
+    stream = advanceStream(stream, drawnText);
     setStreamState(stream);
   }
 
-  if (incremental) {
+  if (incremental || sliced) {
     // WHY a keyed Fragment per group, not a wrapper element: the groups' elements
     // land as direct siblings exactly as one whole-message render would put them,
     // so `.assistant-bubble > *`, `last:mb-0` and every other selector see the
@@ -877,6 +952,21 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     // same element the single-document render used, so nothing drawn before the
     // message started growing is rebuilt.
     let painted = false;
+    // A progressively drawn big file can hold thousands of groups. Walking every one of them as its own
+    // element on every slice made the work per slice grow with the file (a 1 MB file took 3x longer sliced
+    // than drawn whole), so they are handed to memoised PAGES of GROUP_PAGE groups: a finished page is
+    // skipped with one comparison. Pages are by position and only ever appended to, so no group changes
+    // page and nothing already drawn is rebuilt. (Not for a streaming reply: it is short, and a page
+    // boundary would add a wrapper to a path that is already tuned.)
+    if (sliced && !incremental) {
+      const pages: React.ReactNode[] = [];
+      for (let at = 0; at < stream.groups.length; at += GROUP_PAGE) {
+        const slice = stream.groups.slice(at, at + GROUP_PAGE);
+        pages.push(<GroupPage key={slice[0].key} groups={slice} startsPainted={painted} rehypePlugins={rehypePlugins} components={components} />);
+        painted ||= slice.some((g) => g.paints);
+      }
+      return <>{pages}</>;
+    }
     // WHY the scan is made here and not by the chunk: only the LAST group of a live reply can be a list
     // that is still growing. When the reply ends the scan turns null and just that group is redrawn whole;
     // a plain `live` flag would have redrawn the last group of every reply (it stays null for those).
