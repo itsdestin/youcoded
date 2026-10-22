@@ -1,0 +1,86 @@
+name: Website
+
+# Publishes the website (docs/) and, on every publish, rebuilds its live demo (docs/site) and the
+# demo's stills (docs/media/embed-*) from the NEWEST OFFICIAL RELEASE -- so the demo always shows the
+# app people download, with nothing to remember at release time (Destin, 2026-10-21).
+# Runs when the site changes on master, after every successful Desktop Release (the last platform to
+# finish uploading), and on demand. The committed docs/site is only the fallback copy; this job
+# replaces it in what it publishes. Requires Settings -> Pages -> Source: GitHub Actions.
+on:
+  push:
+    branches: [master]
+    paths: ['docs/**', '.github/workflows/site-deploy.yml']
+  # A pull request touching the site builds and checks it (never publishes), so a broken demo or
+  # download script is caught before it merges.
+  pull_request:
+    paths: ['docs/**', '.github/workflows/site-deploy.yml']
+  workflow_run:
+    workflows: ['Desktop Release']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One publish at a time, and a newer one never cancels a publish halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the release tags
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Find the newest official release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # /releases/latest never returns a pre-release or a draft.
+        run: |
+          tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building the demo from $tag"
+      - name: Check out that release's app
+        run: git worktree add --detach "$RUNNER_TEMP/app" "${{ steps.release.outputs.tag }}"
+      - name: Install the release's app dependencies
+        working-directory: ${{ runner.temp }}/app/desktop
+        env:
+          # The demo is a web build: Electron's runtime download is not needed.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+      - name: Build the live demo
+        working-directory: ${{ runner.temp }}/app/desktop
+        run: npm run build:site
+      - name: Put the demo in the site
+        run: rsync -a --delete "$RUNNER_TEMP/app/docs/site/" docs/site/
+      - name: Shoot the demo's stills
+        run: node docs/tools/embed-stills.mjs docs
+      - name: Check the site's own scripts
+        # The site tests load jsdom from desktop/node_modules; reuse the release checkout's install.
+        run: |
+          ln -s "$RUNNER_TEMP/app/desktop/node_modules" desktop/node_modules
+          node --test docs/tools/*.test.mjs
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    # Pull requests and runs on other branches build and check only; the site publishes from master.
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
