@@ -5559,7 +5559,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it('caps replay at SPECIALIST_SPAWN_BUDGET_PER_SESSION records', async () => {
+    it('replays records beyond one process\'s spawn budget, newest included (the ledger outlives the per-process budget)', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
         store, factory, NO_CONTEXT, async () => null, async () => null,
@@ -5567,11 +5567,11 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
-      // One more record than the lifetime spawn budget allows. In production
-      // the ledger can never actually hold more than the budget for one
-      // parent (trySpendSpecialistSpawnBudget gates every spawn BEFORE
-      // recordStart ever runs) — this proves the defensive cap holds even so.
-      for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION + 1; i++) {
+      // The spawn budget (30) resets every app start while the ledger file keeps
+      // growing, so a long-lived conversation holds more records than the budget.
+      // The old test pinned a cap that kept the OLDEST 30 and hid the newest runs.
+      const total = SPECIALIST_SPAWN_BUDGET_PER_SESSION + 5;
+      for (let i = 0; i < total; i++) {
         await (h as any).ledger.recordStart(root, 'root-1', {
           childId: `child-${i}`, parentToolCallId: `tc-${i}`, agentType: 'explorer', title: `T${i}`,
           workDir: root, description: 'd', background: true,
@@ -5579,7 +5579,9 @@ describe('NativeSessionHost', () => {
         });
       }
 
-      expect(h.specialistRunsFor('root-1')).toHaveLength(SPECIALIST_SPAWN_BUDGET_PER_SESSION);
+      const runs = h.specialistRunsFor('root-1');
+      expect(runs).toHaveLength(total);
+      expect(runs.some((r) => r.childId === `child-${total - 1}`)).toBe(true);
 
       await h.destroyAll();
     });

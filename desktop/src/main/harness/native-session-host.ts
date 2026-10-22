@@ -274,6 +274,10 @@ export interface SpecialistRunResult {
  *  worked for several turns (Destin, 2026-09-16). */
 export interface SpecialistRunError extends Error {
   specialistUsage?: SpecialistRunResult['usage'];
+  /** Audit 2026-10-22 B1: the run ended because the USER pressed Stop (the
+   *  child saw a user-interrupt), not because anything went wrong. The ledger
+   *  records that as 'interrupted' ("Stopped"), never 'failed'. */
+  stoppedByUser?: true;
 }
 
 interface LiveEntry {
@@ -371,6 +375,13 @@ function persistedUuidsAfterLastClear(events: TranscriptEvent[]): string[] {
   events.forEach((event, index) => { if (event.type === 'context-clear') start = index + 1; });
   return events.slice(start).map((event) => event.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0);
 }
+
+/** Upper bound on ledger records replayed to a screen (newest kept). */
+const SPECIALIST_REPLAY_MAX_RECORDS = 500;
+
+/** Pauses between retries of a failed run-OUTCOME ledger write (audit B7):
+ *  three bounded retries, async, so a busy lock never wedges the Task call. */
+const OUTCOME_RETRY_DELAYS_MS: readonly number[] = [500, 2_000, 8_000];
 
 // The no-op opener kickIdleDeliveryPass dispatches purely to reach runTurns'
 // delivery tail. A named constant so runTurns can tell "a user started this
@@ -1021,6 +1032,8 @@ export class NativeSessionHost extends EventEmitter {
     // exact packet for token-checked unstarted rollback; this host has not
     // called runDelegation yet and must never restore a stale record snapshot.
     // Without a ledger, only the existing pre-lock snapshot is available.
+    // A new run starts: any earlier unwritten outcome (B7) no longer applies.
+    this.unwrittenOutcomes.delete(opts.childId);
     let missedSteers: string[];
     if (this.ledger && parent.cwd) {
       try {
@@ -1058,6 +1071,14 @@ export class NativeSessionHost extends EventEmitter {
           // for the identical reason (delegation-ledger.ts's own comment).
           injectionAttempted: undefined, reportPath: undefined, rawReport: undefined,
           steps: undefined, stale: undefined, claimedBy: undefined, claimedAt: undefined,
+          // Audit 2026-10-22 B2/B3: say plainly that this is a NEW run of the
+          // same helper and which card carries it. `parentToolCallId` is left
+          // alone (it is the card's identity and where a background report is
+          // folded); the live activity and asks go to the resume call's card,
+          // so that is what `activeToolCallId` names.
+          runNumber: (record.runNumber ?? 1) + 1,
+          activeToolCallId: opts.parentToolCallId,
+          resumedAt: Date.now(),
         });
       } catch (err) {
         // No child turn has started, so tear down only this live construction.
@@ -1259,13 +1280,16 @@ export class NativeSessionHost extends EventEmitter {
         // mutateJson call (see update()'s own WHY) — they now commit
         // together or, on a lock failure, neither commits, same as before
         // this field existed.
+        const completion: Partial<DelegationRecord> = {
+          status: 'completed', endedAt: Date.now(), steps: run.steps, rawReport: run.report,
+          ...(reportPath ? { reportPath } : {}),
+        };
         try {
-          await this.ledger.update(parentCwd, parentId, childId, {
-            status: 'completed', endedAt: Date.now(), steps: run.steps, rawReport: run.report,
-            ...(reportPath ? { reportPath } : {}),
-          }, missedSteers);
+          await this.ledger.update(parentCwd, parentId, childId, completion, missedSteers);
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record specialist completion (including any steers missed during this run) in the ledger — the report is still returned to the caller', { childId, parentId, error: String(ledgerErr) });
+          // B7: never leave the card spinning, and keep trying in the background.
+          this.recoverOutcomeWrite(parentCwd, parentId, childId, completion, missedSteers, false);
         }
       }
       return run;
@@ -1297,14 +1321,21 @@ export class NativeSessionHost extends EventEmitter {
         // mutateJson call: they commit together or, on failure, neither
         // does (see updateIfRunning's own WHY for why the append half still
         // isn't gated on `status === 'running'` the way the patch half is).
-        try {
-          await this.ledger.updateIfRunning(parentCwd, parentId, childId, {
+        // B1: a run that ended because the user pressed Stop is "interrupted"
+        // (the card says Stopped), not "failed" — failureText stays unset so
+        // nothing reads as an error.
+        const outcome: Partial<DelegationRecord> = (err as SpecialistRunError)?.stoppedByUser
+          ? { status: 'interrupted', endedAt: Date.now() }
+          : {
             // Specific and accurate (error-message-standards.md): the real
             // thrown message, never a guessed cause.
             status: 'failed', endedAt: Date.now(), failureText: err?.message ?? String(err),
-          }, missedSteers);
+          };
+        try {
+          await this.ledger.updateIfRunning(parentCwd, parentId, childId, outcome, missedSteers);
         } catch (ledgerErr) {
           log('ERROR', 'NativeSessionHost', 'failed to record specialist failure (including any steers missed during this run) in the ledger', { childId, parentId, error: String(ledgerErr) });
+          this.recoverOutcomeWrite(parentCwd, parentId, childId, outcome, missedSteers, true);
         }
       }
       throw err;
@@ -1321,6 +1352,60 @@ export class NativeSessionHost extends EventEmitter {
         log('ERROR', 'NativeSessionHost', 'specialist teardown failed after the run finished', { childId, parentId, error: String(err) });
       }
     }
+  }
+
+  /** Pauses between outcome-write retries; an instance field only so a test can
+   *  shorten them. */
+  private outcomeRetryDelaysMs: readonly number[] = OUTCOME_RETRY_DELAYS_MS;
+  /** Final statuses that could not be written (B7), by childId — see runViewFor. */
+  private readonly unwrittenOutcomes = new Map<string, Partial<DelegationRecord>>();
+
+  /** Audit 2026-10-22 B7. A run's final status write (completed / failed /
+   *  interrupted) failed — typically a busy file lock. Before this, it was only
+   *  logged: the ledger kept saying 'running', so the helper's card spun until the
+   *  app restarted. Two things now happen, neither blocking the caller:
+   *   1. the screens are told the TRUE status at once, from memory (the same
+   *      event a successful write would have produced), so nothing spins;
+   *   2. the write is retried a bounded number of times (async, unref'd timers),
+   *      stopping early once the record already shows a finished status.
+   *  If every retry fails the in-memory push above is all that is left, and the
+   *  next restart's reconcile marks the stale 'running' row interrupted. */
+  private recoverOutcomeWrite(
+    parentCwd: string, parentId: string, childId: string, patch: Partial<DelegationRecord>,
+    appendSteers: string[], onlyIfRunning: boolean,
+  ): void {
+    const ledger = this.ledger;
+    if (!ledger) return;
+    this.unwrittenOutcomes.set(childId, patch);
+    try {
+      const base = ledger.listFor(parentCwd, parentId).find((r) => r.childId === childId);
+      if (base) this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: toRunView({ ...base, ...patch }, { held: !!this.live.get(parentId)?.holdDeliveries }) } satisfies SpecialistsEvent);
+    } catch (readErr) {
+      log('WARN', 'NativeSessionHost', 'could not read the ledger to push an in-memory outcome', { childId, parentId, error: String(readErr) });
+    }
+    const delays = this.outcomeRetryDelaysMs;
+    const attempt = (n: number): void => {
+      if (n >= delays.length) {
+        log('ERROR', 'NativeSessionHost', 'gave up recording a specialist outcome in the ledger after retries — the card shows the in-memory outcome', { childId, parentId });
+        return;
+      }
+      const t = setTimeout(() => {
+        void (async () => {
+          try {
+            // A retry must not re-append steers or overwrite a newer status when an
+            // earlier attempt actually committed before it threw.
+            const cur = ledger.listFor(parentCwd, parentId).find((r) => r.childId === childId);
+            if (!cur || cur.status !== 'running') return;
+            if (onlyIfRunning) await ledger.updateIfRunning(parentCwd, parentId, childId, patch, appendSteers);
+            else await ledger.update(parentCwd, parentId, childId, patch, appendSteers);
+          } catch {
+            attempt(n + 1);
+          }
+        })();
+      }, delays[n]);
+      t.unref();
+    };
+    attempt(0);
   }
 
   /** Report one delegated run's spend to the parent that paid for it (spec §2).
@@ -1957,7 +2042,7 @@ export class NativeSessionHost extends EventEmitter {
      *  can. */
     const throwIfEnded = (): void => {
       if (errorText) throw new Error(`${errorText} (specialist session ${childId})`);
-      if (interrupted) throw new Error(`the specialist was stopped before it could report (specialist session ${childId}).`);
+      if (interrupted) throw Object.assign(new Error(`the specialist was stopped before it could report (specialist session ${childId}).`), { stoppedByUser: true as const });
       // The parent was destroyed / quiesced mid-run, which cascade-destroys its
       // children — there is no session left to nudge or read from.
       if (!this.live.has(childId)) throw new Error(`the specialist session ${childId} was torn down before it could report.`);
@@ -2310,7 +2395,7 @@ export class NativeSessionHost extends EventEmitter {
     this.ledger = nativeHome
       ? new DelegationLedger(nativeHome, (cwd, parentId, changed) => {
           for (const rec of changed) {
-            this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: toRunView(rec) } satisfies SpecialistsEvent);
+            this.emit('specialists-event', { kind: 'run', sessionId: parentId, run: this.runViewFor(parentId, rec) } satisfies SpecialistsEvent);
           }
         })
       : undefined;
@@ -4771,7 +4856,16 @@ export class NativeSessionHost extends EventEmitter {
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
-    if (entry && !entry.parentSessionId) entry.holdDeliveries = true;
+    if (entry && !entry.parentSessionId) {
+      entry.holdDeliveries = true;
+      // B8: finished background helpers whose reports are now held back should
+      // say so — nothing else would push their cards (no ledger write happens).
+      for (const rec of records) {
+        if (rec.background && !rec.delivered && (rec.status === 'completed' || rec.status === 'failed')) {
+          this.emit('specialists-event', { kind: 'run', sessionId, run: this.runViewFor(sessionId, rec) } satisfies SpecialistsEvent);
+        }
+      }
+    }
     return !!entry;
   }
 
@@ -5030,19 +5124,36 @@ export class NativeSessionHost extends EventEmitter {
    *  left to act on their status, so this matches that same "only when it IS
    *  live" contract instead of inventing a second one.
    *
-   *  Capped at SPECIALIST_SPAWN_BUDGET_PER_SESSION defensively: in
-   *  production the ledger can never hold more than that many records for
-   *  one parent — trySpendSpecialistSpawnBudget spends the budget BEFORE
-   *  recordStart ever runs (see its own comment), so every recordStart call
-   *  is already budget-gated. This slice is a belt-and-braces bound against
-   *  replay ever growing past what a single turn could actually have
-   *  spawned, not a correction for a real overflow. */
+   *  Bounded to the newest SPECIALIST_REPLAY_MAX_RECORDS. NOT the spawn budget:
+   *  that budget resets with every app start while the ledger keeps growing, so
+   *  capping at it (as this once did, keeping the OLDEST 30) hid the newest runs
+   *  — see the slice below. */
   specialistRunsFor(sessionId: string): SpecialistRunView[] {
     const entry = this.live.get(sessionId);
     if (!entry || !this.ledger) return [];
+    // WHY newest-N, not the first 30 (audit 2026-10-22 B5): the old
+    // `.slice(0, 30)` kept the OLDEST records. The spawn budget (30) resets with
+    // every app start while the ledger file keeps growing (real ledgers hold
+    // 31-82 records), so the newest runs — including ones still running — got no
+    // status on reopen, on a phone or in a second window. A generous bound on
+    // the NEWEST records keeps replay cheap without hiding current work.
     return this.ledger.listFor(entry.cwd, sessionId)
-      .slice(0, SPECIALIST_SPAWN_BUDGET_PER_SESSION)
-      .map(toRunView);
+      .slice(-SPECIALIST_REPLAY_MAX_RECORDS)
+      .map((rec) => this.runViewFor(sessionId, rec));
+  }
+
+  /** The card-facing view of one ledger record, with the one fact only the host
+   *  knows: whether this parent's deliveries are held after a Stop (B8). */
+  private runViewFor(parentId: string, rec: DelegationRecord): SpecialistRunView {
+    // B7: an outcome whose disk write failed still wins over the stale 'running'
+    // row, so a later unrelated write (e.g. delivery bookkeeping) cannot flip
+    // the card back to spinning. Dropped as soon as the disk shows a final status.
+    const unwritten = this.unwrittenOutcomes.get(rec.childId);
+    if (unwritten) {
+      if (rec.status === 'running') rec = { ...rec, ...unwritten };
+      else this.unwrittenOutcomes.delete(rec.childId);
+    }
+    return toRunView(rec, { held: !!this.live.get(parentId)?.holdDeliveries });
   }
 
   /** True only when we can AFFIRM this native session has no work in flight —

@@ -469,6 +469,36 @@ export interface SpecialistRunView {
    *  "cannot order these", and the reducer falls back to its old behaviour
    *  rather than dropping the update. */
   seq?: number;
+  /** Audit 2026-10-22 B2/B3. Which run of this helper this record describes:
+   *  1 = the original hire, 2 = the first resume via task_id, and so on. The
+   *  record is ONE row per helper, so after a resume it describes the NEWEST
+   *  run; the earlier run's outcome is gone from it. Absent on a record
+   *  written before this field existed (read it as 1). */
+  runNumber?: number;
+  /** The Task call whose card carries the LIVE (newest) run: equals
+   *  `parentToolCallId` for run 1, the resume call's id after a resume. The
+   *  helper's live activity and any permission asks it raises are stamped
+   *  with THIS id, so this is the card to show them on. `parentToolCallId`
+   *  deliberately stays the ORIGINAL hire card (the identity the reducer
+   *  matches records to cards by, and where a background report is folded). */
+  activeToolCallId?: string;
+  /** When the newest run began, if it is a resume (runNumber >= 2). */
+  resumedAt?: number;
+  /** True when the report shown on the ORIGINAL hire card (the earlier run's)
+   *  is superseded by a newer run: the card should say so rather than present
+   *  the old report beside the new status. Becomes false again once a
+   *  background resume's new report has been delivered (that report is folded
+   *  onto the original card). A foreground resume's report lives on the
+   *  resume card's own tool result, so for those it stays true. */
+  reportStale?: boolean;
+  /** Audit 2026-10-22 B8. The helper finished (completed/failed, background)
+   *  but its report has not reached the assistant yet:
+   *   'waiting-for-turn'  it will be handed over at the next quiet moment
+   *   'held-after-stop'   the user pressed Stop, so it is held until they
+   *                       next write something
+   *  Absent once delivered, and for running/interrupted/foreground runs (a
+   *  foreground report is the Task call's own result). */
+  reportPending?: 'waiting-for-turn' | 'held-after-stop';
 }
 
 /** Task 5 (plan 1c) — the push event `specialists:event` carries: one
