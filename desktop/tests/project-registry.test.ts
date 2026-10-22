@@ -25,38 +25,38 @@ const E = (over: Partial<ProjectRegistryEntry>): ProjectRegistryEntry => ({
 });
 
 describe('project registry store — I/O', () => {
-  it('ensureProjectEntry creates a visible ProjectSync/<name>.json (active, displayName=name)', () => {
+  it('ensureProjectEntry creates a visible ProjectSync/<name>.json (active, displayName=name)', async () => {
     ensureProjectEntry(personal, { name: 'app', repoName: 'r-app' });
     expect(fs.existsSync(path.join(dir(), 'app.json'))).toBe(true);
-    const got = readProjectRegistry(personal);
+    const got = (await readProjectRegistry(personal));
     expect(got).toHaveLength(1);
     expect(got[0]).toMatchObject({ name: 'app', repoName: 'r-app', displayName: 'app', state: 'active' });
   });
 
-  it('ensureProjectEntry is create-if-absent — never clobbers an existing rename/stop', () => {
+  it('ensureProjectEntry is create-if-absent — never clobbers an existing rename/stop', async () => {
     ensureProjectEntry(personal, { name: 'app', repoName: 'r-app' });
     write('app.json', E({ displayName: 'Cool App', state: 'stopped', updatedAt: 50 }));
     ensureProjectEntry(personal, { name: 'app', repoName: 'r-app' }); // must NOT reset
-    const got = readProjectRegistry(personal)[0];
+    const got = (await readProjectRegistry(personal))[0];
     expect(got.displayName).toBe('Cool App');
     expect(got.state).toBe('stopped');
   });
 
-  it('returns [] when the registry dir does not exist', () => {
-    expect(readProjectRegistry(personal)).toEqual([]);
+  it('returns [] when the registry dir does not exist', async () => {
+    expect((await readProjectRegistry(personal))).toEqual([]);
   });
 
-  it('skips corrupt / unknown-schema files without throwing', () => {
+  it('skips corrupt / unknown-schema files without throwing', async () => {
     ensureProjectEntry(personal, { name: 'good', repoName: 'r' });
     fs.writeFileSync(path.join(dir(), 'bad.json'), '{ not json');
     write('future.json', { schemaVersion: 999, name: 'future', repoName: 'r' });
-    expect(readProjectRegistry(personal).map(e => e.name).sort()).toEqual(['good']);
+    expect((await readProjectRegistry(personal)).map(e => e.name).sort()).toEqual(['good']);
   });
 
   it('setProjectDisplayName updates displayName + bumps updatedAt, preserving state', async () => {
     write('app.json', E({ state: 'stopped', updatedAt: 5 }));
     await setProjectDisplayName(personal, 'app', 'r-app', 'Renamed');
-    const got = readProjectRegistry(personal)[0];
+    const got = (await readProjectRegistry(personal))[0];
     expect(got.displayName).toBe('Renamed');
     expect(got.state).toBe('stopped'); // preserved
     expect(got.updatedAt).toBeGreaterThan(5);
@@ -65,29 +65,29 @@ describe('project registry store — I/O', () => {
   it('setProjectStopped tombstones, preserving displayName', async () => {
     write('app.json', E({ displayName: 'Cool', updatedAt: 5 }));
     await setProjectStopped(personal, 'app', 'r-app');
-    const got = readProjectRegistry(personal)[0];
+    const got = (await readProjectRegistry(personal))[0];
     expect(got.state).toBe('stopped');
     expect(got.displayName).toBe('Cool');
   });
 
-  it('folds conflict copies on read — stopped dominates regardless of updatedAt', () => {
+  it('folds conflict copies on read — stopped dominates regardless of updatedAt', async () => {
     // Canonical says active/newer; a remote-wins conflict copy says stopped/older.
     write('app.json', E({ displayName: 'A', state: 'active', updatedAt: 100 }));
     write('app (from laptop, 2026-07-13).json', E({ displayName: 'A', state: 'stopped', updatedAt: 5 }));
-    const got = readProjectRegistry(personal);
+    const got = (await readProjectRegistry(personal));
     expect(got).toHaveLength(1);           // folded into one
     expect(got[0].state).toBe('stopped');  // tombstone dominates the newer active
   });
 
-  it('folds conflict copies on read — displayName is last-writer-wins', () => {
+  it('folds conflict copies on read — displayName is last-writer-wins', async () => {
     write('app.json', E({ displayName: 'Old', updatedAt: 10 }));
     write('app (from laptop, 2026-07-13).json', E({ displayName: 'New', updatedAt: 20 }));
-    expect(readProjectRegistry(personal)[0].displayName).toBe('New');
+    expect((await readProjectRegistry(personal))[0].displayName).toBe('New');
   });
 });
 
 describe('project registry store — pure merge', () => {
-  it('mergeProjectEntries is commutative for state + displayName', () => {
+  it('mergeProjectEntries is commutative for state + displayName', async () => {
     const a = E({ state: 'active', displayName: 'X', updatedAt: 3 });
     const b = E({ state: 'stopped', displayName: 'Y', updatedAt: 9 });
     const ab = mergeProjectEntries(a, b);
@@ -100,34 +100,34 @@ describe('project registry store — pure merge', () => {
 
 // Regression tests for the 2026-07-13 post-merge review findings.
 describe('project registry store — review-fix regressions', () => {
-  it('#1: a project whose folder name contains " (from …)" is its OWN record, not a conflict copy', () => {
+  it('#1: a project whose folder name contains " (from …)" is its OWN record, not a conflict copy', async () => {
     write('Recipes (from Grandma).json', E({ name: 'Recipes (from Grandma)', displayName: 'Recipes (from Grandma)' }));
     // Before the fix this was misread as a conflict copy of "Recipes" and skipped entirely.
-    expect(readProjectRegistry(personal).map(e => e.name)).toEqual(['Recipes (from Grandma)']);
+    expect((await readProjectRegistry(personal)).map(e => e.name)).toEqual(['Recipes (from Grandma)']);
   });
 
   it('#1: STOP is visible for a paren-named project (would silently fail before the fix)', async () => {
     write('Config (from work).json', E({ name: 'Config (from work)', displayName: 'Config (from work)', state: 'active', updatedAt: 1 }));
     await setProjectStopped(personal, 'Config (from work)', 'r');
-    const got = readProjectRegistry(personal);
+    const got = (await readProjectRegistry(personal));
     expect(got).toHaveLength(1);
     expect(got[0].state).toBe('stopped'); // reader sees it → activeManagedSpaces can gate it
   });
 
-  it('#1: a GENUINE transport conflict copy of a paren-named project still folds', () => {
+  it('#1: a GENUINE transport conflict copy of a paren-named project still folds', async () => {
     write('Recipes (from Grandma).json', E({ name: 'Recipes (from Grandma)', displayName: 'Recipes (from Grandma)', state: 'active', updatedAt: 10 }));
     // The engine names a real conflict copy by appending its own " (from <device>, <date>)" suffix.
     write('Recipes (from Grandma) (from Laptop, 2026-07-13).json', E({ name: 'Recipes (from Grandma)', displayName: 'Recipes (from Grandma)', state: 'stopped', updatedAt: 5 }));
-    const got = readProjectRegistry(personal);
+    const got = (await readProjectRegistry(personal));
     expect(got).toHaveLength(1);                          // folded, not two rows
     expect(got[0].name).toBe('Recipes (from Grandma)');
     expect(got[0].state).toBe('stopped');                // the copy's tombstone folded in
   });
 
-  it('#1: a genuine conflict copy of a plain project still folds (no regression)', () => {
+  it('#1: a genuine conflict copy of a plain project still folds (no regression)', async () => {
     write('app.json', E({ displayName: 'A', state: 'active', updatedAt: 10 }));
     write('app (from laptop, 2026-07-13).json', E({ displayName: 'A', state: 'stopped', updatedAt: 5 }));
-    const got = readProjectRegistry(personal);
+    const got = (await readProjectRegistry(personal));
     expect(got).toHaveLength(1);
     expect(got[0].state).toBe('stopped');
   });
@@ -150,19 +150,19 @@ describe('project registry store — review-fix regressions', () => {
     expect(fs.statSync(file).mtimeMs).toBe(m1);
   });
 
-  it('#7: ensureProjectEntry rejects a Windows-reserved name (throws BEFORE writing)', () => {
+  it('#7: ensureProjectEntry rejects a Windows-reserved name (throws BEFORE writing)', async () => {
     expect(() => ensureProjectEntry(personal, { name: 'con', repoName: 'r' })).toThrow();
     expect(fs.existsSync(path.join(dir(), 'con.json'))).toBe(false);
   });
 
-  it('#7: readProjectRegistry skips an over-long name (validateSyncName length cap)', () => {
+  it('#7: readProjectRegistry skips an over-long name (validateSyncName length cap)', async () => {
     const long = 'x'.repeat(101);
     write(`${long}.json`, E({ name: long, displayName: long }));
     ensureProjectEntry(personal, { name: 'ok', repoName: 'r' });
-    expect(readProjectRegistry(personal).map(e => e.name)).toEqual(['ok']); // long one skipped
+    expect((await readProjectRegistry(personal)).map(e => e.name)).toEqual(['ok']); // long one skipped
   });
 
-  it('#8: a create leaves no leftover .tmp file', () => {
+  it('#8: a create leaves no leftover .tmp file', async () => {
     ensureProjectEntry(personal, { name: 'fresh', repoName: 'r' });
     expect(fs.readdirSync(dir()).filter((n) => n.includes('.tmp'))).toEqual([]);
   });

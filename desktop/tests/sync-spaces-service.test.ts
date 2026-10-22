@@ -117,7 +117,7 @@ vi.mock('../src/main/sync-spaces/managed-roots', () => ({
 }));
 vi.mock('../src/main/sync-spaces/project-registry', () => ({
   PROJECT_REGISTRY_SCHEMA: 1,
-  readProjectRegistry: () => h.registry,
+  readProjectRegistry: async () => h.registry,
   ensureProjectEntry: (_root: string, input: any) => { h.ensureEntry(input); },
   setProjectDisplayName: async (_r: string, name: string, repo: string, dn: string) => { h.setDisplay({ name, repo, dn }); },
   setProjectStopped: async (_r: string, name: string, repo: string) => { h.setStopped({ name, repo }); },
@@ -310,7 +310,8 @@ describe('sync-spaces service transition serialization', () => {
       [path.join('/fake/personal', 'Conversations/a.jsonl')]: 60 * 1024 * 1024,
       [path.join('/fake/personal', 'Conversations/b.jsonl')]: 10, // shrank since it was reported
     };
-    const stat = vi.spyOn(fs, 'statSync').mockImplementation(((p: string) => {
+    // WHY promises.stat: the status poll stats off the main thread now (2026-10-22 freeze hunt).
+    const stat = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: string) => {
       if (!(p in sizes)) throw new Error('ENOENT'); // deleted since it was reported
       return { size: sizes[p] };
     }) as any);
@@ -421,6 +422,7 @@ describe('sync-spaces service transition serialization', () => {
     const engine = h.engines[0];
     engine.syncSpace.mockClear();
     h.hub.opts.onEvent({ type: 'connected' });
+    await vi.waitFor(() => expect(engine.syncSpace).toHaveBeenCalled()); // registry read is async now
     const ids = engine.syncSpace.mock.calls.map((c: any) => c[0].id).sort();
     expect(ids).toEqual(['personal', 'project:alpha', 'project:beta']);
     expect((await svc.syncSpacesStatus()).syncHub).toBe('connected');

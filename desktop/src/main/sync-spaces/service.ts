@@ -15,6 +15,7 @@ import { MAX_SYNC_FILE_BYTES, validateSyncName } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
+import { mapLimit } from '../map-limit';
 import { readProjectRegistry, ensureProjectEntry, setProjectDisplayName, setProjectStopped, setProjectDescription, markProjectRemoved, readRemovedProjects } from './project-registry';
 import { planReconcile, activeManagedSpaces } from './materialization-planner';
 import type { SpaceSyncEvent, SyncSpace } from './types';
@@ -266,7 +267,7 @@ export async function startSyncSpaces(getBackupTargets: () => Promise<BackupTarg
   // runIfDue never throws by contract, but resolving the targets (async config
   // read) can — guard so the hourly timer can never become an unhandled reject.
   const runBackup = async () => {
-    try { await backup!.runIfDue(activeSpaces(), await getBackupTargets(), logFn); }
+    try { await backup!.runIfDue(await activeSpaces(), await getBackupTargets(), logFn); }
     catch (e: any) { logFn(`sync-spaces: daily backup check failed: ${String(e?.message ?? e)}`); }
   };
   backupTimer = setInterval(() => { void runBackup(); }, 60 * 60 * 1000);
@@ -277,9 +278,9 @@ export async function startSyncSpaces(getBackupTargets: () => Promise<BackupTarg
 // The spaces the engine should actually run — spaces() minus stopped projects
 // (spec §7 single enforcement point). Reads the registry on disk each call;
 // cheap (a small dir of tiny files).
-function activeSpaces() {
+async function activeSpaces() {
   if (!roots) return [];
-  return activeManagedSpaces(readProjectRegistry(roots.personalRoot), roots.spaces());
+  return activeManagedSpaces(await readProjectRegistry(roots.personalRoot), roots.spaces());
 }
 
 // Materialize one registered project this device is missing. ORDERING IS
@@ -323,7 +324,7 @@ async function runDiscovery(): Promise<void> {
       discoverAgain = false;
       if (!engine || !roots) break;
       await refreshRemoved(); // a remove made on another device arrives with this Personal pull
-      const registry = readProjectRegistry(roots.personalRoot);
+      const registry = await readProjectRegistry(roots.personalRoot);
       const localNames = roots.listProjects().map((p) => p.name);
       const liveNames = engine.liveSpaceIds()
         .filter((id) => id.startsWith('project:')).map((id) => id.slice('project:'.length));
@@ -371,7 +372,11 @@ async function startEngine(log: (m: string) => void): Promise<void> {
   // leak with nothing left holding a reference to close them.
   const e = new SpaceSyncEngine(transport, { onEvent: broadcast, ensureProvisioned });
   engine = e;
-  for (const space of activeSpaces()) { // stopped projects never re-added (spec §7 gate)
+  // WHY read the list first, then re-check: the registry read is async now, so a disable could land
+  // during it; the old synchronous code could not be superseded at this point.
+  const initialSpaces = await activeSpaces();
+  if (engine !== e) { await e.stop(); return; }
+  for (const space of initialSpaces) { // stopped projects never re-added (spec §7 gate)
     if (engine !== e) { await e.stop(); return; } // superseded — clean up and bail (no socket created yet)
     try {
       await e.addSpace(space);
@@ -448,7 +453,8 @@ async function startEngine(log: (m: string) => void): Promise<void> {
         console.log('[lease] hub connected');
         broadcast({ type: 'hub-status', spaceId: 'hub', status: 'connected' });
         // Reconcile-on-connect: pull anything missed while we were offline.
-        if (engine && roots) for (const s of activeSpaces()) void engine.syncSpace(s);
+        // WHY async IIFE: activeSpaces() reads the registry off the main thread now (2026-10-22 freeze hunt).
+        if (engine && roots) void activeSpaces().then((list) => { if (engine) for (const s of list) void engine.syncSpace(s); }).catch(() => {});
         void runDiscovery(); // retry any project a prior materialize missed; apply stop tombstones
       } else if (ev.type === 'disconnected') {
         hubStatus = 'disconnected';
@@ -506,7 +512,7 @@ export function isSyncSpacesEnabled(): boolean {
 
 // ---- IPC-facing functions (also used by remote-server cases) ----
 export async function syncSpacesStatus() {
-  const registry = roots ? readProjectRegistry(roots.personalRoot) : [];
+  const registry = roots ? await readProjectRegistry(roots.personalRoot) : [];
   const byName = new Map(registry.map((e) => [e.name, e]));
   return {
     enabled: manager?.isEnabled() ?? false,
@@ -537,21 +543,25 @@ export async function syncSpacesStatus() {
       displayName: byName.get(name)?.displayName ?? name,
       githubUrl: githubPageFor(name),
     })),
-    oversize: currentOversize(),
+    oversize: await currentOversize(),
     oversizeLimitMb: MAX_SYNC_FILE_BYTES / (1024 * 1024),
     syncHub: hubStatus, // SyncHub connection state (Plan 1b): 'off' when sync disabled
   };
 }
 
 /** Reported over-limit files that are still over the limit on disk. */
-function currentOversize(): Array<{ spaceId: string; files: string[] }> {
+async function currentOversize(): Promise<Array<{ spaceId: string; files: string[] }>> {
   const out: Array<{ spaceId: string; files: string[] }> = [];
   for (const [spaceId, set] of oversizeBySpace) {
     const root = roots?.spaces().find((s) => s.id === spaceId)?.root;
     if (!root) continue;
-    const files = [...set].filter((rel) => {
-      try { return fs.statSync(path.join(root, rel)).size > MAX_SYNC_FILE_BYTES; } catch { return false; }
+    // WHY async + bounded (2026-10-22 freeze hunt): one statSync per reported file ran on the main
+    // thread inside every syncspaces:status poll. Nothing is cached, so the answer is as fresh as before.
+    const rels = [...set];
+    const over = await mapLimit(rels, 8, async (rel) => {
+      try { return (await fs.promises.stat(path.join(root, rel))).size > MAX_SYNC_FILE_BYTES; } catch { return false; }
     });
+    const files = rels.filter((_, i) => over[i]);
     if (files.length) out.push({ spaceId, files });
   }
   return out;
@@ -752,10 +762,10 @@ function backfillRegistry(): void {
  *  project's online copy: one the user stopped syncing (stopping is permanent,
  *  and the old files would pour into the new folder), or one that differs from
  *  an existing project only by capital letters (the two would mix files). */
-function projectNameConflict(name: string): string | null {
+async function projectNameConflict(name: string): Promise<string | null> {
   if (!roots) return null;
   const lower = name.toLowerCase();
-  const registry = readProjectRegistry(roots.personalRoot);
+  const registry = await readProjectRegistry(roots.personalRoot);
   const stopped = registry.find((e) => e.state === 'stopped' && e.name.toLowerCase() === lower);
   if (stopped) return `A project named "${stopped.name}" was stopped from syncing earlier. Choose a different name.`;
   const clash = [...roots.listProjects().map((p) => p.name), ...registry.map((e) => e.name)]
@@ -765,7 +775,7 @@ function projectNameConflict(name: string): string | null {
 }
 
 export async function syncSpacesCreateProject(name: string) {
-  const conflict = projectNameConflict(name);
+  const conflict = await projectNameConflict(name);
   if (conflict) return { ok: false as const, error: conflict };
   const result = roots!.createProject(name);
   if (result.ok) registerProject(name, result.path);
@@ -790,7 +800,7 @@ export async function syncSpacesCreateProject(name: string) {
  *  content — kick an immediate syncSpace instead of waiting for the poll. */
 export async function syncSpacesImportProject(sourcePath: string, name: string, liveCwds: string[]) {
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
-  const conflict = projectNameConflict(name);
+  const conflict = await projectNameConflict(name);
   if (conflict) return { ok: false as const, error: conflict };
   const result = await importProjectFolder({
     sourcePath, name, liveCwds,
