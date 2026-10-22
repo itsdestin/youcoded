@@ -106,6 +106,45 @@ describe('the listener is private by construction', () => {
     expect(server.isRunning()).toBe(false);
   });
 
+  it('starts by itself once Tailscale connects after the app opened', async () => {
+    // The app opens at login before Tailscale has connected; remote access must not stay off all day.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      detection.connected = false;
+      detection.ip = null;
+      const { mockSessionManager, mockHookRelay, config } = makeServer();
+      const { RemoteServer } = await import('../src/main/remote-server');
+      server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+      await expect(server.start()).rejects.toThrow(/not connected/);
+      detection.connected = true;
+      detection.ip = '127.0.0.1';
+      await vi.advanceTimersByTimeAsync(20_000);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(server!.isRunning()).toBe(true));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not keep looking for Tailscale that is not installed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      detection.installed = false;
+      detection.connected = false;
+      detection.ip = null;
+      const { mockSessionManager, mockHookRelay, config } = makeServer();
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const { RemoteConfig } = await import('../src/main/remote-config');
+      server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+      await expect(server.start()).rejects.toThrow(/not installed/);
+      const calls = (RemoteConfig.detectTailscale as any).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((RemoteConfig.detectTailscale as any).mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('says which of the two Tailscale problems it is', async () => {
     // "Not installed" and "installed but not connected" need different next steps, and
     // guessing between them is the invented-cause failure the standards forbid.

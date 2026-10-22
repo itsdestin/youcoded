@@ -50,6 +50,7 @@ import { BrowserWindow, app } from 'electron';
 import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { log } from './logger';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -94,6 +95,8 @@ const MAX_MISSED_PINGS = 3;
 // reconnecting. (The pause-and-poll gate the restore sequence used is gone with the restore: nothing sends in bulk now.)
 const BACKPRESSURE_CLOSE_BYTES = 32 * 1024 * 1024;
 const CLOSE_TOO_SLOW = 4009;
+/** How often to look for Tailscale again while it is installed but not connected. One `tailscale status`, off the main thread. */
+const TAILSCALE_RETRY_MS = 20_000;
 
 interface AuthenticatedClient {
   id: string;
@@ -223,6 +226,8 @@ export class RemoteServer {
   private completedRequests = new Map<string, { id: string; at: number }[]>();
   /** The OS reason the last start() failed, so the panel can say it rather than guess. */
   private lastStartError: string | null = null;
+  /** The next look for Tailscale while it is installed but not yet connected (waitForTailscale). */
+  private tailscaleWait: ReturnType<typeof setTimeout> | null = null;
   /** The tailnet address to bind to. Null means Tailscale is not up, and start() refuses
    *  rather than falling back to every interface — that fallback IS the open listener. */
   private bindAddress: string | null = null;
@@ -290,10 +295,13 @@ export class RemoteServer {
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
    *  project list and a flashing password screen could not be traced, because the host recorded
    *  no connects, drops or catch-ups. A short device id only: never a secret, address or name. */
-  private logDevice(client: { deviceId: string }, event: string): void {
+  private logDevice(client: { deviceId: string; owner?: boolean }, event: string): void {
     // WHY the time (2026-09-11): the log recorded seven drops in ten minutes with no way to
     // tell which were the phone being locked or refreshed and which happened on their own.
     console.log(`[remote-server] ${new Date().toISOString()} device ${client.deviceId.slice(0, 8)}: ${event}`);
+    // WHY also desktop.log (2026-10-22 phone reliability): console.log never reaches a built app's
+    // log file, so a packaged laptop recorded nothing about the phone's drops and none could be counted.
+    log('INFO', 'Remote', event, { device: client.deviceId.slice(0, 8), ...(client.owner ? { local: true } : {}) });
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
@@ -358,8 +366,14 @@ export class RemoteServer {
         ? 'Tailscale is installed but not connected, so there is no private address to listen on.'
         : 'Tailscale is not installed, so there is no private address to listen on.';
       this.emitStatus();
+      // WHY (2026-10-22 phone reliability): the app often opens at login before Tailscale has
+      // connected, and this ran once — so remote access stayed off all day while the switch read
+      // on. Installed-but-not-connected fixes itself, so look again until it does. Not installed
+      // does not, and the setup flow starts the server itself once it is.
+      if (ts.installed) this.waitForTailscale();
       throw new Error(this.lastStartError);
     }
+    this.clearTailscaleWait();
     this.bindAddress = ts.ip;
     return this.listen(this.config.port, '/ws');
   }
@@ -507,7 +521,29 @@ export class RemoteServer {
 
   /** @param forRollback internal use: unwinding a start that failed, where the caller sets
    *  the real reason on the next line. Every other caller is a user switching it off. */
+  /** Try start() again in a while, once: each failed attempt schedules the next. */
+  private waitForTailscale(): void {
+    if (this.tailscaleWait) return;
+    this.tailscaleWait = setTimeout(() => {
+      this.tailscaleWait = null;
+      if (this.config.enabled && !this.running) this.start().catch(() => { /* scheduled the next look itself */ });
+    }, TAILSCALE_RETRY_MS);
+    this.tailscaleWait.unref?.();
+  }
+
+  private clearTailscaleWait(): void {
+    if (this.tailscaleWait) { clearTimeout(this.tailscaleWait); this.tailscaleWait = null; }
+  }
+
+  /** The computer woke: if remote access is on but not listening, look for Tailscale now rather than at the next tick. */
+  startAfterWake(): void {
+    if (this.local || !this.config.enabled || this.running) return;
+    this.clearTailscaleWait();
+    this.start().catch(() => { /* start() reported it and scheduled the next look */ });
+  }
+
   stop(forRollback = false): void {
+    this.clearTailscaleWait();
     this.running = false;
     if (this.uploadCleanupTimer) {
       clearInterval(this.uploadCleanupTimer);
