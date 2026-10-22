@@ -1,11 +1,11 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
 import type { Plugin, PluggableList } from 'unified';
-import type { Root, Element, Text, RootContent } from 'hast';
+import type { Root, Element, RootContent } from 'hast';
 import { visitParents } from 'unist-util-visit-parents';
-import { detectLinkTokens } from './markdown-linkify';
+import { rehypeLinkTokens } from './rehype-link-tokens';
 import { Button } from './ui';
 import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
@@ -13,7 +13,7 @@ import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
 import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
-  startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, type StreamView,
+  startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, scanOpenList, listSplitOf, type ListScan, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
 } from './markdown-blocks';
 
@@ -151,97 +151,6 @@ function hastText(node: unknown): string {
   if (Array.isArray(n.children)) return n.children.map(hastText).join('');
   return '';
 }
-
-/**
- * Rehype plugin: splits plain text nodes into clickable tokens — web URLs
- * (rendered as real <a> links) and file paths (rendered as filepath-token,
- * which becomes a FilepathToken chip below).
- *
- * WHY it runs in the hast (HTML AST) pass rather than on the markdown source:
- * the ancestor chain is available here, so "is this inside a code block?" is a
- * fact rather than a guess, and nothing has to be re-parsed.
- *
- * WHY it runs AFTER rehype-highlight in the plugin array: the highlighter
- * rewrites a code block's single text node into a tree of <span> tokens. Going
- * last means we split the leaves it produced, so a URL inside ```bash is found
- * and the colouring around it survives.
- *
- * Text already inside an <a> is skipped — remark-gfm has already autolinked
- * bare URLs in prose, and linkifying a link would nest anchors.
- *
- * Fenced code blocks are NO LONGER skipped (they were, for paths). A URL or a
- * path printed in a code block is the single most common way Claude hands one
- * over, and reading it out by hand was the complaint this fixes.
- */
-const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
-  (options) => (tree: Root) => {
-  const filepaths = options?.filepaths ?? false;
-  // visitParents provides the full ancestor chain, which is what tells us
-  // whether we are inside an existing link or inside a fenced code block.
-  visitParents(tree, 'text', (node, ancestors) => {
-    const parent = ancestors[ancestors.length - 1];
-    if (!parent) return;
-    const index = (parent as Element | Root).children.indexOf(node as Text);
-    if (index === -1) return;
-
-    // Never linkify inside an existing anchor — that would nest <a> in <a>,
-    // which is invalid HTML and makes the click target ambiguous.
-    if (ancestors.some((a) => a.type === 'element' && (a as Element).tagName === 'a')) return;
-
-    // Inside a fenced block the chip styling would break the monospace grid, so
-    // FilepathToken uses its quieter 'inline' variant there (see the component
-    // map below). Inline `backticks` keep the chip.
-    const inPreBlock = ancestors.some(
-      (a) => a.type === 'element' && (a as Element).tagName === 'pre',
-    );
-
-    const textNode = node as Text;
-    const matches = detectLinkTokens(textNode.value, { filepaths });
-    if (matches.length === 0) return;
-
-    // Split the text node into a sequence of text + token elements.
-    const replacements: RootContent[] = [];
-    let cursor = 0;
-    for (const m of matches) {
-      if (m.start > cursor) {
-        replacements.push({ type: 'text', value: textNode.value.slice(cursor, m.start) });
-      }
-      // The matched source text is kept as the element's child even when the
-      // component ignores it: CopyButton reads the raw text off this hast tree
-      // (hastText), so dropping it would silently delete every path from what a
-      // code block copies.
-      const child: Text = { type: 'text', value: m.text };
-      replacements.push(
-        m.kind === 'url'
-          ? ({
-              type: 'element',
-              tagName: 'a',
-              properties: { href: m.value },
-              children: [child],
-            } as Element)
-          : ({
-              type: 'element',
-              tagName: 'filepath-token',
-              properties: {
-                'data-path': m.value,
-                'data-raw': m.text,
-                ...(inPreBlock ? { 'data-in-code': 'true' } : {}),
-              },
-              children: [child],
-            } as Element),
-      );
-      cursor = m.end;
-    }
-    if (cursor < textNode.value.length) {
-      replacements.push({ type: 'text', value: textNode.value.slice(cursor) });
-    }
-
-    // Replace the original text node with our sequence in the parent's children array.
-    (parent as Element | Root).children.splice(index as number, 1, ...replacements);
-    // Skip past the newly-inserted nodes — they're already processed.
-    return index + replacements.length;
-  });
-};
 
 /**
  * rehype-highlight, but with ONE highlighter shared by every render.
@@ -603,6 +512,91 @@ const mdPreviewComponents = {
   },
 };
 
+/**
+ * The finished items of a long tight list that is still being typed (see
+ * splitOpenList). Same idea as FrozenFence: the <ul>/<ol> they belong INSIDE is
+ * built by react-markdown for the newest items only, so the `ul`/`ol` overrides
+ * below reach the head through this context and draw it as their first children.
+ * WHY inside the live list and not as lists of their own: one <ul> with all the
+ * <li>s as direct children is what the whole-message render makes, so numbering
+ * continues, `space-y-*` spacing and every sibling selector see the same tree.
+ */
+interface FrozenList {
+  /** Line (1-based) of the document react-markdown is drawing where the live list starts: the head belongs to THAT list only. */
+  line: number;
+  ordered: boolean;
+  /** Set by the live list when it drew the head; if it never does, the chunk falls back to the whole list. */
+  claimed: { current: boolean };
+  /** The whole list's first number (the live tail would otherwise claim the number of ITS first item). */
+  start: number;
+  node: React.ReactNode;
+}
+const FrozenListContext = createContext<FrozenList | null>(null);
+
+/** Is this the top-level list that starts on `line` of the document react-markdown is drawing (not one nested inside an item)? */
+const isListAt = (node: any, line: number) => node?.position?.start?.line === line && node?.position?.start?.column === 1;
+
+const liveListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
+const chunkListCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
+/** components for the live tail: its first list also draws the frozen head, then its own (newest) items. */
+function liveListComponents(components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>) {
+  let c = liveListCache.get(components);
+  if (!c) {
+    const make = (tag: 'ul' | 'ol') => {
+      const Base: any = (components as any)[tag] ?? tag;
+      return function LiveList(props: any) {
+        const head = useContext(FrozenListContext);
+        const takes = !!head && head.ordered === (tag === 'ol') && isListAt(props.node, head.line);
+        // WHY: the head must be drawn by exactly one list; MarkdownChunk checks this after drawing.
+        useLayoutEffect(() => { if (takes) head!.claimed.current = true; });
+        if (!head || head.ordered !== (tag === 'ol') || !isListAt(props.node, head.line)) return <Base {...props} />;
+        // start: only the real first number, and none when it is 1 (as react-markdown leaves it).
+        const start = tag === 'ol' ? { start: head.start === 1 ? undefined : head.start } : {};
+        return <Base {...props} {...start}>{head.node}{props.children}</Base>;
+      };
+    };
+    c = { ...components, ul: make('ul'), ol: make('ol') };
+    liveListCache.set(components, c);
+  }
+  return c;
+}
+/** components for a finished chunk: its list wrapper is removed, leaving the <li>s (and the newlines between them). */
+function chunkListComponents(components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>) {
+  let c = chunkListCache.get(components);
+  if (!c) {
+    const make = (tag: 'ul' | 'ol') => {
+      const Base: any = (components as any)[tag] ?? tag;
+      return function ChunkList(props: any) {
+        if (!isListAt(props.node, 1)) return <Base {...props} />;
+        // WHY the trailing newline is dropped: the live list's own children start with one, so
+        // head + tail give exactly the "\n<li>\n<li>\n" a single list has.
+        const kids = React.Children.toArray(props.children);
+        if (kids[kids.length - 1] === '\n') kids.pop();
+        return <>{kids}</>;
+      };
+    };
+    c = { ...components, ul: make('ul'), ol: make('ol') };
+    chunkListCache.set(components, c);
+  }
+  return c;
+}
+
+/**
+ * Twenty finished items of a still-open list, drawn once. WHY memo: `source` is final, so it is
+ * never parsed again however long the list grows.
+ */
+const FrozenListChunk = React.memo(function FrozenListChunk({ source, rehypePlugins, components }: {
+  source: string;
+  rehypePlugins: PluggableList;
+  components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>;
+}) {
+  return (
+    <ReactMarkdown remarkPlugins={remarkPluginsStable} rehypePlugins={rehypePlugins} components={chunkListComponents(components)}>
+      {source}
+    </ReactMarkdown>
+  );
+});
+
 interface Props {
   content: string;
   /** When provided, file paths detected in text are rendered as FilepathToken chips. */
@@ -629,8 +623,10 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, listScan, rehypePlugins, components }: {
   source: string;
+  /** How far a scan of this piece as a growing list has got (see scanOpenList); null = draw it whole. */
+  listScan: ListScan | null;
   /** The reply is still streaming — the only time a long open fence may be drawn in chunks. */
   live: boolean;
   /** Where an open top-level fence starts in `source` when text comes before it (see DrawnGroup.fenceAt). */
@@ -665,19 +661,56 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
     };
   }, [frozenText, opening, line, rehypePlugins, components]);
 
+  // A long tight list still being typed (not a fence, no definitions in front): finished items are
+  // drawn once, in chunks of 20, and react-markdown re-reads only the newest ones (splitOpenList).
+  // The scan comes from the parent (see MarkdownContent) and is null unless the reply is live and
+  // this group is the last one, so a finished reply and every other group draw as before.
+  // WHY failedAt: a list whose finished head no live list claimed (see below) is drawn whole from then on.
+  const [failedAt, setFailedAt] = useState(-1);
+  const listSplit = !split && !defs && listScan?.source === source && listScan.at !== failedAt ? listSplitOf(source, listScan) : null;
+  const listChunks = listSplit?.chunks;
+  const listOrdered = listSplit?.ordered ?? false;
+  const listStart = listSplit?.start ?? 1;
+  // The list's line in the document drawn below (text before it, if any, comes first).
+  const listLine = listSplit ? listSplit.prefix.split('\n').length : 1;
+  // WHY memoised on the chunk list: it is the same array until a whole new chunk freezes.
+  const frozenList = useMemo<FrozenList | null>(() => {
+    if (!listChunks || !components) return null;
+    return {
+      claimed: { current: false },
+      line: listLine,
+      ordered: listOrdered,
+      start: listStart,
+      node: listChunks.map((chunk, i) => (
+        <FrozenListChunk key={i} source={chunk} rehypePlugins={rehypePlugins} components={components} />
+      )),
+    };
+  }, [listChunks, listOrdered, listStart, listLine, rehypePlugins, components]);
+
+  // WHY a safety net: whatever sits in front of the list (an open HTML block, a fence the scan misread)
+  // can stop react-markdown from making the live list at the line we expect. The head would then be
+  // silently missing from the page, so redraw the whole text before it is ever painted.
+  useLayoutEffect(() => {
+    if (frozenList && listScan && !frozenList.claimed.current) setFailedAt(listScan.at);
+  }, [frozenList, listScan]);
+
   const markdown = (
     <ReactMarkdown
       remarkPlugins={remarkPluginsStable}
       rehypePlugins={rehypePlugins}
-      components={components}
+      components={listSplit && components ? liveListComponents(components) : components}
     >
-      {split ? prefix + opening + split.tail : withDefinitions(source, defs)}
+      {split ? prefix + opening + split.tail : listSplit ? listSplit.prefix + listSplit.tail : withDefinitions(source, defs)}
     </ReactMarkdown>
   );
   // WHY the Provider is ALWAYS the root (null when there is no head): swapping the
   // root element's type when the fence reaches 40 lines, or closes, would make React
   // rebuild the whole block (flash, scroll jump, lost selection, Copy reset).
-  return <FrozenFenceContext.Provider value={frozen}>{markdown}</FrozenFenceContext.Provider>;
+  return (
+    <FrozenFenceContext.Provider value={frozen}>
+      <FrozenListContext.Provider value={frozenList}>{markdown}</FrozenListContext.Provider>
+    </FrozenFenceContext.Provider>
+  );
 });
 
 /** react-markdown's components with the block wrapper removed: a chunk draws only its coloured lines. */
@@ -770,6 +803,10 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // function at once with the new view, before drawing any child, so the cost
   // is one extra call of this function, not a second draw.
   const [streamState, setStreamState] = useState<StreamView>(() => startStream(content));
+  // Where the last group's scan as a growing list has got to, so an update reads only the new lines.
+  // WHY a ref: it only remembers progress; scanOpenList checks the text itself, so the answer is the
+  // same with or without it and a render React discards cannot leave anything stale.
+  const listScanRef = useRef<ListScan | null>(null);
   let stream = streamState;
   if (incremental && stream.drawn !== content) {
     stream = advanceStream(stream, content);
@@ -788,6 +825,12 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     // same element the single-document render used, so nothing drawn before the
     // message started growing is rebuilt.
     let painted = false;
+    // WHY the scan is made here and not by the chunk: only the LAST group of a live reply can be a list
+    // that is still growing. When the reply ends the scan turns null and just that group is redrawn whole;
+    // a plain `live` flag would have redrawn the last group of every reply (it stays null for those).
+    const lastGroup = stream.groups[stream.groups.length - 1];
+    const listScan = live && lastGroup && lastGroup.fenceAt === undefined ? scanOpenList(lastGroup.draw, listScanRef.current) : null;
+    listScanRef.current = listScan;
     return (
       <>
         {stream.groups.map((g) => {
@@ -807,6 +850,7 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                   // whole bubble, and every other group would miss its memo and be re-parsed and
                   // re-coloured in one commit — a hitch at the end of every reply.
                   live={live && g.fenceAt !== undefined}
+                  listScan={g === lastGroup ? listScan : null}
                   fenceAt={g.fenceAt}
                   rehypePlugins={rehypePlugins}
                   components={components}

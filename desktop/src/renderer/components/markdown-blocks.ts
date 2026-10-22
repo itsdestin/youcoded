@@ -909,3 +909,206 @@ export function fenceChunks(frozen: string): string[] {
   }
   return chunks;
 }
+
+// ---------------------------------------------------------------------------
+// A long tight list that is still being typed.
+
+/** Items per frozen chunk of an open list (see splitOpenList). */
+export const OPEN_LIST_CHUNK_ITEMS = 20;
+
+/**
+ * Where a scan of a growing list has got to. Kept between updates so each update
+ * reads only the lines that arrived since the last one (performance rule 4).
+ * Everything here is a pure function of `source`: handing in no previous scan, or
+ * a stale one, gives the same answer, only slower.
+ */
+export interface ListScan {
+  /** The text scanned so far (the new text must start with this to resume). */
+  source: string;
+  /** Where the list starts in `source` (0, or the line after the last blank line when text comes before it). */
+  at: number;
+  /** The list cannot be drawn in chunks (and never will be, however much text follows). */
+  bad: boolean;
+  ordered: boolean;
+  /** The bullet character, or the `.`/`)` after the number. */
+  marker: string;
+  /** First item's number (ordered lists; react-markdown's `start`). */
+  start: number;
+  /**
+   * Offset of each item's marker line, from complete lines only. Shared between the scans of one
+   * growing list and appended to in place; only the first `itemCount` entries are this scan's own.
+   * WHY: a render React throws away must not leave a later scan reading entries of text that
+   * never reached the screen.
+   */
+  itemStarts: number[];
+  itemCount: number;
+  /** Offset of the first line not read yet (the line still being typed is never read). */
+  scanned: number;
+  /** What the last line read was: a marker line, a plain col-0 line that continues its paragraph, or an indented line. */
+  lastKind: 'marker' | 'lazy' | 'indented';
+  /** Columns the current item's content starts at (marker + spaces); deeper lines belong to it. */
+  offset: number;
+  /** The frozen head, cut into chunks of OPEN_LIST_CHUNK_ITEMS items (each ends right before the next item's marker). */
+  chunks: string[];
+}
+
+const LIST_MARKER = /^(?:([-+*])|(\d{1,9})([.)]))( {1,4})(?=\S)/;
+// Content right after a marker that starts something other than a paragraph, or that reads
+// differently once it is a list item (a nested list, heading, quote, fence, HTML, table row,
+// definition, task checkbox). Such a list is drawn whole, as before.
+const LIST_ITEM_NOT_PLAIN = /^(?:[`~]{3}|#{1,6}(?:\s|$)|>|[-+*](?:\s|$)|\d{1,9}[.)](?:\s|$)|<|\||\[[ xX]\](?:\s|$)|\[[^\]]*\]:|[-=]+\s*$|\t)/;
+// A column-0 line that is not a marker but only continues the item's paragraph: starts with a
+// letter or any non-ASCII character, never a character that can open another kind of block.
+const LAZY_START = /^[A-Za-z -￿]/;
+
+/**
+ * Where a list that ENDS `source` starts, or -1: 0 when the text begins with a list marker, else the line
+ * after the last blank line, provided that line begins a list and the block before it cannot be a list
+ * (a blank line between two lists' items would join them into one loose list, which changes the page).
+ * WHY a prefix at all: a bubble that mounts part-way through a reply (the renderer was busy, a hidden
+ * chat) draws everything it was given as ONE group, so the list has the reply's first paragraphs in
+ * front of it (perf-lab pathlist-stream, 2026-10-22: 5000-item rungs).
+ */
+export function openListStart(source: string): number {
+  // Complete lines, last to first, as [start, end) offsets; the line still being typed is not looked at.
+  let lineEnd = source.lastIndexOf('\n');
+  const lineBefore = (): [number, number] | null => {
+    if (lineEnd < 0) return null;
+    const end = lineEnd;
+    // WHY the end===0 case: lastIndexOf with a negative start still looks at index 0, which would loop forever on a text that begins with a blank line.
+    const start = end === 0 ? 0 : source.lastIndexOf('\n', end - 1) + 1;
+    lineEnd = start - 1;
+    return [start, end];
+  };
+  let at = -1;
+  for (let l = lineBefore(); l; l = lineBefore()) {
+    if (source.slice(l[0], l[1]).trim() === '') { at = l[1] + 1; break; }
+  }
+  if (at < 0) return LIST_MARKER.test(source.slice(0, 40)) ? 0 : -1;
+  if (!LIST_MARKER.test(source.slice(at, at + 40))) return -1;
+  // The block just before the blank line(s): no list marker or indented line in it...
+  lineEnd = at - 1;
+  let l = lineBefore();
+  while (l && source.slice(l[0], l[1]).trim() === '') l = lineBefore();
+  for (; l; l = lineBefore()) {
+    const line = source.slice(l[0], l[1]);
+    if (line.trim() === '') break;
+    if (/^[ \t]/.test(line) || /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(line)) return -1;
+  }
+  // ...and no code fence left open above (a fence only closes with its own character and at least its own length).
+  const before = source.slice(0, at);
+  let open: { ch: string; len: number } | null = null;
+  for (const m of before.matchAll(/(?:^|\n) {0,3}(`{3,}|~{3,})([^\n]*)/g)) {
+    const ch = m[1][0];
+    if (open) {
+      if (ch === open.ch && m[1].length >= open.len && m[2].trim() === '') open = null;
+    } else if (!(ch === '`' && m[2].includes('`'))) {
+      open = { ch, len: m[1].length };
+    }
+  }
+  if (open) return -1;
+  // ...and no link definition or footnote definition: it would define words INSIDE the finished chunks,
+  // which are drawn as documents of their own and would show the literal "[foo]" (the group's other
+  // definitions are handed to the chunk as `defs`, but these sit in the same group).
+  if (/(?:^|\n)[ \t>*+\-0-9.)]*\[[^\]\n]*\]:/.test(before)) return -1;
+  return at;
+}
+
+/** A fresh scan of `source`, or `prev` carried forward when `source` only appends to it. */
+export function scanOpenList(source: string, prev?: ListScan | null): ListScan | null {
+  let s: ListScan;
+  if (prev && source.startsWith(prev.source)) {
+    if (prev.bad) return prev; // a bad line is final, whatever follows it
+    // WHY: the start was checked for line endings other than \n once; text that arrives later is not.
+    if (source.indexOf('\r', prev.source.length) !== -1) return { ...prev, source, bad: true };
+    s = { ...prev, source };
+    s.itemStarts.length = s.itemCount;
+  } else {
+    if (source.includes('\r')) return null;
+    const at = openListStart(source);
+    if (at < 0) return null;
+    const first = LIST_MARKER.exec(source.slice(at, at + 40))!;
+    s = {
+      source, at, bad: false, ordered: first[2] !== undefined, marker: first[1] ?? first[3],
+      start: first[2] !== undefined ? Number(first[2]) : 1,
+      itemStarts: [], itemCount: 0, scanned: at, lastKind: 'marker', offset: 0, chunks: [],
+    };
+  }
+  const fail = () => { s.bad = true; return s; };
+  // Only complete lines are read; the one still being typed can change under us.
+  while (true) {
+    const eol = source.indexOf('\n', s.scanned);
+    if (eol === -1) break;
+    const line = source.slice(s.scanned, eol);
+    const at = s.scanned;
+    if (line.trim() === '') return fail(); // a blank line can make the list loose or end it
+    const m = LIST_MARKER.exec(line);
+    if (m) {
+      // Same kind of list only: another bullet character or number delimiter starts a SECOND list.
+      if ((m[2] !== undefined) !== s.ordered || (m[1] ?? m[3]) !== s.marker) return fail();
+      const content = line.slice(m[0].length);
+      if (LIST_ITEM_NOT_PLAIN.test(content)) return fail();
+      s.itemStarts.push(at);
+      s.itemCount++;
+      s.offset = m[0].length;
+      s.lastKind = 'marker';
+    } else if (line[0] === ' ') {
+      // Deeper than the item's content: part of the item. Anything shallower is read differently by markdown.
+      const indent = /^ */.exec(line)![0].length;
+      if (indent < s.offset || line[indent] === '\t') return fail();
+      s.lastKind = 'indented';
+    } else if (LAZY_START.test(line) && s.lastKind !== 'indented') {
+      s.lastKind = 'lazy';
+    } else {
+      return fail();
+    }
+    s.scanned = eol + 1;
+  }
+  // Freeze whole chunks, always leaving a live tail of 20-39 items (as splitOpenFence does with lines).
+  const items = s.itemCount;
+  const frozenItems = items < 2 * OPEN_LIST_CHUNK_ITEMS ? 0 : Math.floor((items - OPEN_LIST_CHUNK_ITEMS) / OPEN_LIST_CHUNK_ITEMS) * OPEN_LIST_CHUNK_ITEMS;
+  if (frozenItems > s.chunks.length * OPEN_LIST_CHUNK_ITEMS) {
+    // Copy only when a chunk is new, never per word.
+    const chunks = s.chunks.slice();
+    for (let i = chunks.length * OPEN_LIST_CHUNK_ITEMS; i < frozenItems; i += OPEN_LIST_CHUNK_ITEMS) {
+      chunks.push(source.slice(s.itemStarts[i], s.itemStarts[i + OPEN_LIST_CHUNK_ITEMS]));
+    }
+    s.chunks = chunks;
+  }
+  return s;
+}
+
+export interface OpenListSplit {
+  /** Everything before the list (empty when the text starts with it). */
+  prefix: string;
+  ordered: boolean;
+  /** The first item's number: the real `<ol start>` of the whole list. */
+  start: number;
+  /** Finished items, in chunks; each is a complete list on its own. */
+  chunks: string[];
+  /** The newest items plus the line being typed, still a list on its own. */
+  tail: string;
+  scan: ListScan;
+}
+
+/**
+ * Cut a message piece that is ONE tight list (no blank line, one kind of marker, plain
+ * paragraph items) into finished chunks and a small live tail, or null when it is not that
+ * or is still short.
+ *
+ * WHY (perf-lab 2026-10-22, pathlist-stream): a 2000-5000 item list with no blank line is one
+ * piece, so every streamed word re-parsed and re-drew the whole list - the renderer was busy
+ * 28-38 s of a 45 s reply. An item is final once the next item's marker line has arrived (no
+ * blank line means the list can only get longer, never looser), so its chunk is drawn once.
+ * `prev` is the scan from the previous update, so the cost per update is the new text only.
+ */
+export function splitOpenList(whole: string, prev?: ListScan | null): OpenListSplit | null {
+  return listSplitOf(whole, scanOpenList(whole, prev));
+}
+
+/** The split for a scan already made (so a caller can keep the scan, even a bad one, for the next update). */
+export function listSplitOf(whole: string, scan: ListScan | null): OpenListSplit | null {
+  if (!scan || scan.bad || scan.chunks.length === 0) return null;
+  const tailAt = scan.itemStarts[scan.chunks.length * OPEN_LIST_CHUNK_ITEMS];
+  return { prefix: whole.slice(0, scan.at), ordered: scan.ordered, start: scan.start, chunks: scan.chunks, tail: whole.slice(tailAt), scan };
+}
