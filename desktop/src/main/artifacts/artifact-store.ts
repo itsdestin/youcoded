@@ -153,11 +153,15 @@ async function seedSharedSidecar(projectRoot: string, value: ProjectSidecar): Pr
     // be ours, and the stat must not move while we look; otherwise nothing is cached and the next reader parses.
     const before = await fs.stat(path);
     const fh = await fs.open(path, 'r');
-    let head: string;
+    let head = '';
     try {
-      const buf = Buffer.alloc(HEAD_PROBE_BYTES);
-      const { bytesRead } = await fh.read(buf, 0, HEAD_PROBE_BYTES, 0);
-      head = buf.subarray(0, bytesRead).toString('utf8');
+      // 4 KB normally holds updatedAt (a top-level key written early); a long project name can push it further.
+      for (const size of [HEAD_PROBE_BYTES, 64 * 1024]) {
+        const buf = Buffer.alloc(size);
+        const { bytesRead } = await fh.read(buf, 0, size, 0);
+        head = buf.subarray(0, bytesRead).toString('utf8');
+        if (extractUpdatedAt(head) !== undefined || bytesRead < size) break;
+      }
     } finally { await fh.close(); }
     const after = await fs.stat(path);
     if (extractUpdatedAt(head) === value.updatedAt && sameStat(before, after)) retain(path, after, value);

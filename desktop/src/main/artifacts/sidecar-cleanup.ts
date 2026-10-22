@@ -59,8 +59,23 @@ async function readLedgerFile(root: string): Promise<LedgerFile> {
   return { strikes: {} };
 }
 
-async function writeLedgerFile(root: string, data: LedgerFile): Promise<void> {
-  await mutateFileUnderLock(ledgerFile(root), () => JSON.stringify(data));
+/** Read-modify-write the ledger under its lock, from the file as it is NOW. WHY (review 2026-10-22): runCleanup and
+ *  restoreArchive both write this file, minutes apart; writing back a copy read earlier would erase a restore pin made
+ *  in between. Expired keepUntil entries are dropped on every write. */
+async function updateLedger(root: string, nowMs: number, mutate: (l: LedgerFile) => LedgerFile): Promise<LedgerFile> {
+  let result: LedgerFile = { strikes: {} };
+  await mutateFileUnderLock(ledgerFile(root), (onDisk) => {
+    let cur: LedgerFile = { strikes: {} };
+    try { const p = JSON.parse(onDisk ?? ''); if (p && typeof p === 'object' && p.strikes && typeof p.strikes === 'object') cur = p; } catch { /* fresh */ }
+    const next = mutate(cur);
+    if (next.keepUntil) {
+      next.keepUntil = Object.fromEntries(Object.entries(next.keepUntil).filter(([, until]) => Date.parse(until) > nowMs));
+      if (Object.keys(next.keepUntil).length === 0) delete next.keepUntil;
+    }
+    result = next;
+    return JSON.stringify(next);
+  });
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +272,7 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
     pinned, projectRoot: root, tmpDirs: [os.tmpdir(), '/tmp', '/var/tmp'], keepUntil: ledgerData.keepUntil, ...opts.limits,
   });
   // Strikes and the run date are recorded even when nothing is archived: that is how the 7-day gap elapses.
-  await writeLedgerFile(root, { strikes: sel.ledger, lastRunAt: new Date(nowMs).toISOString(), keepUntil: ledgerData.keepUntil });
+  const fresh = await updateLedger(root, nowMs, (l) => ({ ...l, strikes: sel.ledger, lastRunAt: new Date(nowMs).toISOString() }));
   if (sel.blocked === 'outage-suspected') return { status: 'outage-suspected' };
   if (sel.ids.length === 0) return { status: sel.blocked === 'below-floor' ? 'below-floor' : 'nothing-changed' };
 
@@ -266,14 +281,15 @@ export async function runCleanup(root: string, opts: CleanupOptions = {}): Promi
   catch (e) { if (errCode(e) !== 'EEXIST') throw e; }
 
   // Remember what each candidate looked like at survey time; the commit drops any that changed since.
-  const chosen = new Set(sel.ids);
+  // A restore pin made while the survey ran protects its ids from this run too.
+  const chosen = new Set(sel.ids.filter((id) => !(fresh.keepUntil?.[id] && Date.parse(fresh.keepUntil[id]) > nowMs)));
   const surveyed = new Map(records.filter((r) => chosen.has(r.id)).map((r) => [r.id, { n: r.versions.length, lm: r.lastModified }]));
   await opts.hooks?.beforeCommit?.();
   const result = await enqueueMaintenance(root, () => commit(root, surveyed, nowMs, opts.hooks));
   if (result.status === 'archived' && result.archivedIds) {
     // Only now, with the sidecar write committed, do the archived records leave the strike ledger.
     const done = new Set(result.archivedIds);
-    await writeLedgerFile(root, { strikes: Object.fromEntries(Object.entries(sel.ledger).filter(([id]) => !done.has(id))), lastRunAt: new Date(nowMs).toISOString(), keepUntil: ledgerData.keepUntil });
+    await updateLedger(root, nowMs, (l) => ({ ...l, strikes: Object.fromEntries(Object.entries(l.strikes).filter(([id]) => !done.has(id))) }));
   }
   return { ...result, braked: sel.blocked === 'braked' };
 }
@@ -306,6 +322,8 @@ async function commit(
   const w = await write(root, current.updatedAt, next);
   await fsyncDir(youcodedDir(root));
   if (!w.committed) { // lost the CAS race to another writer: no retry loop; tomorrow's run starts over
+    // The archive file this run wrote would only be a duplicate of what tomorrow's run writes, so remove it.
+    await fs.promises.rm(archivePath, { force: true }).catch(() => {});
     log('INFO', 'ArtifactCleanup', 'sidecar changed during cleanup; will retry on a later run', { root });
     return { status: 'conflict' };
   }
@@ -345,12 +363,13 @@ export async function restoreArchive(root: string, filter: RestoreFilter = {}, h
     if (!w.committed) return { status: 'conflict', restored: 0, skipped: wanted.length };
     // A durable undo: the restored records are protected for RESTORE_GRACE_DAYS (and once touched again they are no
     // longer idle), so a restored record whose file is still missing is not archived again a week later.
-    const ledger = await readLedgerFile(root);
     const until = new Date(Date.now() + RESTORE_GRACE_DAYS * DAY_MS).toISOString();
-    const keepUntil = { ...(ledger.keepUntil ?? {}), ...Object.fromEntries(add.map((r) => [r.id, until])) };
     const restoredIds = new Set(add.map((r) => r.id));
-    const strikes = Object.fromEntries(Object.entries(ledger.strikes).filter(([id]) => !restoredIds.has(id)));
-    await writeLedgerFile(root, { ...ledger, strikes, keepUntil });
+    await updateLedger(root, Date.now(), (l) => ({
+      ...l,
+      strikes: Object.fromEntries(Object.entries(l.strikes).filter(([id]) => !restoredIds.has(id))),
+      keepUntil: { ...(l.keepUntil ?? {}), ...Object.fromEntries(add.map((r) => [r.id, until])) },
+    }));
     return { status: 'restored', restored: add.length, skipped: wanted.length - add.length };
   });
 }

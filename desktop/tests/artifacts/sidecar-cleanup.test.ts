@@ -385,4 +385,37 @@ describe('archive files, durable restore, last look at commit, and offline-drive
     expect(p.get('n')?.ancestor).toMatchObject({ path: root, isProjectRoot: true, empty: false });
     fs.rmSync(real, { recursive: true, force: true });
   });
+
+  it('a restore pin made while a cleanup survey is running is not erased by the cleanup\'s ledger write', async () => {
+    seed();
+    await runCleanup(root, { nowMs: T0, limits: LIMITS });                       // strikes
+    const r = await runCleanup(root, { nowMs: T0 + 8 * DAY, limits: LIMITS, hooks: { beforeCommit: async () => {
+      // the owner restores D1 (pretend it was archived earlier) while this run is between survey and commit
+      fs.mkdirSync(archiveDir(root), { recursive: true });
+      const ledger = JSON.parse(fs.readFileSync(ledgerFile(root), 'utf8'));
+      ledger.keepUntil = { ...(ledger.keepUntil ?? {}), D1: new Date(Date.now() + 90 * DAY).toISOString() };
+      fs.writeFileSync(ledgerFile(root), JSON.stringify(ledger));
+    } } });
+    expect(r.status).toBe('archived');
+    const after = JSON.parse(fs.readFileSync(ledgerFile(root), 'utf8'));
+    expect(after.keepUntil?.D1).toBeDefined();                                    // the cleanup's own writes kept it
+  });
+
+  it('expired restore pins are pruned from the ledger', async () => {
+    seed();
+    fs.writeFileSync(ledgerFile(root), JSON.stringify({ strikes: {}, keepUntil: { D1: new Date(T0 - DAY).toISOString(), D2: new Date(T0 + 30 * DAY).toISOString() } }));
+    await runCleanup(root, { nowMs: T0, limits: LIMITS });
+    const after = JSON.parse(fs.readFileSync(ledgerFile(root), 'utf8'));
+    expect(Object.keys(after.keepUntil ?? {})).toEqual(['D2']);
+  });
+
+  it('a refused sidecar write removes the archive file that run just wrote', async () => {
+    seed();
+    const r = await twoStrikes({ hooks: { afterArchive: () => {
+      const sc = onDisk(); sc.artifacts.push(record('EXT', 'ext.md', 0)); sc.updatedAt = iso(T0 + 9 * DAY);
+      fs.writeFileSync(sidecarFile(root), JSON.stringify(sc));
+    } } });
+    expect(r.status).toBe('conflict');
+    expect(fs.readdirSync(archiveDir(root)).filter((n) => n.endsWith('.jsonl.gz'))).toEqual([]);
+  });
 });

@@ -45,7 +45,7 @@ export class StallProfiler {
   private done: Window[] = [];           // newest last, at most 2
   private writing: Promise<void> = Promise.resolve();
   private lastSaveAt = 0;
-  private pending: { startedAt: number; endedAt: number; ms: number } | null = null;
+  private pending: { startedAt: number; stalls: Array<{ endedAt: number; ms: number }> } | null = null;
   private pendingTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
   private readonly o: Required<Omit<StallProfilerOptions, 'now'>>;
@@ -88,7 +88,9 @@ export class StallProfiler {
       this.windowStart = w.endedAt;
       this.post('Profiler.start');
       this.done.push(w);
-      if (this.done.length > 2) this.done.shift();
+      // Four, not two: a stall waiting out the burst gap must still find its window after a timer rotation and the
+      // flush's own rotation.
+      if (this.done.length > 4) this.done.shift();
       return w;
     } catch { this.teardown(); return null; }
   }
@@ -100,7 +102,7 @@ export class StallProfiler {
     // which both duplicated the same samples and pushed older, distinct profiles out of the 10-file cap. Stalls within
     // MIN_SAVE_GAP_MS of the last save are folded into ONE later save that covers all of them.
     const first = this.pending;
-    this.pending = { startedAt: Math.min(first?.startedAt ?? Infinity, endedAtMs - ms), endedAt: first?.endedAt ?? endedAtMs, ms: first?.ms ?? ms };
+    this.pending = { startedAt: Math.min(first?.startedAt ?? Infinity, endedAtMs - ms), stalls: [...(first?.stalls ?? []), { endedAt: endedAtMs, ms }] };
     const wait = this.lastSaveAt + MIN_SAVE_GAP_MS - this.now();
     if (wait > 0) {
       if (!this.pendingTimer) {
@@ -121,18 +123,23 @@ export class StallProfiler {
     const covering = this.done.filter((w) => w.endedAt >= p.startedAt && !w.saved);
     if (covering.length === 0) return this.writing;
     this.lastSaveAt = this.now();
-    const stamp = new Date(p.endedAt).toISOString().replace(/[:.]/g, '-');
+    // Named by the FIRST stall it covers (it matches that main-stall line in hitches.jsonl); the sidecar .stalls.json
+    // beside it lists EVERY stall the file covers, so each one in a burst can be matched to this profile.
+    const first = p.stalls[0];
+    const stamp = new Date(first.endedAt).toISOString().replace(/[:.]/g, '-');
+    const stalls = p.stalls.map((x) => ({ ts: new Date(x.endedAt).toISOString(), ms: Math.round(x.ms) }));
     covering.forEach((w, i) => {
       w.saved = true;
-      const name = `stall-${stamp}-${Math.round(p.ms)}ms${covering.length > 1 ? `-part${i + 1}` : ''}.cpuprofile`;
-      this.writing = this.writing.then(() => this.save(name, w.profile)).catch(() => {});
+      const name = `stall-${stamp}-${Math.round(first.ms)}ms${covering.length > 1 ? `-part${i + 1}` : ''}.cpuprofile`;
+      this.writing = this.writing.then(() => this.save(name, w.profile, stalls)).catch(() => {});
     });
     return this.writing;
   }
 
-  private async save(name: string, profile: object): Promise<void> {
+  private async save(name: string, profile: object, stalls: Array<{ ts: string; ms: number }>): Promise<void> {
     await fsp.mkdir(this.o.dir, { recursive: true, mode: 0o700 });
     await fsp.writeFile(join(this.o.dir, name), JSON.stringify(profile), { mode: 0o600 });
+    await fsp.writeFile(join(this.o.dir, `${name}.stalls.json`), JSON.stringify({ stalls }), { mode: 0o600 });
     await this.prune();
   }
 
@@ -149,6 +156,7 @@ export class StallProfiler {
       const old = live.shift()!;
       total -= old.size;
       await fsp.rm(join(this.o.dir, old.n), { force: true });
+      await fsp.rm(join(this.o.dir, `${old.n}.stalls.json`), { force: true });
     }
   }
 

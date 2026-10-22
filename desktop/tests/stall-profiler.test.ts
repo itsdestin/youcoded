@@ -31,7 +31,7 @@ describe('StallProfiler', () => {
     const at = Date.parse('2026-10-22T19:05:06.789Z');
     await p.onStall(at, 2500);
     await p.stop();
-    const files = fs.readdirSync(dir);
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.cpuprofile'));
     expect(files).toHaveLength(1);
     expect(files[0]).toBe('stall-2026-10-22T19-05-06-789Z-2500ms.cpuprofile');
     const profile = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'));
@@ -51,7 +51,7 @@ describe('StallProfiler', () => {
       await new Promise((r) => setTimeout(r, 15)); // distinct mtimes
     }
     await p.stop();
-    const files = fs.readdirSync(dir).sort();
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.cpuprofile')).sort();
     expect(files).toHaveLength(3);
     // The oldest stalls' files are gone; the newest stall's remain. (A stall can save two files: the previous window too.)
     expect(files.some((f) => /T10-0[123]-00/.test(f))).toBe(false);
@@ -89,5 +89,20 @@ describe('StallProfiler', () => {
     await p.stop();
     const after = new Set(fs.readdirSync(dir));
     for (const n of before) expect(after.has(n)).toBe(true);
+  });
+
+  it('a merged profile lists every stall it covers in a .stalls.json beside it, and pruning removes both', async () => {
+    const dir = tmp();
+    let clock = Date.parse('2026-10-22T10:00:00Z');
+    const p = new StallProfiler({ dir, now: () => clock, maxFiles: 10 });
+    p.start();
+    await p.onStall(clock, 3000);                       // saved at once
+    clock += 2000; await p.onStall(clock, 2100);        // inside the gap: merged into the next save
+    clock += 2000; await p.onStall(clock, 2600);
+    await p.stop();
+    const lists = fs.readdirSync(dir).filter((n) => n.endsWith('.stalls.json'));
+    const merged = lists.map((n) => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')).stalls).find((s: any[]) => s.length === 2);
+    expect(merged.map((x: any) => x.ms)).toEqual([2100, 2600]);
+    for (const n of lists) expect(fs.existsSync(path.join(dir, n.replace('.stalls.json', '')))).toBe(true);
   });
 });
