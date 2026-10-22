@@ -145,6 +145,26 @@ describe('RemoteServer — pairing', () => {
       expect(older.closed).toMatchObject({ code: 4010 });
     });
 
+    it('answers requests sent right behind the sign-in after it, and drops them when the sign-in is refused', async () => {
+      // A reopening phone sends its list and conversation requests with the sign-in instead of a round trip later.
+      const { server } = await makeServer();
+      const handle = (ws: FakeSocket) => (server as unknown as { handleConnection(w: unknown, r: unknown): void })['handleConnection'](ws, { socket: { remoteAddress: '127.0.0.1' } });
+      const ok = new FakeSocket();
+      handle(ok);
+      ok.emit('message', JSON.stringify({ type: 'auth', password: 'correct-horse', deviceName: 'Phone' }));
+      ok.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+      await vi.waitFor(() => expect(ok.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+      expect(ok.sent[0].pipelined).toBe(true);
+
+      const refused = new FakeSocket();
+      handle(refused);
+      refused.emit('message', JSON.stringify({ type: 'auth', password: 'wrong', deviceName: 'Phone' }));
+      refused.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+      await vi.waitFor(() => expect(refused.closed).not.toBeNull());
+      await new Promise((r) => setImmediate(r));   // settle: nothing more is sent
+      expect(refused.sent.map((m) => m.type)).toEqual(['auth:failed']);
+    });
+
     it('both sign-in paths tell the screen the protocol version and what it can do', async () => {
       const { server } = await makeServer();
       const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });

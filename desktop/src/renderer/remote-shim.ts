@@ -15,6 +15,7 @@ import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT }
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 import { markPage, startConnection, markConnection, takeReport } from './remote-timings';
+import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -146,6 +147,56 @@ let lastFrameAt = 0;
 /** A large answer arriving as `remote:piece` frames (remote-server sendAnswer): its parts so far, by piece id. Each piece is a
  *  complete frame, so a multi-MB load keeps proving the connection alive while it arrives instead of looking like silence. */
 const pieceParts = new Map<number, string[]>();
+
+// ── Requests sent right behind the sign-in (2026-10-22 phone speed) ──────────────────────────────────────────────────────────────
+// WHY: a reopen waited for four answers in a row — connected, signed in, the session list, the conversation — at ~470 ms each on
+// Destin's phone. A computer that says `pipelined` at sign-in (remote-server authOkMessage) holds requests sent before its answer
+// and handles them after it, so the next connection to it sends the list and the conversation it will open with the sign-in.
+// The answers wait here until the app asks for exactly them; the conversation's live pushes are parked until its page is applied.
+const PIPELINED_KEY = 'youcoded-remote-pipelined';
+function hostPipelines(url: string): boolean {
+  try { return (JSON.parse(localStorage.getItem(PIPELINED_KEY) ?? '[]') as string[]).includes(url); } catch { return false; }
+}
+function rememberPipelines(url: string): void {
+  try {
+    const known = JSON.parse(localStorage.getItem(PIPELINED_KEY) ?? '[]') as string[];
+    if (!known.includes(url)) localStorage.setItem(PIPELINED_KEY, JSON.stringify([...known, url].slice(-8)));
+  } catch { /* no storage: this connection just waits */ }
+}
+/** The current socket may send before its sign-in is answered (its computer said `pipelined` last time). */
+let sendBeforeSignIn = false;
+let early: { generation: number; list: Promise<any> | null; opens: Map<string, Promise<any>> } | null = null;
+/** Live pushes for a conversation opened early, held until the app has applied its page (or 15 s, if it never asks). */
+const parked = new Map<string, Array<() => void>>();
+
+function releaseParked(sid: string): void {
+  const held = parked.get(sid);
+  parked.delete(sid);
+  for (const run of held ?? []) run();
+}
+
+/** Ask for the session list and the conversation the app will open, once per connection, as early as this socket may. */
+function startEarlyRequests(generation: number): void {
+  if (early?.generation === generation) return;
+  early = { generation, list: invoke('session:list'), opens: new Map() };
+  early.list!.catch(() => { /* the app asks again (takeEarlyList) */ });
+  // The app's next open of this conversation: a first load (fresh) on a new page, a catch-up (`have`) on a reconnect to the same computer.
+  const fresh = !(hasConnectedBefore && lastReadyHost === getWsUrl());
+  const place = readRemotePlace(remotePlaceStorages(), remotePlaceHost());
+  if (!place) return;
+  parked.set(place, []);
+  const opening = openSessionRemoteNow({ sessionId: place, fresh });
+  opening.catch(() => { /* the app's own open asks again */ });
+  early.opens.set(`${place}|${fresh}`, opening);
+  setTimeout(() => { if (early?.opens.delete(`${place}|${fresh}`)) releaseParked(place); }, 15_000);
+}
+
+function takeEarlyList(): Promise<any> | null {
+  if (!early || early.generation !== connectionGeneration || !early.list) return null;
+  const list = early.list;
+  early.list = null;
+  return list.catch(() => invoke('session:list'));
+}
 /** Another tab of this browser took the connection (CLOSE_REPLACED). WHY a flag (branch review F4): the network coming back and
  *  the page being shown both reconnect a disconnected page, so a hidden tab could take the connection from the one in front, and
  *  the tab showing "Reload this tab" took it back on focus. Only the reload the card offers reconnects it. */
@@ -243,7 +294,8 @@ function reportFill(report: { round?: number; failed?: number } | undefined): vo
   if (noFillTimer) { clearTimeout(noFillTimer); noFillTimer = null; }
   setConversationPhase((report?.failed ?? 0) > 0 ? 'incomplete' : 'complete');
   // One frame on, the conversations are on screen: the computer logs how long this connection took (remote-timings.ts).
-  if (!isAndroidLocal()) requestAnimationFrame(() => { const r = takeReport(); if (r) send({ type: 'remote:timings', payload: r }); });
+  const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 0);
+  if (!isAndroidLocal()) frame(() => { const r = takeReport(); if (r) send({ type: 'remote:timings', payload: r }); });
 }
 
 // Where each session stands on this page, as the host's own numbers: the epoch (which record) and the last event number applied.
@@ -537,7 +589,7 @@ function send(msg: any): boolean {
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
   // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
-  if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
+  if (ws?.readyState === WebSocket.OPEN && (connectionState === 'connected' || (sendBeforeSignIn && connectionState === 'authenticating'))) {
     ws.send(data);
     return true;
   }
@@ -669,7 +721,18 @@ async function openPtyEarly(sid: string): Promise<void> {
   } catch { /* the ordinary open carries the terminal too */ }
 }
 
-async function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
+/** The app's open of a conversation: the answer to the one asked with the sign-in when it is exactly this, else a new request. */
+function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
+  const key = `${req.sessionId}|${!!req.fresh}`;
+  const ready = early?.generation === connectionGeneration ? early.opens.get(key) : undefined;
+  if (!ready) return openSessionRemoteNow(req);
+  early!.opens.delete(key);
+  // Its parked pushes follow once the app has applied the page: the app's own continuation runs before this timer.
+  void ready.then(() => setTimeout(() => releaseParked(req.sessionId), 0), () => releaseParked(req.sessionId));
+  return ready;
+}
+
+async function openSessionRemoteNow(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
   const sid = req.sessionId;
   const have = req.fresh ? undefined : fillCursors.get(sid);
   void openPtyEarly(sid);
@@ -1057,6 +1120,8 @@ function handleMessage(data: string, generation: number): void {
   // Push events: note where this session stands (the host numbers every session-scoped push), then hand it to the listeners.
   // A live terminal frame for a session this connection has not opened yet is dropped (see openedHere).
   if (type === 'pty:output' && !openedHere.has(payload?.sessionId) && !ptyEarly.has(payload?.sessionId)) return;
+  const held = typeof payload?.sessionId === 'string' ? parked.get(payload.sessionId) : undefined;
+  if (held) { held.push(() => { noteCursor(msg); routePush(type, payload); }); return; }
   noteCursor(msg);
   routePush(type, payload);
 }
@@ -1320,6 +1385,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     if (ws) retireSocket(ws);
     setConnectionState('connecting');
     startConnection();
+    sendBeforeSignIn = false;
+    for (const sid of [...parked.keys()]) releaseParked(sid);   // an old connection's held pushes: the new one refills anyway
     const socket = new WebSocket(getWsUrl());
     ws = socket;
     const isCurrent = () => generation === connectionGeneration && ws === socket;
@@ -1366,6 +1433,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
           : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
       socket.send(JSON.stringify(authMsg));
+      // A computer that held early requests last time gets the list and the conversation now, not a round trip later.
+      if (!localBridge && hostPipelines(getWsUrl())) { sendBeforeSignIn = true; startEarlyRequests(generation); }
     };
 
     let authResolved = false;
@@ -1387,6 +1456,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
           markConnection('signed-in');
+          if (msg.pipelined === true) rememberPipelines(getWsUrl());
           // WHY here (one-core R4-1, S7): the host says what this screen can do, before anything announces the connection. An
           // older computer sends nothing and gets the conservative defaults. Replaced on EVERY auth:ok: a reconnect or a
           // switch between the Android app's own runtime and a paired computer takes the new host's answer.
@@ -2125,7 +2195,7 @@ export function installShim(): void {
         return () => removeListener('session:refill', handler);
       },
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
-      list: () => invoke('session:list'),
+      list: () => takeEarlyList() ?? invoke('session:list'),
       // includeOpen: also list the chats open right now, marked `open` (a page's chat list; the Resume list leaves them out).
       browse: (opts?: { includeOpen?: boolean }) => invoke('session:browse', opts?.includeOpen ? { includeOpen: true } : undefined),
       // Fix: parameter order MUST match preload.ts — (sessionId, projectSlug, count, all).

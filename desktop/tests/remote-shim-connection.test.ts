@@ -463,6 +463,50 @@ describe('remote-shim — client:ready', () => {
       expect(readies[0].payload.reconnect).toBe(true);
     });
 
+    // A reopen waited for four answers in a row (~470 ms each on Destin's phone). A computer that said `pipelined` is sent the list
+    // and the conversation the page will open together with the sign-in, and the app's own calls get those answers.
+    it('asks a computer that holds early requests for the list and the last conversation with the sign-in, and reuses the answers', async () => {
+      const place = new Map<string, string>([['youcoded-remote-place:localhost', 's1']]);
+      (globalThis as any).sessionStorage = { getItem: (k: string) => place.get(k) ?? null, setItem: (k: string, v: string) => { place.set(k, v); } };
+      try {
+        const p1 = shim.connect('dev-1:secret', true);
+        const ws1 = FakeWebSocket.instances[0];
+        ws1.open();
+        expect(ws1.sentOf('session:list')).toEqual([]);              // first time: nothing is known about this computer
+        ws1.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', pipelined: true });
+        await p1;
+
+        const p2 = shim.connect('dev-1:secret', true);
+        const ws2 = FakeWebSocket.instances[1];
+        ws2.open();
+        // Before the sign-in is answered: the sign-in, the list, and the conversation (terminal first, then the chat).
+        expect(ws2.sent.map((d) => JSON.parse(d).type)).toEqual(['auth', 'session:list', 'session:open', 'session:open']);
+        const [list, ptyOpen, chatOpen] = ['session:list', 'session:open', 'session:open'].map((t, i) => ws2.sentOf(t)[t === 'session:open' ? i - 1 : 0]);
+        ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', pipelined: true });
+        await p2;
+
+        ws2.receive({ type: 'session:list:response', id: list.id, payload: [{ id: 's1' }] });
+        ws2.receive({ type: 'session:open:response', id: ptyOpen.id, payload: { ok: true, ptyOnly: true } });
+        ws2.receive({ type: 'session:open:response', id: chatOpen.id, payload: { ok: true, epoch: 'e', headSeq: 1 } });
+        // A live message for that conversation, arriving before the app has applied its page, waits for it.
+        const live: string[] = [];
+        (window as any).claude.on.transcriptEvent((e: any) => live.push(e.uuid));
+        await new Promise((r) => setTimeout(r, 0));
+        ws2.receive({ type: 'transcript:event', payload: { sessionId: 's1', uuid: 'u2', type: 'assistant-text' }, epoch: 'e', seq: 2 });
+        expect(live).toEqual([]);
+
+        // The app's own calls are answered from those, with nothing asked again.
+        await expect((window as any).claude.session.list()).resolves.toEqual([{ id: 's1' }]);
+        // A reconnect to the same computer: the app asks for a catch-up (not a fresh page), which is what went with the sign-in.
+        const reply = await (window as any).claude.session.open({ sessionId: 's1' });
+        expect(reply).toMatchObject({ ok: true, epoch: 'e' });
+        expect(live).toEqual([]);                                     // the app applies the page in this continuation
+        await vi.waitFor(() => expect(live).toEqual(['u2']));         // then the held message follows
+        expect(ws2.sentOf('session:list')).toHaveLength(1);
+        expect(ws2.sentOf('session:open')).toHaveLength(2);
+      } finally { delete (globalThis as any).sessionStorage; }
+    });
+
     it('drops a frame from a socket that is no longer the current one', async () => {
       const p1 = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];

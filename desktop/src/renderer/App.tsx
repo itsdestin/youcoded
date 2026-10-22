@@ -1736,7 +1736,7 @@ function AppInner() {
 
   // Which conversations a phone watches (one-core R5-3): the one on screen plus a few it looked at lately. Inert on the computer's own
   // windows, which own what they show. Placed here (not with the other phone state) because it needs the first-page loader.
-  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), loader: firstPages });
+  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), listLoaded: sessionListLoaded, loader: firstPages });
   // Read through a ref by the handlers below that must not re-register every time the watch set changes.
   const remoteWatchRef = useRef(remoteWatch);
   remoteWatchRef.current = remoteWatch;
@@ -1799,12 +1799,14 @@ function AppInner() {
     // Forget closed sessions first. A native session is keyed by the id it
     // resumes, so the same id can legitimately come back — and a stale entry
     // here would silently deny it any history at all.
-    firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
+    // Only against the computer's list once it has arrived: before it, a phone's fill of the conversation it reopened on is already
+    // running, and an empty list would drop it (it was then filled twice — 2026-10-22 phone speed).
+    if (sessionListLoaded) firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
     // A phone fills only what it watches (useRemoteWatch fills the one on screen when it is chosen); every other conversation is not sent to it.
     if (!pendingRef.current?.active && !isRemoteMode()) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, firstPages]);
+  }, [sessions, sessionListLoaded, loadFirstPage, firstPages]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {

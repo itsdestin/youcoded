@@ -198,6 +198,8 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     },
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
+    // Requests sent right behind the sign-in are held and answered after it (handleConnection), so a page may stop waiting a round trip.
+    pipelined: true,
   };
 }
 
@@ -889,6 +891,18 @@ export class RemoteServer {
       detachBudget();
       if (slowStart) await new Promise(r => setTimeout(r, slowStart));
       ws.off('message', authHandler);
+      // WHY held (2026-10-22 phone speed): a page that has signed in here before sends its first requests (the session list, its
+      // conversation) right behind the sign-in instead of a round trip later (`pipelined` in authOkMessage). They wait here and are
+      // handled once it is signed in; a failed sign-in closes the socket and they are dropped. Bounded like the sign-in itself.
+      const early: Array<Buffer | string> = [];
+      let earlyBytes = 0;
+      const holdEarly = (r: Buffer | string) => {
+        earlyBytes += r.length;
+        if (early.length >= 16 || earlyBytes > PRE_AUTH_MAX_BYTES) { ws.close(4009, 'Too much before sign-in'); return; }
+        early.push(r);
+      };
+      ws.on('message', holdEarly);
+      const replayEarly = () => { ws.off('message', holdEarly); for (const r of early) ws.emit('message', r); };
 
       try {
         const msg = JSON.parse(raw.toString());
@@ -903,7 +917,7 @@ export class RemoteServer {
           if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
           releaseUnauth();
           this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
-          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
+          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); replayEarly(); return; // the phone's own abilities
         }
 
         // No password configured
@@ -926,6 +940,7 @@ export class RemoteServer {
             // WHY one builder (R4-1): the two sign-in paths used to spell the handshake by hand and had to be kept
             // in step; a returning device paints the same UI as a newly paired one.
             ws.send(JSON.stringify(authOkMessage({ deviceId: result.device.id }, this.getFocusSessionId())));
+            replayEarly();
             // The restore waits for client:ready (addClient armed the old-client fallback).
             return;
           }
@@ -954,6 +969,7 @@ export class RemoteServer {
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: paired.deviceId, secret: paired.secret }, this.getFocusSessionId())));
+          replayEarly();
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();
@@ -963,6 +979,8 @@ export class RemoteServer {
       } catch {
         ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-message' }));
         ws.close(4000, 'Invalid auth message');
+      } finally {
+        ws.off('message', holdEarly);   // signed in: already handed on (replayEarly); refused: dropped with the socket
       }
     };
 

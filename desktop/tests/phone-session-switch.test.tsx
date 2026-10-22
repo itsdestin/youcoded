@@ -89,6 +89,17 @@ describe('useRemoteWatch on a phone', () => {
     return { loader, filled, finish: () => { release.forEach((r) => r()); release = []; } };
   }
 
+  it('a reopened phone keeps watching the conversation it was on while the computer\'s list is still on its way', async () => {
+    // Pruning against the not-yet-arrived (empty) list forgot it, so the list's arrival filled it a second time.
+    const { loader, filled, finish } = fakeLoader();
+    const { result, rerender } = renderHook((p: { ids: string[]; loaded: boolean }) => useRemoteWatch({ enabled: true, activeId: 'a', sessionIds: p.ids, listLoaded: p.loaded, loader }), { initialProps: { ids: [] as string[], loaded: false } });
+    await act(async () => { finish(); });
+    rerender({ ids: ['a', 'b'], loaded: true });
+    // The list's own choice is the same conversation: already watched, so nothing is asked again.
+    await act(async () => { await result.current.watch('a'); });
+    expect(filled).toEqual(['a']);
+  });
+
   it('fills and watches the conversation on screen, and says it is filling from the frame the switch is drawn in', async () => {
     const { loader, filled, finish } = fakeLoader();
     const seen: boolean[] = [];
