@@ -598,6 +598,8 @@ export class SubagentWatcher {
       // More is waiting: have readNewLines loop again, after letting other work run.
       state.rerunQueued = true;
       await new Promise<void>((resolve) => setImmediate(resolve));
+      // stop() may have run during the yield: deliver nothing for a closed session.
+      if (!this.started) return;
     }
 
     // Stitch the byte carry BEFORE decoding so a multi-byte UTF-8 char split

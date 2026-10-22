@@ -697,3 +697,23 @@ describe('SubagentWatcher default: existing helper files are not replayed', () =
     expect(new Set(emitted.map((e) => looseData(e).toolUseId)).size).toBe(3000);
   });
 });
+
+describe('SubagentWatcher: nothing is delivered after stop()', () => {
+  it('a backlog read cut short by stop() emits no further events', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-stop-'));
+    const dir = path.join(tmp, 'subagents'); fs.mkdirSync(dir);
+    const idx = new SubagentIndex(); const got: TranscriptEvent[] = [];
+    const w = new SubagentWatcher({ sessionId: 's', subagentsDir: dir, index: idx, emit: (e) => got.push(e), replayExisting: true });
+    writeMeta(dir, 'big', 'Find bug', 'Explore');
+    idx.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    const lines = Array.from({ length: 3000 }, (_, i) => JSON.stringify(toolUseLine(`u${i}`, `toolu_${i}`, 'Read', { file_path: '/x'.repeat(500) })));
+    fs.writeFileSync(path.join(dir, 'agent-big.jsonl'), lines.join('\n') + '\n');   // ~3 MiB: several capped reads
+    w.start();
+    await vi.waitFor(() => expect(got.length).toBeGreaterThan(0), { timeout: SETTLE_MS });
+    w.stop();
+    const atStop = got.length;
+    await wait(300);
+    expect(got.length).toBe(atStop);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
