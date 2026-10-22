@@ -14,7 +14,7 @@
 // shown in TWO places — Settings → Help & feedback (was Development until 2026-09-28), and the version pill's update
 // popup beside the changelog — and a second copy is how the Development list
 // ended up with two versions of itself, only one of which users ever saw.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Toggle } from './SettingsPanel';
 import { CARD_LEVEL_1, SectionLabel, SettingRow } from './ui';
 
@@ -110,38 +110,56 @@ export function BetaChannelRow(
   );
 }
 
-/** Shared state hook for "Install updates automatically" (#183), same shape as the beta one. */
-function useAutoInstall(): [boolean | null, () => void] {
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    // WHY the capability check: Android and remote browsers have no installer to run, so the
-    // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
-    const api = window.claude?.update as
-      | { getAutoInstall?: () => Promise<{ enabled: boolean }> }
-      | undefined;
-    if (typeof api?.getAutoInstall !== 'function') return;
+/** "Install updates automatically" (#183) as one small store, not per-row state.
+ *  WHY a store: the update popup's line under its title ("Installs by itself the next time
+ *  you quit") must change the moment the switch below it is flipped (UX review 1, U2) — two
+ *  useState copies would disagree until reopened. */
+let autoInstall: boolean | null = null;
+let autoInstallLoading = false;
+const autoInstallListeners = new Set<() => void>();
+function setAutoInstallValue(v: boolean | null) {
+  autoInstall = v;
+  for (const l of autoInstallListeners) l();
+}
+function subscribeAutoInstall(l: () => void) {
+  autoInstallListeners.add(l);
+  // WHY the capability check: Android and remote browsers have no installer to run, so the
+  // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
+  const api = window.claude?.update as
+    | { getAutoInstall?: () => Promise<{ enabled: boolean }> }
+    | undefined;
+  if (autoInstall === null && !autoInstallLoading && typeof api?.getAutoInstall === 'function') {
+    autoInstallLoading = true;
     api.getAutoInstall()
-      .then((s) => { if (!cancelled) setEnabled(s.enabled); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+      .then((s) => setAutoInstallValue(s.enabled))
+      .catch(() => {})
+      .finally(() => { autoInstallLoading = false; });
+  }
+  return () => { autoInstallListeners.delete(l); };
+}
+
+/** null until known, or where the host has no automatic updates (Android, remote). */
+export function useAutoInstall(): [boolean | null, () => void] {
+  const enabled = useSyncExternalStore(subscribeAutoInstall, () => autoInstall);
   const flip = () => {
     if (enabled === null) return;
     const next = !enabled;
-    setEnabled(next);  // optimistic
+    setAutoInstallValue(next);  // optimistic
     const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<{ enabled: boolean }> };
     api.setAutoInstall(next)
-      .then((s) => setEnabled(s.enabled))
-      .catch(() => setEnabled(!next));  // revert on failure
+      .then((s) => setAutoInstallValue(s.enabled))
+      .catch(() => setAutoInstallValue(!next));  // revert on failure
   };
   return [enabled, flip];
 }
 
 // Two lengths for the same reason as the beta row: 'nav' truncates to one line.
+// WHY no "when you quit" (UX review 1, U4/U10): on a computer where installing needs a
+// password, quitting does not install, so the switch says only what is true everywhere; the
+// update popup's line under its title says when this computer installs it.
 const AUTO_DESCRIPTION =
-  'Downloads new versions in the background and installs them when you quit. Off: you choose when to update.';
-const AUTO_DESCRIPTION_SHORT = 'Installs new versions when you quit';
+  'Downloads new versions by itself. Off: you choose when to update.';
+const AUTO_DESCRIPTION_SHORT = 'Downloads new versions by itself';
 
 /** "Install updates automatically" (#183). Beside Get beta builds in both places it appears:
  *  inside the update popup's Updates card, and in Settings → Help & feedback. */

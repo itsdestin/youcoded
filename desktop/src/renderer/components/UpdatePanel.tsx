@@ -11,7 +11,7 @@ import MarkdownContent from './MarkdownContent';
 import { Button, Callout, CARD_LEVEL_1, Dialog, ErrorState, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { BugReportPopup } from './development/BugReportPopup';
-import { BetaChannelRow } from './BetaChannelToggle';
+import { BetaChannelRow, useAutoInstall } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
@@ -104,6 +104,8 @@ interface Props {
 export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const [data, setData] = useState<ChangelogData | null>(null);
   const [loading, setLoading] = useState(false);
+  // #183: the line under the title follows the switch in the Updates card (UX review 1, U2).
+  const [autoInstall] = useAutoInstall();
 
   // Escape-to-close, matching AboutPopup/PreferencesPopup convention.
   // When the planned useEscClose stack lands, migrate alongside those popups.
@@ -446,7 +448,9 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         subtitle={updateStatus.update_available && updateStatus.downloaded
           ? (updateStatus.needs_password
             ? 'Downloaded. Restarting asks for your password, then installs it.'
-            : 'Downloaded. Installs by itself the next time you quit YouCoded.')
+            : autoInstall === false
+              ? 'Downloaded. Restart when you are ready.'
+              : 'Downloaded. Installs by itself the next time you quit YouCoded.')
           : undefined}
         // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
         // notes with no fade and drew a full-width line above its footer (guide: no full-width

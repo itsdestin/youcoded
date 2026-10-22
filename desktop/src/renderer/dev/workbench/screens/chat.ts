@@ -217,6 +217,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#update-ready', 'view'), params: { update: 'ready' } },
   { ...chat('chat/update#ready', 'dialog'), params: { update: 'ready' } },
   { ...chat('chat/update#ready-password', 'dialog'), params: { update: 'ready-password' } },
+  { ...chat('chat/update#ready-manual', 'dialog'), params: { update: 'ready', autoInstall: 'off' } },
 
   // Actual panel driven through its launch callback; only the backend is faked.
   ...['authorizing', 'installing', 'restarting', 'failed', 'timeout'].map(phase => ({

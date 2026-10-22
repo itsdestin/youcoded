@@ -4006,13 +4006,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // states without ever asking for privileges or modifying an installed app.
   const updateInstall = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('updateInstall') : null;
   const updateInstallListeners = new Set<(event: UpdateInstallProgressEvent) => void>();
-  let autoInstall = true;
+  // `?autoInstall=off` (#183): the switch already off, for the popup's off wording.
+  let autoInstall = typeof location === 'undefined' || new URLSearchParams(location.search).get('autoInstall') !== 'off';
   const update = {
     onInstallProgress: (handler: (event: UpdateInstallProgressEvent) => void) => {
       updateInstallListeners.add(handler);
       return () => { updateInstallListeners.delete(handler); };
     },
-    changelog: async () => ({
+    // ?update=ready* (#183) is 1.3.2 → 1.4.0, so its notes must be 1.4.0's (UX review 1, U1:
+    // a 1.3.0 note under a 1.4.0 button read as three different versions).
+    changelog: async () => updateStatusSwitch()?.downloaded ? ({
+      markdown: '## 1.4.0\n\n- Updates download by themselves and install when you quit.\n- Clearer messages when a reply fails.\n\n## 1.3.2\n\n- Fixes for the file viewer.',
+      entries: [
+        { version: '1.4.0', date: '2026-10-29', body: '- Updates download by themselves and install when you quit.\n- Clearer messages when a reply fails.' },
+        { version: '1.3.2', date: '2026-10-20', body: '- Fixes for the file viewer.' },
+      ],
+      fromCache: false,
+    }) : ({
       markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
       entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
       fromCache: false,
