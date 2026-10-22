@@ -11,8 +11,10 @@
 import { useState } from 'react';
 import { Button, CARD_LEVEL_1, Dialog, Toggle } from './ui';
 
-export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
+export default function QuitSessionsPrompt({ count, onCancel, onConfirm, reason }: {
   count: number;
+  /** 'update': raised by Restart to update (#183 Q-busy), so it says restart, not close. */
+  reason?: 'update';
   onCancel: () => void;
   /** `reopen`: offer these sessions on the Welcome back screen next launch. */
   onConfirm: (reopen: boolean) => void;
@@ -26,7 +28,9 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
     // shared body only to place its own button row; the footer slot does that, and keeps the
     // row in view on a short window. No Enter-to-confirm: Close window ends sessions, so it
     // takes a click.
-    <Dialog open onClose={onCancel} size="panel" title="Close window" layer={3} screen="chat/quit-sessions"
+    // WHY the restart wording (#183, guide "a button names what it does"): Destin asked for this
+    // same prompt on Restart to update; "Close window" there would read as quitting for good.
+    <Dialog open onClose={onCancel} size="panel" title={reason === 'update' ? 'Restart to update' : 'Close window'} layer={3} screen="chat/quit-sessions"
       footer={
         <div className="flex items-center justify-between gap-3">
           <label className="flex items-center gap-2 text-xs text-fg cursor-pointer select-none whitespace-nowrap">
@@ -34,7 +38,7 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
             Resume on Next Launch?
           </label>
           <Button size="sm" variant="danger" className="whitespace-nowrap" onClick={() => onConfirm(reopen)}>
-            Close window
+            {reason === 'update' ? 'Restart' : 'Close window'}
           </Button>
         </div>
       }>
@@ -46,7 +50,7 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
           You have {count} active session{count === 1 ? '' : 's'} - proceed?
         </p>
         <p className="text-2xs text-fg-muted leading-snug">
-          Closing this window will end your active sessions. Would you like an offer to resume these sessions the next time you launch YouCoded?
+          {reason === 'update' ? 'Restarting' : 'Closing this window'} will end your active sessions. Would you like an offer to resume these sessions the next time you launch YouCoded?
         </p>
       </div>
     </Dialog>

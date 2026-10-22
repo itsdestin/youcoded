@@ -4,7 +4,7 @@
 // so it picks up every theme's tokens and needs no colours of its own.
 import { useEffect, useState } from 'react';
 import { Dialog, SectionLabel, SettingRow, Toggle } from './ui';
-import { BetaChannelRow } from './BetaChannelToggle';
+import { AutoInstallRow, BetaChannelRow } from './BetaChannelToggle';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useGuideReset } from './guide/guide-events';
 
@@ -139,7 +139,9 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
               description="Start with a conversation, not code"
               onClick={() => { onOpenContribute(); onClose(); }}
             />
+            {/* #183 Q-switch: the auto-install switch sits beside Get beta builds. */}
             <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
+            <AutoInstallRow variant="nav" icon={<RefreshIcon />} />
           </div>
         </section>
       </div>
@@ -149,6 +151,18 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, onOpenCont
 
 // Inline SVG icons in the settings-row style (stroke 1.8, currentColor →
 // text-fg-muted). Each viewBox is 24×24, rendered at 16×16, round caps and joins.
+
+function RefreshIcon() {
+  // Two curved arrows — an update that comes round by itself.
+  return (
+    <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 11a8 8 0 0 0-14.5-4.5L4 8" />
+      <path d="M4 4v4h4" />
+      <path d="M4 13a8 8 0 0 0 14.5 4.5L20 16" />
+      <path d="M20 20v-4h-4" />
+    </svg>
+  );
+}
 
 function CompassIcon() {
   // A compass — "show me around" is wayfinding.

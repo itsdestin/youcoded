@@ -3209,10 +3209,11 @@ function AppInner() {
   // to close and whether those sessions come back next launch. `requestId`
   // round-trips on the answer so main can match it to the right pending
   // request (a second window closing at the same time gets its own).
-  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number } | null>(null);
+  // `reason: 'update'` (#183): Restart to update raises the same prompt with restart wording.
+  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number; reason?: 'update' } | null>(null);
   useEffect(() => {
     const api = (window.claude as any).window;
-    return api?.onCloseRequest?.((req: { requestId: string; sessions: number }) => setQuitPrompt(req)) ?? undefined;
+    return api?.onCloseRequest?.((req: { requestId: string; sessions: number; reason?: 'update' }) => setQuitPrompt(req)) ?? undefined;
   }, []);
   useEffect(() => {
     // Whole-app quit wins over a pending prompt (design §4 step 5): main
@@ -4128,6 +4129,7 @@ function AppInner() {
       {quitPrompt && (
         <QuitSessionsPrompt
           count={quitPrompt.sessions}
+          reason={quitPrompt.reason}
           onCancel={() => answerClose({ close: false })}
           onConfirm={(reopen) => answerClose({ close: true, reopen })}
         />

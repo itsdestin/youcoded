@@ -56,6 +56,10 @@ interface StatusData {
     latest: string;
     update_available: boolean;
     download_url: string | null;
+    /** #183: the update finished downloading in the background and waits for a restart. */
+    downloaded?: boolean;
+    /** #183: installing it asks for a password (a Linux package, a non-administrator Mac). */
+    needs_password?: boolean;
   } | null;
   announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;
@@ -1605,7 +1609,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available
+            (updateStatus.update_available && updateStatus.downloaded
+              ? `v${updateStatus.latest} is downloaded — click to restart and update`
+              : updateStatus.update_available
               ? `Update available: v${updateStatus.latest} — click to download`
               : `YouCoded v${updateStatus.current}`)
           }>
@@ -1627,7 +1633,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           {updateStatus.update_available ? (
             // Normal words on the amber tint (small-fixes-3#SF3-10); sentence case (decisions "Sentence case").
             <span className="text-fg font-medium">
-              v{updateStatus.latest} — Update available
+              {/* #183 Q-chip "keep-pulse": same tint and pulse, words say it is already here. */}
+              {updateStatus.downloaded
+                ? <>v{updateStatus.latest} ready — restart to update</>
+                : <>v{updateStatus.latest} — Update available</>}
             </span>
           ) : (
             <span>v{updateStatus.current}</span>

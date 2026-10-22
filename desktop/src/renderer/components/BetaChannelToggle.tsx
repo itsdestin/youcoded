@@ -103,7 +103,63 @@ export function BetaChannelRow(
   return (
     <section>
       <SectionLabel className="mb-2">Updates</SectionLabel>
-      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{row}</div>
+      {/* WHY the auto-install row shares this card (#183, Q-switch "both-places"): the two
+          update settings are one group, so they are one card, the beta row first as before. */}
+      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{row}<AutoInstallRow header /></div>
     </section>
+  );
+}
+
+/** Shared state hook for "Install updates automatically" (#183), same shape as the beta one. */
+function useAutoInstall(): [boolean | null, () => void] {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // WHY the capability check: Android and remote browsers have no installer to run, so the
+    // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
+    const api = window.claude?.update as
+      | { getAutoInstall?: () => Promise<{ enabled: boolean }> }
+      | undefined;
+    if (typeof api?.getAutoInstall !== 'function') return;
+    api.getAutoInstall()
+      .then((s) => { if (!cancelled) setEnabled(s.enabled); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const flip = () => {
+    if (enabled === null) return;
+    const next = !enabled;
+    setEnabled(next);  // optimistic
+    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<{ enabled: boolean }> };
+    api.setAutoInstall(next)
+      .then((s) => setEnabled(s.enabled))
+      .catch(() => setEnabled(!next));  // revert on failure
+  };
+  return [enabled, flip];
+}
+
+// Two lengths for the same reason as the beta row: 'nav' truncates to one line.
+const AUTO_DESCRIPTION =
+  'Downloads new versions in the background and installs them when you quit. Off: you choose when to update.';
+const AUTO_DESCRIPTION_SHORT = 'Installs new versions when you quit';
+
+/** "Install updates automatically" (#183). Beside Get beta builds in both places it appears:
+ *  inside the update popup's Updates card, and in Settings → Help & feedback. */
+export function AutoInstallRow(
+  { icon, variant = 'item', header }: { icon?: React.ReactNode; variant?: 'nav' | 'item'; header?: boolean } = {},
+) {
+  const [enabled, flip] = useAutoInstall();
+  if (enabled === null) return null;
+  return (
+    <SettingRow
+      variant={variant}
+      // WHY header inside the popup's card: two rows of one card, both unboxed like the beta
+      // row — a box inside the card read as a third level (first shoot, 2026-10-22).
+      header={header}
+      icon={icon}
+      title="Install updates automatically"
+      description={variant === 'nav' ? AUTO_DESCRIPTION_SHORT : AUTO_DESCRIPTION}
+      control={<Toggle enabled={enabled} onToggle={flip} label="Install updates automatically" />}
+    />
   );
 }

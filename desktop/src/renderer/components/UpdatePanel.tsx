@@ -76,6 +76,11 @@ interface UpdateStatus {
   latest: string;
   update_available: boolean;
   download_url: string | null;
+  /** #183: already downloaded in the background; the button becomes Restart to update. */
+  downloaded?: boolean;
+  /** #183: installing asks for a password (Linux package, non-administrator Mac), so
+   *  quitting does not install it — only Restart to update does. */
+  needs_password?: boolean;
 }
 
 // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
@@ -124,6 +129,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // ── Install state machine ────────────────────────────────────────────────
   type InstallState =
     | { kind: 'idle' }
+    // #183: Restart to update was pressed; waiting on the close-window prompt or the restart.
+    | { kind: 'restarting' }
     | { kind: 'downloading'; jobId: string | null; percent: number }
     | { kind: 'ready'; jobId: string; filePath: string }
     | { kind: 'launching'; jobId: string; phase: 'preparing' | 'handoff' | Exclude<UpdateInstallProgressEvent['phase'], 'failed'>; output: string }
@@ -336,6 +343,21 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     }
   }, [installState, runLaunch]);
 
+  // #183 Restart to update. Main asks through the close-window prompt when chats are open
+  // (Q-busy: "just show the standard closeout prompt"); closing that prompt resolves
+  // `restarting: false` and the button comes back, so nothing restarts behind the user's back.
+  const handleRestart = useCallback(async () => {
+    setInstallState({ kind: 'restarting' });
+    try {
+      const api = window.claude.update as unknown as { restartToUpdate: () => Promise<{ restarting: boolean }> };
+      const result = await api.restartToUpdate();
+      if (!result.restarting) setInstallState({ kind: 'idle' });
+    } catch (e: unknown) {
+      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'launch' });
+    }
+  }, []);
+  const readyToRestart = !!updateStatus.downloaded && (installState.kind === 'idle' || installState.kind === 'ready');
+
   const handleFallbackBrowser = useCallback(async () => {
     if (updateStatus.download_url) {
       await window.claude.shell.openExternal(updateStatus.download_url);
@@ -418,7 +440,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         open
         onClose={onClose}
         size="document"
-        title={updateStatus.update_available ? 'Update available' : "What's new"}
+        title={updateStatus.update_available ? (updateStatus.downloaded ? 'Update ready' : 'Update available') : "What's new"}
+        // #183: one line on when it installs — by itself on quit, except where installing
+        // needs a password (Q-linux / Q-mac: only when you press the button).
+        subtitle={updateStatus.update_available && updateStatus.downloaded
+          ? (updateStatus.needs_password
+            ? 'Downloaded. Restarting asks for your password, then installs it.'
+            : 'Downloaded. Installs by itself the next time you quit YouCoded.')
+          : undefined}
         // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
         // notes with no fade and drew a full-width line above its footer (guide: no full-width
         // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
@@ -446,7 +475,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 where a fresh attempt can help (guide "A failed action replaces the buttons it
                 came from"; small-fixes-1#SF-1). No browser fallback for a damaged download:
                 that file is the one the check refused (2026-09-10 #7 review). */}
-            {installState.kind === 'launching' ? (
+            {installState.kind === 'launching' || installState.kind === 'restarting' ? (
               <div role="status" aria-live="polite">
                 {/* WHY retain the button (LU-1/LU-2/LU-5 review): Destin rejected bare
                     status text. Keep the original full-width action shape as its label
@@ -457,7 +486,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                       itself to update, with no extra text or expandable log below it.
                       Main bounds/sanitizes output; cap the label too for noisy scripts. */}
                   <span className="min-w-0 truncate">
-                    {installState.phase === 'preparing' ? 'Preparing the installer…'
+                    {installState.kind === 'restarting' ? 'Restarting YouCoded…'
+                      : installState.phase === 'preparing' ? 'Preparing the installer…'
                       : installState.phase === 'authorizing' ? 'Waiting for administrator approval…'
                       : installState.phase === 'restarting' ? 'Restarting YouCoded…'
                       : installState.phase === 'handoff' ? 'Opening the installer…'
@@ -484,7 +514,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             <Button
               size="lg"
               className="w-full"
-              onClick={handleUpdate}
+              onClick={readyToRestart ? handleRestart : handleUpdate}
               disabled={
                 installState.kind === 'downloading' ||
                 // The download is done and waiting on a terminal — the block
@@ -494,11 +524,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
               }
             >
-              {installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
+              {/* #183: replaces Update now once the background download is done. */}
+              {readyToRestart && `Restart to update: v${updateStatus.current} → v${updateStatus.latest}`}
+              {!readyToRestart && installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
               {installState.kind === 'downloading' && (
                 installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
               )}
-              {installState.kind === 'ready' && 'Launch installer'}
+              {!readyToRestart && installState.kind === 'ready' && 'Launch installer'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
               {/* Only a blocked update still reaches here in the error state; every other failure
                   is the notice above. WHY the stage picks the sentence there (error inventory
