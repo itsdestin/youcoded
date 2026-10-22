@@ -523,6 +523,11 @@ describe('remote-shim — heartbeat', () => {
       (globalThis as any).location = { protocol, host: 'desk:9900', search: '' };
       doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
       (globalThis as any).document = doc;
+      // The window's own events ('offline'), as a browser has them.
+      const win = new EventTarget();
+      (globalThis as any).addEventListener = win.addEventListener.bind(win);
+      (globalThis as any).removeEventListener = win.removeEventListener.bind(win);
+      (globalThis as any).dispatchEvent = win.dispatchEvent.bind(win);
       store = { 'youcoded-remote-token': 'dev-1:secret' };
       (globalThis as any).localStorage = {
         getItem: (k: string) => store[k] ?? null,
@@ -569,10 +574,36 @@ describe('remote-shim — heartbeat', () => {
       const ws = await signedIn();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(ws.sentOf('remote:ping')).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(FakeWebSocket.instances).toHaveLength(2);
       latest().open();
       expect(latest().sentOf('auth')[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret' });
+    });
+
+    it('waits out a computer that freezes for half a minute, saying so, and keeps the connection', async () => {
+      // The laptop's app freezes 10–50 s at a time; a 5 s wait turned each freeze over ~17 s into a reconnect.
+      const statuses: any[] = [];
+      (globalThis as any).claude.on.remoteConversationStatus((s: any) => statuses.push(s));
+      const ws = await signedIn();
+      await vi.advanceTimersByTimeAsync(20_000);                   // quiet: the question goes out
+      const ping = ws.sentOf('remote:ping')[0];
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(statuses.at(-1)).toMatchObject({ slow: true });       // "Waiting for your computer…"
+      await vi.advanceTimersByTimeAsync(10_000);                   // the computer thaws ~36 s after it went quiet
+      ws.receive({ type: 'remote:ping:response', id: ping.id, payload: { ok: true } });
+      expect(statuses.at(-1)).toMatchObject({ slow: false });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('a phone that reports going offline says "reconnecting" at once instead of waiting', async () => {
+      const statuses: any[] = [];
+      (globalThis as any).claude.on.remoteConversationStatus((s: any) => statuses.push(s));
+      await signedIn();
+      (globalThis as any).dispatchEvent(new Event('offline'));
+      expect(statuses.at(-1)).toMatchObject({ phase: 'reconnecting' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(FakeWebSocket.instances).toHaveLength(2);             // and keeps trying
     });
 
     it('leaves a hidden page alone — the browser freezes it anyway', async () => {

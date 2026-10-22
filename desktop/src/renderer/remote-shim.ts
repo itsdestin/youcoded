@@ -185,7 +185,21 @@ function setConversationPhase(phase: ConversationPhase): void {
   // round, so the 10 s no-report timer turned every connect into "may be out of date".
   if (isAndroidLocal()) return;
   conversationPhase = phase;
-  dispatchEvent('remote:conversation-status', { phase });
+  dispatchEvent('remote:conversation-status', { phase, slow: computerSlow });
+}
+
+/**
+ * The connection is up but the computer has not answered a check for a while (2026-10-22 phone reliability, cause 2).
+ * NOT a connection state: leaving 'connected' rejects every request in flight and stops the heartbeat, which is the very
+ * churn this exists to avoid. The laptop's app freezes for 10–50 s at a time while awake; the page now waits it out
+ * (HEARTBEAT_REPLY_MS) and says so, and a message sent meanwhile is delivered when the computer thaws.
+ */
+let computerSlow = false;
+function setComputerSlow(slow: boolean): void {
+  if (computerSlow === slow) return;
+  computerSlow = slow;
+  if (isAndroidLocal()) return;
+  dispatchEvent('remote:conversation-status', { phase: conversationPhase ?? 'complete', slow });
 }
 
 /** This page no longer describes a computer's copy (it left the host): forget the phase so a
@@ -398,6 +412,8 @@ let pendingSendQueue: { data: string; at: number }[] = [];
 function setConnectionState(state: RemoteConnectionState) {
   const was = connectionState;
   connectionState = state;
+  // A connection that is gone is not "slow": the reconnecting strip says what is happening now.
+  if (state !== 'connected') setComputerSlow(false);
   // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
   // the strip says "reconnecting" and the phone keeps what it shows.
   if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
@@ -974,6 +990,7 @@ function handleMessage(data: string, generation: number): void {
   if (generation !== connectionGeneration) return;
   framesReceived++;
   lastFrameAt = Date.now();
+  if (computerSlow) setComputerSlow(false); // it answered
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
@@ -1625,9 +1642,18 @@ const WAKE_CHECK_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
 /** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
 const HEARTBEAT_IDLE_MS = 12_000;
-/** How long that question may go unanswered before the connection is replaced. Shorter than the
- *  wake check's: the page is in front, the radio is up, and a person may be waiting on a tap. */
-const HEARTBEAT_REPLY_MS = 5_000;
+/** How long that question may go unanswered before the connection is replaced.
+ *  WHY 20 s, not 5 (2026-10-22 phone reliability, cause 2): measured on Destin's laptop, its app freezes 10–50 s about
+ *  twenty times a day while awake. 5 s turned every freeze over ~17 s into a reconnect, a refill and a blocked Send —
+ *  and a message sent in it reported failed though it arrived. With 20 s a freeze up to ~32 s is waited out
+ *  ("Waiting for your computer…" after SLOW_AFTER_MS). A connection the network really lost is still replaced: sooner
+ *  when the phone reports going offline. */
+const HEARTBEAT_REPLY_MS = 20_000;
+/** How long the question goes unanswered before the page says it is waiting for the computer. */
+const SLOW_AFTER_MS = 5_000;
+/** A queued send waits longer than an ordinary request: the measured freezes reach ~50 s, and a send that
+ *  timed out at 30 s was reported failed and put back in the box while the computer then accepted it. */
+const QUEUE_ACTION_TIMEOUT_MS = 60_000;
 let wakeCheckInFlight = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1676,7 +1702,11 @@ function probeConnection(timeoutMs: number, why: string): void {
   const generation = connectionGeneration;
   const framesAtSend = framesReceived;
   const id = `${myDeviceId || 'anon'}:${generation}:${++messageId}`;
-  const settle = () => { clearTimeout(timeout); pending.delete(id); wakeCheckInFlight = false; };
+  const settle = () => { clearTimeout(timeout); clearTimeout(slowTimer); pending.delete(id); wakeCheckInFlight = false; };
+  // Still no answer after a few seconds: say so, without touching the connection.
+  const slowTimer = setTimeout(() => {
+    if (generation === connectionGeneration && ws === socket && framesReceived === framesAtSend) setComputerSlow(true);
+  }, SLOW_AFTER_MS);
   const timeout = setTimeout(() => {
     settle();
     if (generation !== connectionGeneration || ws !== socket || connectionState !== 'connected') return;
@@ -1970,6 +2000,14 @@ export function installShim(): void {
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('online', () => checkConnectionAfterWake());
+    // The phone says its network is gone: the connection is too. Say "Reconnecting" now instead of after the
+    // heartbeat's longer wait (2026-10-22), and keep trying; 'online' tries again at once.
+    window.addEventListener('offline', () => {
+      if (connectionState !== 'connected' || !ws || isAndroidLocal()) return;
+      abandonSocket(ws);
+      const token = localStorage.getItem('youcoded-remote-token');
+      if (token && !savedKeyStopped) scheduleReconnect(token);
+    });
     // A page restored from the browser's back/forward cache kept its old socket object.
     window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) checkConnectionAfterWake(); });
   }
@@ -2083,7 +2121,7 @@ export function installShim(): void {
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
       queue: { action: (sessionId: string, action: import('../shared/conversation-queue-channel-types').ConversationQueueAction) => {
-        return (action.kind === 'enqueue' && noteSendEpoch(sessionId,action.payload.sendId), invoke('session:queue-action', { sessionId, action }));
+        return (action.kind === 'enqueue' && noteSendEpoch(sessionId,action.payload.sendId), invoke('session:queue-action', { sessionId, action }, { timeoutMs: QUEUE_ACTION_TIMEOUT_MS }));
       } },
       control: (sessionId: string, request: import('../shared/claude-control-types').ClaudeControlRequest) => {
         if (request.kind === 'send-text') noteSendEpoch(sessionId, request.sendId);

@@ -110,6 +110,8 @@ interface Props {
   onRefreshConversation?: () => void;
   /** The Android app leaves its unreachable computer for the phone's own runtime — shown on the reconnecting strip there only. */
   onUsePhoneOnly?: () => void;
+  /** A phone's connection is up but the computer is slow to answer (it freezes for tens of seconds at times). Never set on the computer. */
+  waitingForComputer?: boolean;
   /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
    *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
    *  Never set on the computer. */
@@ -123,7 +125,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, onUsePhoneOnly, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, onUsePhoneOnly, waitingForComputer, filling, modelLoadingDemo, model, providerType }: Props) {
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -156,7 +158,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // on its way. Until some arrives, show the SAME "Catching up with your computer…" strip a reconnect shows (no new copy) and not the
   // "Start a conversation" hint, which would claim a conversation with history is empty for the moment the fill takes.
   const waitingForFill = !!filling && state.timeline.length === 0;
-  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : null);
+  // The computer has not answered for a few seconds but the connection is up (remote-shim setComputerSlow): say so, quietly,
+  // and only when nothing more specific is showing. No "Up to date" beat when it passes: nothing was missed.
+  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : waitingForComputer ? 'slow' : null);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -1036,6 +1040,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                   action={onUsePhoneOnly && isAndroid() ? <Button size="sm" variant="ghost" onClick={onUsePhoneOnly}>Use this phone only</Button> : undefined}
                 >
                   Reconnecting to your computer…
+                </StatusStrip>
+              ) : shownStrip === 'slow' ? (
+                <StatusStrip tone="busy" detail="It's taking longer than usual to answer. Anything you send will arrive once it does.">
+                  Waiting for your computer…
                 </StatusStrip>
               ) : shownStrip === 'restoring' ? (
                 // No draft line here: the connection IS back (tester U8).

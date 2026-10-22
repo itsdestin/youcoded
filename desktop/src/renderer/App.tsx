@@ -387,6 +387,8 @@ function AppInner() {
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
+  // The computer is slow to answer but the connection is up (phone only; remote-shim setComputerSlow).
+  const [computerSlow, setComputerSlow] = useState(false);
   // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the computer's session list has arrived — the list
   // reply (or a destroyed conversation's focus) decides the place (decideRemotePlace). Every automatic selection asks mayAutoSelect()
   // first; the desktop is unaffected. Reset when this page starts talking to a different computer.
@@ -1598,8 +1600,9 @@ function AppInner() {
     const seedChatOff = (window.claude.on as any).seedChat?.((payload: any) => { dispatch({ type: 'CHAT_STATE_SEEDED', sessions: payload }); });
     // Where the phone's copy of the conversation stands — reconnecting, restoring, incomplete, complete. Only a remote client ever
     // receives it; ChatView renders the strip (preload declares it and never fires).
-    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
+    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus; slow?: boolean }) => {
       setConversationStatus(s?.phase);
+      setComputerSlow(s?.slow === true);
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -3598,6 +3601,7 @@ function AppInner() {
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
                       onUsePhoneOnly={handleUsePhoneOnly}
+                      waitingForComputer={computerSlow}
                       filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
