@@ -257,4 +257,24 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>, beforeClea
   return tasks;
 }
 
+// WHY (perf, 2026-10-22): every expanded TaskUpdate card AND the app-level Open tasks hook each
+// called buildTasksById on every tool event, so one event re-scanned the session's whole tool
+// history once per reader (cards + 1). The reducer never edits a published toolCalls Map (it
+// copies, then replaces — chat-reducer.ts), so the answer for one Map object is fixed: compute
+// it once per (Map, pre-/clear set) and hand every reader the same result. Callers only read it.
+// buildTasksById itself stays uncached because tests (and the workbench) build, edit and rebuild
+// the same Map.
+const sharedTasks = new WeakMap<
+  Map<string, ToolCallState>,
+  { none?: Map<string, TaskState>; byClear: WeakMap<ReadonlySet<string>, Map<string, TaskState>> }
+>();
+export function buildTasksByIdShared(toolCalls: Map<string, ToolCallState>, beforeClear?: ReadonlySet<string>): Map<string, TaskState> {
+  let entry = sharedTasks.get(toolCalls);
+  if (!entry) { entry = { byClear: new WeakMap() }; sharedTasks.set(toolCalls, entry); }
+  if (!beforeClear) return (entry.none ??= buildTasksById(toolCalls));
+  let hit = entry.byClear.get(beforeClear);
+  if (!hit) { hit = buildTasksById(toolCalls, beforeClear); entry.byClear.set(beforeClear, hit); }
+  return hit;
+}
+
 export const TASK_LIFECYCLE: TaskStatus[] = ['pending', 'in_progress', 'completed'];

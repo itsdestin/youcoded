@@ -5,7 +5,7 @@ import { UnifiedDiff, FILE_BOX_CHUNK } from '../diff/UnifiedDiff';
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import MarkdownContent from '../MarkdownContent';
 import { useSessionToolCalls } from '../../state/chat-context';
-import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
+import { buildTasksByIdShared, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
 import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../../hooks/useExpandAllToggle';
@@ -1204,7 +1204,7 @@ export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; ses
   // text deltas, so this re-renders on tool events only.
   const toolCalls = useSessionToolCalls(sessionId || '');
   const tasksById = useMemo(
-    () => buildTasksById(toolCalls),
+    () => buildTasksByIdShared(toolCalls),
     [toolCalls],
   );
   // Fix: this must sit above the `inner` IIFE's switch, not inside the Bash
