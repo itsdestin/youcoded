@@ -174,6 +174,7 @@ describe('B7: a failed outcome write is retried and never leaves the run "runnin
   it('gives up after a bounded number of tries but the live view still says completed', async () => {
     const { childId, events, attempts } = await runWithFailingWrites(99);
     await vi.waitFor(() => expect(attempts()).toBe(4)); // first try + 3 retries
+    // settle: a NEGATIVE check — after the positive wait above, no fifth try follows.
     await new Promise((r) => setTimeout(r, 50));
     expect(attempts()).toBe(4);
     expect(events.filter((e) => e.run.childId === childId).pop()!.run.status).toBe('completed');
