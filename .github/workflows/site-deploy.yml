@@ -10,6 +10,10 @@ on:
   push:
     branches: [master]
     paths: ['docs/**', '.github/workflows/site-deploy.yml']
+  # A pull request touching the site builds and checks it (never publishes), so a broken demo or
+  # download script is caught before it merges.
+  pull_request:
+    paths: ['docs/**', '.github/workflows/site-deploy.yml']
   workflow_run:
     workflows: ['Desktop Release']
     types: [completed]
@@ -71,8 +75,8 @@ jobs:
 
   deploy:
     needs: build
-    # A run dispatched on another branch builds and checks only; the site publishes from master.
-    if: github.ref == 'refs/heads/master'
+    # Pull requests and runs on other branches build and check only; the site publishes from master.
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
