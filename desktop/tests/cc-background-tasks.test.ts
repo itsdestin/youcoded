@@ -193,3 +193,61 @@ describe('chatReducer — Claude Code background runs', () => {
     expect(card(s).ccBackground).toMatchObject({ status: 'completed', result: 'Second report' });
   });
 });
+
+// ── 2026-10-22 audit: A5 / A6 / C1 / C2 / C5 — shapes copied from real transcripts (trimmed) ──
+const monitorReceipt = JSON.stringify({
+  type: 'user', uuid: 'm1', timestamp: '2026-08-12T10:48:15.064Z',
+  message: { role: 'user', content: [{ tool_use_id: 'toolu_M', type: 'tool_result', content: 'Monitor started (task bt5jyr3nj, timeout 1800000ms). You will be notified on each event.' }] },
+  toolUseResult: { taskId: 'bt5jyr3nj', timeoutMs: 1800000, persistent: false },
+});
+const persistentMonitorReceipt = monitorReceipt.replace('"persistent":false', '"persistent":true');
+const workflowReceipt = JSON.stringify({
+  type: 'user', uuid: 'w1', timestamp: '2026-10-15T16:17:38.943Z', promptId: 'p',
+  message: { role: 'user', content: [{ tool_use_id: 'toolu_W', type: 'tool_result', content: 'Workflow launched in background. Task ID: wmvrqe407\nSummary: Research and write files', is_error: false }] },
+  toolUseResult: { status: 'async_launched', taskId: 'wmvrqe407', taskType: 'local_workflow' },
+});
+const taskStopResult = (type = 'local_bash') => JSON.stringify({
+  type: 'user', uuid: 'ts1', timestamp: '2026-05-20T19:14:17.725Z', promptId: 'p',
+  message: { role: 'user', content: [{ tool_use_id: 'toolu_S', type: 'tool_result', content: '{"message":"Successfully stopped task: bdj6z4tdn (npm run dev 2>&1)","task_id":"bdj6z4tdn","task_type":"local_bash","command":"npm run dev 2>&1"}' }] },
+  toolUseResult: { message: 'Successfully stopped task: bdj6z4tdn (npm run dev 2>&1)', task_id: 'bdj6z4tdn', task_type: type, command: 'npm run dev 2>&1' },
+});
+const queueEnqueue = JSON.stringify({
+  type: 'queue-operation', operation: 'enqueue', timestamp: '2026-10-22T07:29:04.423Z', sessionId: 'x',
+  content: notice('<task-id>b61arikpe</task-id>\n<tool-use-id>toolu_Q</tool-use-id>\n<status>completed</status>\n<summary>Background command "build" completed (exit code 0)</summary>'),
+});
+
+describe('parseTranscriptLine — more background shapes (2026-10-22 audit)', () => {
+  it('A5: a Workflow launch receipt carries its task id', () => {
+    expect(looseData(parseTranscriptLine(workflowReceipt, 's')[0]).backgroundTaskId).toBe('wmvrqe407');
+  });
+  it('C2: a Monitor receipt carries its task id, and whether it is persistent', () => {
+    const d = looseData(parseTranscriptLine(monitorReceipt, 's')[0]);
+    expect(d.backgroundTaskId).toBe('bt5jyr3nj');
+    expect(d.backgroundPersistent).toBeUndefined();
+    expect(looseData(parseTranscriptLine(persistentMonitorReceipt, 's')[0]).backgroundPersistent).toBe(true);
+  });
+  it('C1: a successful TaskStop result names the task it stopped', () => {
+    const d = looseData(parseTranscriptLine(taskStopResult(), 's')[0]);
+    expect(d.stoppedTaskId).toBe('bdj6z4tdn');
+    expect(d.backgroundTaskId).toBeUndefined();
+  });
+  it('C1: a TaskStop that errored stopped nothing', () => {
+    const err = JSON.stringify({ type: 'user', uuid: 'ts2', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'No task found', is_error: true }] }, toolUseResult: 'Error: No task found' });
+    expect(looseData(parseTranscriptLine(err, 's')[0]).stoppedTaskId).toBeUndefined();
+  });
+  it('A6: a notice that only exists as a queue-operation enqueue line is read', () => {
+    const evs = parseTranscriptLine(queueEnqueue, 's');
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ type: 'background-task', data: { toolUseId: 'toolu_Q', backgroundTask: { taskIds: ['b61arikpe'], status: 'completed' } } });
+    // The enqueue line has no uuid of its own: it gets a stable one from its time.
+    expect(evs[0].uuid).toBe('queue:2026-10-22T07:29:04.423Z');
+  });
+  it('A6: other queue operations and non-notice enqueues are ignored', () => {
+    expect(parseTranscriptLine(JSON.stringify({ type: 'queue-operation', operation: 'dequeue', timestamp: 't' }), 's')).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: 't', content: 'hello' }), 's')).toEqual([]);
+  });
+  it('a failed Bash notice carries the exit code from its summary', () => {
+    const evs = parseTranscriptLine(noticeLine(notice('<task-id>b2</task-id>\n<tool-use-id>toolu_F</tool-use-id>\n<status>failed</status>\n<summary>Background command "x" failed with exit code 144</summary>')), 's');
+    expect(looseData(evs[0]).backgroundTask?.exitCode).toBe(144);
+  });
+});
