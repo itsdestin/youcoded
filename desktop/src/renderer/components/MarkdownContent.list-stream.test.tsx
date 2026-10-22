@@ -197,6 +197,63 @@ describe('MarkdownContent while a long list streams in', { timeout: CPU_BOUND_WA
       live.unmount();
     });
 
+    // Review findings on c9c1328bc: things in FRONT of the list that change how its items read.
+    describe('text in front of the list that changes how items are drawn', () => {
+      const refItem = (i: number, ref: string) => `- see ${ref} ${i}`;
+      const same = (before: string, list: string, streamed = false) => {
+        const full = before + list;
+        const live = render(<Bubble md="Hi" incremental />);
+        if (streamed) {
+          let md = '';
+          for (const d of tokenDeltas(full)) { md += d; live.rerender(<Bubble md={md} incremental />); }
+        } else {
+          live.rerender(<Bubble md={full} incremental />);
+        }
+        expect(canonical(live.container)).toBe(wholeHtml(full));
+        const lis = live.container.querySelectorAll('li').length;
+        live.unmount();
+        return lis;
+      };
+
+      it('keeps link definitions that sit in the same group as the list (bubble mounted mid-reply)', () => {
+        const list = lines(70, (i) => refItem(i, '[foo]')) + '\n';
+        expect(same('[foo]: http://x.com\n\nHi\n\n', list)).toBe(70);
+        const live = render(<Bubble md={'Hi'} incremental />);
+        live.rerender(<Bubble md={'[foo]: http://x.com\n\nHi\n\n' + list} incremental />);
+        expect(live.container.querySelectorAll('a[href="http://x.com"]').length).toBe(70);
+        live.unmount();
+      });
+
+      it('keeps footnote references when the footnote is defined before the list', () => {
+        const list = lines(70, (i) => refItem(i, '[^1]').replace('see [^1]', 'see[^1]')) + '\n';
+        same('Hi[^1]\n\n[^1]: note\n\n', list, true);
+      });
+
+      for (const [name, before] of [
+        ['an open <pre> block', '<pre>\n\n'],
+        ['an open HTML comment', '<!-- c\n\n'],
+        ['a ~~~ line inside a backtick fence', '```\n~~~\n\nfoo\n\n'],
+      ] as const) {
+        it(`never loses finished items when the text before the list is ${name}`, () => {
+          const list = lines(70, item) + '\n';
+          same(before, list);
+          same(before, list, true);
+        });
+      }
+
+      it('treats a line ending that changes part-way through the stream like the whole message', () => {
+        const live = render(<Bubble md="Hi" incremental />);
+        let md = `Hi\n\n${lines(60, item)}\n`;
+        live.rerender(<Bubble md={md} incremental />);
+        for (const tail of ['\r\n- crlf one\r\n- crlf two\r\n', '- bare cr\r- another\r']) {
+          md += tail;
+          live.rerender(<Bubble md={md} incremental />);
+          expect(canonical(live.container)).toBe(wholeHtml(md));
+        }
+        live.unmount();
+      });
+    });
+
     it('draws a finished or stopped reply as ONE list, whatever was chunked while it streamed', () => {
       const md = listMd(120);
       const live = render(<Bubble md="Here" incremental />);
