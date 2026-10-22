@@ -21,27 +21,27 @@ import { readClaudeJsonFrom, projectToClaudeJson, applyManifestEntries, platform
 describe('readClaudeJsonFrom', () => {
   let tmpDir: string;
 
-  function withTmpDir<T>(fn: (dir: string) => T): T {
+  async function withTmpDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-mcp-reconciler-test-'));
     try {
-      return fn(tmpDir);
+      return await fn(tmpDir);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }
 
-  it('reads an absent file as {} — not an error', () => {
-    withTmpDir((dir) => {
+  it('reads an absent file as {} — not an error', async () => {
+    await withTmpDir(async (dir) => {
       const filePath = path.join(dir, 'does-not-exist.json');
-      expect(readClaudeJsonFrom(filePath)).toEqual({});
+      expect(await readClaudeJsonFrom(filePath)).toEqual({});
     });
   });
 
-  it('reads a present, valid file normally', () => {
-    withTmpDir((dir) => {
+  it('reads a present, valid file normally', async () => {
+    await withTmpDir(async (dir) => {
       const filePath = path.join(dir, 'claude.json');
       fs.writeFileSync(filePath, JSON.stringify({ someKey: 'value', mcpServers: {} }));
-      expect(readClaudeJsonFrom(filePath)).toEqual({ someKey: 'value', mcpServers: {} });
+      expect(await readClaudeJsonFrom(filePath)).toEqual({ someKey: 'value', mcpServers: {} });
     });
   });
 
@@ -49,19 +49,19 @@ describe('readClaudeJsonFrom', () => {
   // from a partial write, or any other read failure) must be reported as
   // null — categorically different from "absent" — so the caller can abort
   // instead of silently treating it as an empty config and overwriting it.
-  it('reports present-but-unreadable as null, never as {}', () => {
-    withTmpDir((dir) => {
+  it('reports present-but-unreadable as null, never as {}', async () => {
+    await withTmpDir(async (dir) => {
       const filePath = path.join(dir, 'claude.json');
       fs.writeFileSync(filePath, '{ this is not valid json, mid-write ');
-      expect(readClaudeJsonFrom(filePath)).toBeNull();
+      expect(await readClaudeJsonFrom(filePath)).toBeNull();
     });
   });
 
-  it('does not confuse a valid-but-empty file with an unreadable one', () => {
-    withTmpDir((dir) => {
+  it('does not confuse a valid-but-empty file with an unreadable one', async () => {
+    await withTmpDir(async (dir) => {
       const filePath = path.join(dir, 'claude.json');
       fs.writeFileSync(filePath, '{}');
-      expect(readClaudeJsonFrom(filePath)).toEqual({});
+      expect(await readClaudeJsonFrom(filePath)).toEqual({});
     });
   });
 });
@@ -80,7 +80,7 @@ describe('readClaudeJsonFrom', () => {
 // projected file's own schema.
 
 describe('projection into ~/.claude.json', () => {
-  it('writes an enabled registry server into mcpServers', () => {
+  it('writes an enabled registry server into mcpServers', async () => {
     const out = projectToClaudeJson({}, [
       { id: 'gmail', label: 'Gmail', enabled: true, transport: { type: 'stdio', command: 'npx', args: ['gmail-mcp'] }, origin: { kind: 'user' }, missingSecrets: [] } as any,
     ]);
@@ -89,13 +89,13 @@ describe('projection into ~/.claude.json', () => {
     expect(out.skippedCollisions).toEqual([]);
   });
 
-  it('NEVER modifies an entry it does not own', () => {
+  it('NEVER modifies an entry it does not own', async () => {
     const existing = { mcpServers: { handwritten: { type: 'stdio', command: 'my-thing' } } };
     const out = projectToClaudeJson(existing, []);
     expect(out.claudeJson.mcpServers!.handwritten).toEqual({ type: 'stdio', command: 'my-thing' });
   });
 
-  it('removes an owned entry that left the registry', () => {
+  it('removes an owned entry that left the registry', async () => {
     const existing = {
       mcpServers: { gone: { type: 'stdio', command: 'x' } },
       _youcodedOwnedMcpServers: ['gone'],
@@ -104,7 +104,7 @@ describe('projection into ~/.claude.json', () => {
     expect(out.claudeJson.mcpServers!.gone).toBeUndefined();
   });
 
-  it('does not project a server with missing secrets', () => {
+  it('does not project a server with missing secrets', async () => {
     const out = projectToClaudeJson({}, [
       { id: 'gmail', label: 'Gmail', enabled: true, transport: { type: 'stdio', command: 'npx' }, origin: { kind: 'user' }, missingSecrets: ['GMAIL_TOKEN'] } as any,
     ]);
@@ -117,7 +117,7 @@ describe('projection into ~/.claude.json', () => {
   // calling projectToClaudeJson, but the pure function's OWN contract must
   // not depend on that — a disabled entry must never be projected even if a
   // future caller passes an unfiltered list by mistake.
-  it('does not project a disabled registry server', () => {
+  it('does not project a disabled registry server', async () => {
     const out = projectToClaudeJson({}, [
       { id: 'gmail', label: 'Gmail', enabled: false, transport: { type: 'stdio', command: 'npx' }, origin: { kind: 'user' }, missingSecrets: [] } as any,
     ]);
@@ -129,7 +129,7 @@ describe('projection into ~/.claude.json', () => {
   // key, so a user hand-editing the file around it must not break projection
   // — unrelated keys survive, and a stale ownership record naming a server
   // the user already deleted by hand must not crash or resurrect it.
-  it('survives a user hand-editing the file around the owned-id list', () => {
+  it('survives a user hand-editing the file around the owned-id list', async () => {
     const existing = {
       mcpServers: {}, // user deleted the 'gmail' entry by hand
       _youcodedOwnedMcpServers: ['gmail'], // stale record left behind
@@ -154,7 +154,7 @@ describe('projection into ~/.claude.json', () => {
   // clobbered the user's hand-configured server with no warning. This test
   // MUST fail on the pre-fix code (it would have asserted the registry's
   // config, not the user's original one).
-  it('does NOT overwrite a hand-written entry sharing a registry server id (CRITICAL)', () => {
+  it('does NOT overwrite a hand-written entry sharing a registry server id (CRITICAL)', async () => {
     const handwritten = { type: 'stdio', command: 'my-hand-configured-gmail', args: ['--special-flag'] };
     const existing = {
       mcpServers: { gmail: { ...handwritten } },
@@ -175,7 +175,7 @@ describe('projection into ~/.claude.json', () => {
   // broad that it also blocks legitimate updates to a server YouCoded already
   // owns — otherwise editing/re-enabling an owned server in YouCoded would
   // silently stop working the moment this fix landed.
-  it('still updates an entry YouCoded already owns (id in previouslyOwned)', () => {
+  it('still updates an entry YouCoded already owns (id in previouslyOwned)', async () => {
     const existing = {
       mcpServers: { gmail: { type: 'stdio', command: 'old-npx-path' } },
       _youcodedOwnedMcpServers: ['gmail'],
@@ -193,7 +193,7 @@ describe('projection into ~/.claude.json', () => {
   // object before calling projectToClaudeJson). The guard is keyed on
   // "already exists AND not previously owned", not specifically on "written
   // by a human", so it must catch this shape too without any special-casing.
-  it('does not overwrite a manifest-scanned entry sharing a registry server id', () => {
+  it('does not overwrite a manifest-scanned entry sharing a registry server id', async () => {
     const manifestWritten = { type: 'stdio', command: 'plugin-bundled-gmail' };
     const existing = {
       mcpServers: { gmail: { ...manifestWritten } },
@@ -211,7 +211,7 @@ describe('projection into ~/.claude.json', () => {
   // numeric-indexed keys ('0', '1', ...) that would then get written back
   // into the real config as garbage. This pins the guard that treats a
   // non-object the same as absent.
-  it('treats a non-object mcpServers the same as absent', () => {
+  it('treats a non-object mcpServers the same as absent', async () => {
     const existing = { mcpServers: 'not-an-object' as unknown as Record<string, unknown> };
     const out = projectToClaudeJson(existing, [
       { id: 'gmail', label: 'Gmail', enabled: true, transport: { type: 'stdio', command: 'npx' }, origin: { kind: 'user' }, missingSecrets: [] } as any,
@@ -225,7 +225,7 @@ describe('projection into ~/.claude.json', () => {
   // `_youcodedOwnedMcpServers` (e.g. a hand-edited string instead of an
   // array) — must behave exactly like an absent/empty owned-id list rather
   // than crashing on `.includes()`/iteration or treating the string as owned.
-  it('treats a non-array _youcodedOwnedMcpServers the same as absent', () => {
+  it('treats a non-array _youcodedOwnedMcpServers the same as absent', async () => {
     const existing = {
       mcpServers: { gmail: { type: 'stdio', command: 'my-thing' } },
       _youcodedOwnedMcpServers: 'gmail' as unknown as string[],
@@ -258,7 +258,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
   };
   const root = '/home/u/.claude/plugins/marketplaces/youcoded/plugins/p';
 
-  it('expands the PACKAGE_DIR placeholder to the plugin directory, like {{plugin_root}}', () => {
+  it('expands the PACKAGE_DIR placeholder to the plugin directory, like {{plugin_root}}', async () => {
     const servers: Record<string, unknown> = {};
     const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
     expect(r.added).toBe(1);
@@ -266,11 +266,11 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect(expandTokens(`{{plugin_root}}/a ${PKG}/b`, '/r')).toBe('/r/a /r/b');
   });
 
-  it('never reads a $ in the real path as a replacement pattern', () => {
+  it('never reads a $ in the real path as a replacement pattern', async () => {
     expect(expandTokens(`${PKG}/x`, '/tmp/$&odd')).toBe('/tmp/$&odd/x');
   });
 
-  it('honours a platforms list written in Node names', () => {
+  it('honours a platforms list written in Node names', async () => {
     const servers: Record<string, unknown> = {};
     const onLinux = applyManifestEntries(servers, [{ entries: [spotify], pluginRoot: root }], { platform: 'linux', isWindows: false });
     expect(onLinux).toMatchObject({ added: 0, skippedPlatform: 1 });
@@ -281,7 +281,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect((servers['spotify-services'] as { args: string[] }).args).toEqual([`${root}/mcp-servers/spotify-services/launcher.sh`]);
   });
 
-  it('keeps the single platform field working, in either vocabulary', () => {
+  it('keeps the single platform field working, in either vocabulary', async () => {
     expect(platformMatches({ platform: 'linux' }, 'linux')).toBe(true);
     expect(platformMatches({ platform: 'macos' }, 'linux')).toBe(false);
     expect(platformMatches({}, 'windows')).toBe(true);
@@ -290,7 +290,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect(platformMatches({ platforms: [], platform: 'windows' }, 'windows')).toBe(true);
   });
 
-  it('repairs an untouched entry an older build wrote with the literal placeholder', () => {
+  it('repairs an untouched entry an older build wrote with the literal placeholder', async () => {
     const servers: Record<string, unknown> = {
       gmessages: { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: [], env: {} },
     };
@@ -299,7 +299,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect((servers.gmessages as { command: string }).command).toBe(`${root}/mcp-servers/gmessages/gmessages`);
   });
 
-  it('repairs the old entry even when its keys were rewritten in another order', () => {
+  it('repairs the old entry even when its keys were rewritten in another order', async () => {
     const servers: Record<string, unknown> = {
       gmessages: { env: {}, args: [], command: `${PKG}/mcp-servers/gmessages/gmessages`, type: 'stdio' },
     };
@@ -307,7 +307,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect(r.repaired).toBe(1);
   });
 
-  it('still never overwrites an entry the user changed, even one holding the placeholder', () => {
+  it('still never overwrites an entry the user changed, even one holding the placeholder', async () => {
     const custom = { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: ['--verbose'], env: {} };
     const servers: Record<string, unknown> = { gmessages: { ...custom } };
     const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });

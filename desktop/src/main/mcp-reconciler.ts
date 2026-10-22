@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { atomicWrite } from './atomic-write';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -172,11 +173,14 @@ function listManifests(): Array<{ entries: McpManifestEntry[]; pluginRoot: strin
 // explicit path (rather than reading the module-level CLAUDE_JSON constant)
 // so tests can exercise this exact absent-vs-unreadable distinction against a
 // temp file — never the real file.
-export function readClaudeJsonFrom(filePath: string): ClaudeJson | null {
-  if (!fs.existsSync(filePath)) return {};
+export async function readClaudeJsonFrom(filePath: string): Promise<ClaudeJson | null> {
+  // WHY async (2026-10-22 freeze hunt): this runs at launch and on every plugin install, and the
+  // file is large (59 top-level keys + project history). An ENOENT read is "absent" ({}), exactly
+  // what the old existsSync check answered; every OTHER failure is "unreadable" (null), as before.
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
   } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return {};
     log('ERROR', 'mcp-reconciler', 'unable to read an existing ~/.claude.json — aborting MCP reconcile rather than risk overwriting it', {
       path: filePath, error: String(err),
     });
@@ -184,14 +188,16 @@ export function readClaudeJsonFrom(filePath: string): ClaudeJson | null {
   }
 }
 
-function readClaudeJson(): ClaudeJson | null {
+function readClaudeJson(): Promise<ClaudeJson | null> {
   return readClaudeJsonFrom(CLAUDE_JSON);
 }
 
-function writeClaudeJsonAtomic(data: ClaudeJson): void {
-  const tmp = `${CLAUDE_JSON}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmp, CLAUDE_JSON);
+async function writeClaudeJsonAtomic(data: ClaudeJson): Promise<void> {
+  // WHY the shared atomicWrite (temp file + rename, unique temp name per call): the old fixed
+  // `<file>.<pid>.tmp` was safe only because the write was synchronous. Now two reconciles in one
+  // process (launch + a plugin install) can overlap, and a shared temp name would make the second
+  // rename fail. The result on disk is the same: the old whole file or the new whole file.
+  await atomicWrite(CLAUDE_JSON, JSON.stringify(data, null, 2));
 }
 
 /** Convert a manifest entry to the shape Claude Code expects in .claude.json. */
@@ -416,7 +422,7 @@ export interface ReconcileMcpResult {
 
 export async function reconcileMcp(): Promise<ReconcileMcpResult> {
   const manifests = listManifests();
-  const claudeJson = readClaudeJson();
+  const claudeJson = await readClaudeJson();
   if (claudeJson === null) {
     // Fix (Finding 2): abort rather than proceed from `{}` — see
     // readClaudeJsonFrom's comment. Returning a result (never throwing) keeps
@@ -453,7 +459,7 @@ export async function reconcileMcp(): Promise<ReconcileMcpResult> {
   const ownershipChanged = JSON.stringify(claudeJson._youcodedOwnedMcpServers ?? []) !== JSON.stringify(projected._youcodedOwnedMcpServers ?? []);
 
   if (manifestChanged || mcpServersChanged || ownershipChanged) {
-    writeClaudeJsonAtomic(projected);
+    await writeClaudeJsonAtomic(projected);
   }
   return { added, skippedPlatform, skippedManual, manifestCount: manifests.length, skippedCollisions, aborted: false };
 }
