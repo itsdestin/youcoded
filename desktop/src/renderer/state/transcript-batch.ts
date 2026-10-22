@@ -10,6 +10,7 @@ import { eventToAction } from './transcript-event-actions';
 import { getCapabilities } from '../platform';
 import type { TranscriptEvent } from '../../shared/types';
 import type { SessionLive } from '../../shared/session-live-types';
+import { sharedBatcherCounters } from './transcript-batch-counters';
 
 // The whole frame's actions in one call, in arrival order. WHY an array
 // (2026-09-16 A4): the store applies them one by one but notifies its
@@ -165,6 +166,10 @@ const WATCH_AFTER_WORDS_MS = 100;
 
 export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBatcher {
   const pending: ChatAction[] = [];
+  // WHY: perf-lab counters (dev/perf only). null in every normal build — Vite folds the flag to a constant —
+  // so each `counters?.` below is a skipped null check and no window hook exists.
+  const counters = sharedBatcherCounters();
+  counters?.onInstall();
   let rafId: number | null = null;
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
@@ -211,14 +216,21 @@ export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBat
     const batch = pending.splice(0);
     // One call for the frame: the store applies every action in order and
     // notifies subscribers once (React already coalesced the render).
-    if (batch.length > 0) dispatch(batch);
+    if (batch.length > 0) {
+      if (!counters) { dispatch(batch); return; }
+      // WHY try/catch only when counting: a throwing dispatch loses the already-spliced batch; record that
+      // instead of letting the conservation identity silently break, then rethrow unchanged.
+      try { dispatch(batch); } catch (e) { counters.onLeave(batch, 'error'); throw e; }
+      counters.onLeave(batch, 'applied');
+    }
   }
 
   function push(action: ChatAction) {
     // A push after dispose (a transcript event racing the effect's cleanup) must not
     // arm a frame whose flush would only no-op — the batch is gone with the effect.
-    if (disposed) return;
+    if (disposed) { counters?.onPush(action, false); return; }
     pending.push(action);
+    counters?.onPush(action, true);
     if (rafId !== null || timerId !== null) return;
     // Hidden-window caveat: Electron suspends requestAnimationFrame while the
     // window is minimized/occluded, which used to FREEZE chat state (queued
@@ -281,6 +293,8 @@ export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBat
     push,
     flush,
     dispose() {
+      // WHY: whatever is still queued is discarded here (flush() no-ops once disposed); count it once.
+      if (!disposed && counters) counters.onLeave(pending, 'dispose');
       disposed = true;
       clearScheduled();
       document.removeEventListener('visibilitychange', onVisibilityChange);
