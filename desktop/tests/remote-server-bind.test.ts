@@ -91,6 +91,14 @@ describe('the listener is private by construction', () => {
     expect(address.port).toBeGreaterThan(0);
   });
 
+  it('compresses large messages to a phone (conversation loads cross a slow relay)', async () => {
+    const { mockSessionManager, mockHookRelay, config } = makeServer();
+    const { RemoteServer } = await import('../src/main/remote-server');
+    server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    await server.start();
+    expect((server as any).wss.options.perMessageDeflate).toMatchObject({ threshold: 1024, zlibDeflateOptions: { level: 1 } });
+  });
+
   it('refuses to start without a private address instead of falling back', async () => {
     // The fallback IS the open listener this batch exists to remove: binding every
     // interface is what makes conversations readable by anything on the same wifi.

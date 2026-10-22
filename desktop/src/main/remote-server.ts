@@ -439,6 +439,17 @@ export class RemoteServer {
       server: this.httpServer,
       path: wsPath,
       maxPayload: 52428800,
+      // WHY (2026-10-22 phone reliability): a phone's conversation load is plain JSON — up to ~2 MB of history plus the terminal —
+      // over a Tailscale relay measured at 75–100 ms. On Destin's own transcripts level 1 shrank text 3–4.5× for ~6–10 ms per 2 MB,
+      // run on zlib's thread pool, not the main thread (pictures do not shrink, and cost little). Small frames are left alone. No
+      // context kept between messages: a few hundred KB less per phone for a slightly lower ratio. Not on the Android app's own
+      // loopback backend, where nothing crosses a network and the phone's CPU would pay for nothing.
+      perMessageDeflate: this.local ? false : {
+        zlibDeflateOptions: { level: 1 },
+        threshold: 1024,
+        serverNoContextTakeover: true,
+        clientNoContextTakeover: true,
+      },
       verifyClient: (info, cb) => {
         if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
           cb(true);

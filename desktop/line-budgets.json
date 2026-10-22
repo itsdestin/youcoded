@@ -10,7 +10,7 @@
     "renderer/components/SessionDrawer.tsx": "2026-10-13: 1639 (+5): the floating rename error gets a solid backing (final review F18).",
     "main/harness/harness-session.ts": "2026-10-21: 4310 (+19, +3 from master's custom-providers assumedWindow in the same budget() call, merged 2026-10-21): provider-failure recovery (+2: Gemini MALFORMED_FUNCTION_CALL joins the empty-step retry; +2: continueTurn, the error card's Try again / Keep going with no new message). The per-step output cap now comes from the provider policy (one getter replacing seven literal reads), a reply cut off at that cap continues or is asked to split inside the turn (recoverTruncation), retries apply only to classified temporary failures with a visible countdown and Stop, and the turn's error carries its kind. The rules themselves live in providers/provider-failure.ts, providers/output-cap.ts and harness/truncation-recovery.ts; what stays here is the wiring.",
     "main/main.ts": "2026-10-22: +3: remote access looks for Tailscale again when the laptop wakes (phone reliability).",
-    "main/remote-server.ts": "2026-10-22: phone reliability — phone connection lines reach desktop.log; remote access starts by itself once Tailscale connects (retry every 20 s while installed, and on wake). Then: a device signing in again replaces its older connection (CLOSE_REPLACED), and an expired fill hold asks a capable page to refill one conversation instead of hanging up."
+    "main/remote-server.ts": "2026-10-22: phone reliability — phone connection lines reach desktop.log; remote access starts by itself once Tailscale connects (retry every 20 s while installed, and on wake). Then: a device signing in again replaces its older connection (CLOSE_REPLACED), and an expired fill hold asks a capable page to refill one conversation instead of hanging up. Then +11: per-message compression to phones, with its measurement."
   },
   "default": 1500,
   "exempt": {
@@ -23,7 +23,7 @@
     "main/ipc-handlers.ts": 2493,
     "main/harness/native-session-host.ts": 5383,
     "renderer/App.tsx": 4690,
-    "main/remote-server.ts": 1374,
+    "main/remote-server.ts": 1385,
     "main/harness/harness-session.ts": 4310,
     "renderer/components/SettingsPanel.tsx": 3291,
     "renderer/remote-shim.ts": 3457,
