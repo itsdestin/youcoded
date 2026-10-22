@@ -34,6 +34,8 @@ export interface TurnUsageTally {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** Typed prompts already read, by the entry they follow (parentUuid → text): see the re-recorded prompt check below. */
+  promptsByParent?: Map<string, string>;
 }
 
 export function emptyTurnUsageTally(): TurnUsageTally {
@@ -252,6 +254,17 @@ export function parseTranscriptLine(
         return events;
       }
 
+      // WHY (Destin, 2026-10-22: "claude only ever received a single wyd"): when a request stalls, Claude Code can write the SAME
+      // prompt a second time — a new line with the same parent entry and the same text, which replaces the first on its own chain
+      // (its terminal shows one). Read as two messages, the chat drew two bubbles. A message typed again later has a different
+      // parent (the reply or the first copy), so only a re-recording is skipped.
+      const parent = typeof parsed.parentUuid === 'string' ? parsed.parentUuid : '';
+      if (parent && tally.promptsByParent?.get(parent) === text) return events;
+      if (parent) {
+        tally.promptsByParent ??= new Map();
+        tally.promptsByParent.set(parent, text);
+        if (tally.promptsByParent.size > 64) tally.promptsByParent.delete(tally.promptsByParent.keys().next().value as string);
+      }
       events.push({
         type: 'user-message',
         sessionId,

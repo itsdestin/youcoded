@@ -1456,3 +1456,30 @@ describe('parseTranscriptLine — control messages written as user lines', () =>
     });
   });
 });
+
+// Destin, 2026-10-22: one "wyd" sent from the phone showed as two bubbles. Claude Code had written the prompt twice — the second
+// line after a stalled request, with the same parent entry and the same text — and its terminal showed one.
+describe('a prompt Claude Code wrote twice', () => {
+  const line = (uuid: string, parentUuid: string, text: string, ts: string) => JSON.stringify({
+    parentUuid, type: 'user', message: { role: 'user', content: text }, uuid, promptId: `p-${uuid}`, timestamp: ts,
+    origin: { kind: 'human' }, promptSource: 'typed',
+  });
+  const userTexts = (lines: string[]) => {
+    const tally = emptyTurnUsageTally();
+    return lines.flatMap((l) => parseTranscriptLine(l, 'desk-1', tally)).filter((e) => e.type === 'user-message').map((e) => (e.data as { text: string }).text);
+  };
+
+  it('shows once when the second copy follows the same entry', () => {
+    expect(userTexts([
+      line('a', 'root', 'wyd', '2026-10-22T18:34:08.567Z'),
+      line('b', 'root', 'wyd', '2026-10-22T18:35:06.923Z'),
+    ])).toEqual(['wyd']);
+  });
+
+  it('still shows the same words typed again after the first', () => {
+    expect(userTexts([
+      line('a', 'root', 'wyd', '2026-10-22T18:34:08.567Z'),
+      line('b', 'a', 'wyd', '2026-10-22T18:35:06.923Z'),
+    ])).toEqual(['wyd', 'wyd']);
+  });
+});
