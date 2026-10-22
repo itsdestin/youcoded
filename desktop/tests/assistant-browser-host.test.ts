@@ -126,6 +126,16 @@ describe('Browser worker, through the main process\'s client', () => {
     await client.command({ cmd: 'set-show-window', show: false });
   }, 90_000);
 
+  live('hiding the window also ends a sign-in card\'s open window, so Hide always hides', async () => {
+    answerNext('c-hide', 'local', 'allow_chat');
+    const opened = await client.callTool('c-hide', 'BrowserNavigate', { url: `${base}/one` }, { vision: true });
+    expect(opened.isError, opened.text).toBeFalsy();
+    await client.command({ cmd: 'open-window-for-handoff', sessionId: 'c-hide' });
+    expect(host!.service.hasWindowOverride()).toBe(true);
+    await client.command({ cmd: 'set-show-window', show: false });
+    expect(host!.service.hasWindowOverride()).toBe(false);
+  }, 90_000);
+
   live('clearing sign-ins stops the browser and empties its saved data', async () => {
     answerNext('c-clear', 'local', 'allow_chat');
     const opened = await client.callTool('c-clear', 'BrowserNavigate', { url: `${base}/one` }, { vision: true });
