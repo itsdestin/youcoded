@@ -9,7 +9,7 @@ import { useScreenOpen } from '../../shoot-mode';
 // Targets outside chat content / the composer are left untouched (terminal,
 // settings, remote-browser native menu, etc.). Mounted once from App.
 
-type MenuState = { x: number; y: number; entries: MenuEntry[]; screen?: string };
+type MenuState = { x: number; y: number; entries: MenuEntry[]; screen?: string; anchor?: Node };
 
 export function ContextMenuHost() {
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -21,7 +21,7 @@ export function ContextMenuHost() {
       const entries = buildContextMenu(target);
       if (!entries) return; // not our surface — leave the default behavior alone
       e.preventDefault();
-      setMenu({ x: e.clientX, y: e.clientY, entries });
+      setMenu({ x: e.clientX, y: e.clientY, entries, anchor: target });
     };
     document.addEventListener('contextmenu', onContextMenu, true);
     return () => document.removeEventListener('contextmenu', onContextMenu, true);
@@ -41,7 +41,7 @@ export function ContextMenuHost() {
       return;
     }
     const r = el.getBoundingClientRect();
-    setMenu({ x: r.left + Math.min(40, r.width / 2), y: r.top + Math.min(20, r.height / 2), entries, screen });
+    setMenu({ x: r.left + Math.min(40, r.width / 2), y: r.top + Math.min(20, r.height / 2), entries, screen, anchor: el });
   };
   useScreenOpen('chat/menu/assistant', () => openOn('.assistant-bubble', 'chat/menu/assistant'));
   useScreenOpen('chat/menu/user', () => openOn('.user-bubble', 'chat/menu/user'));
@@ -50,5 +50,5 @@ export function ContextMenuHost() {
   useScreenOpen('chat/menu/file', () => openOn('.chat-scroll [data-file-path]', 'chat/menu/file', true));
 
   if (!menu) return null;
-  return <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} screen={menu.screen} onClose={() => setMenu(null)} />;
+  return <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} screen={menu.screen} anchor={menu.anchor} onClose={() => setMenu(null)} />;
 }

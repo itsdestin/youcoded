@@ -19,11 +19,14 @@ export function ContextMenu({
   entries,
   onClose,
   screen,
+  anchor,
 }: {
   x: number;
   y: number;
   entries: MenuEntry[];
   onClose: () => void;
+  /** What was right-clicked. Only a scroll that moves it closes the menu. */
+  anchor?: Node;
   /** Set when `shoot` opened this menu (photo-only build): names its mark. */
   screen?: string;
 }) {
@@ -66,7 +69,14 @@ export function ContextMenu({
     const onDown = (e: MouseEvent) => {
       if (!panelRef.current?.contains(e.target as Node)) onClose();
     };
-    const onScroll = () => onClose();
+    // WHY only scrolls that move what was right-clicked: the listener is
+    // capture-wide, so the chat auto-scrolling as a reply streamed in closed a
+    // menu opened on a spreadsheet beside it (the comment-popup-reading
+    // journey failed this way under load). A page scroll (target = document)
+    // still contains everything and still closes it.
+    const onScroll = (e: Event) => {
+      if (!anchor || !(e.target instanceof Node) || e.target.contains(anchor)) onClose();
+    };
     window.addEventListener('mousedown', onDown, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onClose);
@@ -77,7 +87,7 @@ export function ContextMenu({
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
     };
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   const run = (entry: MenuEntry) => {
     if (entry.type !== 'item' || entry.disabled) return;

@@ -15,7 +15,7 @@ import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-
 import { SAFE_ID_RE } from './session-browser';
 import { HookRelay } from './hook-relay';
 import { IPC, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
-import { isPlaceholderModelId } from '../shared/model-ids';
+import { conversationModelOf } from '../shared/model-ids';
 import { setPermissionOverrides, forgetSessionAttention } from './app-signals';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
@@ -118,6 +118,7 @@ import { getUpdateService } from './update-service';
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { setPermissionOverridesSink } from './prefs-service';
+import { withResumeModel } from './conversations/resume-model';
 import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { createPublish } from './publish';
@@ -616,7 +617,7 @@ export function registerIpcHandlers(
     // pending only in the brief window right after app launch.
     await adminCapabilityReady();
     checkWindow();
-    const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    let opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // WHY (2026-10-02): setup no longer installs Node for everyone, and Claude
     // Code and Terminal sessions run through it (the PTY worker). Usually the
     // Claude sign-in already installed it; this is the safety net for anyone
@@ -626,9 +627,10 @@ export function registerIpcHandlers(
       if (refusal) throw new Error(refusal);
       checkWindow();
     }
-    // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
+    // Snapshot BEFORE spawn (a fallback page can otherwise include new turns); then a resume naming no model reopens on the conversation's own, for every screen and both doors (resume-model.ts).
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
+    opts = await withResumeModel(opts, resumeBoundary?.jsonlPath); checkWindow();
     const info = sessionManager.createSession(opts);
     if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // WHY: a holder takeover can arrive during the FIRST native await or before
@@ -1562,21 +1564,17 @@ export function registerIpcHandlers(
     // providerType is 'claude-code' — deliberately not a native provider type,
     // so the resume prefill can never match it against the local model catalog.
     if (claudeId && event.type === 'assistant-text') {
-      const model = (event.data as { model?: unknown } | undefined)?.model;
+      const model = conversationModelOf(event.data); // null for a helper agent's message or a placeholder
       // Deduped: assistant-text fires per TEXT BLOCK, several times a turn, and
       // noteModelUsed does a store read + write each call. The model only
       // changes on an explicit /model switch, so writing on every block would
       // mean hundreds of redundant record writes per conversation — each one a
       // sync-visible change. Only a DIFFERENT model reaches the store.
-      // Fix: never record CC's `<synthetic>` placeholder. It is stamped on
-      // assistant lines CC composed itself (session limit / out of credits /
-      // /login), so it is not a model — and this record OVERRIDES the Resume
-      // Browser's transcript scan (session-browser.ts, store overlay), so a
-      // single limit notice would print `<synthetic>` as the card's model and
-      // sync that to every other device. Read side is guarded too
-      // (store-core.ts sanitizeModelRef) to heal records written before this.
-      if (typeof model === 'string' && model && !isPlaceholderModelId(model)
-          && lastModelSeen.get(claudeId) !== model) {
+      // This record OVERRIDES the Resume Browser's transcript scan (store
+      // overlay) and syncs to every device, so a `<synthetic>` limit notice or
+      // a helper's model must never land here (conversationModelOf). Read side
+      // is guarded too (store-core.ts sanitizeModelRef).
+      if (model && lastModelSeen.get(claudeId) !== model) {
         lastModelSeen.set(claudeId, model);
         noteModelUsed(claudeId, { modelId: model, providerType: 'claude-code', providerLabel: 'Claude Code' });
       }

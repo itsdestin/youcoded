@@ -18,7 +18,7 @@
   },
   "budgets": {
     "shared/backend-contract.ts": 1635,
-    "main/ipc-handlers.ts": 2495,
+    "main/ipc-handlers.ts": 2493,
     "main/harness/native-session-host.ts": 5383,
     "renderer/App.tsx": 4665,
     "main/remote-server.ts": 1325,
