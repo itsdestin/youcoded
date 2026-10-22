@@ -165,6 +165,41 @@ describe('RemoteServer — pairing', () => {
       expect(refused.sent.map((m) => m.type)).toEqual(['auth:failed']);
     });
 
+    it('a sign-in and requests carried in the opening request are answered as soon as the socket exists', async () => {
+      // A reopening phone puts its saved sign-in and first requests in the socket's subprotocol names, saving a round trip.
+      const { firstFrameProtocols, TOOK_FRAMES_PROTOCOL, PLAIN_PROTOCOL } = await import('../src/shared/first-frames');
+      const { server } = await makeServer();
+      const paired = await connect(server, { password: 'correct-horse', deviceName: 'Phone' });
+      const auth = { type: 'auth', deviceId: paired.last()!.deviceId, secret: paired.last()!.secret };
+      const s = server as unknown as { pickProtocol(o: Set<string>, r: unknown): string | false; handleConnection(w: unknown, r: unknown): void };
+
+      const req = { socket: { remoteAddress: '127.0.0.1' } };
+      const offered = firstFrameProtocols([JSON.stringify(auth), JSON.stringify({ type: 'remote:ping', id: 'd:1:1' })])!;
+      expect(s.pickProtocol(new Set(offered), req)).toBe(TOOK_FRAMES_PROTOCOL);
+      const ws = new FakeSocket();
+      s.handleConnection(ws, req);   // nothing sent by the page itself
+      await vi.waitFor(() => expect(ws.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+
+      // Anything else is answered as before: the first name offered, and the page sends its own messages.
+      expect(s.pickProtocol(new Set([PLAIN_PROTOCOL, TOOK_FRAMES_PROTOCOL, 'yc-frames.not-base64!']), {})).toBe(PLAIN_PROTOCOL);
+      expect(s.pickProtocol(new Set(), {})).toBe(false);
+    });
+
+    it('a request that arrives during the sign-in slowdown waits for the sign-in instead of being read as a second one', async () => {
+      const { server } = await makeServer();
+      (server as unknown as { shouldSlowConnection(): boolean }).shouldSlowConnection = () => true;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const ws = new FakeSocket();
+        (server as unknown as { handleConnection(w: unknown, r: unknown): void })['handleConnection'](ws, { socket: { remoteAddress: '127.0.0.1' } });
+        ws.emit('message', JSON.stringify({ type: 'auth', password: 'correct-horse', deviceName: 'Phone' }));
+        ws.emit('message', JSON.stringify({ type: 'remote:ping', id: 'anon:1:1' }));
+        await vi.advanceTimersByTimeAsync(2_500);
+        expect(ws.closed).toBeNull();
+        await vi.waitFor(() => expect(ws.sent.map((m) => m.type)).toEqual(['auth:ok', 'remote:ping:response']));
+      } finally { vi.useRealTimers(); }
+    });
+
     it('both sign-in paths tell the screen the protocol version and what it can do', async () => {
       const { server } = await makeServer();
       const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });

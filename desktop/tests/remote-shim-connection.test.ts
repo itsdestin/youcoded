@@ -350,7 +350,8 @@ describe('remote-shim — client:ready', () => {
     onmessage: ((e: { data: string }) => void) | null = null;
     onclose: ((e: { code: number; reason: string }) => void) | null = null;
     onerror: (() => void) | null = null;
-    constructor(public url: string) { FakeWebSocket.instances.push(this); }
+    protocol = '';
+    constructor(public url: string, public protocols?: string[]) { FakeWebSocket.instances.push(this); }
     send(data: string) {
       if (this.readyState !== FakeWebSocket.OPEN) throw new Error('WebSocket is not OPEN');
       this.sent.push(data);
@@ -500,6 +501,38 @@ describe('remote-shim — client:ready', () => {
         expect(ws.sentOf('session:list')).toHaveLength(1);
         expect(ws.sentOf('session:open')).toHaveLength(2);
       } finally { delete (globalThis as any).sessionStorage; }
+    });
+
+    it('a saved sign-in and the early requests ride the opening request; a computer that takes them is sent nothing more', async () => {
+      // One round trip less: the computer answers them with its "connected" (shared/first-frames.ts).
+      const { readFirstFrames, TOOK_FRAMES_PROTOCOL } = await import('../src/shared/first-frames');
+      const place = new Map<string, string>([['youcoded-remote-place:localhost', 's1']]);
+      (globalThis as any).sessionStorage = { getItem: (k: string) => place.get(k) ?? null, setItem: (k: string, v: string) => { place.set(k, v); } };
+      try {
+        const p = shim.connect('dev-1:secret', true);
+        const ws = FakeWebSocket.instances[0];
+        const frames = readFirstFrames(ws.protocols ?? [])!.map((f) => JSON.parse(f));
+        expect(frames.map((m) => m.type)).toEqual(['auth', 'session:list', 'session:open', 'session:open']);
+        expect(frames[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret' });
+        ws.protocol = TOOK_FRAMES_PROTOCOL;
+        ws.open();
+        expect(ws.sent).toEqual([]);
+        ws.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', pipelined: true });
+        await p;
+        ws.receive({ type: 'session:list:response', id: frames[1].id, payload: [{ id: 's1' }] });
+        await expect((window as any).claude.session.list()).resolves.toEqual([{ id: 's1' }]);
+        expect(ws.sentOf('session:list')).toHaveLength(0);
+      } finally { delete (globalThis as any).sessionStorage; }
+    });
+
+    it('a password sign-in is never put in the opening request', async () => {
+      const p = shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      expect(ws.protocols).toBeUndefined();
+      ws.open();
+      expect(ws.sentOf('auth')[0].password).toBe('pw');
+      ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
     });
 
     it('is in remote mode the moment it is signed in, before the app mounts', async () => {

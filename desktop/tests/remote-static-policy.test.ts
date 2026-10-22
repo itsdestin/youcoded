@@ -16,9 +16,13 @@ describe('cacheControlFor', () => {
 
   // The bug this prevents: index.html is the ONE unhashed URL. Marking it
   // immutable strands every client on a stale build with no recovery path.
-  it('never marks index.html immutable', () => {
-    expect(cacheControlFor('/index.html')).toBe('no-cache');
-    expect(cacheControlFor('/')).toBe('no-cache');
+  // It is kept a week instead (no round trip per open); the page checks its
+  // own version after loading (index-html-version-check.test.ts).
+  it('never marks index.html immutable, and keeps it a week', () => {
+    for (const url of ['/index.html', '/']) {
+      expect(cacheControlFor(url)).not.toContain('immutable');
+      expect(cacheControlFor(url)).toBe('private, max-age=604800');
+    }
   });
 
   it('does not treat a path merely containing the word assets as hashed', () => {

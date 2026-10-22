@@ -16,6 +16,7 @@ import { describePhoneTimings, describeAnswer } from './remote-timings';
 import { localTokenMatches, ownerDesktopServices, type LocalModeOptions } from './remote-local';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
+import { readFirstFrames, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
 import type { SessionManager } from './session-manager';
 import type { createHandoffTransport } from './conversations/handoff-transport';
 import type { HookRelay } from './hook-relay';
@@ -225,6 +226,8 @@ export class RemoteServer {
   // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
   // because Vite content-hashes the URLs it serves; see compressStatic().
   private compressedAssets = new Map<string, Buffer>();
+  /** Messages a socket's opening request carried (handleProtocols), handed to its sign-in once the connection exists. */
+  private firstFrames = new WeakMap<http.IncomingMessage, string[]>();
   // Channels already warned about, so an unbridged channel that a client polls
   // logs once instead of every second. See the `default:` case in handleMessage.
   private warnedChannels = new Set<string>();
@@ -472,6 +475,9 @@ export class RemoteServer {
         serverNoContextTakeover: true,
         clientNoContextTakeover: true,
       },
+      // A phone's sign-in and first requests can ride in the opening request (shared/first-frames.ts): taken here, answered with
+      // the "connected". Anything else offered is answered as ws would by default (the first name), so an old page is unaffected.
+      handleProtocols: (offered, req) => this.pickProtocol(offered, req),
       verifyClient: (info, cb) => {
         if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
           cb(true);
@@ -826,6 +832,13 @@ export class RemoteServer {
 
   // --- WebSocket connection handling ---
 
+  /** The subprotocol answered to an opening request; takes the messages it carries (shared/first-frames.ts). */
+  private pickProtocol(offered: Set<string>, req: http.IncomingMessage): string | false {
+    const frames = this.local ? null : readFirstFrames(offered);
+    if (frames) { this.firstFrames.set(req, frames); return TOOK_FRAMES_PROTOCOL; }
+    return offered.values().next().value ?? false;
+  }
+
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
 
@@ -889,7 +902,8 @@ export class RemoteServer {
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
       detachBudget();
-      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
+      // WHY detached and holding BEFORE the slowdown wait: a request sent behind the sign-in that arrived during the wait reached
+      // this handler as a second sign-in, and was refused as "expected auth" with the socket closed.
       ws.off('message', authHandler);
       // WHY held (2026-10-22 phone speed): a page that has signed in here before sends its first requests (the session list, its
       // conversation) right behind the sign-in instead of a round trip later (`pipelined` in authOkMessage). They wait here and are
@@ -903,6 +917,7 @@ export class RemoteServer {
       };
       ws.on('message', holdEarly);
       const replayEarly = () => { ws.off('message', holdEarly); for (const r of early) ws.emit('message', r); };
+      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
 
       try {
         const msg = JSON.parse(raw.toString());
@@ -985,6 +1000,10 @@ export class RemoteServer {
     };
 
     ws.on('message', authHandler);
+    // The opening request's messages, in order: the sign-in reaches authHandler, the rest wait in its early hold like frames sent
+    // right behind it. They count against the same limits.
+    for (const frame of this.firstFrames.get(req) ?? []) ws.emit('message', Buffer.from(frame), false);
+    this.firstFrames.delete(req);
   }
 
   /** Close sockets that stopped answering. Without this a half-open connection is invisible

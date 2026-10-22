@@ -14,6 +14,7 @@ import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsu
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
+import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
 import { markPage, startConnection, markConnection, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
 import { setConnectionMode } from './platform';
@@ -585,8 +586,12 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'appearance:broadcast': 'user-action',
 };
 
+/** While set, messages are collected for the next socket's opening request instead of sent (shared/first-frames.ts). */
+let capturing: string[] | null = null;
+
 function send(msg: any): boolean {
   const data = JSON.stringify(msg);
+  if (capturing) { capturing.push(data); return true; }
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
   // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
@@ -1388,12 +1393,42 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     startConnection();
     sendBeforeSignIn = false;
     for (const sid of [...parked.keys()]) releaseParked(sid);   // an old connection's held pushes: the new one refills anyway
-    const socket = new WebSocket(getWsUrl());
-    ws = socket;
-    const isCurrent = () => generation === connectionGeneration && ws === socket;
     // Decided now, not when the close arrives: by then the Android app may already have gone back
     // to its own runtime, which changes the answer (finding 1).
     const localBridge = location.protocol === 'file:' && !targetUrl;
+    // Security: when connecting to the local Android bridge (file:// protocol),
+    // use the auth token passed via URL query param by WebViewHost.
+    // The token is in the URL so it's available before any JS runs (no race).
+    const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
+    // refillPush: this page refills one conversation on `session:refill`, so the computer need not hang up on it
+    // when one fill never completes (remote-server dropAudience, 2026-10-22). pieces: it puts a large answer back together
+    // from `remote:piece` frames, so a slow load never reads as silence (remote-server PIECE_CHARS).
+    const authMsg = localBridge && bridgeToken
+      ? { type: 'auth', token: bridgeToken, refillPush: true, pieces: true }
+      : isToken
+        ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
+        : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+    // A computer that holds early requests gets the list and the conversation with the sign-in, not a round trip later. A browser page
+    // was served by the computer it talks to (no target), so it is that computer's own version and always may; the Android app's page
+    // is its own build, so it waits until a computer has said so once.
+    const mayPipeline = !localBridge && (!targetUrl || hostPipelines(getWsUrl()));
+    // WHY in the opening request (2026-10-22 phone speed): a saved sign-in and those requests ride the socket's subprotocol names
+    // (shared/first-frames.ts), so the computer answers them with its "connected" — one round trip (~470 ms on a phone) sooner. Not
+    // the password (the gate's sign-in): that stays a message. A computer that does not take them picks the plain name, and onopen
+    // sends the same messages itself.
+    let firstFrames: string[] | null = null;
+    if (isToken && !localBridge) {
+      firstFrames = [JSON.stringify(authMsg)];
+      if (mayPipeline) {
+        sendBeforeSignIn = true;
+        capturing = firstFrames;
+        try { startEarlyRequests(generation); } finally { capturing = null; }
+      }
+    }
+    const protocols = firstFrames && firstFrameProtocols(firstFrames);
+    const socket = protocols ? new WebSocket(getWsUrl(), protocols) : new WebSocket(getWsUrl());
+    ws = socket;
+    const isCurrent = () => generation === connectionGeneration && ws === socket;
 
     // Track whether the socket ever got to OPEN. Lets onclose tell the difference
     // between "couldn't reach host" (TCP refused, Android cleartext block,
@@ -1420,24 +1455,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       markConnection('open');
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
-      // Security: when connecting to the local Android bridge (file:// protocol),
-      // use the auth token passed via URL query param by WebViewHost.
-      // The token is in the URL so it's available before any JS runs (no race).
-      const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
-      const isLocalBridge = location.protocol === 'file:' && !targetUrl;
-      // refillPush: this page refills one conversation on `session:refill`, so the computer need not hang up on it
-      // when one fill never completes (remote-server dropAudience, 2026-10-22). pieces: it puts a large answer back together
-      // from `remote:piece` frames, so a slow load never reads as silence (remote-server PIECE_CHARS).
-      const authMsg = isLocalBridge && bridgeToken
-        ? { type: 'auth', token: bridgeToken, refillPush: true, pieces: true }
-        : isToken
-          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true, refillPush: true, pieces: true }
-          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, refillPush: true, pieces: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+      if (socket.protocol === TOOK_FRAMES_PROTOCOL) return;   // the computer took them from the opening request
+      if (firstFrames) { for (const frame of firstFrames) socket.send(frame); return; }
       socket.send(JSON.stringify(authMsg));
-      // A computer that holds early requests gets the list and the conversation now, not a round trip later. A browser page was served
-      // by the computer it talks to (no target), so it is that computer's own version and always may; the Android app's page is its
-      // own build, so it waits until a computer has said so once.
-      if (!localBridge && (!targetUrl || hostPipelines(getWsUrl()))) { sendBeforeSignIn = true; startEarlyRequests(generation); }
+      if (mayPipeline) { sendBeforeSignIn = true; startEarlyRequests(generation); }
     };
 
     let authResolved = false;
