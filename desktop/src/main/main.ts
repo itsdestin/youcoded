@@ -24,7 +24,7 @@ import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
 import { ClaudeControlBridge } from './claude-control-bridge';
-import { HookRelay } from './hook-relay';
+import { HookRelay, hookPipeName } from './hook-relay';
 import { hookWindowTargets } from './hook-window-route';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
@@ -297,12 +297,12 @@ function broadcastWindowState() {
 windowRegistry.on('changed', broadcastWindowState);
 
 
-// Unique pipe name per launch — avoids EADDRINUSE from stale Electron processes
-const pipeName = process.platform === 'win32'
-  ? `\\\\.\\pipe\\claude-desktop-hooks-${process.pid}`
-  : path.join(os.tmpdir(), `claude-desktop-hooks-${process.pid}.sock`);
+// Unique per launch (stale processes); where and why not /tmp: hookPipeName() in hook-relay.ts.
+const pipeName = hookPipeName();
 sessionManager.setPipeName(pipeName);
 const hookRelay = new HookRelay(pipeName);
+// WHY: a deleted socket file left new sessions on "Initializing session…" — re-create it per session.
+sessionManager.on('session-created', () => { void hookRelay.ensureListening(); });
 // Hold /reload-plugins broadcasts away from sessions whose TUI is showing a
 // live permission/AskUserQuestion menu — typing into that menu presses Enter
 // on the highlighted option and silently answers the prompt (stray-Enter fix).

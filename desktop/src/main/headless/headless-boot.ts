@@ -14,7 +14,7 @@ import path from 'path';
 import { app } from 'electron';
 import { SessionManager } from '../session-manager';
 import { ClaudeControlBridge } from '../claude-control-bridge';
-import { HookRelay } from '../hook-relay';
+import { HookRelay, hookPipeName } from '../hook-relay';
 import { WindowRegistry } from '../window-registry';
 import { registerIpcHandlers } from '../ipc-handlers';
 import { RemoteServer } from '../remote-server';
@@ -87,9 +87,11 @@ export async function bootHeadless(opts: HeadlessOptions): Promise<{ stop: () =>
   // --- What main.ts builds at module scope ---
   const sessionManager = new SessionManager({ claudeControls: new ClaudeControlBridge(() => path.join(app.getPath('userData'), 'claude-control')) });
   const windowRegistry = new WindowRegistry();
-  const pipeName = path.join(os.tmpdir(), `claude-desktop-hooks-${process.pid}.sock`);
+  const pipeName = hookPipeName();
   sessionManager.setPipeName(pipeName);
   const hookRelay = new HookRelay(pipeName);
+  // Same repair as main.ts: re-create a deleted hook socket as each session starts.
+  sessionManager.on('session-created', () => { void hookRelay.ensureListening(); });
   sessionManager.setReloadPluginsGate((sessionId) => hookRelay.hasPendingPermission(sessionId));
   hookRelay.setSessionGate((sessionId) => sessionManager.hasSession(sessionId));
   const remoteConfig = new RemoteConfig();
