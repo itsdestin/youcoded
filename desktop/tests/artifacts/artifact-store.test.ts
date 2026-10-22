@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync, promises as fsPromises } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { readSidecar, writeSidecar, appendVersion, appendVersionsDirect, removeArtifactRecord, runSidecarMigration, renameArtifact, repairRelativeExternals } from '../../src/main/artifacts/artifact-store';
+import { readSidecar, writeSidecar, appendVersion, appendVersionsDirect, removeArtifactRecord, runSidecarMigration, renameArtifact, repairRelativeExternals, readSidecarShared, _resetSidecarCacheForTests } from '../../src/main/artifacts/artifact-store';
 import type { ProjectSidecar } from '../../src/shared/artifacts/types';
 import { SIDECAR_SCHEMA_VERSION } from '../../src/shared/artifacts/types';
 import sampleJson from '../../../shared-fixtures/artifacts/sample-sidecar.json';
@@ -259,6 +259,10 @@ describe('appendVersion', () => {
     });
 
     it('a rejected batch rejects every caller in it and the queue keeps working afterwards', async () => {
+      // Append now reuses the shared parsed copy and skips the read when the file is absent: give it a
+      // real file and a cold cache so the injected read failure is actually hit.
+      await appendVersion(projectRoot, sample.projectId, sample.name, { path: 'seed.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent' });
+      _resetSidecarCacheForTests();
       const spy = vi.spyOn(fsPromises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }));
       const p1 = appendVersion(projectRoot, sample.projectId, sample.name, {
         path: 'x.md', kind: 'internal', absolutePath: null, sessionId: 's', type: 'create', author: 'agent',
@@ -769,3 +773,54 @@ describe('repairRelativeExternals', () => {
   });
 });
 
+// 2026-10-22 freeze hunt: appends reuse the shared parsed copy instead of re-parsing a 27 MB file per
+// cycle, and write compact JSON. These pin that the reuse never hides an outside change, never edits
+// what readers hold, and that the bytes on disk still parse to exactly the same data.
+describe('appendVersion — shared parsed copy + compact file', () => {
+  let projectRoot: string;
+  const input = (p: string, extra: object = {}) => ({
+    path: p, kind: 'internal' as const, absolutePath: null, sessionId: 's', type: 'edit' as const, author: 'agent' as const, ...extra,
+  });
+  beforeEach(() => { projectRoot = mkdtempSync(join(tmpdir(), 'as-shared-')); _resetSidecarCacheForTests(); });
+
+  it('parses the file once across many append cycles', async () => {
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    const parse = vi.spyOn(JSON, 'parse');
+    for (let i = 0; i < 5; i++) await appendVersion(projectRoot, 'p', 'n', input(`f${i}.md`));
+    const bigParses = parse.mock.calls.filter(([t]) => typeof t === 'string' && t.length > 200).length;
+    parse.mockRestore();
+    expect(bigParses).toBe(0);
+  });
+
+  it('picks up a change made by another writer between appends', async () => {
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    const path = join(projectRoot, '.youcoded/artifacts.json');
+    const onDisk = JSON.parse(readFileSync(path, 'utf8'));
+    onDisk.artifacts.push({ id: 'EXT', path: 'external.md', kind: 'internal', absolutePath: null, lastModified: 'x', status: 'active', versions: [], comments: [], tags: [] });
+    onDisk.updatedAt = new Date(Date.now() + 5000).toISOString();
+    writeFileSync(path, JSON.stringify(onDisk));
+    await appendVersion(projectRoot, 'p', 'n', input('b.md'));
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    expect(after.artifacts.map((a: any) => a.path).sort()).toEqual(['a.md', 'b.md', 'external.md']);
+  });
+
+  it('never edits the copy a reader is holding', async () => {
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    const held = (await readSidecarShared(projectRoot)) as ProjectSidecar;
+    const before = JSON.stringify(held);
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    await appendVersion(projectRoot, 'p', 'n', input('c.md'));
+    expect(JSON.stringify(held)).toBe(before);
+  });
+
+  it('writes compact JSON that reads back to the same data as the indented form', async () => {
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    await appendVersion(projectRoot, 'p', 'n', input('a.md'));
+    const text = readFileSync(join(projectRoot, '.youcoded/artifacts.json'), 'utf8');
+    expect(text).not.toMatch(/\n\s/);                       // no indentation
+    const sc = (await readSidecar(projectRoot)) as ProjectSidecar;
+    expect(sc.artifacts).toHaveLength(1);
+    expect(sc.artifacts[0].versions).toHaveLength(2);
+    expect(JSON.parse(JSON.stringify(sc, null, 2))).toEqual(JSON.parse(text));
+  });
+});

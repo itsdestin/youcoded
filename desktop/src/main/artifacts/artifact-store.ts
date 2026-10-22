@@ -1,6 +1,6 @@
 import { promises as fs, constants as fsConstants } from 'fs';
 import { join, dirname, extname, basename, relative, isAbsolute } from 'path';
-import { ProjectSidecar } from '../../shared/artifacts/types';
+import { ProjectSidecar, ArtifactRecord } from '../../shared/artifacts/types';
 import { newArtifactId, newVersionId } from '../../shared/artifacts/ulid';
 import { SIDECAR_SCHEMA_VERSION } from '../../shared/artifacts/types';
 import { casWrite, CAS_REPLACE_ANY, type CasExpectation } from './cas-write';
@@ -8,7 +8,7 @@ import { migrateRelativeExternals } from '../../shared/artifacts/migrate-relativ
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { isAbsoluteRecorded, judgeRelativeRecord } from './write-authorization';
 import { readFolders } from '../saved-folders';
-import { pruneSidecarVersions } from '../../shared/artifacts/version-retention';
+import { pruneVersions } from '../../shared/artifacts/version-retention';
 
 const SIDECAR_RELATIVE = '.youcoded/artifacts.json';
 
@@ -213,7 +213,11 @@ export async function writeSidecar(
   // retrying rather than reusing the object, so nothing observes that; a future
   // caller that retries with the same object must re-read too.
   next.updatedAt = bumpPastExpected(next.updatedAt, expectedUpdatedAt);
-  const json = JSON.stringify(next, null, 2);
+  // WHY compact (2026-10-22 freeze hunt): indented output made the 27 MB sidecar's stringify slower and
+  // the file ~40% bigger. Checked that nothing needs the indentation: `.youcoded/` is gitignored and
+  // excluded from sync (so no line-based merge or diff), Android never reads this file, and every reader
+  // is JSON.parse plus extractUpdatedAt's whitespace-tolerant regex. Schema and content are unchanged.
+  const json = JSON.stringify(next);
   const result = await casWrite(
     path,
     expectedUpdatedAt,
@@ -359,7 +363,12 @@ export async function appendVersionsDirect(
 ): Promise<AppendVersionResult[]> {
   if (inputs.length === 0) return [];
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const current = await readSidecar(projectRoot);
+    // WHY the shared copy, not a fresh read (2026-10-22 freeze hunt): every append cycle used to
+    // read + parse the whole sidecar (27 MB: 90-190 ms and ~200 MB of garbage). The shared copy is
+    // validated against the file's stat, so an external writer is still picked up, and a CAS conflict
+    // retry changes the stat and so re-parses. The shared object is READ-ONLY, so the edits below are
+    // made copy-on-write on `sidecar` (a shallow copy), never on `current`.
+    const current = await readSidecarShared(projectRoot);
     let sidecar: ProjectSidecar;
     let expectedUpdatedAt: CasExpectation;
     if (current === null || 'corrupted' in current) {
@@ -382,16 +391,30 @@ export async function appendVersionsDirect(
       // so it says so explicitly instead of borrowing the create path's null.
       expectedUpdatedAt = current === null ? null : CAS_REPLACE_ANY;
     } else {
-      sidecar = current;
+      sidecar = { ...current, artifacts: current.artifacts.slice() };
       expectedUpdatedAt = sidecar.updatedAt;
     }
+
+    // Path+kind -> position, built once per cycle (the old per-input `find` scanned ~24k records each
+    // time). The FIRST match wins, exactly as `find` did.
+    const slotOf = new Map<string, number>();
+    sidecar.artifacts.forEach((a, i) => { const k = `${a.kind}\0${a.path}`; if (!slotOf.has(k)) slotOf.set(k, i); });
+    // Records this cycle has already copied; only those may be edited in place.
+    const owned = new Set<ArtifactRecord>();
+    const own = (rec: ArtifactRecord, slot: number): ArtifactRecord => {
+      if (owned.has(rec) || current === null || 'corrupted' in current) return rec;
+      const copy = { ...rec, versions: rec.versions.slice() };
+      sidecar.artifacts[slot] = copy;
+      owned.add(copy);
+      return copy;
+    };
 
     const results: AppendVersionResult[] = [];
     let changed = false;
     for (const input of inputs) {
-      const existing = sidecar.artifacts.find(
-        (a) => a.path === input.path && a.kind === input.kind
-      );
+      const key = `${input.kind}\0${input.path}`;
+      const slot = slotOf.get(key);
+      let existing = slot === undefined ? undefined : sidecar.artifacts[slot];
       // Replay dedupe: the same tool call recorded once already ⇒ nothing to
       // add. Same sessionId AND same toolUseId — never toolUseId alone.
       if (
@@ -416,6 +439,7 @@ export async function appendVersionsDirect(
       };
       let artifactId: string;
       if (existing) {
+        existing = own(existing, slot!);
         existing.versions.push(versionEvent);
         // A 'read' is not a modification — bumping lastModified for a view
         // reordered "recently modified" sorting every time a pill was clicked.
@@ -427,7 +451,7 @@ export async function appendVersionsDirect(
         artifactId = existing.id;
       } else {
         artifactId = newArtifactId();
-        sidecar.artifacts.push({
+        const fresh: ArtifactRecord = {
           id: artifactId,
           path: input.path,
           kind: input.kind,
@@ -437,7 +461,10 @@ export async function appendVersionsDirect(
           versions: [versionEvent],
           comments: [],
           tags: [],
-        });
+        };
+        slotOf.set(key, sidecar.artifacts.length);
+        sidecar.artifacts.push(fresh);
+        owned.add(fresh);
       }
       changed = true;
       results.push({ committed: true, artifactId });
@@ -468,7 +495,13 @@ export async function appendVersionsDirect(
     // byte-identical" invariant is untouched.
     //
     // Policy and safety floor: shared/artifacts/version-retention.ts.
-    pruneSidecarVersions(sidecar);
+    // Copy-on-write form of pruneSidecarVersions: same policy, but a pruned record is replaced by a
+    // copy so the shared (read-only) parsed object is never edited.
+    const nowMs = Date.now();
+    sidecar.artifacts.forEach((rec, i) => {
+      const pruned = pruneVersions(rec.versions, nowMs);
+      if (pruned !== rec.versions) sidecar.artifacts[i] = { ...rec, versions: pruned };
+    });
 
     sidecar.updatedAt = new Date().toISOString();
     const result = await writeSidecar(projectRoot, expectedUpdatedAt, sidecar);
