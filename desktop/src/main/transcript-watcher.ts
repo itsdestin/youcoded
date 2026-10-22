@@ -392,7 +392,7 @@ export function parseTranscriptLine(
  * any other line. Background-task notices (commandMode 'task-notification') and messages another
  * Claude Code session sent in (origin.kind 'peer') are not something the person typed. A queued
  * line with no origin at all is read as typed: all 84 measured on 2026-09-11 carried one, so this
- * only matters for a Claude Code build this was not measured on. Mirrored in TranscriptWatcher.kt.
+ * only matters for a Claude Code build this was not measured on.
  */
 function queuedPromptText(parsed: any): string | null {
   const a = parsed?.type === 'attachment' ? parsed.attachment : null;
@@ -445,7 +445,7 @@ const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>
  * card and yield nothing. Shape measured on 2026-09-24 across 1,915 notices:
  * <task-id> (one, or several for an orphan summary on resume), usually a
  * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
- * a helper a <result> holding its final report. Mirrored in TranscriptWatcher.kt.
+ * a helper a <result> holding its final report.
  */
 function taskNotificationEvents(raw: string, sessionId: string, uuid: string, timestamp: number): StampableEvent[] {
   if (!raw || !raw.includes('<task-notification>')) return [];

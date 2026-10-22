@@ -78,6 +78,12 @@ describe('the collapsed group sentence agrees', () => {
     expect(headline).not.toContain('brought in');
   });
 
+  it('a follow-up still in flight is named neither a note nor a resume until its result says which', () => {
+    const headline = buildToolGroupHeadline([card('Task', { task_id: 'c1', prompt: 'p' }, { status: 'running' })]);
+    expect(headline).toMatch(/following up with a specialist/i);
+    expect(headline).not.toMatch(/note|resum/i);
+  });
+
   it('background checks and stops are not "used a tool"', () => {
     expect(buildToolGroupHeadline([card('TaskOutput', { task_id: 'b' }), card('TaskStop', { task_id: 'b' })]))
       .toBe('Checked on a background task and stopped a background task');

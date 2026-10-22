@@ -86,6 +86,12 @@ const KIND_TABLE: Record<string, KindPhrasing> = {
     done: (n) => (n === 1 ? 'resumed a specialist' : `resumed ${n} specialists`),
     active: (n) => (n === 1 ? 'resuming a specialist' : `resuming ${n} specialists`),
   },
+  // A task_id call still in flight: only its result says note or resume, and the card itself
+  // may already say "Resuming" from the target's state — so the headline names neither (review F8).
+  'specialist-followup': {
+    done: (n) => (n === 1 ? 'followed up with a specialist' : `followed up with specialists ${n} times`),
+    active: (n) => (n === 1 ? 'following up with a specialist' : `following up with specialists ${n} times`),
+  },
   'specialist-stop': {
     done: (n) => (n === 1 ? 'stopped a specialist' : `stopped ${n} specialists`),
     active: (n) => (n === 1 ? 'stopping a specialist' : `stopping ${n} specialists`),
@@ -176,6 +182,7 @@ function callKindKey(t: Pick<ToolCallState, 'toolName' | 'input' | 'response' | 
   if (input.list === true && !input.task_id) return 'specialist-check';
   if (!input.task_id) return 'Task';
   if (input.interrupt === true) return 'specialist-stop';
+  if (t.status === 'running') return 'specialist-followup';
   const resp = t.status === 'complete' ? (t.response ?? '') : '';
   return resp && !resp.startsWith('Steer delivered') ? 'specialist-resume' : 'specialist-note';
 }

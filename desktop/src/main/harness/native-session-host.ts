@@ -5370,7 +5370,18 @@ export class NativeSessionHost extends EventEmitter {
         // closing a tab must not stall on a stubborn process.
         void reg.killAll('conversation-closed')
           .catch((err) => log('WARN', 'NativeSessionHost', 'killAll on destroy failed', { sessionId, error: String(err) }))
-          .finally(() => this.drainingShellRegistries.delete(reg));
+          .finally(() => {
+            this.drainingShellRegistries.delete(reg);
+            // Review F11: the closed conversation's saved-commands file is written out and
+            // released (it was kept until quit). A reopen in the meantime owns a NEW sidecar,
+            // which the identity check leaves alone.
+            const sidecar = this.shellSidecars.get(sessionId);
+            if (sidecar) {
+              void sidecar.flush()
+                .catch((err) => log('WARN', 'NativeSessionHost', 'saved-commands flush on close failed', { sessionId, error: String(err) }))
+                .finally(() => { if (this.shellSidecars.get(sessionId) === sidecar) this.shellSidecars.delete(sessionId); });
+            }
+          });
       }
     }
     if (!entry) return;

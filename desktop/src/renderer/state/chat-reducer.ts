@@ -451,7 +451,9 @@ function endTurn(
     // launch receipt if it launched, an error if it did not — so failing it here only
     // made the card flash "failed" until the receipt flipped it back. The result
     // decides. (Other paths that end a turn — process exit, a closed session — still
-    // fail it: no result is coming there.)
+    // fail it: no result is coming there.) Every Agent, foreground included (review F6):
+    // 0 of the Agent calls in the 400 newest local transcripts lacked a result, Esc'd ones
+    // included (2026-10-22), and 1,139 of 1,139 measured were background launches anyway.
     if (errorMessage === 'Turn interrupted' && tool.status === 'running' && launchesBackgroundWork(tool)) continue;
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
       // Also drop `expired`: a kept card (PERMISSION_EXPIRED 'hook-closed') is
