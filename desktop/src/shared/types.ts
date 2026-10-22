@@ -271,6 +271,13 @@ export interface CcBackgroundRun {
   status: CcBackgroundStatus;
   summary?: string;
   result?: string;
+  /** A Bash command's exit code (read from the notice's summary text). */
+  exitCode?: number;
+  /** When the end was read (epoch ms) — the background-command list shows it. */
+  endedAt?: number;
+  /** Only on the `reopen:<taskId>` marker in `ccBackgroundOutcomes`: the SendMessage
+   *  call that resumed this finished helper. See cc-background.ts `markHelperReopened`. */
+  viaToolUseId?: string;
 }
 
 /**
@@ -311,6 +318,10 @@ export interface TranscriptPageResult {
   hasMore: boolean;
   /** Native page is idle. */ reconcileInterrupted?: boolean;
   /** CC tool calls before the pre-spawn cutoff; new calls on this page stay live. */ reconcileInterruptedToolIds?: string[];
+  /** CC: no Claude Code process of this app is attached to the transcript this page was read from
+   *  (the conversation is only being viewed), so background work it launched and never reported an end
+   *  for cannot still be running — the page's cards read stopped instead of spinning forever (audit A7/C3). */
+  reconcileBackground?: boolean;
   /**
    * "I could not locate this session's transcript", as distinct from "you have
    * reached the beginning of the conversation" — which is what an empty page

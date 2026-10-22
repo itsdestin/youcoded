@@ -1698,6 +1698,11 @@ export function registerIpcHandlers(
     }
 
     let source: ResolvedPageSource | null = transcriptWatcher.pageSourceFor(sessionId);
+    // A7/C3: no watcher means no Claude Code process of ours is attached to this transcript, and no
+    // resume boundary means we did not just spawn one (a pre-hook resume has a boundary and a live
+    // process). Then the conversation is only being viewed, so background work it never reported an
+    // end for cannot still be running — see TranscriptPageResult.reconcileBackground.
+    const viewOnly = !source && !resumePageBoundaries.has(sessionId);
     if (!source) {
       // No watcher yet (pre-hook resume), anymore (exit), or ever (buddy).
       // Resolve from validated locator ids supplied now or on the first page;
@@ -1733,7 +1738,7 @@ export function registerIpcHandlers(
     const reconcile = resumeOffset != null && !entirelyOld;
     const old = reconcile ? await readTranscriptPage({ jsonlPath: source.jsonlPath,
       sessionId, endOffset: resumeOffset }) : null;
-    return { ...page, reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
+    return { ...page, ...(viewOnly ? { reconcileBackground: true } : {}), reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
       ? [...new Set(old.events.filter(ev => ev.type === 'tool-use').map(ev => ev.data.toolUseId).filter((id): id is string => !!id))]
       : undefined };
   };

@@ -221,6 +221,8 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         isError: ev.data.isError || false,
         structuredPatch: ev.data.structuredPatch,
         backgroundTaskId: ev.data.backgroundTaskId,
+        backgroundPersistent: ev.data.backgroundPersistent,
+        stoppedTaskId: ev.data.stoppedTaskId,
         resumedTaskId: ev.data.resumedTaskId,
         parentAgentToolUseId: ev.data.parentAgentToolUseId,
         agentId: ev.data.agentId,
@@ -235,11 +237,13 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         type: 'TRANSCRIPT_BACKGROUND_TASK',
         sessionId,
         uuid,
+        timestamp,
         toolUseId: ev.data.toolUseId,
         taskIds: ev.data.backgroundTask.taskIds,
         status: ev.data.backgroundTask.status,
         summary: ev.data.backgroundTask.summary,
         result: ev.data.backgroundTask.result,
+        exitCode: ev.data.backgroundTask.exitCode,
         parentAgentToolUseId: ev.data.parentAgentToolUseId,
       } as ChatAction];
 
