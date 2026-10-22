@@ -116,6 +116,19 @@ export function BetaChannelRow(
  *  useState copies would disagree until reopened. */
 let autoInstall: boolean | null = null;
 let autoInstallLoading = false;
+// WHY a resolved flag: after {supported:false} the value stays null, so "null" alone would re-ask
+// the host on every mount of every row. Once a definite answer arrives we ask no more this page load.
+let autoInstallResolved = false;
+// WHY a request counter: two quick flips send two saves; an older reply landing after a newer
+// flip must not move the switch back.
+let autoInstallRequest = 0;
+type AutoInstallReply = { supported?: unknown; enabled?: unknown } | null | undefined;
+/** The value a reply means: a boolean, null for supported:false, or undefined for a malformed reply. */
+function readAutoInstallReply(s: AutoInstallReply): boolean | null | undefined {
+  if (!s || typeof s.supported !== 'boolean') return undefined;
+  if (!s.supported) return null;
+  return typeof s.enabled === 'boolean' ? s.enabled : undefined;
+}
 const autoInstallListeners = new Set<() => void>();
 function setAutoInstallValue(v: boolean | null) {
   autoInstall = v;
@@ -126,17 +139,30 @@ function subscribeAutoInstall(l: () => void) {
   // WHY the capability check: Android and remote browsers have no installer to run, so the
   // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
   const api = window.claude?.update as
-    | { getAutoInstall?: () => Promise<{ supported: boolean; enabled?: boolean }> }
+    | { getAutoInstall?: () => Promise<AutoInstallReply> }
     | undefined;
-  if (autoInstall === null && !autoInstallLoading && typeof api?.getAutoInstall === 'function') {
+  if (!autoInstallResolved && !autoInstallLoading && typeof api?.getAutoInstall === 'function') {
     autoInstallLoading = true;
+    const startedAt = autoInstallRequest;
     api.getAutoInstall()
-      // WHY supported:false ⇒ null: no in-app updater here (Android, unpackaged), so the row stays hidden.
-      .then((s) => setAutoInstallValue(s.supported && typeof s.enabled === 'boolean' ? s.enabled : null))
+      .then((s) => {
+        const v = readAutoInstallReply(s);
+        // A malformed reply is "unknown": hide the row, but allow a later retry.
+        if (v === undefined) return;
+        autoInstallResolved = true;
+        // A flip made while this read was in flight is newer than the read.
+        if (startedAt === autoInstallRequest) setAutoInstallValue(v);
+      })
       .catch(() => {})
       .finally(() => { autoInstallLoading = false; });
   }
   return () => { autoInstallListeners.delete(l); };
+}
+
+/** Test seam: forget what this page load has learned. */
+export function resetAutoInstallStoreForTests() {
+  autoInstall = null; autoInstallLoading = false; autoInstallResolved = false; autoInstallRequest = 0;
+  autoInstallListeners.clear();
 }
 
 /** null until known, or where the host has no automatic updates (Android, remote). */
@@ -144,12 +170,21 @@ export function useAutoInstall(): [boolean | null, () => void] {
   const enabled = useSyncExternalStore(subscribeAutoInstall, () => autoInstall);
   const flip = () => {
     if (enabled === null) return;
+    const previous = enabled;
     const next = !enabled;
+    const mine = ++autoInstallRequest;
     setAutoInstallValue(next);  // optimistic
-    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<{ supported: boolean; enabled?: boolean }> };
+    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<AutoInstallReply> };
+    // WHY revert to `previous` on a failed or malformed reply (review of T1): a reply with no boolean
+    // `supported` is an error, and treating it as "unsupported" hid the row instead of undoing the flip.
+    const revert = () => { if (mine === autoInstallRequest) setAutoInstallValue(previous); };
     api.setAutoInstall(next)
-      .then((s) => setAutoInstallValue(s.supported && typeof s.enabled === 'boolean' ? s.enabled : null))
-      .catch(() => setAutoInstallValue(!next));  // revert on failure
+      .then((s) => {
+        if (mine !== autoInstallRequest) return; // a newer flip owns the switch
+        const v = readAutoInstallReply(s);
+        if (v === undefined) revert(); else setAutoInstallValue(v);
+      })
+      .catch(revert);
   };
   return [enabled, flip];
 }

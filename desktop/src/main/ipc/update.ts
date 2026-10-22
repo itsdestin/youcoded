@@ -37,6 +37,9 @@ export const updateChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.UPDATE_SET_AUTO_INSTALL, kind: 'handle',
     handler: (payload) => getUpdateService().setAutoInstall(payload?.enabled),
-    remoteOnError: (error) => ({ ok: false, error: String((error as Error)?.message ?? error) }),
+    // WHY no remoteOnError (review of T1): the beta channel's soft {ok:false,error} answer is an old
+    // shape its own caller understands. This switch's caller treats any reply without `supported`
+    // as a failure to revert from, so a failed save must reach the phone as a rejection (the table's
+    // thrown-handler flag does that), never as a quiet answer.
   }),
 ];

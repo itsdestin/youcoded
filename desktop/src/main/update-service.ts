@@ -278,16 +278,27 @@ function createUpdateService() {
   // (D18). Default true until the one async read lands, matching "absent ⇒ on". A set writes
   // through, so a read racing the load can never overwrite a newer choice (see loadAutoInstall).
   let autoInstallCache = true;
-  let autoInstallTouched = false;
+  // WHY a counter, not a flag: a read that STARTED before a save finished must not overwrite the
+  // save with the older file contents, and a later re-read (refreshAutoInstall) must still be
+  // allowed to apply once no save is racing it.
+  let autoInstallWrites = 0;
   let autoInstallLoad: Promise<void> | null = null;
-  /** Read the saved value once, off the main thread. T2 calls this at startup; get calls it lazily. */
+  /** Read the file once, off the main thread, and apply it unless a save landed meanwhile. */
+  async function readAutoInstallInto(): Promise<void> {
+    const startedAt = autoInstallWrites;
+    const saved = await updateSettings.readAsync(); // readAsync maps failures to defaults
+    if (startedAt === autoInstallWrites) autoInstallCache = saved.autoInstall;
+  }
+  /** Read the saved value once. T2 calls this at startup; get calls it lazily. */
   function loadAutoInstall(): Promise<void> {
-    if (!autoInstallLoad) {
-      autoInstallLoad = updateSettings.readAsync().then((p) => {
-        if (!autoInstallTouched) autoInstallCache = p.autoInstall;
-      }).catch(() => { /* readAsync already maps failures to defaults */ });
-    }
+    if (!autoInstallLoad) autoInstallLoad = readAutoInstallInto().catch(() => {});
     return autoInstallLoad;
+  }
+  /** Re-read config.json into the cache. WHY: the dev instance and the installed app share the
+   *  file, so a change made by the other app is otherwise invisible until restart. T2 calls this
+   *  on each background release check. Async only; never call it on the quit path (D18). */
+  function refreshAutoInstall(): Promise<void> {
+    return autoInstallSupported ? readAutoInstallInto().catch(() => {}) : Promise.resolve();
   }
   /** Sync, memory-only: what background downloads and the quit path consult. */
   function autoInstallEnabled(): boolean { return autoInstallSupported && autoInstallCache; }
@@ -298,15 +309,22 @@ function createUpdateService() {
     await loadAutoInstall();
     return { supported: true, enabled: autoInstallCache };
   }
-  async function setAutoInstall(enabled: boolean): Promise<UpdateAutoInstallState> {
-    if (!autoInstallSupported) return { supported: false };
-    // WHY validate/write before touching the cache: a rejected save must not leave memory saying
-    // on while the file says off.
-    await updateSettings.setAutoInstall(enabled);
-    autoInstallTouched = true;
-    autoInstallCache = enabled;
-    if (enabled) onAutoInstallEnabled();
-    return { supported: true, enabled };
+  // WHY a promise chain: two quick flips would otherwise run two locked writes whose finish order
+  // is not their start order, leaving file and memory disagreeing about which flip was last.
+  let autoInstallQueue: Promise<unknown> = Promise.resolve();
+  function setAutoInstall(enabled: boolean): Promise<UpdateAutoInstallState> {
+    if (!autoInstallSupported) return Promise.resolve({ supported: false });
+    const run = autoInstallQueue.then(async (): Promise<UpdateAutoInstallState> => {
+      // WHY validate/write before touching the cache: a rejected save must not leave memory saying
+      // on while the file says off.
+      await updateSettings.setAutoInstall(enabled);
+      autoInstallWrites++;
+      autoInstallCache = enabled;
+      if (enabled) onAutoInstallEnabled();
+      return { supported: true, enabled };
+    });
+    autoInstallQueue = run.catch(() => {}); // a failed save must not wedge later ones
+    return run;
   }
 
   async function setBetaChannel(enabled: boolean): Promise<UpdateBetaChannelState> {
@@ -398,7 +416,7 @@ function createUpdateService() {
     return findCachedDownload(updateCacheDir, version, process.platform);
   }
 
-  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, autoInstallEnabled, download, cancel, launch, getCachedDownload };
+  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, refreshAutoInstall, autoInstallEnabled, download, cancel, launch, getCachedDownload };
 }
 
 export type UpdateService = ReturnType<typeof createUpdateService>;

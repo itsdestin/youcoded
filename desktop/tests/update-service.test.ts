@@ -5,7 +5,7 @@ import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 
 const mocks = vi.hoisted(() => ({
   launch: vi.fn(), verify: vi.fn(), quit: vi.fn(), relaunch: vi.fn(), send: vi.fn(),
-  deps: null as LaunchInstallerDeps | null, savedAutoInstall: true, packaged: true,
+  deps: null as LaunchInstallerDeps | null, savedAutoInstall: true, packaged: true, readGate: null as Promise<void> | null, readValue: true,
 }));
 vi.mock('electron', () => ({
   app: { get isPackaged() { return mocks.packaged; }, getVersion: () => '1.0.0', getPath: () => '/unused', quit: mocks.quit, relaunch: mocks.relaunch },
@@ -19,7 +19,12 @@ vi.mock('../src/main/update-installer', async (importOriginal) => {
 vi.mock('../src/main/update-manifest-verify', () => ({ verifyDownloadedUpdate: mocks.verify }));
 vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class {
   resolve() { return false; }
-  async readAsync() { return { betaChannel: null, autoInstall: mocks.savedAutoInstall }; }
+  async readAsync() {
+    const gate = mocks.readGate;
+    const value = mocks.savedAutoInstall;
+    if (gate) await gate; // a test can hold the read open
+    return { betaChannel: null, autoInstall: gate ? mocks.readValue : value };
+  }
   async setAutoInstall(v: unknown) { if (typeof v !== 'boolean') throw new TypeError('bad'); mocks.savedAutoInstall = v; }
 } }));
 vi.mock('../src/main/native-home', () => ({ NativeHome: class {} }));
@@ -91,7 +96,7 @@ describe('update service launch ownership', () => {
 // "Install updates automatically" (#183): what the service answers, and that a check or quit never
 // needs a file read.
 describe('update service auto-install', () => {
-  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); mocks.savedAutoInstall = true; mocks.packaged = true; delete process.env.YOUCODED_HEADLESS_PORT; });
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); mocks.savedAutoInstall = true; mocks.packaged = true; mocks.readGate = null; delete process.env.YOUCODED_HEADLESS_PORT; });
   afterEach(() => { mocks.packaged = true; delete process.env.YOUCODED_HEADLESS_PORT; delete process.env.YOUCODED_DEV_FAKE_UPDATE; });
   const load = async () => (await import('../src/main/update-service')).getUpdateService();
 
@@ -131,5 +136,35 @@ describe('update service auto-install', () => {
     vi.resetModules();
     process.env.YOUCODED_DEV_FAKE_UPDATE = '1';
     expect(await (await load()).getAutoInstall()).toEqual({ supported: true, enabled: true });
+  });
+
+  it('keeps a save made while the first read was still open', async () => {
+    let release!: () => void;
+    mocks.readGate = new Promise<void>((r) => { release = r; });
+    mocks.readValue = true; // the stale file contents the held read will return
+    const s = await load();
+    const asked = s.getAutoInstall();               // starts the read, which is now held
+    await s.setAutoInstall(false);                  // the save completes first
+    release();                                      // the read resolves with the older "true"
+    expect(await asked).toEqual({ supported: true, enabled: false });
+    expect(s.autoInstallEnabled()).toBe(false);
+  });
+
+  it('applies two quick saves in the order they were made', async () => {
+    const s = await load();
+    const first = s.setAutoInstall(false);
+    const second = s.setAutoInstall(true);
+    await Promise.all([first, second]);
+    expect(mocks.savedAutoInstall).toBe(true);
+    expect(s.autoInstallEnabled()).toBe(true);
+  });
+
+  it('sees a change made by the other app only when asked to re-read', async () => {
+    const s = await load();
+    await s.getAutoInstall();
+    mocks.savedAutoInstall = false; // the other instance edited config.json
+    expect(s.autoInstallEnabled()).toBe(true);
+    await s.refreshAutoInstall();
+    expect(s.autoInstallEnabled()).toBe(false);
   });
 });
