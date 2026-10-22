@@ -277,7 +277,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel', 'update.onInstallProgress',
-  // Automatic updates (#183): designed ahead of main — registered in mock-only.ts.
+  // Automatic updates (#183): the two settings channels are real (T1); restartToUpdate is
+  // designed ahead of main — registered in mock-only.ts.
   'update.getAutoInstall', 'update.setAutoInstall', 'update.restartToUpdate',
   // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
   // hand-written so the workbench serves the seeded comment fixtures instead
@@ -4034,8 +4035,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     getBetaChannel: async () => ({ betaChannel: null, effective: false }),
     setBetaChannel: async (enabled: boolean) => ({ betaChannel: enabled, effective: enabled }),
     // Automatic updates (#183). On unless turned off, like the real default will be.
-    getAutoInstall: async () => ({ enabled: autoInstall }),
-    setAutoInstall: async (enabled: boolean) => { autoInstall = enabled; return { enabled }; },
+    // WHY the {supported:true, ...} shape: the real channel answers it (supported:false hides the row).
+    getAutoInstall: async () => ({ supported: true as const, enabled: autoInstall }),
+    setAutoInstall: async (enabled: boolean) => { autoInstall = enabled; return { supported: true as const, enabled }; },
     // With sessions open, the restart asks through the close-window prompt and resolves with
     // whether it went ahead; with none, it goes ahead at once. Parked after "yes": a browser
     // tab cannot restart, and a stable "Restarting YouCoded…" is the state to review.

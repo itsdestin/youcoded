@@ -10,7 +10,7 @@ import path from 'path';
 import https from 'https';
 import { app, BrowserWindow, shell } from 'electron';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
-import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState } from '../shared/update-install-types';
+import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
 import { linuxInstallKind, primeLinuxInstallKind } from './linux-install-kind';
@@ -267,6 +267,48 @@ function createUpdateService() {
     }
   }
 
+  // --- "Install updates automatically" (#183, design §1) ---
+  // WHY supported is decided here: the same rule the dev fake-update path uses. Android's headless
+  // backend reports isPackaged=false and has no installer, and an unpackaged desktop build has
+  // nothing to install, so both answer {supported:false} and the row hides. The explicit headless
+  // env check is belt-and-braces for a dev run that sets YOUCODED_DEV_FAKE_UPDATE.
+  const autoInstallSupported = !process.env.YOUCODED_HEADLESS_PORT
+    && (app.isPackaged || process.env.YOUCODED_DEV_FAKE_UPDATE === '1');
+  // WHY an in-memory cache: the check and quit paths must never read config.json synchronously
+  // (D18). Default true until the one async read lands, matching "absent ⇒ on". A set writes
+  // through, so a read racing the load can never overwrite a newer choice (see loadAutoInstall).
+  let autoInstallCache = true;
+  let autoInstallTouched = false;
+  let autoInstallLoad: Promise<void> | null = null;
+  /** Read the saved value once, off the main thread. T2 calls this at startup; get calls it lazily. */
+  function loadAutoInstall(): Promise<void> {
+    if (!autoInstallLoad) {
+      autoInstallLoad = updateSettings.readAsync().then((p) => {
+        if (!autoInstallTouched) autoInstallCache = p.autoInstall;
+      }).catch(() => { /* readAsync already maps failures to defaults */ });
+    }
+    return autoInstallLoad;
+  }
+  /** Sync, memory-only: what background downloads and the quit path consult. */
+  function autoInstallEnabled(): boolean { return autoInstallSupported && autoInstallCache; }
+  /** Turning the switch ON starts the background download. T2 fills this; a no-op until then. */
+  function onAutoInstallEnabled(): void { /* T2: ensureDownloaded('switch-on') */ }
+  async function getAutoInstall(): Promise<UpdateAutoInstallState> {
+    if (!autoInstallSupported) return { supported: false };
+    await loadAutoInstall();
+    return { supported: true, enabled: autoInstallCache };
+  }
+  async function setAutoInstall(enabled: boolean): Promise<UpdateAutoInstallState> {
+    if (!autoInstallSupported) return { supported: false };
+    // WHY validate/write before touching the cache: a rejected save must not leave memory saying
+    // on while the file says off.
+    await updateSettings.setAutoInstall(enabled);
+    autoInstallTouched = true;
+    autoInstallCache = enabled;
+    if (enabled) onAutoInstallEnabled();
+    return { supported: true, enabled };
+  }
+
   async function setBetaChannel(enabled: boolean): Promise<UpdateBetaChannelState> {
     await updateSettings.setBetaChannel(enabled);
     // WHY re-check immediately: the status cache holds one answer for 30 minutes,
@@ -356,7 +398,7 @@ function createUpdateService() {
     return findCachedDownload(updateCacheDir, version, process.platform);
   }
 
-  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, download, cancel, launch, getCachedDownload };
+  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, autoInstallEnabled, download, cancel, launch, getCachedDownload };
 }
 
 export type UpdateService = ReturnType<typeof createUpdateService>;

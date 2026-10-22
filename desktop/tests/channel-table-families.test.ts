@@ -298,12 +298,12 @@ describe('dev, update and account: every channel is in the table, and phones are
   it('every dev:*, update:* and account:* name in the contract has a table entry (pushes excepted)', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => /^(dev|update|account):/.test(v) && !PUSHES.has(v));
-    expect(names.length).toBe(26); // 9 dev + 7 update + 10 account; a new one must be decided here
+    expect(names.length).toBe(28); // 9 dev + 9 update + 10 account; a new one must be decided here
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
   it('exactly these are open to a phone; everything else answers "not available over remote access"', () => {
     const open = CHANNEL_TABLE.filter((d) => /^(dev|update|account):/.test(d.name) && !d.desktopOnly && d.remoteAllowed !== false).map((d) => d.name).sort();
-    expect(open).toEqual(['account:signed-in', 'account:user', 'update:get-beta-channel', 'update:set-beta-channel']);
+    expect(open).toEqual(['account:signed-in', 'account:user', 'update:get-auto-install', 'update:get-beta-channel', 'update:set-auto-install', 'update:set-beta-channel']);
   });
   it('a phone asking for an installer launch or a bug report is refused without the handler running', async () => {
     for (const type of ['update:launch', 'update:download', 'update:changelog', 'dev:submit-issue', 'dev:log-tail', 'dev:install-workspace', 'dev:open-session-in']) {

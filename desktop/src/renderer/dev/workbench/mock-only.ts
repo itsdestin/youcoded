@@ -108,11 +108,9 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
-  // Automatic updates (#183, docs/active/design/2026-10-22-auto-updates): the "Install updates
-  // automatically" switch and Restart to update were designed here ahead of main. Delete each
+  // Automatic updates (#183, docs/active/design/2026-10-22-auto-updates): Restart to update was
+  // designed here ahead of main (the Install-automatically switch is real since T1). Delete the
   // row when its real channel lands on preload + remote-shim.
-  { channel: 'update.getAutoInstall', feature: 'Automatic updates: the Install updates automatically switch' },
-  { channel: 'update.setAutoInstall', feature: 'Automatic updates: the Install updates automatically switch' },
   { channel: 'update.restartToUpdate', feature: 'Automatic updates: Restart to update' },
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
   // (T2, 2026-09-24): main + preload + remote-shim now carry the real

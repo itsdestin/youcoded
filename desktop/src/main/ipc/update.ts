@@ -31,4 +31,12 @@ export const updateChannels: MainChannelDef[] = [
     // The phone always got `{ok:false,error}` here when the save failed.
     remoteOnError: (error) => ({ ok: false, error: String((error as Error)?.message ?? error) }),
   }),
+  // "Install updates automatically" (#183): allowed from a paired phone like the beta channel
+  // (one setting kept in sync everywhere). {supported:false} where there is no in-app updater.
+  defineChannel({ name: IPC.UPDATE_GET_AUTO_INSTALL, kind: 'handle', handler: () => getUpdateService().getAutoInstall() }),
+  defineChannel({
+    name: IPC.UPDATE_SET_AUTO_INSTALL, kind: 'handle',
+    handler: (payload) => getUpdateService().setAutoInstall(payload?.enabled),
+    remoteOnError: (error) => ({ ok: false, error: String((error as Error)?.message ?? error) }),
+  }),
 ];

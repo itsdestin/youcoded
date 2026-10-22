@@ -13,6 +13,8 @@ const CHANNELS = [
   'update:get-cached-download',
   'update:get-beta-channel',
   'update:set-beta-channel',
+  'update:get-auto-install',
+  'update:set-auto-install',
 ];
 
 const ROOT = path.join(__dirname, '..');

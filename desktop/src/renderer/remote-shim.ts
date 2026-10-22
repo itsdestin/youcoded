@@ -2476,6 +2476,12 @@ export function installShim(): void {
         invoke('update:get-beta-channel'),
       setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
         invoke('update:set-beta-channel', { enabled }),
+      // Same reasoning as the beta channel: a HOST setting, so a paired phone reads and writes the
+      // computer's. Android's own backend answers {supported:false} (no in-app updater).
+      getAutoInstall: (): Promise<import('../shared/update-install-types').UpdateAutoInstallState> =>
+        invoke('update:get-auto-install'),
+      setAutoInstall: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateAutoInstallState> =>
+        invoke('update:set-auto-install', { enabled }),
       // WHY no socket listener: update:install-progress is desktop-only, just like launch.
       onInstallProgress: (_handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => () => {},
       onProgress: (_handler: (ev: any) => void) => {

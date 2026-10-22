@@ -126,12 +126,13 @@ function subscribeAutoInstall(l: () => void) {
   // WHY the capability check: Android and remote browsers have no installer to run, so the
   // method is absent there and the row renders nothing (same reasoning as useBetaChannel).
   const api = window.claude?.update as
-    | { getAutoInstall?: () => Promise<{ enabled: boolean }> }
+    | { getAutoInstall?: () => Promise<{ supported: boolean; enabled?: boolean }> }
     | undefined;
   if (autoInstall === null && !autoInstallLoading && typeof api?.getAutoInstall === 'function') {
     autoInstallLoading = true;
     api.getAutoInstall()
-      .then((s) => setAutoInstallValue(s.enabled))
+      // WHY supported:false ⇒ null: no in-app updater here (Android, unpackaged), so the row stays hidden.
+      .then((s) => setAutoInstallValue(s.supported && typeof s.enabled === 'boolean' ? s.enabled : null))
       .catch(() => {})
       .finally(() => { autoInstallLoading = false; });
   }
@@ -145,9 +146,9 @@ export function useAutoInstall(): [boolean | null, () => void] {
     if (enabled === null) return;
     const next = !enabled;
     setAutoInstallValue(next);  // optimistic
-    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<{ enabled: boolean }> };
+    const api = window.claude.update as unknown as { setAutoInstall: (on: boolean) => Promise<{ supported: boolean; enabled?: boolean }> };
     api.setAutoInstall(next)
-      .then((s) => setAutoInstallValue(s.enabled))
+      .then((s) => setAutoInstallValue(s.supported && typeof s.enabled === 'boolean' ? s.enabled : null))
       .catch(() => setAutoInstallValue(!next));  // revert on failure
   };
   return [enabled, flip];

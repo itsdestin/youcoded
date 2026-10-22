@@ -65,6 +65,9 @@ export interface UpdateCachedDownload {
 // inline in the window.claude type; the channel table's rows now share these.
 /** `betaChannel` is the saved answer (null = never chosen); `effective` is what the next check uses. */
 export interface UpdateBetaChannelState { betaChannel: boolean | null; effective: boolean }
+/** "Install updates automatically" (#183). `supported:false` = no in-app updater here (Android's
+ *  headless backend; an unpackaged build without YOUCODED_DEV_FAKE_UPDATE=1): the row is hidden. */
+export type UpdateAutoInstallState = { supported: true; enabled: boolean } | { supported: false };
 export interface UpdateChangelogResult {
   markdown: string | null;
   entries: Array<{ version: string; date?: string; body: string }>;

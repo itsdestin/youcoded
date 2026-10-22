@@ -80,4 +80,40 @@ describe('UpdateSettings — persistence', () => {
       expect(settings.resolve('1.3.0-beta.77')).toBe(true);
     });
   });
+
+  // "Install updates automatically" (#183): on unless the user turned it off.
+  it('auto-install is on before anything is written, and when the saved value is garbage', async () => {
+    await withHome(async (settings, dir) => {
+      expect(settings.read().autoInstall).toBe(true);
+      expect((await settings.readAsync()).autoInstall).toBe(true);
+      const file = path.join(dir, '.youcoded', 'config.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ updates: { autoInstall: 'nope' } }));
+      expect(settings.read().autoInstall).toBe(true);
+      fs.writeFileSync(file, '{ not json');
+      expect((await settings.readAsync()).autoInstall).toBe(true);
+    });
+  });
+
+  it('auto-install round-trips both ways and leaves the beta choice and other keys alone', async () => {
+    await withHome(async (settings, dir) => {
+      await settings.setBetaChannel(true);
+      await settings.setAutoInstall(false);
+      expect(settings.read()).toEqual({ betaChannel: true, autoInstall: false });
+      expect((await settings.readAsync()).autoInstall).toBe(false);
+      await settings.setAutoInstall(true);
+      expect(settings.read()).toEqual({ betaChannel: true, autoInstall: true });
+      expect(JSON.parse(fs.readFileSync(path.join(dir, '.youcoded', 'config.json'), 'utf8')).updates)
+        .toEqual({ betaChannel: true, autoInstall: true });
+    });
+  });
+
+  it('refuses a non-boolean auto-install rather than storing it', async () => {
+    await withHome(async (settings, dir) => {
+      await expect(settings.setAutoInstall('yes')).rejects.toThrow(TypeError);
+      await expect(settings.setAutoInstall(undefined)).rejects.toThrow(TypeError);
+      expect(fs.existsSync(path.join(dir, '.youcoded', 'config.json'))).toBe(false);
+      expect(settings.read().autoInstall).toBe(true);
+    });
+  });
 });

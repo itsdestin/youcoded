@@ -5,10 +5,10 @@ import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 
 const mocks = vi.hoisted(() => ({
   launch: vi.fn(), verify: vi.fn(), quit: vi.fn(), relaunch: vi.fn(), send: vi.fn(),
-  deps: null as LaunchInstallerDeps | null,
+  deps: null as LaunchInstallerDeps | null, savedAutoInstall: true, packaged: true,
 }));
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getVersion: () => '1.0.0', getPath: () => '/unused', quit: mocks.quit, relaunch: mocks.relaunch },
+  app: { get isPackaged() { return mocks.packaged; }, getVersion: () => '1.0.0', getPath: () => '/unused', quit: mocks.quit, relaunch: mocks.relaunch },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }] },
   shell: { openExternal: vi.fn() },
 }));
@@ -17,7 +17,11 @@ vi.mock('../src/main/update-installer', async (importOriginal) => {
   return { ...actual, createUpdateInstaller: () => ({}), makeLaunchInstaller: (deps: LaunchInstallerDeps) => { mocks.deps = deps; return mocks.launch; } };
 });
 vi.mock('../src/main/update-manifest-verify', () => ({ verifyDownloadedUpdate: mocks.verify }));
-vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class { resolve() { return false; } } }));
+vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class {
+  resolve() { return false; }
+  async readAsync() { return { betaChannel: null, autoInstall: mocks.savedAutoInstall }; }
+  async setAutoInstall(v: unknown) { if (typeof v !== 'boolean') throw new TypeError('bad'); mocks.savedAutoInstall = v; }
+} }));
 vi.mock('../src/main/native-home', () => ({ NativeHome: class {} }));
 vi.mock('../src/main/linux-install-kind', () => ({ linuxInstallKind: () => 'deb', primeLinuxInstallKind: async () => {} }));
 vi.mock('../src/main/update-release-status', () => ({
@@ -81,5 +85,51 @@ describe('update service launch ownership', () => {
     expect(await s.launch(input)).toEqual(failure);
     expect(mocks.launch).toHaveBeenCalledTimes(3);
     expect(mocks.quit).not.toHaveBeenCalled();
+  });
+});
+
+// "Install updates automatically" (#183): what the service answers, and that a check or quit never
+// needs a file read.
+describe('update service auto-install', () => {
+  beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); mocks.savedAutoInstall = true; mocks.packaged = true; delete process.env.YOUCODED_HEADLESS_PORT; });
+  afterEach(() => { mocks.packaged = true; delete process.env.YOUCODED_HEADLESS_PORT; delete process.env.YOUCODED_DEV_FAKE_UPDATE; });
+  const load = async () => (await import('../src/main/update-service')).getUpdateService();
+
+  it('answers on by default and remembers a change in memory', async () => {
+    const s = await load();
+    expect(s.autoInstallEnabled()).toBe(true); // before the async read lands: default on, no file read
+    expect(await s.getAutoInstall()).toEqual({ supported: true, enabled: true });
+    expect(await s.setAutoInstall(false)).toEqual({ supported: true, enabled: false });
+    expect(s.autoInstallEnabled()).toBe(false);
+    expect(await s.getAutoInstall()).toEqual({ supported: true, enabled: false });
+  });
+
+  it('starts from the saved value', async () => {
+    mocks.savedAutoInstall = false;
+    const s = await load();
+    expect(await s.getAutoInstall()).toEqual({ supported: true, enabled: false });
+  });
+
+  it('refuses a non-boolean and keeps the old answer', async () => {
+    const s = await load();
+    await expect(s.setAutoInstall('yes' as unknown as boolean)).rejects.toThrow(TypeError);
+    expect(await s.getAutoInstall()).toEqual({ supported: true, enabled: true });
+  });
+
+  it('is unsupported on the Android headless backend', async () => {
+    process.env.YOUCODED_HEADLESS_PORT = '9000';
+    const s = await load();
+    expect(await s.getAutoInstall()).toEqual({ supported: false });
+    expect(await s.setAutoInstall(false)).toEqual({ supported: false });
+    expect(mocks.savedAutoInstall).toBe(true); // nothing was written
+    expect(s.autoInstallEnabled()).toBe(false);
+  });
+
+  it('is unsupported in an unpackaged build unless the dev fake update is on', async () => {
+    mocks.packaged = false;
+    expect(await (await load()).getAutoInstall()).toEqual({ supported: false });
+    vi.resetModules();
+    process.env.YOUCODED_DEV_FAKE_UPDATE = '1';
+    expect(await (await load()).getAutoInstall()).toEqual({ supported: true, enabled: true });
   });
 });
