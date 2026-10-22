@@ -2,7 +2,8 @@ import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useBackgroundCommands } from '../hooks/useBackgroundCommands';
 import { useChunkedReveal } from '../hooks/use-chunked-reveal';
 import { summarizeBackgroundCommands, type BackgroundCommand } from '../state/background-commands';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, Pill, RowStatus, SectionLabel, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, Pill, SectionLabel, Tooltip } from './ui';
+import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, StoppedIcon } from './Icons';
 import { useElapsed, STOP_REASON } from './tool-views/ToolBody';
 import { jumpToCard } from './SpecialistsChip';
@@ -16,9 +17,8 @@ import { useScreenOpen } from '../shoot-mode';
  * whether or not the card that started it is still loaded in the chat.
  *
  * Built from existing pieces only, copying two screens that do the same job:
- * - the chip is the Open tasks chip's shape (OpenTasksChip.tsx): a word, then counts, each state
- *   carried by the small dot before its number, never by a coloured number (guide "Status and
- *   notices"; small-fixes-3#SF3-10);
+ * - the chip is the Subagents chip's shape (SpecialistsChip.tsx): one state icon, then the count
+ *   in words (background-status-review#B-1 replaced the first round's dotted bare numbers);
  * - the popup is the Open tasks popup's layout (OpenTasksPopup.tsx): a small label over one
  *   first-level card per group, one nested box per row holding its words and, at the right, its
  *   one control; the name links to the card the way the Subagents popup's names do.
@@ -41,25 +41,29 @@ export default function BackgroundCommandsChip({ sessionId }: { sessionId: strin
     finished > 0 ? `${finished} finished` : null,
   ].filter(Boolean).join(', ');
   const tooltip = `Background commands: ${parts} — click to see them`;
+  // WHY the Subagents chip's shape (Destin, background-status-review#B-1/B-4: "notice how loading
+  // icon is before text in the subagents card? … too many different numbers and its not clear what
+  // each of the 3 means"): one icon, then words — never bare dotted numbers. While anything runs,
+  // that is the only count; once all have ended, failures first, then the rest, each number with
+  // its word. Same words at phone width, as the Subagents chip keeps them.
+  const label = counts.running > 0
+    ? `${counts.running} ${counts.running === 1 ? 'command' : 'commands'}`
+    : [counts.failed > 0 && `${counts.failed} failed`, finished > 0 && `${finished} finished`].filter(Boolean).join(' · ');
 
   return (
     <>
       <Tooltip text={tooltip}>
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
         style={{ backgroundColor: 'var(--inset)', color: 'var(--fg-muted)', borderColor: 'var(--edge-dim)' }}
         aria-label={tooltip}
         data-testid="background-chip"
       >
-        {/* The word hides at phone width, like Open tasks' "Tasks" (guide G-15: chips shrink
-            before the bar wraps); the dotted counts still say it. */}
-        <span className="hidden sm:inline">Background</span>
-        {/* Green = the session list's Working; red = failed. The numbers stay in the chip's
-            text colour (status hues only in the dot). */}
-        {counts.running > 0 && <span className="inline-flex items-center"><RowStatus dotClassName="bg-green-400">{counts.running}</RowStatus></span>}
-        {counts.failed > 0 && <span className="inline-flex items-center"><RowStatus dotClassName="bg-red-400">{counts.failed}</RowStatus></span>}
-        {finished > 0 && <span className="inline-flex items-center gap-0.5"><CheckIcon className="w-3 h-3" />{finished}</span>}
+        {counts.running > 0 ? <BrailleSpinner size="xs" />
+          : counts.failed > 0 ? <FailIcon className="w-3 h-3" />
+          : <CheckIcon className="w-3 h-3" />}
+        <span>{label}</span>
       </button>
       </Tooltip>
       {open && (
@@ -142,6 +146,11 @@ function endedLine(c: BackgroundCommand, ranFor: string): string {
   return ranFor ? `Ran ${ranFor}` : '';
 }
 
+// TEMPORARY — background-status-review#B-3 ("want to see alternative stop button stylings/
+// positions"): the four Stop designs shown on the choice slide. The one Destin picks stays;
+// this switch and the others go.
+const STOP_STYLE = 'filled' as 'filled' | 'outline' | 'beside' | 'icon';
+
 const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
   c: BackgroundCommand;
   sessionId?: string;
@@ -181,7 +190,9 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
   const target = c.ownerHelper?.toolUseId ?? c.toolUseId;
 
   return (
-    <li className={`${CARD_LEVEL_2} px-3 py-2 flex items-center gap-3`} data-testid={`background-row-${c.id}`}>
+    // WHY items-start (background-status-review#B-2: "make the chips top-right aligned"): the pill
+    // or Stop sits level with the name, as on the Subagents popup's cards, not centred on the row.
+    <li className={`${CARD_LEVEL_2} px-3 py-2 flex items-start gap-3`} data-testid={`background-row-${c.id}`}>
       <div className="min-w-0 flex-1">
         {/* The name is the link to its card — dotted underline, like the Subagents popup. */}
         <Tooltip text={c.ownerHelper ? "Show the helper that started this" : 'Show this command in the conversation'}>
@@ -196,11 +207,12 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
         {showCommand && <div className="text-2xs font-mono text-fg-dim truncate" title={c.command}>{c.command}</div>}
         <div className="text-2xs text-fg-muted">{facts.join(' · ')}</div>
       </div>
-      <div className="shrink-0">
-        {canStop
-          // While it runs, Stop is the row's main action (guide "Buttons": filled, one per row).
-          ? <Button size="sm" variant="primary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>
-          : <StatusPill c={c} />}
+      <div className="shrink-0 flex items-center gap-1.5">
+        {!canStop ? <StatusPill c={c} />
+          : STOP_STYLE === 'filled' ? <Button size="sm" variant="primary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>
+          : STOP_STYLE === 'outline' ? <Button size="sm" variant="secondary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>
+          : STOP_STYLE === 'beside' ? <><StatusPill c={c} /><Button size="sm" variant="secondary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button></>
+          : <><StatusPill c={c} /><Tooltip text="Stop this command"><Button size="icon-sm" variant="ghost" aria-label={stopping ? 'Stopping…' : 'Stop'} disabled={stopping} onClick={stop}><StoppedIcon className="w-4 h-4" /></Button></Tooltip></>}
       </div>
     </li>
   );

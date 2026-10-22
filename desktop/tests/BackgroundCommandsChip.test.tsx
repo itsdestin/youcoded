@@ -48,6 +48,19 @@ describe('the Background chip', () => {
     );
     const chip = screen.getByTestId('background-chip');
     expect(chip.getAttribute('aria-label')).toBe('Background commands: 1 running, 1 failed, 1 finished — click to see them');
+    // The Subagents chip's shape (background-status-review#B-1): while anything runs, one count in words.
+    expect(within(chip).getByText('1 command')).toBeTruthy();
+  });
+
+  it('once everything has ended, says failures first, each number with its word', () => {
+    const dispatch = setup();
+    dispatch(
+      ...ccLaunch('a', 'b1', { command: 'npm test', run_in_background: true }),
+      ...ccLaunch('b', 'b2', { command: 'npm run build', run_in_background: true }),
+      ccEnd('a', 'b1', 'failed', 1),
+      ccEnd('b', 'b2', 'completed', 0),
+    );
+    expect(screen.getByTestId('background-chip').textContent).toBe('1 failed · 1 finished');
   });
 
   it('the popup groups running and finished and says how each ended', () => {
