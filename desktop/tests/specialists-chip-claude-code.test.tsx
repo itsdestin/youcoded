@@ -169,12 +169,12 @@ describe('the chip in a Claude Code session', () => {
       toolUse('a1', 'Agent', { description: 'Sweep the rules', subagent_type: 'Explore' }),
       toolUse('a2', 'Agent', { description: 'Draft the plan', subagent_type: 'Plan' }),
     ]);
-    expect(chipLabel()).toBe('2 subagents');
+    expect(chipLabel()).toBe('2 Subagents');
   });
 
   it('says the singular for one', () => {
     renderChip([toolUse('a1', 'Agent', { description: 'Sweep', subagent_type: 'Explore' })]);
-    expect(chipLabel()).toBe('1 subagent');
+    expect(chipLabel()).toBe('1 Subagent');
   });
 
   it('draws nothing when the session has no subagents', () => {
@@ -196,7 +196,7 @@ describe('the chip in a Claude Code session', () => {
         },
       },
     ]);
-    expect(chipLabel()).toBe('1 specialist');
+    expect(chipLabel()).toBe('1 Specialist');
   });
 
   it('never turns amber for a Claude Code session', () => {
@@ -207,7 +207,7 @@ describe('the chip in a Claude Code session', () => {
       { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash', input: { command: 'rm x' }, requestId: 'r-1' },
     ]);
     expect(chipLabel()).not.toContain('needs you');
-    expect(chipLabel()).toBe('1 subagent');
+    expect(chipLabel()).toBe('1 Subagent');
   });
 });
 
@@ -239,7 +239,7 @@ describe('the chip tells failures from finishes (B4) and tracks ccBackground (A1
 
   it('a helper still working after its launch receipt reads as working', () => {
     renderChip(launchAgent());
-    expect(chipLabel()).toBe('1 subagent');
+    expect(chipLabel()).toBe('1 Subagent');
   });
   it('a failed helper says failed, with no check', () => {
     renderChip([...launchAgent(), end('a1', 'failed')]);
@@ -261,7 +261,7 @@ describe('the chip tells failures from finishes (B4) and tracks ccBackground (A1
     let dispatch!: (a: ChatAction) => void;
     function Grab() { dispatch = useChatDispatch(); return null; }
     render(<ChatProvider><Grab /><Harness actions={[{ type: 'SESSION_INIT', sessionId: 's1' }, ...launchAgent()]} /></ChatProvider>);
-    expect(chipLabel()).toBe('1 subagent');
+    expect(chipLabel()).toBe('1 Subagent');
     React.act(() => dispatch(end('a1', 'failed')));
     expect(chipLabel()).toBe('1 failed');
   });
@@ -276,7 +276,7 @@ describe('the chip tells failures from finishes (B4) and tracks ccBackground (A1
     renderChip([
       { type: 'SPECIALIST_RUN_CHANGED', sessionId: 's1', run: { childId: 'c9', parentToolCallId: 'unloaded', agentType: 'explorer', title: 'Nadia', background: true, status: 'running', startedAt: 1 } },
     ]);
-    expect(chipLabel()).toBe('1 specialist');
+    expect(chipLabel()).toBe('1 Specialist');
   });
 });
 
@@ -303,6 +303,6 @@ describe('a Claude Code subagent’s ask (agent_id on the hook payload)', () => 
   });
   it('an ask from an unknown agent id stays a plain top-level ask (the chip does not guess)', () => {
     renderChip([...launched, hook({ agent_id: 'someone-else' })]);
-    expect(chipLabel()).toBe('1 subagent');
+    expect(chipLabel()).toBe('1 Subagent');
   });
 });

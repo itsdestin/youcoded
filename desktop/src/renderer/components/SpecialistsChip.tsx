@@ -42,7 +42,9 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
   const label = needsYou > 0
     ? `${needsYou} need${needsYou === 1 ? 's' : ''} you`
     : working > 0
-      ? `${working} ${working === 1 ? noun : plural}`
+      // Capitalised in the chip only (background-status-review-2#R-2: "capitalize specialist/
+      // command") — the chip names a thing, like a tab; sentences elsewhere keep lower case.
+      ? `${working} ${working === 1 ? Noun.slice(0, -1) : Noun}`
       // B4: failures and stops are said as such, never folded into "finished" with
       // a check. Failures first — they are what a person scans for.
       : [failed > 0 && `${failed} failed`, stopped > 0 && `${stopped} stopped`, finished > 0 && `${finished} finished`]

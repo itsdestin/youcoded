@@ -49,7 +49,7 @@ describe('the Background chip', () => {
     const chip = screen.getByTestId('background-chip');
     expect(chip.getAttribute('aria-label')).toBe('Background commands: 1 running, 1 failed, 1 finished — click to see them');
     // The Subagents chip's shape (background-status-review#B-1): while anything runs, one count in words.
-    expect(within(chip).getByText('1 command')).toBeTruthy();
+    expect(within(chip).getByText('1 Command')).toBeTruthy();
   });
 
   it('once everything has ended, says failures first, each number with its word', () => {

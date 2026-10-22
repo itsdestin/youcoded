@@ -45,9 +45,10 @@ export default function BackgroundCommandsChip({ sessionId }: { sessionId: strin
   // icon is before text in the subagents card? … too many different numbers and its not clear what
   // each of the 3 means"): one icon, then words — never bare dotted numbers. While anything runs,
   // that is the only count; once all have ended, failures first, then the rest, each number with
-  // its word. Same words at phone width, as the Subagents chip keeps them.
+  // its word. Same words at phone width, as the Subagents chip keeps them. The noun is capitalised
+  // (background-status-review-2#R-2), as the Subagents chip's is.
   const label = counts.running > 0
-    ? `${counts.running} ${counts.running === 1 ? 'command' : 'commands'}`
+    ? `${counts.running} ${counts.running === 1 ? 'Command' : 'Commands'}`
     : [counts.failed > 0 && `${counts.failed} failed`, finished > 0 && `${finished} finished`].filter(Boolean).join(' · ');
 
   return (
@@ -146,11 +147,6 @@ function endedLine(c: BackgroundCommand, ranFor: string): string {
   return ranFor ? `Ran ${ranFor}` : '';
 }
 
-// TEMPORARY — background-status-review#B-3 ("want to see alternative stop button stylings/
-// positions"): the four Stop designs shown on the choice slide. The one Destin picks stays;
-// this switch and the others go.
-const STOP_STYLE = 'filled' as 'filled' | 'outline' | 'beside' | 'icon';
-
 const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
   c: BackgroundCommand;
   sessionId?: string;
@@ -190,30 +186,41 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
   const target = c.ownerHelper?.toolUseId ?? c.toolUseId;
 
   return (
-    // WHY items-start (background-status-review#B-2: "make the chips top-right aligned"): the pill
-    // or Stop sits level with the name, as on the Subagents popup's cards, not centred on the row.
-    <li className={`${CARD_LEVEL_2} px-3 py-2 flex items-start gap-3`} data-testid={`background-row-${c.id}`}>
-      <div className="min-w-0 flex-1">
-        {/* The name is the link to its card — dotted underline, like the Subagents popup. */}
-        <Tooltip text={c.ownerHelper ? "Show the helper that started this" : 'Show this command in the conversation'}>
-        <button
-          type="button"
-          onClick={() => onJump(target)}
-          className="text-xs font-medium text-fg text-left underline decoration-dotted decoration-fg-muted underline-offset-2 hover:decoration-fg break-words"
-        >
-          {c.label}
-        </button>
-        </Tooltip>
-        {showCommand && <div className="text-2xs font-mono text-fg-dim truncate" title={c.command}>{c.command}</div>}
-        <div className="text-2xs text-fg-muted">{facts.join(' · ')}</div>
+    // WHY the Subagents popup card's own layout (background-status-review#B-2 "make the chips
+    // top-right aligned"; -2#R-3 "is this alignment consistent with the subagent popup and
+    // cards?"): a header line holding the name and, at its right, the status — lined up on the
+    // name's text baseline (SpecialistsChip HelperCard's `items-baseline`) — then the details
+    // below at full width.
+    <li className={`${CARD_LEVEL_2} px-3 pt-2.5 pb-2 space-y-0.5`} data-testid={`background-row-${c.id}`}>
+      <div className="flex items-baseline gap-2 min-w-0">
+        <div className="min-w-0 flex-1">
+          {/* The name is the link to its card — dotted underline, like the Subagents popup. */}
+          <Tooltip text={c.ownerHelper ? "Show the helper that started this" : 'Show this command in the conversation'}>
+          <button
+            type="button"
+            onClick={() => onJump(target)}
+            className="text-xs font-medium text-fg text-left align-baseline underline decoration-dotted decoration-fg-muted underline-offset-2 hover:decoration-fg break-words"
+          >
+            {c.label}
+          </button>
+          </Tooltip>
+        </div>
+        <div className="shrink-0 flex items-center gap-1.5">
+          <StatusPill c={c} />
+          {/* Stop is the small stop symbol after the Running label (background-status-review-2#C-1,
+              Destin picked it over a filled or outlined button): the row still says Running like
+              every other, and the hover text names the action. */}
+          {canStop && (
+            <Tooltip text="Stop this command">
+              <Button size="icon-sm" variant="ghost" aria-label={stopping ? 'Stopping…' : 'Stop'} disabled={stopping} onClick={stop}>
+                <StoppedIcon className="w-4 h-4" />
+              </Button>
+            </Tooltip>
+          )}
+        </div>
       </div>
-      <div className="shrink-0 flex items-center gap-1.5">
-        {!canStop ? <StatusPill c={c} />
-          : STOP_STYLE === 'filled' ? <Button size="sm" variant="primary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>
-          : STOP_STYLE === 'outline' ? <Button size="sm" variant="secondary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button>
-          : STOP_STYLE === 'beside' ? <><StatusPill c={c} /><Button size="sm" variant="secondary" disabled={stopping} onClick={stop}>{stopping ? 'Stopping…' : 'Stop'}</Button></>
-          : <><StatusPill c={c} /><Tooltip text="Stop this command"><Button size="icon-sm" variant="ghost" aria-label={stopping ? 'Stopping…' : 'Stop'} disabled={stopping} onClick={stop}><StoppedIcon className="w-4 h-4" /></Button></Tooltip></>}
-      </div>
+      {showCommand && <div className="text-2xs font-mono text-fg-dim truncate" title={c.command}>{c.command}</div>}
+      <div className="text-2xs text-fg-muted">{facts.join(' · ')}</div>
     </li>
   );
 });

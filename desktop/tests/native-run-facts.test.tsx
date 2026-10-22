@@ -79,7 +79,7 @@ describe('specialist facts', () => {
       return ok ? <SpecialistsChip sessionId={S} /> : null;
     }
     render(<ChatProvider><H /></ChatProvider>);
-    expect(screen.getByTestId('specialists-chip').textContent!.replace(/^[⠀-⣿]+/, '')).toBe('1 specialist');
+    expect(screen.getByTestId('specialists-chip').textContent!.replace(/^[⠀-⣿]+/, '')).toBe('1 Specialist');
   });
   it('the status line says when the finished run’s report has not reached the assistant yet', () => {
     render(<RunStatusLine run={run({ status: 'completed', startedAt: 0, endedAt: 1000, reportPending: 'waiting-for-turn' })} />);
