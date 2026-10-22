@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blind Rating</title>
+<!-- Template for harness-eval-blind.mjs, which swaps the DATA placeholder for a run's pairs. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --inset: #efede8; --fg: #1d1c1a; --fg2: #55524c; --dim: #8a867e;
+  --edge: #dedad2; --accent: #3d5afe; --on-accent: #fff; --a: #0f766e; --b: #b45309; --good: #15803d; --bad: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151515; --panel: #1e1e1e; --inset: #262626; --fg: #ecebe8; --fg2: #b5b2ab; --dim: #85827b;
+    --edge: #333; --accent: #7c8cff; --on-accent: #0b0b0b; --a: #2dd4bf; --b: #f59e0b; --good: #4ade80; --bad: #f87171;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151515; --panel: #1e1e1e; --inset: #262626; --fg: #ecebe8; --fg2: #b5b2ab; --dim: #85827b;
+  --edge: #333; --accent: #7c8cff; --on-accent: #0b0b0b; --a: #2dd4bf; --b: #f59e0b; --good: #4ade80; --bad: #f87171;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--edge); }
+.bar { max-width: 1400px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.bar h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.progress { color: var(--fg2); font-size: 13px; }
+.spacer { flex: 1; }
+button { font: inherit; border: 1px solid var(--edge); background: var(--panel); color: var(--fg); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--fg2); }
+button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.dots { display: flex; gap: 4px; flex-wrap: wrap; max-width: 1400px; margin: 0 auto; padding: 0 16px 10px; }
+.dot { width: 22px; height: 8px; border-radius: 4px; background: var(--edge); border: 0; padding: 0; }
+.dot.done { background: var(--fg2); }
+.dot.here { outline: 2px solid var(--accent); outline-offset: 1px; }
+main { max-width: 1400px; margin: 0 auto; padding: 16px 16px 160px; }
+.intro { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; color: var(--fg2); }
+.intro b { color: var(--fg); }
+.question { background: var(--inset); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; }
+.question .label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.question .text { font-size: 17px; margin-top: 2px; }
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .sides { grid-template-columns: 1fr; } }
+.side { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; min-width: 0; }
+.side h2 { margin: 0; padding: 10px 16px; font-size: 14px; border-bottom: 1px solid var(--edge); display: flex; justify-content: space-between; }
+.side .body { padding: 4px 16px 16px; overflow-wrap: anywhere; }
+.side .body pre { overflow-x: auto; background: var(--inset); padding: 8px; border-radius: 6px; font-size: 13px; }
+.side .body code { font-size: 13px; }
+.side .body table { border-collapse: collapse; display: block; overflow-x: auto; }
+.side .body td, .side .body th { border: 1px solid var(--edge); padding: 4px 8px; }
+.step { margin: 12px 0; font-size: 13px; color: var(--fg2); background: var(--inset); border-radius: 8px; padding: 6px 10px; }
+.step summary { cursor: pointer; }
+.step pre { white-space: pre-wrap; max-height: 260px; overflow: auto; }
+.nudge { margin: 12px 0; font-size: 13px; color: var(--dim); border-left: 3px solid var(--edge); padding-left: 10px; }
+.err { color: var(--bad); font-size: 13px; }
+.rate { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--edge); z-index: 5; }
+.rate .inner { max-width: 1400px; margin: 0 auto; padding: 10px 16px; display: flex; flex-direction: column; gap: 8px; }
+.scale { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+@media (max-width: 600px) { .scale { grid-template-columns: 1fr 1fr; } .scale button:nth-child(3) { grid-column: span 2; } }
+.scale button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.row { display: flex; gap: 8px; align-items: center; }
+.row input { flex: 1; min-width: 0; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--edge); background: var(--panel); color: var(--fg); }
+.kbd { font-size: 12px; color: var(--dim); }
+/* Results */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 12px 16px; }
+.card h3 { margin: 0 0 6px; font-size: 13px; color: var(--fg2); font-weight: 600; }
+.big { font-size: 22px; font-weight: 650; }
+table.t { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--panel); border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+table.t th, table.t td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--edge); vertical-align: top; }
+table.t th { font-size: 12px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.wrap { overflow-x: auto; }
+.armA { color: var(--a); font-weight: 600; } .armB { color: var(--b); font-weight: 600; }
+.split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--edge); margin-top: 6px; }
+.split span { display: block; height: 100%; }
+h2.sec { font-size: 15px; margin: 24px 0 10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Blind rating</h1>
+    <span class="progress" id="progress"></span>
+    <span class="spacer"></span>
+    <button id="download" title="Save your ratings as a file">Download ratings</button>
+    <button id="reveal" class="primary">Reveal results</button>
+  </div>
+  <div class="dots" id="dots"></div>
+</header>
+<main id="main"></main>
+<div class="rate" id="rateBar">
+  <div class="inner">
+    <div class="scale" id="scale"></div>
+    <div class="row">
+      <button id="prev" aria-label="Previous pair">←</button>
+      <input id="note" placeholder="Optional note: why? (only you see this)">
+      <button id="next" aria-label="Next pair">→</button>
+    </div>
+    <div class="kbd">Keys: 1–5 rate · ← → move between pairs</div>
+  </div>
+</div>
+<script>
+const DATA = /*__DATA__*/null;
+
+// ---- storage: per-viewer convenience only; every read/write may throw ----
+const STORE_KEY = 'blind-rating:' + DATA.run + ':' + DATA.armA + ':' + DATA.armB;
+function load() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || null; } catch { return null; } }
+function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {} }
+
+// ---- seeded shuffle so order and sides stay put across reloads ----
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+let state = load();
+if (!state || state.n !== DATA.pairs.length) {
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  const r = rng(seed);
+  const order = DATA.pairs.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  // flip[i] true → the page's "Answer A" shows arm B's conversation.
+  const flip = DATA.pairs.map(() => r() < 0.5);
+  state = { n: DATA.pairs.length, order, flip, ratings: {}, notes: {}, pos: 0, revealed: false };
+  save();
+}
+
+// Scale values are from the PAGE's point of view: -2 = left much better … +2 = right much better.
+const SCALE = [[-2, 'A is much better'], [-1, 'A is a bit better'], [0, 'About the same'], [1, 'B is a bit better'], [2, 'B is much better']];
+
+const $ = (id) => document.getElementById(id);
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function md(text) {
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(text));
+  return '<p style="white-space:pre-wrap">' + esc(text) + '</p>';
+}
+
+// One plain sentence per tool step, so a non-developer can read what happened.
+function stepLabel(it) {
+  const i = it.input || {};
+  if (it.tool === 'WebSearch') return 'Searched the web for “' + (i.query ?? '') + '”';
+  if (it.tool === 'WebFetch') return 'Opened a web page: ' + (i.url ?? '');
+  if (it.tool === 'AskUserQuestion') {
+    const qs = Array.isArray(i.questions) ? i.questions : [];
+    return 'Asked you: ' + qs.map((q) => '“' + q.question + '”' + (q.options?.[0] ? ' (the test picked “' + q.options[0].label + '”)' : '')).join(' ');
+  }
+  if (it.tool === 'Read') return 'Read a file: ' + (i.file_path ?? '');
+  if (it.tool === 'Bash') return 'Ran a command: ' + (i.description || i.command || '');
+  return 'Used ' + it.tool;
+}
+
+function renderSide(side) {
+  let h = '';
+  if (side.error) h += '<p class="err">This run hit an error: ' + esc(side.error) + '</p>';
+  for (const it of side.items) {
+    if (it.kind === 'assistant') h += md(it.text);
+    else if (it.kind === 'tool') {
+      h += '<details class="step"><summary>' + esc(stepLabel(it)) + '</summary>' +
+        (it.result ? '<pre>' + esc(it.result) + '</pre>' : '<pre>(no result)</pre>') + '</details>';
+    } else if (it.kind === 'user') h += '<p class="nudge">The test then said: “' + esc(it.text) + '”</p>';
+    else if (it.kind === 'error') h += '<p class="err">' + esc(it.text) + '</p>';
+  }
+  return h || '<p class="err">No answer.</p>';
+}
+
+function sidesOf(idx) {
+  const p = DATA.pairs[idx];
+  return state.flip[idx] ? [p.b, p.a] : [p.a, p.b];
+}
+
+function renderPair() {
+  const idx = state.order[state.pos];
+  const p = DATA.pairs[idx];
+  const [left, right] = sidesOf(idx);
+  const ratedCount = Object.keys(state.ratings).length;
+  $('main').innerHTML =
+    (state.pos === 0 && ratedCount === 0 ? '<div class="intro"><b>How this works.</b> Each pair is the same question answered twice: once by each version. Which version is A or B is hidden and shuffled for every pair, and the model name is hidden too. Pick the answer you would rather get. Nothing is revealed until you press <b>Reveal results</b>.</div>' : '') +
+    '<div class="question"><div class="label">Pair ' + (state.pos + 1) + ' of ' + DATA.pairs.length + ' · the question</div><div class="text">' + esc(p.question) + '</div></div>' +
+    '<div class="sides"><section class="side"><h2><span>Answer A</span></h2><div class="body">' + renderSide(left) +
+    '</div></section><section class="side"><h2><span>Answer B</span></h2><div class="body">' + renderSide(right) + '</div></section></div>';
+  $('rateBar').style.display = '';
+  const cur = state.ratings[idx];
+  $('scale').innerHTML = SCALE.map(([v, label], k) => '<button data-v="' + v + '"' + (cur === v ? ' class="on"' : '') + '>' + (k + 1) + ' · ' + label + '</button>').join('');
+  $('note').value = state.notes[idx] || '';
+  $('prev').disabled = state.pos === 0;
+  $('next').disabled = state.pos === DATA.pairs.length - 1;
+  renderChrome();
+  window.scrollTo(0, 0);
+}
+
+function renderChrome() {
+  const done = Object.keys(state.ratings).length;
+  $('progress').textContent = done + ' of ' + DATA.pairs.length + ' rated';
+  $('dots').innerHTML = state.order.map((idx, pos) => '<button class="dot' + (idx in state.ratings ? ' done' : '') + (pos === state.pos && !state.revealed ? ' here' : '') + '" data-pos="' + pos + '" aria-label="Pair ' + (pos + 1) + '"></button>').join('');
+}
+
+function rate(v) {
+  const idx = state.order[state.pos];
+  state.ratings[idx] = v;
+  save();
+  // Move on to the next unrated pair, so rating is one press per pair.
+  const nextUnrated = state.order.findIndex((i, pos) => pos > state.pos && !(i in state.ratings));
+  if (nextUnrated >= 0) state.pos = nextUnrated;
+  else if (state.pos < DATA.pairs.length - 1) state.pos++;
+  renderPair();
+}
+
+// Convert a page rating to "how much the person preferred arm B" (-2…+2).
+function prefB(idx) {
+  const v = state.ratings[idx];
+  if (v === undefined) return undefined;
+  return state.flip[idx] ? -v : v;
+}
+
+function renderResults() {
+  state.revealed = true; save();
+  $('rateBar').style.display = 'none';
+  const A = esc(DATA.armA), B = esc(DATA.armB);
+  const rated = DATA.pairs.map((_, i) => i).filter((i) => prefB(i) !== undefined);
+  const tally = (ids) => {
+    let b = 0, a = 0, t = 0, sum = 0;
+    for (const i of ids) { const v = prefB(i); if (v === undefined) continue; sum += v; if (v > 0) b++; else if (v < 0) a++; else t++; }
+    return { a, b, t, n: a + b + t, avg: (a + b + t) ? sum / (a + b + t) : 0 };
+  };
+  const bar = (x) => x.n ? '<div class="split"><span style="width:' + (x.a / x.n * 100) + '%;background:var(--a)"></span><span style="width:' + (x.t / x.n * 100) + '%;background:var(--edge)"></span><span style="width:' + (x.b / x.n * 100) + '%;background:var(--b)"></span></div>' : '';
+  const all = tally(rated);
+  const groupBy = (field) => {
+    const groups = {};
+    DATA.pairs.forEach((p, i) => { (groups[p.meta[field]] ??= []).push(i); });
+    return Object.entries(groups).map(([k, ids]) => [k, tally(ids)]);
+  };
+  const tableFor = (title, field) => '<h2 class="sec">' + title + '</h2><div class="wrap"><table class="t"><tr><th>' + field + '</th><th class="armA">' + A + ' preferred</th><th>Same</th><th class="armB">' + B + ' preferred</th><th>Lean</th></tr>' +
+    groupBy(field).map(([k, x]) => '<tr><td>' + esc(k) + '</td><td>' + x.a + '</td><td>' + x.t + '</td><td>' + x.b + '</td><td>' + lean(x) + bar(x) + '</td></tr>').join('') + '</table></div>';
+  function lean(x) {
+    if (!x.n) return 'not rated';
+    if (Math.abs(x.avg) < 0.25) return 'no clear preference';
+    return (x.avg > 0 ? '<span class="armB">' + B + '</span>' : '<span class="armA">' + A + '</span>') + (Math.abs(x.avg) >= 1 ? ', strongly' : ', slightly');
+  }
+
+  // Judge averages per rubric item per arm, for comparing your taste with the AI judge's.
+  const judge = {};
+  for (const p of DATA.pairs) for (const [arm, side] of [['a', p.a], ['b', p.b]]) for (const g of side.judge || []) {
+    if (typeof g.score !== 'number') continue;
+    const j = (judge[g.id] ??= { a: [], b: [] }); j[arm].push(g.score);
+  }
+  const avg = (xs) => xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(1) : '–';
+  const judgeRows = Object.entries(judge).map(([id, j]) => '<tr><td>' + esc(id) + '</td><td>' + avg(j.a) + '</td><td>' + avg(j.b) + '</td></tr>').join('');
+
+  const detail = state.order.map((idx, pos) => {
+    const p = DATA.pairs[idx], v = prefB(idx);
+    const label = v === undefined ? 'not rated' : v === 0 ? 'About the same' : (v > 0 ? '<span class="armB">' + B + '</span>' : '<span class="armA">' + A + '</span>') + (Math.abs(v) === 2 ? ' much better' : ' a bit better');
+    const sideA = state.flip[idx] ? B : A, sideB = state.flip[idx] ? A : B;
+    return '<tr><td>' + (pos + 1) + '</td><td>' + esc(Object.entries(p.meta).map(([k, x]) => x).join(' · ')) + '</td><td>A was ' + sideA + ', B was ' + sideB + '</td><td>' + label + '</td><td>' + esc(state.notes[idx] || '') + '</td></tr>';
+  }).join('');
+
+  $('main').innerHTML =
+    '<div class="cards"><div class="card"><h3>Overall (' + all.n + ' of ' + DATA.pairs.length + ' pairs rated)</h3><div class="big">' + lean(all) + '</div>' + bar(all) +
+    '<div style="margin-top:6px;font-size:13px;color:var(--fg2)"><span class="armA">' + A + '</span> ' + all.a + ' · same ' + all.t + ' · <span class="armB">' + B + '</span> ' + all.b + '</div></div>' +
+    '<div class="card"><h3>What the arms are</h3><div><span class="armA">' + A + '</span> vs <span class="armB">' + B + '</span>, compared on the <b>' + esc(DATA.axis) + '</b>. Everything else in each pair was identical.</div></div></div>' +
+    tableFor('By question', 'case') + tableFor('By model', 'model') +
+    (judgeRows ? '<h2 class="sec">The AI judge\'s average scores (1–5), for comparison</h2><div class="wrap"><table class="t"><tr><th>Rubric item</th><th class="armA">' + A + '</th><th class="armB">' + B + '</th></tr>' + judgeRows + '</table></div>' : '') +
+    '<h2 class="sec">Every pair</h2><div class="wrap"><table class="t"><tr><th>#</th><th>Question · model · repeat</th><th>Sides</th><th>You preferred</th><th>Your note</th></tr>' + detail + '</table></div>' +
+    '<button id="back">Back to rating</button>';
+  $('back').onclick = () => { state.revealed = false; save(); renderPair(); };
+  renderChrome();
+}
+
+// ---- wiring ----
+$('scale').addEventListener('click', (e) => { const b = e.target.closest('button[data-v]'); if (b) rate(Number(b.dataset.v)); });
+$('note').addEventListener('input', () => { state.notes[state.order[state.pos]] = $('note').value; save(); });
+$('prev').onclick = () => { if (state.pos > 0) { state.pos--; renderPair(); } };
+$('next').onclick = () => { if (state.pos < DATA.pairs.length - 1) { state.pos++; renderPair(); } };
+$('dots').addEventListener('click', (e) => { const b = e.target.closest('.dot'); if (b) { state.pos = Number(b.dataset.pos); state.revealed = false; save(); renderPair(); } });
+$('reveal').onclick = () => {
+  const left = DATA.pairs.length - Object.keys(state.ratings).length;
+  // WHY confirm: once seen, which version is which can't be unseen, and that
+  // would bias any pairs still left to rate.
+  if (left > 0 && !confirm(left + ' pair(s) are still unrated. Seeing the results now will reveal which version is which. Continue?')) return;
+  renderResults();
+};
+$('download').onclick = () => {
+  const out = { run: DATA.run, axis: DATA.axis, armA: DATA.armA, armB: DATA.armB, ratings: DATA.pairs.map((p, i) => ({ pair: p.key, ...p.meta, preferB: prefB(i) ?? null, note: state.notes[i] || '', shownAs: state.flip[i] ? 'B-left' : 'A-left' })) };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
+  a.download = 'blind-ratings-' + DATA.run + '-' + DATA.armA + '-vs-' + DATA.armB + '.json';
+  a.click();
+};
+document.addEventListener('keydown', (e) => {
+  if (state.revealed || e.target.tagName === 'INPUT') return;
+  if (e.key >= '1' && e.key <= '5') rate(SCALE[Number(e.key) - 1][0]);
+  else if (e.key === 'ArrowLeft') $('prev').click();
+  else if (e.key === 'ArrowRight') $('next').click();
+});
+state.revealed ? renderResults() : renderPair();
+</script>
+</body>
+</html>
