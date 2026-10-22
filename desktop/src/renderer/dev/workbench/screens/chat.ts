@@ -196,6 +196,18 @@ export const CHAT: readonly ScreenEntry[] = [
   // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
+  // Background work (2026-10-22 status audit): a Claude Code and a native conversation that
+  // left commands, a watcher and helpers running — the cards' wording, the Subagents chip's
+  // real state and the Background chip and its popup (fixtures/bubbles/background-*.jsonl).
+  { ...chat('chat#background-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat#background-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-background-native' } },
+  { ...chat('chat#background-native-phone', 'view', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-background-native' }, viewport: { width: 390, height: 844 } },
+  { ...chat('chat/specialists#cc', 'dialog'), session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat/background#cc', 'dialog'), newIn: 'after', session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat/background#native', 'dialog'), newIn: 'after', session: 'wb-2', params: { seed: 'bubbles-background-native' } },
+  // One card per management call (a note, a status check, a stop…), so each card's own words show.
+  { ...chat('chat#manage-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-manage-cc' } },
+  { ...chat('chat#manage-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-manage-native' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
   // Actual panel driven through its launch callback; only the backend is faked.
   ...['authorizing', 'installing', 'restarting', 'failed', 'timeout'].map(phase => ({

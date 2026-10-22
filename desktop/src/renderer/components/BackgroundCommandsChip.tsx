@@ -132,14 +132,14 @@ function endedLine(c: BackgroundCommand, ranFor: string): string {
   if (c.signal) return `Ended by ${c.signal}${after}`;
   if (c.exitUnknown) return 'Ended while the app was closed · exit code unknown';
   if (c.status === 'stopped') {
-    const who = c.provider === 'native' && c.stopReason && c.stopReason in STOP_REASON
-      ? STOP_REASON[c.stopReason as keyof typeof STOP_REASON]
-      : c.kind === 'watcher' ? 'Stopped watching' : 'Stopped';
-    return `${who}${after}`;
+    // Native knows who stopped it ("Stopped by you"); Claude Code's own stop says only that.
+    if (c.provider === 'native' && c.stopReason && c.stopReason in STOP_REASON) {
+      return `${STOP_REASON[c.stopReason as keyof typeof STOP_REASON]}${after}`;
+    }
+    return ranFor ? `Ran ${ranFor}` : '';
   }
   if (c.exitCode != null) return `Exit code ${c.exitCode}${ranFor ? ` · ran ${ranFor}` : ''}`;
-  if (c.kind === 'watcher') return `Finished watching${after}`;
-  return ranFor ? `Ran ${ranFor}` : 'Finished';
+  return ranFor ? `Ran ${ranFor}` : '';
 }
 
 const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
@@ -164,14 +164,17 @@ const CommandRow = memo(function CommandRow({ c, sessionId, onJump }: {
     } catch (err) { console.error('KillShell failed:', err); setStopping(false); }
   };
 
+  // Each fact once: the pill at the right already says Running / Watching / Failed / Stopped /
+  // Finished, so this line only adds what the pill can't — how long, how it ended, who started it.
   const facts: string[] = [];
-  if (c.kind === 'watcher') facts.push('Watcher');
+  if (c.kind === 'watcher' && !running) facts.push('Watcher');
   if (c.ownerHelper) facts.push('Started by a helper');
   if (running) {
-    if (c.maybeStillRunning) facts.push('May still be running — it ended while the app was closed');
-    else if (elapsed) facts.push(`Running ${elapsed}`);
+    if (c.maybeStillRunning) facts.push('It ended while the app was closed and may still be running');
+    else if (elapsed) facts.push(`For ${elapsed}`);
   } else {
-    facts.push(endedLine(c, elapsed));
+    const line = endedLine(c, elapsed);
+    if (line) facts.push(line);
   }
   // The full command under the name, only when the name is the call's own description.
   const showCommand = !!c.command && c.command.split('\n')[0] !== c.label;

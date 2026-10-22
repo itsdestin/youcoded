@@ -256,7 +256,8 @@ export function buildToolGroupHeadline(tools: ToolCallState[]): string {
 
     const doneCount = tools.filter(isDone).length;
     const failedCount = tools.filter((t) => toolOutcome(t) === 'failed').length;
-    if (failedCount > 0) return `${lead} (+${doneCount} completed, ${failedCount} failed)`;
+    // Nothing finished yet but something failed: "(+1 failed)", never "(+0 completed, 1 failed)".
+    if (failedCount > 0) return doneCount > 0 ? `${lead} (+${doneCount} completed, ${failedCount} failed)` : `${lead} (+${failedCount} failed)`;
     if (doneCount > 0) return `${lead} (+${doneCount} completed)`;
     return lead;
   }
