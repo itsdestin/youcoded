@@ -17,7 +17,7 @@
   <!-- Reverse of the domain we own (youcoded.ai). Never change it: catalogs key on it. -->
   <id>ai.youcoded.YouCoded</id>
   <name>YouCoded</name>
-  <summary>Your AI assistant, on your terms</summary>
+  <summary>Your personal AI assistant and open source everything app</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <developer id="ai.youcoded">
@@ -25,14 +25,16 @@
   </developer>
   <description>
     <p>
-      YouCoded is an open-source AI assistant that helps you work with files, projects,
-      research and everyday tasks. Choose the AI behind it: a plan you already pay for
-      (Claude or ChatGPT), a cloud provider key, or a local model on your own computer.
+      YouCoded is a fully customizable AI assistant and open-source everything app. Hand it
+      your files, research and writing, or ask it for a new feature, a page for something in
+      your life, a game, or a whole new look, and it builds them inside the app.
     </p>
     <p>
-      Install skills and themes from the community marketplace, keep projects and
-      conversations organized, play games with friends while your assistant works, and
-      reach your sessions from your phone or any web browser.
+      Choose the AI behind it: Claude or ChatGPT on the plan you already pay for, hundreds of
+      models through OpenRouter, your own API keys, or a free model running offline on your
+      own computer. It asks before it acts, syncs conversations across your devices, and has
+      a community marketplace of skills and themes, plus games to play with friends while it
+      works.
     </p>
   </description>
   <!-- Must name the .desktop file electron-builder writes into the AppImage (the
