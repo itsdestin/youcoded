@@ -6,7 +6,7 @@
 //
 // usage: node docs/tools/embed-stills.mjs <youcoded/docs>   (needs index.html and a built site/index.html)
 // Writes docs/media/embed-<layout>-<theme>.webp. Writes NOTHING if any still fails to prove the app painted.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, copyFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -80,9 +80,10 @@ async function newTab() {
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.text);
     return r.result.value;
   };
-  const png = async () => Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64');
+  // WHY webp straight from Chrome: CI runners do not reliably carry ImageMagick (the first CI run had none).
+  const webp = async () => Buffer.from((await send('Page.captureScreenshot', { format: 'webp', quality: 82 })).data, 'base64');
   const close = async () => { ws.close(); await browser.send('Target.disposeBrowserContext', { browserContextId }).catch(() => {}); };
-  return { send, evaluate, png, close };
+  return { send, evaluate, webp, close };
 }
 
 const waitUntil = async (tab, expr, what) => {
@@ -137,10 +138,7 @@ for (const layout of LAYOUTS) {
       if (info.css) await t.evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(info.css)}; document.head.appendChild(s); })()`);
       await waitUntil(t, PAINTED(theme), `${theme} to paint`);
       await new Promise((r) => setTimeout(r, SETTLE));
-      const png = join(staging, `${name}.png`);
-      writeFileSync(png, await t.png());
-      const conv = spawnSync('convert', [png, '-quality', '82', join(staging, `${name}.webp`)], { encoding: 'utf8' });
-      if (conv.status !== 0) throw new Error(`convert: ${conv.stderr.trim()}`);
+      writeFileSync(join(staging, `${name}.webp`), await t.webp());
       written.push(name);
       console.log(`ok   ${name} (${info.w * SCALE}x${info.h * SCALE})`);
     } catch (e) {
