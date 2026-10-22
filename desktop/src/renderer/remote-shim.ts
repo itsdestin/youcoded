@@ -1628,12 +1628,7 @@ const HEARTBEAT_IDLE_MS = 12_000;
 /** How long that question may go unanswered before the connection is replaced. Shorter than the
  *  wake check's: the page is in front, the radio is up, and a person may be waiting on a tap. */
 const HEARTBEAT_REPLY_MS = 5_000;
-/** Hidden for longer than the computer's own patience (its check runs every 20 s and it gives up
- *  after three): its side is already gone, so the page reconnects on sight instead of asking. */
-const HIDDEN_TOO_LONG_MS = 60_000;
 let wakeCheckInFlight = false;
-/** When the page was last hidden, or 0 if it is showing. Read once, by the wake check. */
-let hiddenSince = 0;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -1649,8 +1644,6 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 export function checkConnectionAfterWake(): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
   if (isAndroidLocal()) return;
-  const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
-  hiddenSince = 0;
   if (!hasConnectedBefore) {
     // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
     // try again, not the end of a backoff of up to a minute (finding 6).
@@ -1663,14 +1656,11 @@ export function checkConnectionAfterWake(): void {
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
   }
-  // Away longer than the computer waits: it has already closed its side, so a question here
-  // would only wait out its own deadline for an answer that can never come — ten seconds of a
-  // phone that looks connected and answers nothing. Replace the connection now.
-  if (hiddenFor >= HIDDEN_TOO_LONG_MS) {
-    if (ws) abandonSocket(ws);
-    if (token && !savedKeyStopped) reconnectNow(token);
-    return;
-  }
+  // Always ask first, however long the page was away. WHY (2026-10-22 phone reliability, cause 3): a
+  // page hidden 60 s or more used to replace its connection on sight, assuming the computer had given
+  // up on it — but a backgrounded phone's browser keeps answering the computer's pings, so the
+  // connection was usually still good, and every unlock cost a reconnect, a refill and a blocked Send.
+  // A connection that really is dead fails this question within WAKE_CHECK_TIMEOUT_MS.
   probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
 }
 
@@ -1976,8 +1966,6 @@ export function installShim(): void {
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') checkConnectionAfterWake();
-      // Remembered so the wake check knows whether the computer can still be there at all.
-      else hiddenSince = Date.now();
     });
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
