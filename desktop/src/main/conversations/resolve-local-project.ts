@@ -49,7 +49,7 @@ export async function resolveLocalProject(
 }
 
 /** fs.existsSync, off the main thread. Same answer: any failure to see the path means "no". */
-export function pathExists(p: string, cache?: Map<string, Promise<boolean>>): Promise<boolean> {
+function pathExists(p: string, cache?: Map<string, Promise<boolean>>): Promise<boolean> {
   const hit = cache?.get(p);
   if (hit) return hit;
   const probe = fs.promises.access(p).then(() => true, () => false);

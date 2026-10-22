@@ -666,17 +666,18 @@ describe('TranscriptWatcher', () => {
       path.join(subagentsDir, 'agent-abc.meta.json'),
       JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
     );
-    fs.writeFileSync(
-      path.join(subagentsDir, 'agent-abc.jsonl'),
-      JSON.stringify({
+    // WHY empty at start (2026-10-22): existing helper files are no longer replayed when watching starts
+    // (their history comes from the page reader); the helper's line arrives after, as it does live.
+    const subagentJsonl = path.join(subagentsDir, 'agent-abc.jsonl');
+    fs.writeFileSync(subagentJsonl, '');
+    const subagentLine = JSON.stringify({
         type: 'assistant', uuid: 'uuid-s1', isSidechain: true,
         message: {
           role: 'assistant',
           content: [{ type: 'tool_use', id: 'toolu_S1', name: 'Read', input: { file_path: '/a' } }],
           stop_reason: null,
         },
-      }) + '\n',
-    );
+      }) + '\n';
 
     const tw = new TranscriptWatcher(tmpRoot);
     const events: TranscriptEvent[] = [];
@@ -684,6 +685,9 @@ describe('TranscriptWatcher', () => {
     tw.startWatching('desktop-sess-1', sessionId, 'C:/tmp/project');
     try {
       fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-1', 'toolu_P1') + '\n');
+      // Wait until the helper file is tracked (its start point fixed) before it gets its line.
+      await vi.waitFor(() => expect((tw as any).sessions.get('desktop-sess-1').subagentWatcher.perFile.has('abc')).toBe(true), { timeout: WATCH_MS });
+      fs.appendFileSync(subagentJsonl, subagentLine);
       tw.readNewLinesForSession('desktop-sess-1');
       await vi.waitFor(() => {
         expect(events.map(e => e.type + ':' + (looseData(e).toolName ?? ''))).toContain('tool-use:Read');
@@ -997,17 +1001,17 @@ describe('startWatching path source', () => {
       path.join(subagentsDir, 'agent-hook.meta.json'),
       JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
     );
-    fs.writeFileSync(
-      path.join(subagentsDir, 'agent-hook.jsonl'),
-      JSON.stringify({
+    // Empty at start: existing helper files are not replayed (2026-10-22); the line arrives after watching starts.
+    const hookSubagentJsonl = path.join(subagentsDir, 'agent-hook.jsonl');
+    fs.writeFileSync(hookSubagentJsonl, '');
+    const hookSubagentLine = JSON.stringify({
         type: 'assistant', uuid: 'uuid-hook-s1', isSidechain: true,
         message: {
           role: 'assistant',
           content: [{ type: 'tool_use', id: 'toolu_HS1', name: 'Read', input: { file_path: '/a' } }],
           stop_reason: null,
         },
-      }) + '\n',
-    );
+      }) + '\n';
 
     // 4-arg: transcriptPath (parentJsonl, inside divergentDir) wins over any
     // cwd-derived slug. If subagentsDir regressed to slug-derivation, it would
@@ -1020,6 +1024,8 @@ describe('startWatching path source', () => {
     // Live path (getHistory was removed in B1): the parent's Agent tool_use is
     // appended after watching starts, which binds the helper file.
     fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-hook-1', 'toolu_HP1') + '\n');
+    await vi.waitFor(() => expect((watcher as any).sessions.get('desktop-hook-1').subagentWatcher.perFile.has('hook')).toBe(true), { timeout: WATCH_MS });
+    fs.appendFileSync(hookSubagentJsonl, hookSubagentLine);
     watcher.readNewLinesForSession('desktop-hook-1');
     await vi.waitFor(() => {
       expect(history.some(e => e.type === 'tool-use' && e.data.toolName === 'Read')).toBe(true);
