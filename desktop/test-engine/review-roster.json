@@ -6,5 +6,7 @@
   { "label": "Deepseek v4 flash 0731", "modelId": "deepseek/deepseek-v4-flash-0731", "contextLength": 1048576 },
   { "label": "Grok 4.5", "modelId": "x-ai/grok-4.5", "contextLength": 500000 },
   { "label": "GPT 5.6 Luna", "modelId": "openai/gpt-5.6-luna", "contextLength": 1050000 },
-  { "label": "Claude Opus 5", "modelId": "anthropic/claude-opus-5", "contextLength": 1000000 }
+  { "label": "Claude Opus 5", "modelId": "anthropic/claude-opus-5", "contextLength": 1000000 },
+  { "label": "Claude Sonnet 5.5", "modelId": "anthropic/claude-sonnet-5.5", "contextLength": 1000000 },
+  { "label": "GPT 6.1 Sol", "modelId": "openai/gpt-6.1-sol", "contextLength": 1050000 }
 ]

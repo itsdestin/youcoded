@@ -2,15 +2,36 @@
   "_notes": [
     "Destin's persona experiment (2026-10-21): does replacing the native assistant's ENTIRE built-in prompt (identity, preset, doctrine, steering) with his tutor/generalist persona change everyday answers?",
     "Builds: 'stock' is this branch unchanged; 'persona' is the same code with prompt-assembly.ts returning only the persona plus the <env> block (date, folder). The swap was never committed; the patch is kept with the session's scratch files.",
-    "Cases are the four everyday-* prompts (cases/everyday.ts), none of which needs the fixture."
+    "Cases are the four everyday-* prompts (cases/everyday.ts), none of which needs the fixture.",
+    "2026-10-22: first run used Claude Opus 5 + Qwen 3.8 Max and stopped on the key's own $5 limit after 2 cells (an Opus bakery answer built a whole site, ~$1.80-$2.80 each). Rerun on mid-tier models (Destin: 'sonnet/sol class, not opus'); Qwen 3.8 Max is no longer listed on OpenRouter."
   ],
   "name": "persona-prompt",
-  "cases": ["everyday-bakery", "everyday-laptop", "everyday-system32", "everyday-rome"],
-  "instructions": [{ "id": "none", "file": null }],
-  "models": ["Claude Opus 5", "Qwen 3.8 Max", "Deepseek v4 flash 0731"],
+  "cases": [
+    "everyday-bakery",
+    "everyday-laptop",
+    "everyday-system32",
+    "everyday-rome"
+  ],
+  "instructions": [
+    {
+      "id": "none",
+      "file": null
+    }
+  ],
+  "models": [
+    "Claude Sonnet 5.5",
+    "GPT 6.1 Sol",
+    "Deepseek v4 flash 0731"
+  ],
   "builds": [
-    { "id": "stock",   "dist": "/home/destin/youcoded-dev/worktrees/sessions/persona-prompt-eval/youcoded/desktop/dist-baseline" },
-    { "id": "persona", "dist": "/home/destin/youcoded-dev/worktrees/sessions/persona-prompt-eval/youcoded/desktop/dist-persona" }
+    {
+      "id": "stock",
+      "dist": "/home/destin/youcoded-dev/worktrees/sessions/persona-prompt-eval/youcoded/desktop/dist-baseline"
+    },
+    {
+      "id": "persona",
+      "dist": "/home/destin/youcoded-dev/worktrees/sessions/persona-prompt-eval/youcoded/desktop/dist-persona"
+    }
   ],
   "repeats": 2,
   "judge": "x-ai/grok-4.5"
