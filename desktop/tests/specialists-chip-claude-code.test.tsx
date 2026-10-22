@@ -19,7 +19,7 @@
  *     rendering `Date.now() - 0` as a 56-year runtime.
  *  4. A finished CC helper carries an END time, so "Finished in 4m" is fixed
  *     instead of climbing on every re-render.
- *  5. CC helpers never reach 'needs-you': Claude Code does not say which
+ *  5. (Superseded 2026-10-22 by agent_id attribution, see the A4 block at the end.) CC helpers never reach needs-you: Claude Code does not say which
  *     subagent raised a permission prompt, so the amber state stays native-only
  *     rather than pinning an ask on a guessed helper.
  */
@@ -27,6 +27,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import React from 'react';
 import { ccRunFromCard } from '../src/renderer/hooks/useSpecialists';
+import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import SpecialistsChip from '../src/renderer/components/SpecialistsChip';
 import { RunStatusLine } from '../src/renderer/components/specialists/RunStatusLine';
 import { ChatProvider, useChatDispatch } from '../src/renderer/state/chat-context';
@@ -206,6 +207,102 @@ describe('the chip in a Claude Code session', () => {
       { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash', input: { command: 'rm x' }, requestId: 'r-1' },
     ]);
     expect(chipLabel()).not.toContain('needs you');
+    expect(chipLabel()).toBe('1 subagent');
+  });
+});
+
+// ── 2026-10-22 audit A1 / B4 / B6 ────────────────────────────────────────────
+// The chip must read the work's REAL state (ccBackground / the run record), and a
+// failure must never be summarised as "N finished" with a check.
+describe('ccRunFromCard reads the background record (A1)', () => {
+  const launched = (bg: NonNullable<ToolCallState['ccBackground']>) => agentCard({ status: 'complete', ccBackground: bg });
+  it('a helper whose launch receipt landed is still WORKING until its notice', () => {
+    const out = ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'running' }))!;
+    expect(out.run.status).toBe('running');
+    // …and a working helper has no end time, so its clock keeps ticking.
+    expect(out.run.endedAt).toBeUndefined();
+  });
+  it('failed / stopped / completed map onto the run statuses the popup knows', () => {
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'failed' }))!.run.status).toBe('failed');
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'stopped' }))!.run.status).toBe('interrupted');
+    expect(ccRunFromCard('tu-1', launched({ taskId: 'a1', status: 'completed' }))!.run.status).toBe('completed');
+  });
+});
+
+describe('the chip tells failures from finishes (B4) and tracks ccBackground (A1)', () => {
+  const launchAgent = (id = 'a1'): ChatAction[] => [
+    toolUse(id, 'Agent', { description: `Job ${id}`, subagent_type: 'Explore' }),
+    { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: 's1', uuid: `r-${id}`, toolUseId: id, result: 'Async agent launched', isError: false, backgroundTaskId: `task-${id}` } as ChatAction,
+  ];
+  const end = (id: string, status: 'completed' | 'failed' | 'stopped'): ChatAction =>
+    ({ type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId: 's1', uuid: `n-${id}`, toolUseId: id, taskIds: [`task-${id}`], status } as ChatAction);
+
+  it('a helper still working after its launch receipt reads as working', () => {
+    renderChip(launchAgent());
+    expect(chipLabel()).toBe('1 subagent');
+  });
+  it('a failed helper says failed, with no check', () => {
+    renderChip([...launchAgent(), end('a1', 'failed')]);
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('a stopped helper says stopped', () => {
+    renderChip([...launchAgent(), end('a1', 'stopped')]);
+    expect(chipLabel()).toBe('1 stopped');
+  });
+  it('a clean finish still says finished', () => {
+    renderChip([...launchAgent(), end('a1', 'completed')]);
+    expect(chipLabel()).toBe('1 finished');
+  });
+  it('mixed outcomes list each, failures first', () => {
+    renderChip([...launchAgent('a1'), ...launchAgent('a2'), end('a1', 'completed'), end('a2', 'failed')]);
+    expect(chipLabel()).toBe('1 failed · 1 finished');
+  });
+  it('redraws when the notice lands AFTER the chip first rendered', () => {
+    let dispatch!: (a: ChatAction) => void;
+    function Grab() { dispatch = useChatDispatch(); return null; }
+    render(<ChatProvider><Grab /><Harness actions={[{ type: 'SESSION_INIT', sessionId: 's1' }, ...launchAgent()]} /></ChatProvider>);
+    expect(chipLabel()).toBe('1 subagent');
+    React.act(() => dispatch(end('a1', 'failed')));
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('a failed native specialist says failed too', () => {
+    renderChip([
+      toolUse('t1', 'Task', { description: 'Sweep', agent: 'explorer' }),
+      { type: 'SPECIALIST_RUN_CHANGED', sessionId: 's1', run: { childId: 'c1', parentToolCallId: 't1', agentType: 'explorer', title: 'Nadia', background: false, status: 'failed', startedAt: 1, endedAt: 2 } },
+    ]);
+    expect(chipLabel()).toBe('1 failed');
+  });
+  it('counts a run whose card is not loaded yet (B6)', () => {
+    renderChip([
+      { type: 'SPECIALIST_RUN_CHANGED', sessionId: 's1', run: { childId: 'c9', parentToolCallId: 'unloaded', agentType: 'explorer', title: 'Nadia', background: true, status: 'running', startedAt: 1 } },
+    ]);
+    expect(chipLabel()).toBe('1 specialist');
+  });
+});
+
+// ── A4 (2026-10-22): a Claude Code subagent's permission ask names its helper ──
+// Claude Code stamps `agent_id` on a hook payload ONLY when the hook fires inside a subagent
+// (its own schema: "Present only when the hook fires from within a subagent… Absent for the main
+// thread"), and that id is the helper's task id — the Agent card's agentId / receipt id.
+describe('a Claude Code subagent’s ask (agent_id on the hook payload)', () => {
+  const hook = (payload: Record<string, unknown>) => hookEventToAction({
+    type: 'PermissionRequest', sessionId: 's1', timestamp: 1,
+    payload: { tool_name: 'Bash', tool_input: { command: 'rm x' }, _requestId: 'r-1', ...payload },
+  })!;
+  const launched: ChatAction[] = [
+    toolUse('a1', 'Agent', { description: 'Sweep the rules', subagent_type: 'Explore' }),
+    { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: 's1', uuid: 'r-a1', toolUseId: 'a1', result: 'launched', isError: false, backgroundTaskId: 'ag-7' } as ChatAction,
+  ];
+  it('the dispatcher carries the helper id (and ignores a main-thread ask)', () => {
+    expect(hook({ agent_id: 'ag-7', agent_type: 'Explore' })).toMatchObject({ specialist: { childId: 'ag-7', agentType: 'Explore' } });
+    expect((hook({}) as any).specialist).toBeUndefined();
+  });
+  it('turns the chip amber and lists the ask on that helper', () => {
+    renderChip([...launched, hook({ agent_id: 'ag-7', agent_type: 'Explore' })]);
+    expect(chipLabel()).toBe('1 needs you');
+  });
+  it('an ask from an unknown agent id stays a plain top-level ask (the chip does not guess)', () => {
+    renderChip([...launched, hook({ agent_id: 'someone-else' })]);
     expect(chipLabel()).toBe('1 subagent');
   });
 });

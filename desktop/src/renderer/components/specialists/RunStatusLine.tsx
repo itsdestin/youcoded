@@ -1,6 +1,7 @@
 import type { ToolCallState } from '../../../shared/types';
 import { useSecondsTick } from '../../hooks/useSecondsTick';
 import { RowStatus } from '../ui';
+import { specialistFacts } from '../../state/native-run-facts';
 
 /** "Working in the background · 2m 14s" / "Finished in 4m · 5 steps" — the
  *  one line that answers "is it done?" without opening anything. Rides the
@@ -44,6 +45,9 @@ export function RunStatusLine({ run, report, elapsedUnknown = false }: {
   } else {
     text = `Stopped${after}${steps} — the assistant can pick this back up`;
   }
+  // A finished background run whose report the assistant has not received yet (native host fact).
+  const pending = specialistFacts(run).reportPending;
+  if (pending && run.status !== 'running') text += pending === 'held-after-stop' ? ' · report not read yet — held until you continue' : ' · report not read by the assistant yet';
   return <div className="text-xs text-fg-muted" data-testid="specialist-status-line">{dot ? <RowStatus dotClassName={dot}>{text}</RowStatus> : text}</div>;
 }
 

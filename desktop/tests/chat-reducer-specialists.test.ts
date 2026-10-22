@@ -535,3 +535,82 @@ describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activ
     expect(trail(state)).toEqual(['tool:t1', 'tool:t2', 'note:mid']);
   });
 });
+
+// ── 2026-10-22 audit B2 / B3: a RESUMED child ────────────────────────────────
+// Resuming a finished helper (Task with task_id) restarts the SAME ledger row: status running,
+// startedAt reset, endedAt cleared. The run still belongs to the ORIGINAL card, but the child's
+// live events and asks are stamped with the NEW resume-call card. Main-side assumption (see the
+// native-engine work): the run record keeps arriving with the original child id, and a resumed
+// run is recognisable by status 'running' / a later startedAt than the one the card holds.
+describe('a resumed child', () => {
+  const RESUME_CALL = 'task-resume-call';
+  const base = (): ChatState => {
+    let s = seedTaskCard(initState());
+    s = seedTaskCard(s, RESUME_CALL);   // the later Task call that resumed the child (no run record of its own)
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'failed', endedAt: 2000, seq: 5 }) });
+    // The first run's report was delivered and folded onto the card.
+    return dispatch(s, {
+      type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'rep1', text: 'It broke', timestamp: 2100,
+      injected: 'specialist-report',
+      injectedMeta: { childId: CHILD_ID, title: 'Nadia', agentType: 'explorer', status: 'failed', parentToolCallId: TASK_ID },
+    } as ChatAction);
+  };
+  const card = (s: ChatState, id = TASK_ID) => s.get(SESSION)!.toolCalls.get(id)!;
+
+  it('B2: the old report goes when the same child starts a newer run (it would read Failed with the old text)', () => {
+    let s = base();
+    expect(card(s).specialistReport?.status).toBe('failed');
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    expect(card(s).specialistRun?.status).toBe('running');
+    expect(card(s).specialistReport).toBeUndefined();
+  });
+  it('B2: a newer run is accepted even if the host restarted and its stamp counter began again', () => {
+    let s = base();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 1 }) });
+    expect(card(s).specialistRun?.status).toBe('running');
+  });
+  it('B2: an old straggler for the FIRST run still cannot revive it', () => {
+    let s = base();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 1000, seq: 2 }) });
+    expect(card(s).specialistRun?.status).toBe('failed');
+    expect(card(s).specialistReport?.status).toBe('failed');
+  });
+  it('B2: the resumed run’s own report replaces the old one', () => {
+    let s = base();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'completed', startedAt: 3000, endedAt: 4000, seq: 7 }) });
+    s = dispatch(s, {
+      type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'rep2', text: 'Fixed it', timestamp: 4100,
+      injected: 'specialist-report',
+      injectedMeta: { childId: CHILD_ID, title: 'Nadia', agentType: 'explorer', status: 'completed', parentToolCallId: RESUME_CALL },
+    } as ChatAction);
+    // The report folds onto the card that carries the run, not the resume call.
+    expect(card(s).specialistReport).toMatchObject({ status: 'completed', text: 'Fixed it' });
+    expect(card(s, RESUME_CALL).specialistReport).toBeUndefined();
+  });
+  it('B3: an ask from the resumed child lands on the card that carries its run', () => {
+    let s = base();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = dispatch(s, {
+      type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName: 'Bash', input: { command: 'ls' }, requestId: 'req-r',
+      specialist: { childId: CHILD_ID, agentType: 'explorer', title: 'Nadia', parentToolCallId: RESUME_CALL },
+    });
+    expect(card(s).subagentSegments?.some(g => g.type === 'tool' && g.requestId === 'req-r')).toBe(true);
+    expect(card(s, RESUME_CALL).subagentSegments?.length ?? 0).toBe(0);
+  });
+  it('B3: the resumed child’s live activity lands there too', () => {
+    let s = base();
+    s = dispatch(s, { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun({ status: 'running', startedAt: 3000, seq: 6 }) });
+    s = dispatch(s, {
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 3500, sessionId: SESSION, uuid: 'cu', toolUseId: 'child-tool', toolName: 'Read', toolInput: { file_path: '/x' },
+      parentAgentToolUseId: RESUME_CALL, agentId: CHILD_ID,
+    });
+    expect(card(s).subagentSegments?.some(g => g.type === 'tool' && g.toolUseId === 'child-tool')).toBe(true);
+    expect(card(s, RESUME_CALL).subagentSegments?.length ?? 0).toBe(0);
+  });
+  it('a child’s activity for an ordinary (never resumed) card is unchanged', () => {
+    let s = dispatch(seedTaskCard(initState()), { type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION, run: baseRun() });
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 2, sessionId: SESSION, uuid: 'cu', toolUseId: 'ct', toolName: 'Read', toolInput: {}, parentAgentToolUseId: TASK_ID, agentId: CHILD_ID });
+    expect(card(s).subagentSegments).toHaveLength(1);
+  });
+});

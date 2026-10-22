@@ -20,13 +20,15 @@ function run(over: Partial<ShellRunView> = {}): ShellRunView {
 const card = (s: ChatState, id = 't1') => s.get(S)!.toolCalls.get(id)!;
 
 describe('SHELL_RUN_CHANGED', () => {
-  it('lands on the Bash card by toolUseId; an unknown card is dropped', () => {
+  it('lands on the Bash card by toolUseId; an unknown card is parked, not dropped (audit D1)', () => {
     let s = bashCard(init(), 't1', { command: 'x', run_in_background: true });
     s = d(s, { type: 'SHELL_RUN_CHANGED', sessionId: S, run: run() } as ChatAction);
     expect(card(s).shellRun?.shellId).toBe('sh-1');
-    const before = s;
-    s = d(s, { type: 'SHELL_RUN_CHANGED', sessionId: S, run: run({ toolUseId: 'nope' }) } as ChatAction);
-    expect(s).toBe(before);
+    const cardsBefore = s.get(S)!.toolCalls;
+    s = d(s, { type: 'SHELL_RUN_CHANGED', sessionId: S, run: run({ toolUseId: 'nope', shellId: 'sh-9' }) } as ChatAction);
+    // No card changed; the record waits for its card (tests/cc-background-reducer.test.ts covers the pickup).
+    expect(s.get(S)!.toolCalls).toBe(cardsBefore);
+    expect(s.get(S)!.parkedShellRuns?.get('nope')?.shellId).toBe('sh-9');
   });
 });
 

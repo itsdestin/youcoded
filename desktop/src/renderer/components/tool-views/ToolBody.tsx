@@ -34,6 +34,7 @@ import { hasNestedAsk } from '../../utils/specialist-cards';
 import { SpecialistActions } from '../specialists/SpecialistActions';
 import { RunStatusLine } from '../specialists/RunStatusLine';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../../shared/send-user-link';
+import { shellEndKind, shellFacts, specialistFacts } from '../../state/native-run-facts';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -384,7 +385,9 @@ function ShellView({ tool, commandField, sessionId }: {
   const run = tool.shellRun;
   const bg = run != null || (tool.input.run_in_background as boolean | undefined);
   const response = tool.response ? stripCarriageReturns(tool.response) : '';
-  const failed = tool.status === 'failed' || (run?.status === 'exited' && run.exitCode !== 0);
+  const kind = run ? shellEndKind(run) : undefined;
+  // A signal kill or an unknown exit is not a failure (native-run-facts.ts).
+  const failed = tool.status === 'failed' || kind === 'failed';
   // A rebuilt record (app quit) has no start time — show no timer rather than "0s".
   const elapsed = useElapsed(run?.startedAt || undefined, run?.endedAt);
   const [stopping, setStopping] = useState(false);
@@ -409,7 +412,14 @@ function ShellView({ tool, commandField, sessionId }: {
   // the chip row only speaks once it has ended. "Exit N · 3m 12s" says how it
   // ended; a stopped run names who stopped it.
   if (bg && run?.status !== 'running') chips.push(<Chip key="bg" tone="info">{run?.detached ? 'Moved to background at its time limit' : 'Background'}</Chip>);
-  if (run?.status === 'exited') {
+  const facts = run ? shellFacts(run) : undefined;
+  if (run && facts?.maybeStillRunning) {
+    chips.push(<Chip key="maybe" tone="warn">May still be running — it ended while the app was closed</Chip>);
+  } else if (run?.status === 'exited' && facts?.signal) {
+    chips.push(<Chip key="signal" tone="warn">Ended by {facts.signal}{elapsed ? ` · after ${elapsed}` : ''}</Chip>);
+  } else if (run?.status === 'exited' && facts?.exitUnknown) {
+    chips.push(<Chip key="unknown" tone="warn">Ended · exit code unknown</Chip>);
+  } else if (run?.status === 'exited') {
     chips.push(<Chip key="exit" tone={run.exitCode === 0 ? 'add' : 'remove'}>Exit {run.exitCode ?? '?'}{elapsed ? ` · ${elapsed}` : ''}</Chip>);
   } else if (run?.status === 'stopped') {
     chips.push(<Chip key="stopped" tone="warn">{STOP_REASON[run.stopReason ?? 'user']}{elapsed ? ` · after ${elapsed}` : ''}</Chip>);
@@ -883,8 +893,10 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
   // then there is none — the receipt ("Async agent launched… internal ID, do
   // not mention to user") is Claude Code's note to the model, never a report.
   const ccReport = ccBg ? (ccBg.result ?? (ccBg.status === 'completed' ? undefined : ccBg.summary)) : undefined;
+  // A report the host marks as an earlier run's is shown as such, not as this run's outcome.
+  const stale = !!run && specialistFacts(run).reportStale;
   const report = tool.specialistReport
-    ? { title: tool.specialistReport.status === 'failed' ? 'Report — failed' : 'Report', text: displayReport(tool.specialistReport.text) }
+    ? { title: stale ? 'Earlier report' : tool.specialistReport.status === 'failed' ? 'Report — failed' : 'Report', text: displayReport(tool.specialistReport.text) }
     : ccBg
       ? (ccReport ? { title: ccBg.status === 'failed' ? 'Report — failed' : 'Report', text: ccReport } : null)
       : tool.response && !taskId && (run ? run.background === false : isNative)

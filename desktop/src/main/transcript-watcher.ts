@@ -82,6 +82,15 @@ export function parseTranscriptLine(
   // a wrong-but-recent time beats no time at all.
   const timestamp = stamp === 'recorded' && recordedAt ? recordedAt : Date.now();
 
+  // A task-notification Claude Code only ever wrote as a `queue-operation` enqueue line (~2% of Bash
+  // background ends measured 2026-10-22, e.g. task b61arikpe): no user line and no attachment follows,
+  // so without this the card spins until the session exits (audit A6). The same notice may ALSO arrive
+  // as a user line or attachment — applying a notice twice is harmless (it settles the same card the
+  // same way), so there is no cross-line dedup here. The line has no uuid; its time is its identity.
+  if (parsed?.type === 'queue-operation' && parsed.operation === 'enqueue' && typeof parsed.content === 'string') {
+    return taskNotificationEvents(parsed.content, sessionId, `queue:${parsed.timestamp ?? ''}`, timestamp);
+  }
+
   // A message typed while Claude is still working. Claude Code records it ONLY as a queued_command
   // attachment (no ordinary user line follows), and skipping it with every other non-user line left
   // the typing device's bubble unconfirmed at the bottom of its chat while every other device never
@@ -159,6 +168,8 @@ export function parseTranscriptLine(
           ? parsed.toolUseResult.structuredPatch
           : undefined;
         const backgroundTaskId = backgroundLaunchId(parsed.toolUseResult);
+        const backgroundPersistent = backgroundTaskId && parsed.toolUseResult?.persistent === true ? true : undefined;
+        const stoppedTaskId = stoppedTaskIdOf(parsed.toolUseResult);
         const resumed = parsed.toolUseResult?.resumedAgentId;
         const resumedTaskId = typeof resumed === 'string' && resumed ? resumed : undefined;
         for (const block of content) {
@@ -175,6 +186,8 @@ export function parseTranscriptLine(
                 recordedAt,
                 ...(structuredPatch ? { structuredPatch } : {}),
                 ...(backgroundTaskId ? { backgroundTaskId } : {}),
+                ...(backgroundPersistent ? { backgroundPersistent } : {}),
+                ...(stoppedTaskId && !block.is_error ? { stoppedTaskId } : {}),
                 ...(resumedTaskId ? { resumedTaskId } : {}),
               },
             });
@@ -398,12 +411,30 @@ function queuedTaskNotificationText(parsed: any): string | null {
 
 /** The id of the background work a Claude Code tool result only LAUNCHED:
  *  an Agent's `agentId` when its status is 'async_launched' (every CC Agent
- *  call measured on 2026-09-24), or a Bash command's `backgroundTaskId`. */
+ *  call measured on 2026-09-24), a Bash command's `backgroundTaskId`, a
+ *  Workflow's `taskId` (`status: 'async_launched'`, `taskType: 'local_workflow'`,
+ *  no agentId — audit A5), or a Monitor's `taskId` (`{taskId, timeoutMs,
+ *  persistent}` — audit C2). Without the last two those cards never started
+ *  as running, so a live watcher or workflow read "done". */
 function backgroundLaunchId(r: any): string | undefined {
   if (!r || typeof r !== 'object') return undefined;
   if (r.status === 'async_launched' && typeof r.agentId === 'string' && r.agentId) return r.agentId;
   if (typeof r.backgroundTaskId === 'string' && r.backgroundTaskId) return r.backgroundTaskId;
+  if (r.status === 'async_launched' && typeof r.taskId === 'string' && r.taskId) return r.taskId;
+  // The Monitor receipt has no status field; `timeoutMs` beside `taskId` is its signature.
+  if (typeof r.taskId === 'string' && r.taskId && typeof r.timeoutMs === 'number') return r.taskId;
   return undefined;
+}
+
+/** The task a SUCCESSFUL TaskStop ended. Shape (measured): `toolUseResult
+ *  {message: 'Successfully stopped task: <id> (<command>)', task_id, task_type:
+ *  local_bash | local_agent | local_workflow, command}`. Any other `task_id`
+ *  result (TaskOutput's, an error string) is not a stop. */
+function stoppedTaskIdOf(r: any): string | undefined {
+  if (!r || typeof r !== 'object') return undefined;
+  if (typeof r.task_id !== 'string' || !r.task_id || typeof r.task_type !== 'string') return undefined;
+  if (typeof r.message !== 'string' || !/^Successfully stopped/i.test(r.message)) return undefined;
+  return r.task_id;
 }
 
 const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>/g;
@@ -440,6 +471,8 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
     const re = body.lastIndexOf('</result>');
     const result = rs !== -1 && re > rs ? body.slice(rs + '<result>'.length, re).trim() : undefined;
     const summary = tagText(body, 'summary');
+    // A Bash command's exit code exists only inside the summary sentence.
+    const exit = summary ? /exit code (-?\d+)/i.exec(summary) : null;
     out.push({
       type: 'background-task',
       sessionId,
@@ -452,6 +485,7 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
           taskIds, status: mapped,
           ...(summary ? { summary } : {}),
           ...(result ? { result } : {}),
+          ...(exit ? { exitCode: Number(exit[1]) } : {}),
         },
       },
     });

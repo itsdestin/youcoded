@@ -36,6 +36,7 @@ import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-us
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
+import { shellEndKind } from '../state/native-run-facts';
 
 // --- Helpers for friendly display ---
 
@@ -1328,7 +1329,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   const runIcon: 'spinner' | 'check' | 'fail' | 'stopped' | null =
     tool.status === 'awaiting-approval' ? null
     : ccBg ? (ccBg.status === 'running' ? 'spinner' : ccBg.status === 'completed' ? 'check' : ccBg.status === 'failed' ? 'fail' : 'stopped')
-    : shell ? (shell.status === 'running' ? 'spinner' : shell.status === 'stopped' ? 'stopped' : shell.exitCode === 0 ? 'check' : 'fail')
+    : shell ? ({ running: 'spinner', stopped: 'stopped', completed: 'check', failed: 'fail' } as const)[shellEndKind(shell)]
     : !run ? null
     : run.status === 'running' ? 'spinner'
     : run.status === 'completed' ? (tool.specialistReport?.status === 'failed' ? 'fail' : 'check')
