@@ -1,5 +1,6 @@
 import { HARNESS_BATTERY } from './harness-battery';
 import { CODE_EXPLANATION } from './code-explanation';
+import { EVERYDAY_BAKERY, EVERYDAY_LAPTOP, EVERYDAY_ROME, EVERYDAY_SYSTEM32 } from './everyday';
 import { CONFIG_INVESTIGATION } from './config-investigation';
 import { OPTIONS_PROPOSAL } from './options-proposal';
 import { PORT_BUMP } from './port-bump';
@@ -18,6 +19,11 @@ const ALL: EvalCase[] = [
   OPTIONS_PROPOSAL,
   PORT_BUMP,
   CODE_EXPLANATION,
+  // Everyday non-coding requests (test-engine/eval-plans/persona-prompt.json).
+  EVERYDAY_BAKERY,
+  EVERYDAY_LAPTOP,
+  EVERYDAY_SYSTEM32,
+  EVERYDAY_ROME,
 ];
 
 const CASES: Record<string, EvalCase> = {};
