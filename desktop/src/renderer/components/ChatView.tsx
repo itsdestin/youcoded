@@ -480,7 +480,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }

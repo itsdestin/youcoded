@@ -19,7 +19,9 @@ import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
-import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
+import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
+import { specialistFacts } from './native-run-facts';
+import { ccCommandFromLaunch, nativeCommandFromRun, putCommand, settleCommands } from './background-commands';
 import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
@@ -404,6 +406,12 @@ function injectPlanSegment(
   return updated;
 }
 
+/** A Claude Code call whose result is only a launch receipt for work that outlives it. */
+function launchesBackgroundWork(tool: ToolCallState): boolean {
+  return tool.toolName === 'Agent' || tool.toolName === 'Monitor' || tool.toolName === 'Workflow'
+    || (tool.toolName === 'Bash' && tool.input?.run_in_background === true);
+}
+
 /**
  * Shared cleanup for turn endings (both normal completion and timeout).
  * Marks orphaned running/awaiting tools as failed and clears turn tracking.
@@ -438,6 +446,15 @@ function endTurn(
       removePreparingTool(toolCalls, toolGroups, assistantTurns, id);
       continue;
     }
+    // A8 (audit): a Claude Code call that LAUNCHES background work (every Agent, a Monitor,
+    // a Workflow, a Bash `run_in_background`) still gets a tool result after Esc — the
+    // launch receipt if it launched, an error if it did not — so failing it here only
+    // made the card flash "failed" until the receipt flipped it back. The result
+    // decides. (Other paths that end a turn — process exit, a closed session — still
+    // fail it: no result is coming there.) Every Agent, foreground included (review F6):
+    // 0 of the Agent calls in the 400 newest local transcripts lacked a result, Esc'd ones
+    // included (2026-10-22), and 1,139 of 1,139 measured were background launches anyway.
+    if (errorMessage === 'Turn interrupted' && tool.status === 'running' && launchesBackgroundWork(tool)) continue;
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
       // Also drop `expired`: a kept card (PERMISSION_EXPIRED 'hook-closed') is
       // settled now, and a stale flag would let a later quiet
@@ -495,13 +512,24 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       && action.type !== 'TRANSCRIPT_ASSISTANT_REASONING') {
     return state;
   }
-  const parentId = (action as any).parentAgentToolUseId as string | undefined;
+  let parentId = (action as any).parentAgentToolUseId as string | undefined;
   if (!parentId) return state;
 
   const session = state.get(action.sessionId);
   if (!session) return state;
-  const parent = session.toolCalls.get(parentId);
+  let parent = session.toolCalls.get(parentId);
   if (!parent) return state;
+  // B3 (audit): a RESUMED native child's events are stamped with the NEW resume-call
+  // Task card, which carries no run of its own, while the child's run (and its
+  // Activity trail) lives on the card that first hired it. Follow the child id to the
+  // card that carries its run. Scoped to a run-less native Task parent so the common
+  // path (and every Claude Code subagent event) pays no scan.
+  const stampedChild = (action as { agentId?: string }).agentId;
+  if (stampedChild && parent.toolName === 'Task' && !parent.specialistRun) {
+    for (const [id, tool] of session.toolCalls) {
+      if (tool.specialistRun?.childId === stampedChild) { parentId = id; parent = tool; break; }
+    }
+  }
 
   // Fix (external review, 2026-08-13): a subagent event used to skip the
   // seenUuids dedup every other replay-fed entry point passes (see
@@ -695,8 +723,19 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       && !existingToolSegment.structuredPatch
     ? addPatchLines(session.totals, action.structuredPatch)
     : session.totals;
+  // C4 (audit): a helper's OWN background command used to vanish (it has no top-level
+  // card). It is listed in the background-command list, marked as the helper's.
+  let backgroundCommands = session.backgroundCommands;
+  if (action.type === 'TRANSCRIPT_TOOL_RESULT' && !action.isError && action.backgroundTaskId && existingToolSegment
+      && (existingToolSegment.toolName === 'Bash' || existingToolSegment.toolName === 'Monitor')) {
+    backgroundCommands = putCommand(backgroundCommands, ccCommandFromLaunch({
+      toolUseId: action.toolUseId, toolName: existingToolSegment.toolName, input: existingToolSegment.input ?? {},
+      taskId: action.backgroundTaskId, persistent: action.backgroundPersistent, startedAt: action.timestamp,
+      owner: { toolUseId: parentId, ...(parent.agentId ? { agentId: parent.agentId } : {}) },
+    }));
+  }
   const next = new Map(state);
-  next.set(action.sessionId, { ...session, toolCalls, seenUuids, totals });
+  next.set(action.sessionId, { ...session, toolCalls, seenUuids, totals, backgroundCommands });
   return next;
 }
 
@@ -710,10 +749,11 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
  *  but that carries no live run record after replay was running when the app
  *  quit (a live registry would have replayed its record before this point).
  *  Returns null when no card changes so the reducer can keep its Map ref. */
-export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>): Map<string, ToolCallState> | null {
+export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>, parked?: Map<string, unknown>): Map<string, ToolCallState> | null {
   let out: Map<string, ToolCallState> | null = null;
   for (const [id, card] of toolCalls) {
-    if (card.toolName !== 'Bash' || card.shellRun || !card.response) continue;
+    // A record the host refilled (session:open) is parked until its card appears: it is the truth, not "stopped when the app quit".
+    if (card.toolName !== 'Bash' || card.shellRun || !card.response || parked?.has(id)) continue;
     const m = /\(shell id (sh-[0-9a-f]+)\)/.exec(card.response);
     if (!m) continue;
     out ??= new Map(toolCalls);
@@ -734,7 +774,24 @@ export function markOrphanedShellRuns(toolCalls: Map<string, ToolCallState>): Ma
 function findSpecialistCard(
   toolCalls: Map<string, ToolCallState>,
   ref: { parentToolCallId?: string; childId?: string },
+  // B3 (audit): for the child's OWN traffic (its asks, its delivered report) the card
+  // that carries the child's run record wins over the call the traffic was stamped
+  // with. A RESUMED child is stamped with the NEW resume-call card, which has no run
+  // of its own — so its asks nested there and the chip never turned amber for them.
+  opts?: { carrierFirst?: boolean },
 ): string | null {
+  if (opts?.carrierFirst && ref.childId) {
+    let first: string | null = null;
+    for (const [id, tool] of toolCalls) {
+      if (tool.specialistRun?.childId !== ref.childId) continue;
+      // After a resume the run sits on BOTH the original card and the resume call's; the host
+      // names the live one (activeToolCallId) — that is where the child's traffic belongs.
+      const active = specialistFacts(tool.specialistRun).activeToolCallId;
+      if (!active || active === id) return id;
+      first ??= id;
+    }
+    if (first) return first;
+  }
   if (ref.parentToolCallId && toolCalls.has(ref.parentToolCallId)) return ref.parentToolCallId;
   if (ref.childId) {
     for (const [id, tool] of toolCalls) {
@@ -889,6 +946,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   if (next === state || !id) return next;
   next = touchTurnTime(state, next, id, action);
   next = applyParkedSpecialistRuns(state, next, id);
+  next = applyParkedShellRuns(state, next, id);
   const s = next.get(id);
   if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
   const fixed = new Map(next);
@@ -920,6 +978,25 @@ function applyParkedSpecialistRuns(prev: ChatState, next: ChatState, id: string)
     const unparked = new Map(out);
     unparked.set(id, { ...current, parkedSpecialistRuns: parked.size ? parked : undefined });
     out = chatReducerCases(unparked, { type: 'SPECIALIST_RUN_CHANGED', sessionId: id, run });
+  }
+  return out;
+}
+
+/** Hand every parked native-shell record whose Bash card has now appeared to the
+ *  normal SHELL_RUN_CHANGED case (audit D1) — the shell twin of applyParkedSpecialistRuns.
+ *  Runs only when the session's tool cards actually changed. */
+function applyParkedShellRuns(prev: ChatState, next: ChatState, id: string): ChatState {
+  const s = next.get(id);
+  if (!s?.parkedShellRuns?.size || prev.get(id)?.toolCalls === s.toolCalls) return next;
+  let out = next;
+  for (const [toolUseId, run] of s.parkedShellRuns) {
+    const current = out.get(id)!;
+    if (!current.toolCalls.has(toolUseId)) continue;
+    const parked = new Map(current.parkedShellRuns);
+    parked.delete(toolUseId);
+    const unparked = new Map(out);
+    unparked.set(id, { ...current, parkedShellRuns: parked.size ? parked : undefined });
+    out = chatReducerCases(unparked, { type: 'SHELL_RUN_CHANGED', sessionId: id, run });
   }
   return out;
 }
@@ -1126,14 +1203,17 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // Claude Code's background helpers and commands die with its process,
       // and no notice will ever say so — without this their cards spin forever.
       const toolCalls = stopRunningBackground(session.toolCalls, () => true);
+      // The background-command list ends with the process too (a persistent Monitor included).
+      const backgroundCommands = stopRunningCommands(session.backgroundCommands, () => true);
       if (action.exitCode === 0 && !hadInFlight) {
-        if (toolCalls === session.toolCalls) return state;
-        next.set(action.sessionId, { ...session, toolCalls });
+        if (toolCalls === session.toolCalls && backgroundCommands === session.backgroundCommands) return state;
+        next.set(action.sessionId, { ...session, toolCalls, backgroundCommands });
         return next;
       }
       next.set(action.sessionId, {
         ...session,
         toolCalls,
+        backgroundCommands,
         ...endTurn({ ...session, toolCalls }),
         // Override endTurn's 'ok' reset — this is the state we want to surface.
         attentionState: 'session-died',
@@ -1516,7 +1596,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.injectedMeta.parentToolCallId,
           childId: action.injectedMeta.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const toolCalls = new Map(session.toolCalls);
@@ -1994,6 +2074,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
 
       const existing = session.toolCalls.get(action.toolUseId);
+      let backgroundCommands = session.backgroundCommands;
+      let ccBackgroundOutcomes = session.ccBackgroundOutcomes;
       // WHY copied only when a card exists (perf, 2026-09-23): an orphan result
       // changes nothing, so the session keeps its own toolCalls Map.
       let toolCalls = session.toolCalls;
@@ -2032,7 +2114,24 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             ...(bg && existing.toolName === 'Agent' && !existing.agentId ? { agentId: action.backgroundTaskId } : {}),
           });
           if (action.resumedTaskId) toolCalls = reopenResumedHelper(session, toolCalls, action.toolUseId, action.resumedTaskId);
+          // The background-command list (Bash / Monitor only — helpers have the Subagents chip).
+          if (bg && (existing.toolName === 'Bash' || existing.toolName === 'Monitor')) {
+            const cmd = ccCommandFromLaunch({
+              toolUseId: action.toolUseId, toolName: existing.toolName, input: existing.input ?? {},
+              taskId: action.backgroundTaskId!, persistent: action.backgroundPersistent, startedAt: action.timestamp,
+            });
+            // A launch whose end was already read (a newer history page) lists its real end.
+            backgroundCommands = putCommand(backgroundCommands, bg.status === 'running' ? cmd : {
+              ...cmd, status: bg.status, ...(bg.exitCode !== undefined ? { exitCode: bg.exitCode } : {}),
+              ...(bg.summary ? { summary: bg.summary } : {}), ...(bg.endedAt ? { endedAt: bg.endedAt } : {}),
+            });
+          }
         }
+      }
+      // A resumed helper is remembered in session state too, so a launch card that is
+      // NOT loaded yet (older page) reads working when its page arrives (audit A2).
+      if (existing && action.resumedTaskId && !action.isError) {
+        ccBackgroundOutcomes = markHelperReopened(ccBackgroundOutcomes, action.toolUseId, action.resumedTaskId);
       }
 
       // Count edited lines ONCE. A tool-result can be delivered twice (a
@@ -2053,10 +2152,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ? addPatchLines(session.totals, action.structuredPatch)
         : session.totals;
 
-      next.set(action.sessionId, {
-        ...session, toolCalls, totals, lastActivityAt: Date.now(),
+      let settledSession: SessionChatState = {
+        ...session, toolCalls, totals, backgroundCommands, ccBackgroundOutcomes, lastActivityAt: Date.now(),
         attentionState: 'ok',
-      });
+      };
+      // C1: a successful TaskStop is the only signal a stopped command / helper / workflow is over.
+      if (action.stoppedTaskId && !action.isError) {
+        settledSession = applyTaskStop(settledSession, action.stoppedTaskId, undefined, action.timestamp);
+      }
+      next.set(action.sessionId, settledSession);
       return next;
     }
 
@@ -2328,8 +2432,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // idleness, so an unknown session is left exactly as it was.
       // G-1 (spec §5.7): applied whether or not the session is idle — it only
       // touches cards that got NO live record from the replay just before this.
-      const orphaned = markOrphanedShellRuns(session.toolCalls);
-      const withShells = orphaned ? { ...session, toolCalls: orphaned } : session;
+      const orphaned = markOrphanedShellRuns(session.toolCalls, session.parkedShellRuns);
+      // The command list shows the same "stopped when the app quit" the card does.
+      let orphanCommands = session.backgroundCommands;
+      if (orphaned) {
+        for (const [cardId, card] of orphaned) {
+          if (card.shellRun && !session.toolCalls.get(cardId)?.shellRun) orphanCommands = putCommand(orphanCommands, nativeCommandFromRun(card.shellRun, card));
+        }
+      }
+      const withShells = orphaned ? { ...session, toolCalls: orphaned, backgroundCommands: orphanCommands } : session;
       if (!action.sessionIdle) {
         if (!orphaned) return state;
         next.set(action.sessionId, withShells);
@@ -2377,7 +2488,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.specialist.parentToolCallId,
           childId: action.specialist.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const segs = card.subagentSegments ? [...card.subagentSegments] : [];
@@ -2624,7 +2735,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.specialist.parentToolCallId,
           childId: action.specialist.childId,
-        });
+        }, { carrierFirst: true });
         if (cardId) {
           const card = session.toolCalls.get(cardId)!;
           const segs = card.subagentSegments;
@@ -2931,14 +3042,28 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'SHELL_RUN_CHANGED': {
       // Background Bash (G-1): the run record lands on the Bash card that
       // started it, keyed by toolUseId. The card must already exist (the tool
-      // use precedes every run event); a record for an unknown card is dropped.
+      // use precedes every run event); a record for an unknown card is parked (D1).
       const session = next.get(action.sessionId);
       if (!session) return state;
       const card = session.toolCalls.get(action.run.toolUseId);
-      if (!card) return state;
+      // The background-command list takes the run whether or not its card is loaded
+      // (audit D1 + the new Background chip). putCommand returns the SAME record for a
+      // tail-only update, so streaming output does not redraw the chip.
+      const backgroundCommands = putCommand(session.backgroundCommands, nativeCommandFromRun(action.run, card));
+      if (!card) {
+        // D1: PARK it (latest per toolUseId) like a specialist run, instead of dropping it —
+        // a card on an older page used to never learn its command had ended.
+        const held = session.parkedShellRuns?.get(action.run.toolUseId);
+        if (held && held.status === action.run.status && held.exitCode === action.run.exitCode && held.stopReason === action.run.stopReason
+            && backgroundCommands === session.backgroundCommands) return state;
+        const parkedShellRuns = new Map(session.parkedShellRuns);
+        parkedShellRuns.set(action.run.toolUseId, action.run);
+        next.set(action.sessionId, { ...session, parkedShellRuns, backgroundCommands });
+        return next;
+      }
       const toolCalls = new Map(session.toolCalls);
       toolCalls.set(card.toolUseId, { ...card, shellRun: action.run });
-      next.set(action.sessionId, { ...session, toolCalls });
+      next.set(action.sessionId, { ...session, toolCalls, backgroundCommands });
       return next;
     }
     case 'SPECIALIST_RUN_CHANGED': {
@@ -2948,8 +3073,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // applyParkedSpecialistRuns for why dropping it lost a helper's notes.
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // A resumed child's LIVE run is carried by the resume call's card (activeToolCallId, set by the
+      // native host); the original hire card keeps the record too (below). Hosts that send no such
+      // fact fall back to parentToolCallId, exactly as before.
+      const activeId = specialistFacts(action.run).activeToolCallId;
       const cardId = findSpecialistCard(session.toolCalls, {
-        parentToolCallId: action.run.parentToolCallId,
+        parentToolCallId: activeId && session.toolCalls.has(activeId) ? activeId : action.run.parentToolCallId,
         childId: action.run.childId,
       });
       if (!cardId) {
@@ -2988,8 +3117,13 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // that is not strictly newer than what the card holds is a straggler.
       // Both sides must carry a stamp: a card replayed from a build without
       // one cannot be ordered, and refusing an update there would freeze it.
+      // B2 (audit): a RESUMED child restarts the same ledger row (running, startedAt reset).
+      // That is a NEWER RUN, whatever its stamp says — the host's stamp counter restarts with
+      // the host, and refusing the update would freeze the card on the finished first run.
+      const newerRun = !!card.specialistRun && action.run.startedAt > card.specialistRun.startedAt;
       if (
         card.specialistRun
+        && !newerRun
         && action.run.seq !== undefined
         && card.specialistRun.seq !== undefined
         && action.run.seq <= card.specialistRun.seq
@@ -2997,8 +3131,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         return state;
       }
       const toolCalls = new Map(session.toolCalls);
+      // B2: the first run's delivered report is not the resumed run's. Dropped when the child
+      // starts again, or when the run now shown began after that report was delivered; the
+      // resumed run's own report lands later through the normal fold.
+      const { specialistReport: priorReport, ...cardNoReport } = card;
+      const staleReport = !!priorReport && (newerRun || (action.run.status === 'running' && card.specialistRun?.status !== 'running')
+        || priorReport.timestamp < action.run.startedAt);
       toolCalls.set(cardId, {
-        ...card,
+        ...(staleReport ? cardNoReport : card),
         specialistRun: action.run,
         agentId: card.agentId ?? action.run.childId,
         agentType: card.agentType ?? action.run.agentType,
@@ -3009,6 +3149,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // a time — reconcileNoteSegments skips any note already present.
         subagentSegments: reconcileNoteSegments(card.subagentSegments, action.run.notes, action.run.childId),
       });
+      // The original hire card keeps the run record too when the live run sits on a resume call's
+      // card: its Activity and status stay truthful, and `reportStale` (from the host) lets it
+      // show the earlier report as earlier instead of reading Failed from it.
+      const origId = action.run.parentToolCallId;
+      const orig = origId !== cardId ? toolCalls.get(origId) : undefined;
+      if (orig) toolCalls.set(origId, { ...orig, specialistRun: action.run, agentId: orig.agentId ?? action.run.childId, agentType: orig.agentType ?? action.run.agentType });
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }
@@ -3109,27 +3255,46 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ? () => true
         : (id: string) => (action.reconcileInterruptedToolIds ?? []).includes(id);
       const pageSess = action.reconcileInterrupted || action.reconcileInterruptedToolIds?.length
-        ? { ...endedSess, toolCalls: stopRunningBackground(endedSess.toolCalls, launchedBefore) }
+        ? {
+          ...endedSess,
+          toolCalls: stopRunningBackground(endedSess.toolCalls, launchedBefore),
+          backgroundCommands: stopRunningCommands(endedSess.backgroundCommands, launchedBefore),
+        }
         : endedSess;
+      // A7/C3 (audit): main says no Claude Code process of ours is attached to this
+      // transcript (the conversation is only being viewed — a preview, one opened from
+      // search, one a closed session left behind). Nothing it launched can still be
+      // reporting, so what this page left "running" reads stopped instead of spinning
+      // forever. Only THIS page's cards: work the live stream added is untouched, and
+      // a session with a live process never sets the flag (its transcript watcher exists).
+      const viewOnly = action.reconcileBackground
+        ? {
+          ...pageSess,
+          toolCalls: stopRunningBackground(pageSess.toolCalls, () => true),
+          backgroundCommands: stopRunningCommands(pageSess.backgroundCommands, () => true),
+        }
+        : pageSess;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...pageSess.timeline.filter((e) => !(e.kind === 'system-marker' && hasMarker(session, e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
+        timeline: [...viewOnly.timeline.filter((e) => !(e.kind === 'system-marker' && hasMarker(session, e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
         // Union the maps page-first so a live entry always wins over a replayed
         // one for the same key (it is the fresher of the two).
-        toolCalls: new Map([...pageSess.toolCalls, ...session.toolCalls]),
-        toolGroups: new Map([...pageSess.toolGroups, ...session.toolGroups]),
-        assistantTurns: new Map([...pageSess.assistantTurns, ...session.assistantTurns]),
-        seenUuids: new Set([...session.seenUuids, ...pageSess.seenUuids]),
-        ccBackgroundOutcomes: { ...pageSess.ccBackgroundOutcomes, ...session.ccBackgroundOutcomes },
+        toolCalls: new Map([...viewOnly.toolCalls, ...session.toolCalls]),
+        toolGroups: new Map([...viewOnly.toolGroups, ...session.toolGroups]),
+        assistantTurns: new Map([...viewOnly.assistantTurns, ...session.assistantTurns]),
+        seenUuids: new Set([...session.seenUuids, ...viewOnly.seenUuids]),
+        ccBackgroundOutcomes: { ...viewOnly.ccBackgroundOutcomes, ...session.ccBackgroundOutcomes },
+        // Older page first, so the list reads oldest launch first; a live entry wins for the same id.
+        backgroundCommands: { ...viewOnly.backgroundCommands, ...session.backgroundCommands },
         // Fold in what this page counted. session-totals' contract was "rebuilt
         // for free when a resumed session replays its record", which paging
         // broke — the scratch replay accumulates the page's usage and it would
         // otherwise be thrown away, so a resumed session showed no totals at all.
-        totals: mergeTotals(session.totals, pageSess.totals),
+        totals: mergeTotals(session.totals, viewOnly.totals),
         // NAMED deliberately, not left to the `...session` spread: pages are
         // PREPENDED, so an OLDER page can carry a compaction whose re-based
         // occupancy predates the live one. The live value always wins. Adding
-        // `pageSess.contextUsedOverride` here would read as a consistency fix and
+        // `viewOnly.contextUsedOverride` here would read as a consistency fix and
         // would silently roll the context gauge backwards.
         contextUsedOverride: session.contextUsedOverride,
         history: { cursor: action.cursor, hasMore: action.hasMore, loading: false },

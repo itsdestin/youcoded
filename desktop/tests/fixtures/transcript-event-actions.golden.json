@@ -650,7 +650,8 @@
           "status": "completed",
           "summary": "s",
           "result": "r",
-          "parentAgentToolUseId": "parent-1"
+          "parentAgentToolUseId": "parent-1",
+          "timestamp": 1700
         }
       }
     ],
@@ -668,7 +669,8 @@
           "status": "completed",
           "summary": "s",
           "result": "r",
-          "parentAgentToolUseId": "parent-1"
+          "parentAgentToolUseId": "parent-1",
+          "timestamp": 1700
         }
       }
     ],
@@ -683,7 +685,8 @@
       "status": "completed",
       "summary": "s",
       "result": "r",
-      "parentAgentToolUseId": "parent-1"
+      "parentAgentToolUseId": "parent-1",
+      "timestamp": 1700
     }
   },
   "background-task without payload": {

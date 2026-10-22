@@ -35,7 +35,7 @@ export function applyOpenReply(deps: FillDeps, sessionId: string, reply: OpenOk,
     if (opts.acceptPage && page) {
       deps.dispatch({
         type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
-        reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds,
+        reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true,
       });
     } else {
       // The page is not ready (the transcript is not found yet): the loader asks again, and `loading` keeps the scroll-up sentinel idle.

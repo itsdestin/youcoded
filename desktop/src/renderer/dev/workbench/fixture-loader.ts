@@ -292,6 +292,15 @@ export function loadFixture(
           toolUseId: parsed.tool_use_id,
           result: content,
           isError: parsed.is_error === true,
+          // A line that states its own time keeps it (a launch's start time); others stay unstamped as before.
+          ...(typeof parsed.elapsedMs === 'number' || typeof parsed.timestamp === 'number' ? { timestamp: fixtureTime(parsed, actions.length) } : {}),
+          // Claude Code's background receipts, as transcript-watcher.ts reads them off
+          // `toolUseResult` (2026-10-22): a launch (Agent / Bash / Monitor / Workflow), a
+          // persistent Monitor, a successful TaskStop, and a SendMessage that resumed a helper.
+          ...(typeof parsed.background_task_id === 'string' ? { backgroundTaskId: parsed.background_task_id } : {}),
+          ...(parsed.background_persistent === true ? { backgroundPersistent: true } : {}),
+          ...(typeof parsed.stopped_task_id === 'string' ? { stoppedTaskId: parsed.stopped_task_id } : {}),
+          ...(typeof parsed.resumed_task_id === 'string' ? { resumedTaskId: parsed.resumed_task_id } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
@@ -455,6 +464,22 @@ export function loadFixture(
             startedAt, endedAt: parsed.ranForMs != null ? startedAt + parsed.ranForMs : undefined,
             tail: parsed.tail ?? '', logPath: parsed.logPath ?? '/tmp/youcoded-harness-bash-output/s1/bash-1.txt',
           },
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
+      } else if (parsed.type === 'task_notification') {
+        // Claude Code's <task-notification>: background work a card launched has ended
+        // (TRANSCRIPT_BACKGROUND_TASK, from transcript-watcher.ts taskNotificationEvents).
+        const action: ChatAction = {
+          type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId,
+          uuid: `${name}-note-${actions.length}`,
+          timestamp: fixtureTime(parsed, actions.length),
+          toolUseId: parsed.tool_use_id,
+          taskIds: Array.isArray(parsed.task_ids) ? parsed.task_ids : [],
+          status: parsed.status ?? 'completed',
+          ...(typeof parsed.exit_code === 'number' ? { exitCode: parsed.exit_code } : {}),
+          ...(parsed.summary ? { summary: parsed.summary } : {}),
+          ...(parsed.result ? { result: parsed.result } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);

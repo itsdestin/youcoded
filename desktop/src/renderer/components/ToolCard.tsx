@@ -22,6 +22,8 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
 import { usePopupOpen } from '../hooks/use-esc-close';
 import { asString } from '../utils/tool-input';
+import { managementTargetId, useBackgroundTarget } from '../hooks/useBackgroundTarget';
+import { managementDisplay } from './management-labels';
 import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
@@ -36,6 +38,7 @@ import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-us
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
+import { shellEndKind } from '../state/native-run-facts';
 
 // --- Helpers for friendly display ---
 
@@ -65,18 +68,27 @@ function truncate(s: string, max: number): string {
  */
 export function taskDisplay(
   input: Record<string, unknown>,
-  ctx?: { title?: string; targetTitle?: string; targetRunning?: boolean; runStatus?: string },
+  ctx?: { title?: string; targetTitle?: string; targetRunning?: boolean; runStatus?: string; active?: boolean },
 ): { label: string; detail: string } {
   const taskId = asString(input.task_id);
   const prompt = asString(input.prompt);
+  // WHY each management call has its own verb, in the right tense (Destin, 2026-10-22:
+  // "checking the status of subagents or sending additional notes often still reports as
+  // 'hiring specialist', which makes it seem like were adding a new subagent when we arent").
+  // `active` undefined (a caller with no status) reads as the "-ing" form.
+  const now = ctx?.active !== false;
+  // `list: true` alone asks for the roster — nothing is hired.
+  if (input.list === true && !taskId) {
+    return { label: now ? 'Checking on specialists' : 'Checked on specialists', detail: '' };
+  }
   if (taskId) {
     const who = ctx?.targetTitle || 'a specialist';
-    if (input.interrupt === true) return { label: `Stopping ${who}`, detail: '' };
+    if (input.interrupt === true) return { label: now ? `Stopping ${who}` : `Stopped ${who}`, detail: '' };
     // Running child → the prompt is a mid-course note; finished → a resume
     // with a fresh brief. Unknown (no record yet) reads as the neutral verb.
-    const label = ctx?.targetRunning === true ? `Note to ${who}`
-      : ctx?.targetRunning === false ? `Resuming ${who}`
-      : `Message to ${who}`;
+    const label = ctx?.targetRunning === true ? (now ? `Sending a note to ${who}` : `Sent a note to ${who}`)
+      : ctx?.targetRunning === false ? (now ? `Resuming ${who}` : `Resumed ${who}`)
+      : (now ? `Messaging ${who}` : `Messaged ${who}`);
     return { label, detail: prompt ? `· ${truncate(prompt.replace(/\n/g, ' '), 80)}` : '' };
   }
   const desc = asString(input.description);
@@ -145,7 +157,7 @@ export function StackedSkillsCard({ skills }: { skills: ToolCallState[] }) {
 
 export function friendlyToolDisplay(
   tool: ToolCallState,
-  ctx?: { taskTargetTitle?: string; taskTargetRunning?: boolean },
+  ctx?: { taskTargetTitle?: string; taskTargetRunning?: boolean; targetLabel?: string },
 ): { label: string; detail: string } {
   // The model is still GENERATING this call's arguments, so `input` is empty and
   // every per-tool detail line below would render blank. Show the argument
@@ -316,13 +328,32 @@ export function friendlyToolDisplay(
     // Worker · Run the release checklist" — once the run record names the
     // child; before that, "Hiring a worker". `task_id` calls read as the
     // management verb they are.
-    case 'Task':
+    case 'Task': {
+      // Once the call has answered, ITS result says whether this was a note or a resume
+      // (tools/task.ts: "Steer delivered to …" for a note) — the target's state NOW would
+      // relabel an old note "Resumed" the moment the specialist later finished.
+      const resp = tool.status === 'complete' ? (tool.response ?? '') : '';
+      const targetRunning = resp ? resp.startsWith('Steer delivered') : ctx?.taskTargetRunning;
       return taskDisplay(input, {
         title: tool.specialistRun?.title,
         runStatus: tool.specialistRun?.status,
         targetTitle: ctx?.taskTargetTitle,
-        targetRunning: ctx?.taskTargetRunning,
+        targetRunning,
+        active,
       });
+    }
+
+    // Claude Code's helper and background-task management, and the native command checks
+    // (2026-10-22): their wording lives in management-labels.ts.
+    case 'SendMessage':
+    case 'TaskOutput':
+    case 'TaskStop':
+    case 'BashOutput':
+    case 'KillShell':
+    case 'Monitor':
+    case 'ScheduleWakeup':
+    case 'Workflow':
+      return managementDisplay(tool, active, ctx?.targetLabel);
 
     case 'Agent': {
       // Fix: a non-string description rendered "Agent: [object Object]".
@@ -1310,9 +1341,14 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // hireAgent, so it is unaffected — this only collapses NON-hire cards onto
   // the one shared empty-cwd cache entry instead of a fresh per-project read.
   const hireDefinition = useSpecialistDefinition(hireAgent ? sessionCwd : undefined, hireAgent || undefined);
+  // A management call (SendMessage, TaskOutput, TaskStop, BashOutput, KillShell) names
+  // the helper or command it acts on — look up that one name (a narrow selector; every
+  // other card has no target and subscribes to nothing).
+  const targetLabel = useBackgroundTarget(sessionId, managementTargetId(tool.toolName, tool.input));
   const display = friendlyToolDisplay(tool, {
     taskTargetTitle: taskTarget?.title,
     taskTargetRunning: taskTarget ? taskTarget.status === 'running' : undefined,
+    targetLabel,
   });
   // Specialists 1c: the REAL status of a Task card is its run record, not its
   // tool result — a background hire's result is only the launch ack (Destin's
@@ -1328,7 +1364,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   const runIcon: 'spinner' | 'check' | 'fail' | 'stopped' | null =
     tool.status === 'awaiting-approval' ? null
     : ccBg ? (ccBg.status === 'running' ? 'spinner' : ccBg.status === 'completed' ? 'check' : ccBg.status === 'failed' ? 'fail' : 'stopped')
-    : shell ? (shell.status === 'running' ? 'spinner' : shell.status === 'stopped' ? 'stopped' : shell.exitCode === 0 ? 'check' : 'fail')
+    : shell ? ({ running: 'spinner', stopped: 'stopped', completed: 'check', failed: 'fail' } as const)[shellEndKind(shell)]
     : !run ? null
     : run.status === 'running' ? 'spinner'
     : run.status === 'completed' ? (tool.specialistReport?.status === 'failed' ? 'fail' : 'check')

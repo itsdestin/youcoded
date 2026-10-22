@@ -17,6 +17,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
+import BackgroundCommandsChip from './BackgroundCommandsChip';
 import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -1112,6 +1113,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
 
       {/* Specialists (1c) — hidden when the conversation has no helpers. */}
       <SpecialistsChip sessionId={sessionId} />
+
+      {/* Background commands and watchers (2026-10-22) — its own chip beside the helpers',
+          hidden when the conversation never left anything running. */}
+      <BackgroundCommandsChip sessionId={sessionId} />
 
       {/* Rate limits — one chip per window the plan reports, in the order
           5h, 7d, then any other length (W-2 = a: a free ChatGPT plan shows a

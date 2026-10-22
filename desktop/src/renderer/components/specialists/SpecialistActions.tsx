@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ToolCallState } from '../../../shared/types';
 import { FieldError } from '../ui';
 
@@ -41,13 +41,20 @@ export function SpecialistActions({ sessionId, run, compact = false }: {
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(null); }
   };
+  // B9 (2026-10-22 audit): an ACCEPTED stop leaves the button on "Stopping…" — the
+  // helper is still winding down until its run record says so, and this component
+  // goes away when it does (the popup swaps in the status pill). Only a refusal
+  // frees the button at once. The timer is the safety net for a stop that was
+  // accepted but whose record never changes, so the person is never stuck.
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (retryTimer.current) clearTimeout(retryTimer.current); }, []);
   const stop = async () => {
     setBusy('stop'); setError(null);
     try {
       const res = await window.claude.specialists.interrupt(sessionId, run.childId);
-      if (res && res.ok === false) setError(res.error || `Couldn’t stop ${first}.`);
-    } catch (e) { setError((e as Error).message); }
-    finally { setBusy(null); }
+      if (res && res.ok === false) { setError(res.error || `Couldn’t stop ${first}.`); setBusy(null); return; }
+      retryTimer.current = setTimeout(() => setBusy(null), 20_000);
+    } catch (e) { setError((e as Error).message); setBusy(null); }
   };
   const btn = compact
     ? 'text-2xs px-2 py-0.5 rounded-md border border-edge text-fg-dim hover:text-fg-2 hover:bg-inset transition-colors disabled:opacity-50'
