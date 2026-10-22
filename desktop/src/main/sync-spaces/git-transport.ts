@@ -15,6 +15,7 @@ import { nextGcCounter } from './gc-policy';
 import { GITHUB_AUTH_ERROR_CODE } from '../github-client';
 import { matchGitCorruption, isNetworkFailureStderr, stderrTail, REPO_CORRUPT_ERROR_CODE } from '../sync-error-classifier';
 import { deleteZeroByteObjects, brokenBackupName, pruneBrokenBackups } from './repair';
+import { mapLimit } from '../map-limit';
 import type { PullResult, PushResult, RepairOutcome, SpaceVersion, SyncSpace, SyncTransport } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -471,7 +472,7 @@ export class GitTransport implements SyncTransport {
     // Files already excluded (by this cycle's pull, or an earlier one) are no
     // longer staged, so unstageOversize alone never reports them — a NEW big
     // file was never shown to the user (2026-09-16 review F1).
-    for (const f of this.excludedOversize(space)) if (!oversize.includes(f)) oversize.push(f);
+    for (const f of await this.excludedOversize(space)) if (!oversize.includes(f)) oversize.push(f);
     const staged = await this.git(space, ['diff', '--cached', '--name-only']);
     this.assertLocalOk(space, 'diff', staged);
     let commit: string | undefined;
@@ -557,12 +558,14 @@ export class GitTransport implements SyncTransport {
   private async unstageOversize(space: SyncSpace): Promise<string[]> {
     const staged = (await this.git(space, ['diff', '--cached', '--name-only', '-z'])).stdout
       .split('\0').filter(Boolean);
-    const oversize: string[] = [];
-    for (const rel of staged) {
-      try {
-        if (fs.statSync(path.join(space.root, rel)).size > this.maxFileBytes) oversize.push(rel);
-      } catch { /* deleted while staging — fine */ }
-    }
+    // WHY async + bounded (2026-10-22 freeze hunt): this was one blocking statSync per staged file on
+    // every sync cycle of every space (thousands after a big first sync). Stats now run off the main
+    // thread, 16 at a time; results keep staged order, so `oversize` is identical to before.
+    const isOver = await mapLimit(staged, 16, async (rel) => {
+      try { return (await fs.promises.stat(path.join(space.root, rel))).size > this.maxFileBytes; }
+      catch { return false; /* deleted while staging — fine */ }
+    });
+    const oversize: string[] = staged.filter((_, i) => isOver[i]);
     if (oversize.length) {
       // Checked since 2026-09-16: this result used to be ignored, so a reset
       // that lost an index.lock race let the oversize files ride into the
@@ -576,9 +579,9 @@ export class GitTransport implements SyncTransport {
       // an unconditional append grew info/exclude without bound at poll cadence.
       const excludePath = path.join(this.gitDir(space), 'info', 'exclude');
       let have = new Set<string>();
-      try { have = new Set(fs.readFileSync(excludePath, 'utf8').split('\n')); } catch { /* fresh file */ }
+      try { have = new Set((await fs.promises.readFile(excludePath, 'utf8')).split('\n')); } catch { /* fresh file */ }
       const fresh = oversize.map(excludeLineFor).filter(line => !have.has(line));
-      if (fresh.length) fs.appendFileSync(excludePath, fresh.join('\n') + '\n');
+      if (fresh.length) await fs.promises.appendFile(excludePath, fresh.join('\n') + '\n');
     }
     return oversize;
   }
@@ -586,12 +589,14 @@ export class GitTransport implements SyncTransport {
   /** Over-cap files this device keeps out through info/exclude and that are
    *  still over the cap on disk. Our lines are the only ones starting with "/"
    *  (init rewrites the file to DEFAULT_IGNORES on every launch). */
-  private excludedOversize(space: SyncSpace): string[] {
+  private async excludedOversize(space: SyncSpace): Promise<string[]> {
     let lines: string[] = [];
-    try { lines = fs.readFileSync(path.join(this.gitDir(space), 'info', 'exclude'), 'utf8').split('\n'); } catch { return []; }
-    return lines.filter(l => l.startsWith('/')).map(pathFromExcludeLine).filter(rel => {
-      try { return fs.statSync(path.join(space.root, rel)).size > this.maxFileBytes; } catch { return false; }
+    try { lines = (await fs.promises.readFile(path.join(this.gitDir(space), 'info', 'exclude'), 'utf8')).split('\n'); } catch { return []; }
+    const rels = lines.filter(l => l.startsWith('/')).map(pathFromExcludeLine);
+    const over = await mapLimit(rels, 16, async (rel) => {
+      try { return (await fs.promises.stat(path.join(space.root, rel))).size > this.maxFileBytes; } catch { return false; }
     });
+    return rels.filter((_, i) => over[i]);
   }
 
   /** The size cap's LAST line of defence, run right before every push: if any
