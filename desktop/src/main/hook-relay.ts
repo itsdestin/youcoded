@@ -6,6 +6,7 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import { HookEvent } from '../shared/types';
 import { log } from './logger';
+import { relistenIfDeleted } from './socket-repair';
 
 const DEFAULT_PIPE_NAME = process.platform === 'win32'
   ? '\\\\.\\pipe\\claude-desktop-hooks'
@@ -129,7 +130,6 @@ export class HookRelay extends EventEmitter {
   // which would be the replacement's file (checked 2026-10-22). Each keeps any
   // permission connection it already accepted working until it ends.
   private retiredServers: net.Server[] = [];
-  private repairing = false;
 
   constructor(pipeName?: string, holdMs: number = APP_HOLD_MS) {
     super();
@@ -359,31 +359,14 @@ export class HookRelay extends EventEmitter {
    * retiredServers) because closing it would delete the new file.
    */
   async ensureListening(): Promise<void> {
-    if (!this.running || this.repairing || process.platform === 'win32') return;
-    this.repairing = true;
-    try {
-      try {
-        await fs.promises.lstat(this.pipeName);
-        return; // still there — the normal case
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
-      }
-      await this.ensureSocketDir();
-      const old = this.server;
-      try {
-        // tryListen, not start(): start()'s EADDRINUSE retry deletes the file at
-        // the path, and anything that appeared there since the check is not ours.
-        await this.tryListen();
-      } catch (err) {
-        this.server = old;
-        log('ERROR', 'HookRelay', 'hook socket file was missing and could not be re-created', { path: this.pipeName, error: String(err) });
-        return;
-      }
-      if (old) this.retiredServers.push(old);
-      log('WARN', 'HookRelay', 'hook socket file was missing (something deleted it) — re-created it', { path: this.pipeName });
-    } finally {
-      this.repairing = false;
-    }
+    if (!this.running) return;
+    // Not start(): its EADDRINUSE retry deletes the file at the path, and
+    // anything that appeared there since the check is not ours.
+    const fresh = await relistenIfDeleted(this.pipeName, () => this.createServer());
+    if (!fresh) return;
+    if (this.server) this.retiredServers.push(this.server);
+    this.server = fresh;
+    log('WARN', 'HookRelay', 'hook socket file was missing (something deleted it) — re-created it', { path: this.pipeName });
   }
 
   private async forceReleasePipe(): Promise<void> {

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import {
@@ -180,5 +181,27 @@ describe('Browser relay for Claude Code', () => {
     expect(browserToolOf(`mcp__${serverId}__BrowserAct`)).toBe('BrowserAct');
     expect(browserToolOf('mcp__other__BrowserAct')).toBeNull();
     expect(browserToolOf('BrowserAct')).toBe('BrowserAct');
+  });
+});
+
+// 2026-10-22: every Claude Code session's config points at one socket path for the
+// whole run; a deleted file is re-created as sessions start (socket-repair.ts).
+describe.skipIf(isWin)('BrowserRelayServer.ensureListening', () => {
+  it('re-creates a deleted socket file, still private (0600)', async () => {
+    const relay = new BrowserRelayServer({
+      socketDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ycs-')),
+      isClaudeSession: () => true,
+      callTool: async () => ({ text: 'ok' }),
+    });
+    const p = await relay.start();
+    fs.unlinkSync(p);
+    await relay.ensureListening();
+    expect(fs.statSync(p).mode & 0o777).toBe(0o600);
+    await new Promise<void>((resolve, reject) => {
+      const c = net.createConnection(p, () => { c.end(); resolve(); });
+      c.on('error', reject);
+    });
+    await relay.stop();
+    expect(fs.existsSync(p)).toBe(false);
   });
 });
