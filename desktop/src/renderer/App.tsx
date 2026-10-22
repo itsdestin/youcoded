@@ -123,6 +123,7 @@ import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionP
 import type { NativePermissionMode } from '../shared/permission-types';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
+import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
@@ -1740,14 +1741,29 @@ function AppInner() {
   // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
   // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
   // page. Either way the shim is told how it went, so the strip says "up to date" or "may be behind".
+  const refillRetry = useMemo(() => createRefillRetry({
+    refill: (id) => firstPages.refill(id, { fresh: true }),
+    healed: () => reportFillRound([]),
+    hidden: () => document.visibilityState === 'hidden',
+    whenVisible: (cb) => {
+      const on = () => { if (document.visibilityState !== 'hidden') { document.removeEventListener('visibilitychange', on); cb(); } };
+      document.addEventListener('visibilitychange', on);
+      return () => document.removeEventListener('visibilitychange', on);
+    },
+  }), [firstPages, reportFillRound]);
+  useEffect(() => () => refillRetry.cancel(), [refillRetry]);
   const fillAgain = useCallback((fresh: boolean) => {
     // WHY only what is watched on a phone (one-core R5-3): refilling opens (watches) the conversation, and a phone must not start
     // receiving all of them again just because the connection came back. The rest keep their position and catch up when next opened.
     const watched = remoteWatch.watchedIds();
     const ids = (watched ?? sessionsRef.current.map((x: any) => x.id)).filter((id: string) => !String(id).startsWith('pending-handoff:'));
     // R6-2: changes whose answer was lost are settled against what the fills just put on the screen.
-    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => { reportFillRound(outcomes); void reconcilePending(); });
-  }, [firstPages, reportFillRound, remoteWatch]);
+    refillRetry.cancel();
+    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => {
+      reportFillRound(outcomes); void reconcilePending();
+      if (isRemoteMode()) refillRetry.start(ids, outcomes); // the failed ones are tried again on their own (refill-retry.ts)
+    });
+  }, [firstPages, reportFillRound, remoteWatch, refillRetry]);
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
