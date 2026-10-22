@@ -16,6 +16,9 @@ import { GITHUB_AUTH_ERROR_CODE } from '../github-client';
 import { matchGitCorruption, isNetworkFailureStderr, stderrTail, REPO_CORRUPT_ERROR_CODE } from '../sync-error-classifier';
 import { deleteZeroByteObjects, brokenBackupName, pruneBrokenBackups } from './repair';
 import { mapLimit } from '../map-limit';
+
+// Serialises info/exclude updates per file (see unstageOversize).
+const excludeQueues = new Map<string, Promise<void>>();
 import type { PullResult, PushResult, RepairOutcome, SpaceVersion, SyncSpace, SyncTransport } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -578,10 +581,20 @@ export class GitTransport implements SyncTransport {
       // that grew past the cap is re-staged by `git add -A` on every sync, and
       // an unconditional append grew info/exclude without bound at poll cadence.
       const excludePath = path.join(this.gitDir(space), 'info', 'exclude');
-      let have = new Set<string>();
-      try { have = new Set((await fs.promises.readFile(excludePath, 'utf8')).split('\n')); } catch { /* fresh file */ }
-      const fresh = oversize.map(excludeLineFor).filter(line => !have.has(line));
-      if (fresh.length) await fs.promises.appendFile(excludePath, fresh.join('\n') + '\n');
+      // WHY a per-file queue (review 2026-10-22): the read and the append are separated by an await
+      // now, so two overlapping calls for one space could both see "line missing" and both append it.
+      // Running them one at a time restores the old read-then-append atomicity within this process.
+      const prev = excludeQueues.get(excludePath) ?? Promise.resolve();
+      const run = prev.then(async () => {
+        let have = new Set<string>();
+        try { have = new Set((await fs.promises.readFile(excludePath, 'utf8')).split('\n')); } catch { /* fresh file */ }
+        const fresh = oversize.map(excludeLineFor).filter(line => !have.has(line));
+        if (fresh.length) await fs.promises.appendFile(excludePath, fresh.join('\n') + '\n');
+      });
+      const tail = run.catch(() => {});
+      excludeQueues.set(excludePath, tail);
+      void tail.then(() => { if (excludeQueues.get(excludePath) === tail) excludeQueues.delete(excludePath); });
+      await run;
     }
     return oversize;
   }

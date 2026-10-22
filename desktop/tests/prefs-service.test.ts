@@ -106,3 +106,16 @@ describe('game favorites and incognito', () => {
     expect(getIncognito(gameFile)).toBe(true);
   });
 });
+
+describe('session defaults: a slow read cannot undo a newer save', () => {
+  it('a read that began before a save does not push its older overrides to the enforcement sink', async () => {
+    fs.writeFileSync(defaultsFile, JSON.stringify({ permissionOverrides: { approveAll: false } }));
+    const sink = vi.fn();
+    setPermissionOverridesSink(sink);
+    const slow = readDefaults(defaultsFile);               // starts first, finishes after the save
+    await writeDefaults({ permissionOverrides: { approveAll: true } }, defaultsFile);
+    await slow;
+    expect(sink).toHaveBeenLastCalledWith(expect.objectContaining({ approveAll: true }));
+    expect((await readDefaults(defaultsFile)).permissionOverrides.approveAll).toBe(true);
+  });
+});

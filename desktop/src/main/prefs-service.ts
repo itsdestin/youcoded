@@ -51,6 +51,11 @@ function syncPermissionOverrides(defaults: Record<string, any>): void {
 // An atomic write replaces the inode, so the signature also changes on every save of ours.
 interface DefaultsCacheEntry { sig: string; value: Record<string, any> }
 const defaultsCache = new Map<string, DefaultsCacheEntry>();
+// WHY a generation (review 2026-10-22): a read that began before a save can finish after it. It must
+// not push its older overrides into the enforcement cache or the read cache over the save's newer ones.
+// Every save bumps this; a read acts on the cache/sink only if it is unchanged since the read began.
+const writeGen = new Map<string, number>();
+const genOf = (file: string) => writeGen.get(file) ?? 0;
 
 function withOverrideDefaults(parsed: Record<string, any>): Record<string, any> {
   return {
@@ -67,18 +72,21 @@ function cloneDefaults(v: Record<string, any>): Record<string, any> {
 /** The saved defaults over the built-in ones, overrides merged key by key. Refreshes the
  *  enforcement cache as a side effect, as the desktop handler always did. */
 export async function readDefaults(file = defaultsFilePath()): Promise<Record<string, any>> {
+  const gen = genOf(file);
   try {
     const st = await fs.promises.stat(file);
     const sig = `${st.ino}:${st.size}:${st.mtimeMs}`;
     const hit = defaultsCache.get(file);
     if (hit && hit.sig === sig) {
-      syncPermissionOverrides(hit.value);
+      if (gen === genOf(file)) syncPermissionOverrides(hit.value);
       return cloneDefaults(hit.value);
     }
     const parsed = JSON.parse(await fs.promises.readFile(file, 'utf-8'));
     const result = withOverrideDefaults(parsed);
-    defaultsCache.set(file, { sig, value: result });
-    syncPermissionOverrides(result);
+    if (gen === genOf(file)) {
+      defaultsCache.set(file, { sig, value: result });
+      syncPermissionOverrides(result);
+    }
     return cloneDefaults(result);
   } catch {
     defaultsCache.delete(file);
@@ -118,6 +126,7 @@ async function writeDefaultsNow(updates: Record<string, any>, file: string): Pro
     // WHY drop the cached copy: the next read must see what was just saved (its stat signature
     // changes anyway; this makes the invalidation explicit rather than dependent on timestamps).
     defaultsCache.delete(file);
+    writeGen.set(file, genOf(file) + 1);
     syncPermissionOverrides(merged);
     return merged;
   } catch {

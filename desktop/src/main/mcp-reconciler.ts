@@ -420,7 +420,17 @@ export interface ReconcileMcpResult {
   aborted: boolean;
 }
 
-export async function reconcileMcp(): Promise<ReconcileMcpResult> {
+// WHY a mutex (review 2026-10-22): reconcile is read, await (secret decrypt), write. A launch run and a
+// plugin-install run overlapping in one process could each read the old file and the later write would
+// drop the earlier one's changes. Runs now go one at a time, in order; a failure doesn't block the next.
+let reconcileChain: Promise<unknown> = Promise.resolve();
+export function reconcileMcp(): Promise<ReconcileMcpResult> {
+  const run = reconcileChain.then(reconcileMcpNow, reconcileMcpNow);
+  reconcileChain = run.catch(() => {});
+  return run;
+}
+
+async function reconcileMcpNow(): Promise<ReconcileMcpResult> {
   const manifests = listManifests();
   const claudeJson = await readClaudeJson();
   if (claudeJson === null) {

@@ -325,6 +325,8 @@ async function runDiscovery(): Promise<void> {
       if (!engine || !roots) break;
       await refreshRemoved(); // a remove made on another device arrives with this Personal pull
       const registry = await readProjectRegistry(roots.personalRoot);
+      // WHY re-check: sync may have been turned off while the registry was being read.
+      if (!engine || !roots) break;
       const localNames = roots.listProjects().map((p) => p.name);
       const liveNames = engine.liveSpaceIds()
         .filter((id) => id.startsWith('project:')).map((id) => id.slice('project:'.length));
@@ -777,10 +779,12 @@ async function projectNameConflict(name: string): Promise<string | null> {
 export async function syncSpacesCreateProject(name: string) {
   const conflict = await projectNameConflict(name);
   if (conflict) return { ok: false as const, error: conflict };
-  const result = roots!.createProject(name);
+  // WHY re-check: the conflict check awaits; sync can be switched off meanwhile, nulling roots.
+  if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
+  const result = roots.createProject(name);
   if (result.ok) registerProject(name, result.path);
   if (result.ok && engine) {
-    const space = roots!.spaces().find(s => s.id === `project:${name}`)!;
+    const space = roots.spaces().find(s => s.id === `project:${name}`)!;
     try {
       await engine.addSpace(space);
       const transport = makeTransport();
@@ -802,13 +806,14 @@ export async function syncSpacesImportProject(sourcePath: string, name: string, 
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
   const conflict = await projectNameConflict(name);
   if (conflict) return { ok: false as const, error: conflict };
+  if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
   const result = await importProjectFolder({
     sourcePath, name, liveCwds,
     projectsRoot: roots.projectsRoot,
     youcodedRoot: roots.youcodedRoot,
   });
   if (result.ok) registerProject(name, result.path);
-  if (result.ok && engine) {
+  if (result.ok && engine && roots) {
     const space = roots.spaces().find(s => s.id === `project:${name}`);
     if (space) {
       try {
