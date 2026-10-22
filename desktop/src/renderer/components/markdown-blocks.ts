@@ -911,16 +911,31 @@ export function splitOpenFence(whole: string, fenceAt = 0): OpenFenceSplit | nul
 export const HIGHLIGHT_MAX_LINES = 1500;
 export const HIGHLIGHT_MAX_CHARS = 100_000;
 
-/** True when a fence's code (given as its line and character counts) is too big to colour. */
-export function overHighlightLimit(lines: number, chars: number): boolean {
-  return lines > HIGHLIGHT_MAX_LINES || chars > HIGHLIGHT_MAX_CHARS;
-}
-
-/** Count the line endings in a string (a cheap scan, no allocation). */
-export function countLines(text: string): number {
-  let n = 0;
-  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) n++;
-  return n + 1;
+/**
+ * True when the code made of `parts` joined (a streaming fence is its frozen head plus its live tail;
+ * a finished one is a single text) is over the colour limit.
+ *
+ * WHY ONE function for both (review 2026-10-22): the streaming count and the finished count must agree
+ * EXACTLY at the limit, or a block coloured while streaming turns plain when it ends. Both ignore one
+ * trailing line ending (the finished block's text carries one the open fence's last line does not yet)
+ * and count a half-typed last line as a line. It stops as soon as the answer is known, so a huge fence
+ * is never scanned past the limit.
+ */
+export function fenceOverHighlightLimit(...parts: string[]): boolean {
+  let total = 0;
+  for (const p of parts) total += p.length;
+  if (total === 0) return false;
+  let last = '';
+  for (let i = parts.length - 1; i >= 0 && !last; i--) last = parts[i];
+  const endsWithNewline = last.endsWith('\n');
+  if (total - (endsWithNewline ? 1 : 0) > HIGHLIGHT_MAX_CHARS) return true;
+  let newlines = 0;
+  for (const p of parts) {
+    for (let at = p.indexOf('\n'); at !== -1; at = p.indexOf('\n', at + 1)) {
+      if (++newlines > HIGHLIGHT_MAX_LINES) return true;
+    }
+  }
+  return newlines + (endsWithNewline ? 0 : 1) > HIGHLIGHT_MAX_LINES;
 }
 
 // ---------------------------------------------------------------------------

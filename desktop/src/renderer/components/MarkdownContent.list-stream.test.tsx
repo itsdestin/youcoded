@@ -96,10 +96,11 @@ describe('MarkdownContent while a long list streams in', { timeout: CPU_BOUND_WA
 
     it('draws the same page as the whole message after every word, from a short list to a long one', () => {
       const live = render(<Bubble md="Here" incremental />);
-      let md = listMd(30);
+      // Review 2026-10-22: 25 + 25 items (was 30 + 30). Still past two chunk freezes (40+ items), about 40% less CPU.
+      let md = listMd(25);
       live.rerender(<Bubble md={md} incremental />);
       const whole = render(<></>);
-      const deltas = tokenDeltas(lines(30, (i) => item(i + 30)) + '\n- tail');
+      const deltas = tokenDeltas(lines(25, (i) => item(i + 25)) + '\n- tail');
       deltas.forEach((d, i) => {
         md += d;
         live.rerender(<Bubble md={md} incremental />);
@@ -171,13 +172,14 @@ describe('MarkdownContent while a long list streams in', { timeout: CPU_BOUND_WA
     // A bubble that MOUNTS part-way through a reply (renderer busy, hidden chat) draws what it was given as
     // one group with the reply's first paragraphs in front of the list (found by the 5000-item lab rungs).
     it('stays bounded and equal to the whole message when the bubble mounts in the middle of the list', () => {
-      const mount = `Here are the files:\n\nA second paragraph.\n\n${lines(100, item)}\n`;
+      const mount = `Here are the files:\n\nA second paragraph.\n\n${lines(70, item)}\n`;
       const live = render(<Bubble md={mount} incremental />);
       const ul = () => live.container.querySelector('ul');
       let md = mount;
       const costs: number[] = [];
       const whole = render(<></>);
-      const more = tokenDeltas(lines(45, (i) => item(i + 100)) + '\n');
+      // Review 2026-10-22: mounts at 70 items and adds 30 (was 100 + 45): still mid-list, past one freeze, ~35% less CPU.
+      const more = tokenDeltas(lines(30, (i) => item(i + 70)) + '\n');
       more.forEach((d, i) => {
         md += d;
         markdownRenders.length = 0;

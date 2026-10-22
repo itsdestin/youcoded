@@ -71,4 +71,24 @@ describe('code fences over the colour limit', () => {
     expect(grow.container.textContent).toContain('const v1599 = 1599;');
     expect(midText).toContain('const v1599 = 1599;');
   });
+
+  // Review 2026-10-22: the streaming count and the finished count must agree exactly AT the limit.
+  it.each([
+    [HIGHLIGHT_MAX_LINES, true],
+    [HIGHLIGHT_MAX_LINES + 1, false],
+  ])('a fence of exactly %i lines is coloured=%s both while streaming and when finished', (n, coloured) => {
+    const body = codeLines(n);
+    const has = (c: HTMLElement) => c.querySelector('.hljs-keyword') !== null;
+    // Open fence, last line still being typed (no line ending yet) ...
+    const typing = render(<MarkdownContent content={'```js\n' + body} incremental live />);
+    expect(has(typing.container)).toBe(coloured);
+    // ... last line complete, fence still open ...
+    typing.rerender(<MarkdownContent content={'```js\n' + body + '\n'} incremental live />);
+    expect(has(typing.container)).toBe(coloured);
+    // ... and finished.
+    typing.rerender(<MarkdownContent content={'```js\n' + body + '\n```'} incremental live={false} />);
+    expect(has(typing.container)).toBe(coloured);
+    const whole = render(<MarkdownContent content={'```js\n' + body + '\n```'} />);
+    expect(has(whole.container)).toBe(coloured);
+  });
 });

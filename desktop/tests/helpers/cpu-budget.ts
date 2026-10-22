@@ -22,11 +22,7 @@ export const CPU_BOUND_WALL_LIMIT_MS = 600_000;
  *  charged in CPU. Alone the heaviest of these use ~1.5-3 s (measured 2026-10-07, quiet
  *  machine); contention inflates a process's own CPU time 2-4× (tests/helpers/render-cost.ts),
  *  so a correct test stays far under it, while a cost turning per-message (n² → n³) overshoots. */
-// 2026-10-22: raised 30 s -> 60 s. The two heaviest list-stream tests now use ~16-20 s of CPU ALONE
-// (the 1.5-3 s above predates the long-list cases) and 30-31 s inside verify's parallel run on a busy
-// machine, failing with nothing regressed (identical CPU on master, measured). 60 s still leaves a
-// per-message-cost regression (n² -> n³) many times over budget.
-export const CPU_BOUND_CPU_BUDGET_MS = 60_000;
+export const CPU_BOUND_CPU_BUDGET_MS = 30_000;
 
 /** Call inside a `describe` whose tests are pure CPU work: every test in it fails if it used
  *  more than `budgetMs` of CPU. Give the describe `{ timeout: CPU_BOUND_WALL_LIMIT_MS }` so the

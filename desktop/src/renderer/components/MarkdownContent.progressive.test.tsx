@@ -117,6 +117,40 @@ describe('the file viewer', () => {
     expect(r.container.innerHTML).toContain('Some prose line');
   });
 
+  // Review 2026-10-22, item 1: leaving Edit remounts the document, which refills in slices.
+  it('after Edit and Cancel the refill is marked loading again, and clears when it finishes', () => {
+    const doc = big('Some prose line for the viewer.\n', PROGRESSIVE_MIN_CHARS + 5000);
+    const el = (editing: boolean) => <MarkdownView path="big.md" content={doc} editing={editing} draft={doc} projectRoot="/p" {...({} as any)} />;
+    const r = render(el(false));
+    const root = () => r.container.querySelector('[data-artifact-viewer]');
+    drain();
+    expect(root()!.hasAttribute('data-doc-loading')).toBe(false);
+    r.rerender(el(true));
+    expect(r.container.querySelector('textarea')).not.toBeNull();
+    r.rerender(el(false));
+    expect(frames.length).toBeGreaterThan(0);
+    expect(root()!.hasAttribute('data-doc-loading')).toBe(true);
+    drain();
+    expect(root()!.hasAttribute('data-doc-loading')).toBe(false);
+  });
+
+  // Review 2026-10-22, item 2: the assistant edits the open file. The page must not collapse to a first slice.
+  it('a changed text for a file already on screen is drawn whole at once, so the page keeps its height', () => {
+    const line = 'Some prose line for the viewer.\n\n';
+    const v1 = big(line, PROGRESSIVE_MIN_CHARS + 5000);
+    const v2 = v1 + 'THE-NEW-LAST-PARAGRAPH\n';
+    const el = (c: string) => <MarkdownView path="big.md" content={c} projectRoot="/p" {...({} as any)} />;
+    const r = render(el(v1));
+    drain();
+    const before = r.container.querySelectorAll('p').length;
+    r.rerender(el(v2));
+    // Everything is there in the very first commit: nothing queued, no loading flag, last paragraph present.
+    expect(frames.length).toBe(0);
+    expect(r.container.querySelector('[data-artifact-viewer]')!.hasAttribute('data-doc-loading')).toBe(false);
+    expect(r.container.textContent).toContain('THE-NEW-LAST-PARAGRAPH');
+    expect(r.container.querySelectorAll('p').length).toBe(before + 1);
+  });
+
   it('a big .txt ends as the whole text in one <pre>, drawn over several frames', () => {
     const text = Array.from({ length: 30000 }, (_, i) => `log line ${i} with some words`).join('\n');
     const r = render(view('big.txt', text));

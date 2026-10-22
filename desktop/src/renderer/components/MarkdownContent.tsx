@@ -15,7 +15,7 @@ import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
   startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, scanOpenList, listSplitOf, type ListScan, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
-  countLines, overHighlightLimit, canDrawInSlices, sliceCuts, nextSliceEnd, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_BATCH_CHARS,
+  fenceOverHighlightLimit, canDrawInSlices, sliceCuts, nextSliceEnd, PROGRESSIVE_FIRST_CHARS, PROGRESSIVE_BATCH_CHARS,
 } from './markdown-blocks';
 
 /**
@@ -179,15 +179,8 @@ function dropLanguageFromHugeFences(tree: Root) {
     if (el.tagName !== 'code' || !Array.isArray(el.properties?.className)) return;
     const parent = ancestors[ancestors.length - 1] as Element | undefined;
     if (parent?.type !== 'element' || parent.tagName !== 'pre') return;
-    let chars = 0;
-    let lines = 1;
-    for (const child of el.children) {
-      if (child.type !== 'text') continue;
-      chars += child.value.length;
-      lines += countLines(child.value) - 1;
-      if (overHighlightLimit(lines, chars)) break;
-    }
-    if (!overHighlightLimit(lines, chars)) return;
+    const texts = el.children.flatMap((child) => (child.type === 'text' ? [child.value] : []));
+    if (!fenceOverHighlightLimit(...texts)) return;
     const rest = (el.properties.className as string[]).filter((c) => !/^(?:lang|language)-/.test(String(c)));
     // An empty class list would print class="" - delete it so the markup equals a no-language fence's.
     if (rest.length) el.properties.className = rest;
@@ -699,7 +692,7 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fe
   // them, and the fence would turn grey at the end when it is drawn as one block. Once the
   // fence passes the limit it stays uncoloured for the rest of the stream, as it will be
   // when finished. The earlier coloured chunks are redrawn plain once, at the crossing.
-  const rehypePlugins = split && overHighlightLimit(countLines(split.frozen) + countLines(split.tail) - 1, split.frozen.length + split.tail.length)
+  const rehypePlugins = split && fenceOverHighlightLimit(split.frozen, split.tail)
     ? withoutColour(basePlugins)
     : basePlugins;
   const frozenText = split?.frozen ?? '';

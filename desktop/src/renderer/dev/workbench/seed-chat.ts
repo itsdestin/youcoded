@@ -76,7 +76,7 @@ function providerErrorRequested(): string | null {
 /** `?seed=long-<N>`: wb-2 holds N finished turns of very different heights (short answers, long ones, tool
  *  steps, code). WHY: the first-draw plan (state/first-draw-plan.ts) draws only the newest screens of a long
  *  conversation, so proving it cannot jump needs real layout over a long, uneven transcript
- *  (tests/first-draw-scroll-stability, scripts/first-draw-probe.mjs). Deterministic: no randomness. */
+ *  (tests/journeys/first-draw-stability.json, scripts/first-draw-scroll-probe.mjs). Deterministic: no randomness. */
 export function longConversation(turns: number): string {
   const lines: string[] = [];
   for (let i = 0; i < turns; i++) {

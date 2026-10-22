@@ -9,10 +9,11 @@
 // WHY THIS CANNOT JUMP, in one place so a reviewer can check it:
 //  - the bottom is pinned: ChatView re-pins to the bottom whenever the content height changes while
 //    stuck (its ResizeObserver), before the next paint, so the newest message never moves;
-//  - while the reader is scrolled up, the browser's own scroll anchoring keeps the entry they are
-//    looking at in place when a spacer above is replaced by its real body;
+//  - while the reader is scrolled up, use-entry-folding.ts puts the entry they are looking at back in
+//    place when a spacer above is replaced by its real body (the browser's own scroll anchoring usually
+//    does it first; the explicit correction covers browsers without it);
 //  - entries are drawn ~1,500 px BEFORE they can be seen (FOLD_ROOT_MARGIN), so a wrong estimate is
-//    corrected off screen. Pinned by tests/first-draw-scroll-stability (real layout, workbench).
+//    corrected off screen. Guarded in real layout by the first-draw-stability journey (desktop/tests/journeys/, run by verify.sh; numbers via desktop/scripts/first-draw-scroll-probe.mjs).
 import type { AssistantTurn, TimelineEntry } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn } from './chat-types';
 

@@ -1,7 +1,7 @@
 // Task 6.4: MarkdownView is now a fully controlled component.
 // Edit state (editing, draft) is managed by ActiveArtifactView in SessionDrawer.tsx
 // so the conflict banner has access to the in-progress draft.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import MarkdownContent from '../MarkdownContent';
 import { PROGRESSIVE_MIN_CHARS } from '../markdown-blocks';
 import { requestFindRewalk } from './artifact-find-bridge';
@@ -55,9 +55,25 @@ export function MarkdownView({
   editing = false, draft = '', onDraftChange,
   commentsMode = 'reading', onOpenComments, focusThreadId, projectRoot,
 }: ArtifactViewProps) {
-  // Which text the big-file draw has finished (null = not yet). Keyed by the text itself so a changed
-  // file starts over as "still drawing"; read by Find and the comment highlights, which wait for it.
-  const [doneFor, setDoneFor] = useState<string | null>(null);
+  // How a big file is being drawn, decided ONCE per text: sliced (first screenful now, the rest a slice
+  // per frame) or whole. `done` is what Find and the comment highlights wait for.
+  // WHY it is state keyed by the text and cleared on entering Edit (review 2026-10-22): a flag that outlived
+  // the edit box said "done" while the remounted child was still refilling, so comment highlights ran on
+  // half a page (marking comments "text no longer found") and Find never re-counted.
+  const [view, setView] = useState<{ content: string | null; slice: boolean; done: boolean }>({ content: null, slice: false, done: false });
+  // The last text this view fully showed, and for which file.
+  const lastShown = useRef<{ path: string; content: string } | null>(null);
+  useEffect(() => { if (editing) setView({ content: null, slice: false, done: false }); }, [editing]);
+  const big = content !== null && content.length > PROGRESSIVE_MIN_CHARS;
+  // WHY a file already on screen whose text CHANGED is drawn whole (review 2026-10-22): that is the
+  // assistant editing the open file. Starting the new text from its first slice would collapse the page
+  // to a screenful and throw the reader's place away; one whole draw (the old behaviour) keeps the page
+  // as tall as the file, so the scroll position survives. A first open, or the same text drawn again
+  // after leaving Edit, is sliced.
+  const sliceNow = big && !(lastShown.current && lastShown.current.path === path && lastShown.current.content !== content);
+  const cur = view.content === content ? view : { content, slice: sliceNow, done: !sliceNow };
+  if (view.content !== content && content !== null && !editing) setView(cur);
+  useEffect(() => { if (content !== null && !editing && !cur.slice) lastShown.current = { path, content }; });
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
     // knows WHICH of the three it is — see ArtifactContentState). A null here
@@ -86,12 +102,12 @@ export function MarkdownView({
   }
 
   const isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
-  const big = content.length > PROGRESSIVE_MIN_CHARS;
-  const loading = big && doneFor !== content;
-  // Stable per text so the child's effect does not restart on every parent render.
+  const loading = cur.slice && !cur.done;
   const onDone = (done: boolean) => {
-    if (!done || doneFor === content) return;
-    setDoneFor(content);
+    if (!done) return;
+    lastShown.current = { path, content };
+    if (cur.done) return;
+    setView((v) => (v.content === content ? { ...v, done: true } : v));
     // A search already typed re-counts against the whole file (ContentFindBar's rewalk).
     requestFindRewalk();
   };
@@ -117,8 +133,8 @@ export function MarkdownView({
           instead of patching nodes the highlights moved; the highlights then
           re-apply to the new text. Nothing changes while the text is the same. */}
       {isMarkdown
-        ? <MarkdownContent key={content} content={content} progressive={big} onProgressive={big ? onDone : undefined} />
-        : big
+        ? <MarkdownContent key={content} content={content} progressive={cur.slice} onProgressive={cur.slice ? onDone : undefined} />
+        : cur.slice
           ? <ProgressiveText key={content} text={content} onDone={onDone} />
           : <pre key={content} className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
     </CommentableDocument>
