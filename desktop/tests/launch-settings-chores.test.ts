@@ -193,6 +193,6 @@ describe('the three settings chores after install-hooks', () => {
     expect(r.promptSuggestion).toEqual({ changed: true, prior: undefined });
     expect(r.retention).toEqual({ changed: true, effective: 365 });
     expect(readSettings()).toEqual({ promptSuggestionEnabled: false, cleanupPeriodDays: 365, hooks: {} });
-    expect(rename).toHaveBeenCalledTimes(1); // the fresh write; the backup used renameSync
+    expect(rename).toHaveBeenCalledTimes(2); // the corrupt-file backup and the fresh write (both async now)
   });
 });

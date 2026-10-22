@@ -12,9 +12,9 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 export const settingsChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.SETTINGS_GET, kind: 'handle',
-    handler: (payload) => {
+    handler: async (payload) => {
       // An unsafe or missing path reads as "not set", never as an error.
-      try { return getField(payload?.field ?? ''); } catch { return undefined; }
+      try { return await getField(payload?.field ?? ''); } catch { return undefined; }
     },
   }),
   defineChannel({
