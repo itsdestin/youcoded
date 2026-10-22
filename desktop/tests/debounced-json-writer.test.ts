@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createDebouncedJsonWriter } from '../src/main/debounced-json-writer';
+import { createDebouncedJsonWriter, flushDebouncedJsonWrites } from '../src/main/debounced-json-writer';
 
 let dir: string;
 let file: string;
@@ -45,5 +45,15 @@ describe('debounced json writer', () => {
     fs.rmSync(file); fs.mkdirSync(file);               // a directory where the file should be
     w.schedule();
     await expect(w.flush()).resolves.toBeUndefined();   // best effort, like the old try/catch
+  });
+
+  it('the quit-time flush saves every writer that has a pending change', async () => {
+    const other = path.join(dir, 'other.json');
+    const a = createDebouncedJsonWriter({ file, getValue: () => ({ a: 1 }), delayMs: 60_000 });
+    const b = createDebouncedJsonWriter({ file: other, getValue: () => ({ b: 2 }), delayMs: 60_000 });
+    a.schedule(); b.schedule();
+    await flushDebouncedJsonWrites();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ a: 1 });
+    expect(JSON.parse(fs.readFileSync(other, 'utf8'))).toEqual({ b: 2 });
   });
 });

@@ -124,7 +124,7 @@ import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-
 import { perfMark, getPerfMarks } from './perf-marks';
 import { startHitchRecorder, traceIpc, hitchLogDisabled, type HitchRecorder, type IpcTrace } from './hitch-recorder';
 import { loadDefaultAppIcon } from './app-icon';
-import { createDebouncedJsonWriter } from './debounced-json-writer';
+import { createDebouncedJsonWriter, flushDebouncedJsonWrites } from './debounced-json-writer';
 
 // Perf lab instrumentation: perfMark() is a no-op unless YOUCODED_PERF_LOG is
 // set, so these calls cost nothing in a normal launch. The names below are a
@@ -1594,15 +1594,8 @@ void app.whenReady().then(async () => {
     try { return JSON.parse(fs.readFileSync(BUDDY_POS_FILE, 'utf8')); } catch { return {}; }
   }
   const buddyPositions = loadBuddyPositions();
-  // WHY debounced + async (2026-10-22 freeze hunt): this used to be a writeFileSync on every drag
-  // move event, each able to freeze the whole app on a slow disk. Moves now schedule ONE atomic
-  // write ~500 ms after the last, and runShutdown() flushes a pending one so quitting right after
-  // a drag still keeps the final position. The file's contents and format are unchanged.
-  const buddyPositionsWriter = createDebouncedJsonWriter({ file: BUDDY_POS_FILE, getValue: () => buddyPositions, delayMs: 500 });
-  flushBuddyPositions = () => buddyPositionsWriter.flush();
-  function saveBuddyPositions(_obj: BuddyPositionsFile): void {
-    buddyPositionsWriter.schedule();
-  }
+  const buddyPositionsWriter = createDebouncedJsonWriter({ file: BUDDY_POS_FILE, getValue: () => buddyPositions }); // WHY: debounced async save (was a sync write per drag move); flushed on quit — see debounced-json-writer.ts
+  const saveBuddyPositions = (_obj: BuddyPositionsFile): void => buddyPositionsWriter.schedule();
 
   // ─── The Linux/KDE buddy helper: launch housekeeping, before any buddy ────
   //
@@ -1938,8 +1931,6 @@ function settlePendingCloseRequests(): void {
   });
 }
 
-// Set once the buddy-position writer exists (inside whenReady); runShutdown flushes it.
-let flushBuddyPositions: (() => Promise<void>) | null = null;
 let shuttingDown: Promise<void> | null = null;
 let shutdownComplete = false;
 function shutdownApp(): Promise<void> {
@@ -1959,7 +1950,7 @@ async function runShutdown(): Promise<void> {
   // an unflushed write just means that one session's offer is a run stale,
   // not lost (the desktop-lifecycle `open` entry it came from is harmless).
   await Promise.race([
-    Promise.all([welcomeBackStore?.flush(), hitchRecorder?.stop(), flushBuddyPositions?.()]),
+    Promise.all([welcomeBackStore?.flush(), hitchRecorder?.stop(), flushDebouncedJsonWrites()]),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
   // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.

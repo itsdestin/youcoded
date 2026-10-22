@@ -15,6 +15,14 @@ export interface DebouncedJsonWriter {
   flush(): Promise<void>;
 }
 
+// Every writer made, so quit can flush them all with one call (runShutdown in main.ts).
+const allWriters = new Set<DebouncedJsonWriter>();
+
+/** Write every pending change now. Never rejects. */
+export async function flushDebouncedJsonWrites(): Promise<void> {
+  await Promise.all([...allWriters].map((w) => w.flush()));
+}
+
 export function createDebouncedJsonWriter(opts: {
   file: string;
   getValue: () => unknown;
@@ -39,7 +47,7 @@ export function createDebouncedJsonWriter(opts: {
     return inFlight;
   };
 
-  return {
+  const writer: DebouncedJsonWriter = {
     schedule() {
       dirty = true;
       if (timer) clearTimeout(timer);
@@ -53,4 +61,6 @@ export function createDebouncedJsonWriter(opts: {
       await inFlight;
     },
   };
+  allWriters.add(writer);
+  return writer;
 }
