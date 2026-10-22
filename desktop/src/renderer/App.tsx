@@ -2724,11 +2724,8 @@ function AppInner() {
       return true;
     }
 
-    // Only a model the person chose in a resume form is sent. WHY: with none,
-    // main reopens the conversation on the model it last ran on
-    // (main/conversations/resume-model.ts). Filling the gap here with the open
-    // tab's model — or Sonnet when no tab was open — reopened Opus
-    // conversations on Sonnet (2026-10-21).
+    // Only a model picked in a resume form is sent; with none, main reopens the conversation on its own (resume-model.ts).
+    // WHY: guessing here (the open tab's model, else Sonnet) reopened Opus conversations on Sonnet.
     const m = resumeModel || undefined;
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
@@ -3189,11 +3186,7 @@ function AppInner() {
       }
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
-        // No model: this screen offers no picker, so main reopens each
-        // conversation on the model its own transcript last ran on
-        // (resume-model.ts). The row's lastUsedModel can be a record an older
-        // build let a helper agent's Sonnet overwrite — the 2026-10-21 bug.
-        undefined,
+        undefined, // no picker here: main reopens it on its transcript's model, never a record a helper overwrote (resume-model.ts)
         // WHY always false: this screen shows no Skip permissions switch, so a
         // default of "skip" would have reopened every session with approvals off,
         // unseen. Resuming one row through its own card still shows the switch.

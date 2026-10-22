@@ -8,6 +8,9 @@
 // conversation's own history is the one answer that cannot be wrong, so main
 // reads it here, for every caller on both doors, just before the launch.
 import { claudeAliasForModelId } from '../../shared/model-ids';
+import { readSessionTranscriptMeta } from '../session-browser';
+import { readDefaults } from '../prefs-service';
+import { getConversationStore } from './service';
 
 export interface ResumeModelSources {
   /** `message.model` of the last real main-conversation assistant line in the
@@ -40,4 +43,21 @@ export async function resolveResumeModel(src: ResumeModelSources): Promise<strin
     if (typeof fallback === 'string' && fallback) return fallback;
   } catch { /* no saved default */ }
   return undefined;
+}
+
+/** `opts` with the conversation's own model filled in when it is a Claude Code
+ *  resume that names none. A model the person picked in a resume form always
+ *  wins, and every other session passes through untouched. `jsonlPath` is the
+ *  local transcript (snapshotResumeBoundary), absent when there is none. */
+export async function withResumeModel<T extends { provider?: string; resumeSessionId?: string; model?: string }>(
+  opts: T, jsonlPath: string | undefined,
+): Promise<T> {
+  if (opts.provider !== 'claude' || !opts.resumeSessionId || opts.model) return opts;
+  const conversationId = opts.resumeSessionId;
+  const model = await resolveResumeModel({
+    transcriptModelId: async () => (jsonlPath ? (await readSessionTranscriptMeta(jsonlPath, false)).lastModelId : null),
+    storedModelId: async () => (await getConversationStore()?.get('claude', conversationId))?.lastUsedModel?.modelId,
+    defaultModel: () => readDefaults().model,
+  });
+  return model ? { ...opts, model } : opts;
 }
