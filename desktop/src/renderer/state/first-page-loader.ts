@@ -112,9 +112,12 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
    *  resolve because someone else started it (2026-09-27 review). */
   const inflight = new Map<string, Promise<FillOutcome>>();
 
-  /** A first load that failed only because the computer could not be asked does not use up one of its runs. */
-  const unCount = (sid: string, opts: { refill: boolean }): void => {
-    if (!opts.refill) runs.set(sid, Math.max(0, (runs.get(sid) ?? 1) - 1));
+  /** A first load that failed only because the connection lost the question does not use up one of its runs. WHY only then (branch
+   *  review F5): the remote shim marks a request the connection lost (dropped, timed out) `outcomeUnknown`; any other throw (a bridge
+   *  with no host record) fails the same way every time, and uncounted it would be asked again on every live event, without end. */
+  const unCount = (sid: string, opts: { refill: boolean }, err: unknown): void => {
+    const lost = (err as { outcomeUnknown?: unknown } | null)?.outcomeUnknown === true || (err as Error | null)?.message === 'Server switched';
+    if (!opts.refill && lost) runs.set(sid, Math.max(0, (runs.get(sid) ?? 1) - 1));
   };
 
   const fail = (sid: string): FillOutcome => {
@@ -164,11 +167,11 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
         sessionId: sid, claudeSessionId: h?.claudeSessionId, projectSlug: h?.projectSlug,
         ...(opts.fresh ? { fresh: true } : {}),
       });
-    } catch {
+    } catch (err) {
       // The computer could not be asked (the connection dropped, a bridge with no host record).
       // WHY uncounted (2026-10-22 phone reliability): a dropped connection says nothing about the session, yet four of
       // them in one run used to stop a phone's conversation from ever loading again until the app restarted.
-      unCount(sid, opts);
+      unCount(sid, opts, err);
       return busyOrDone.get(sid) === token ? bad() : 'failed';
     }
     // Closed while we waited (retainOnly dropped it): record nothing.
@@ -204,8 +207,8 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
         const hh = hints.get(sid);
         page = await deps.requestPage({ sessionId: sid, beforeCursor: null, toEnd: true,
           claudeSessionId: hh?.claudeSessionId, projectSlug: hh?.projectSlug });
-      } catch {
-        unCount(sid, opts);
+      } catch (err) {
+        unCount(sid, opts, err);
         return busyOrDone.get(sid) === token ? bad() : 'failed';
       }
       if (busyOrDone.get(sid) !== token) return 'failed';

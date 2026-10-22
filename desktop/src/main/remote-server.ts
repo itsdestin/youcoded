@@ -355,7 +355,18 @@ export class RemoteServer {
     for (const l of this.statusListeners) l(status);
   }
 
-  async start(): Promise<void> {
+  /** A start in progress: every other caller joins it (start). */
+  private starting: Promise<void> | null = null;
+
+  /** WHY one start at a time (branch review F2): `running` turns true only once the port is bound, after the Tailscale check, and
+   *  the 20 s Tailscale retry, the wake handler and the settings switch can all call this. Two overlapping starts bound twice: the
+   *  loser's rollback tore down the winner's server, or both subscribed and a phone got every terminal chunk twice. */
+  start(): Promise<void> {
+    this.starting ??= this.startOnce().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async startOnce(): Promise<void> {
     if (this.local) {
       if (this.running) return;
       this.bindAddress = '127.0.0.1'; this.serveBuiltPage = true; // loopback; a phone has no dev server
@@ -541,8 +552,6 @@ export class RemoteServer {
     this.broadcast({ type: 'status:data', payload: data });
   }
 
-  /** @param forRollback internal use: unwinding a start that failed, where the caller sets
-   *  the real reason on the next line. Every other caller is a user switching it off. */
   /** Try start() again in a while, once: each failed attempt schedules the next. */
   private waitForTailscale(): void {
     if (this.tailscaleWait) return;
@@ -564,6 +573,8 @@ export class RemoteServer {
     this.start().catch(() => { /* start() reported it and scheduled the next look */ });
   }
 
+  /** @param forRollback internal use: unwinding a start that failed, where the caller sets
+   *  the real reason on the next line. Every other caller is a user switching it off. */
   stop(forRollback = false): void {
     this.clearTailscaleWait();
     this.running = false;

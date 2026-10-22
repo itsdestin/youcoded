@@ -1170,6 +1170,10 @@ describe('remote-shim — overlapping connections', () => {
       expect(refusals).toEqual(['replaced']);
       expect(FakeWebSocket.instances).toHaveLength(1);      // no reconnect that would kick the other tab
       expect(store['youcoded-remote-token']).toBe('dev-1:secret');
+      // Neither the network coming back nor the tab being shown again takes it back; only Reload does.
+      shim.checkConnectionAfterWake();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
     it('the Android app whose old connection was replaced just reconnects', async () => {

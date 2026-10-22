@@ -243,3 +243,12 @@ describe('RemoteGate', () => {
     expect(screen.getByText('THE APP')).toBeTruthy();
   });
 });
+
+describe('the notice when a saved computer refuses the Android app', () => {
+  it('blames the password only when the computer refused the password', async () => {
+    const { savedPasswordRefusedNotice } = await import('../src/renderer/remote-gate');
+    expect(savedPasswordRefusedNotice('Home PC', 'invalid-credentials')).toMatch(/didn't accept the saved password/);
+    expect(savedPasswordRefusedNotice('Home PC', 'no-password-configured')).toBe('Home PC has no remote access password set yet. Set one on that computer, in Settings → Remote access.');
+    expect(savedPasswordRefusedNotice('Home PC', 'rate-limited')).toBe('Home PC refused this sign-in.');
+  });
+});

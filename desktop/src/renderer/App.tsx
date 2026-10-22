@@ -1770,7 +1770,18 @@ function AppInner() {
   useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
-  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
+  // WHY the watch check and the retry (branch review F3): refilling opens (watches) a conversation, so one the phone has left since is
+  // not refilled. And the push stands in for the hang-up that used to force a full round, so a refill that fails here gets the round's
+  // treatment: the strip says the conversation may be behind, and it is tried again on its own.
+  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => {
+    const watched = remoteWatchRef.current.watchedIds();
+    if (watched && !watched.includes(sid)) return;
+    void firstPages.refill(sid, { fresh: true }).then((outcome) => {
+      if (outcome === 'ok') return;
+      reportFillRound([outcome]);
+      refillRetry.start([sid], [outcome]);
+    });
+  }), [firstPages, reportFillRound, refillRetry]);
   useEffect(() => {
     const onRefresh = () => fillAgain(true);
     window.addEventListener(REMOTE_REFRESH_EVENT, onRefresh);

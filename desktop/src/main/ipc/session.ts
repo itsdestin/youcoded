@@ -405,7 +405,12 @@ const sessionEntries: MainChannelDef[] = [
       // so the frames that follow continue exactly from the answer. No hold, no chat subscription: the ordinary open still follows and fills the chat.
       if (req?.ptyOnly === true && audience?.socket && sessionId) {
         const reply = openPtyOnly({ knows: (id) => !!o.sessionManager.getSession(id), records: rt.records }, req);
-        if (reply.ok) { o.windowRegistry?.subscribePty(sessionId, audience.id); ptyCutServed.add(`${audience.key}:${sessionId}`); }
+        if (reply.ok) {
+          o.windowRegistry?.subscribePty(sessionId, audience.id);
+          ptyCutServed.add(`${audience.key}:${sessionId}`);
+          // Bounded (branch review F8): an entry is removed by the ordinary open that follows, which a dropped connection never sends.
+          if (ptyCutServed.size > 256) ptyCutServed.delete(ptyCutServed.values().next().value as string);
+        }
         return reply as unknown as Awaited<ReturnType<typeof openSession>>;   // same channel, its own small shape (PtyOnlyReply)
       }
       // WHY (2026-10-22 phone reliability): a phone asks for the terminal alone and then the ordinary open, both carrying its terminal

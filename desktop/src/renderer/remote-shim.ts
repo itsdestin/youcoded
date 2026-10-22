@@ -144,6 +144,10 @@ let lastFrameAt = 0;
 /** A large answer arriving as `remote:piece` frames (remote-server sendAnswer): its parts so far, by piece id. Each piece is a
  *  complete frame, so a multi-MB load keeps proving the connection alive while it arrives instead of looking like silence. */
 const pieceParts = new Map<number, string[]>();
+/** Another tab of this browser took the connection (CLOSE_REPLACED). WHY a flag (branch review F4): the network coming back and
+ *  the page being shown both reconnect a disconnected page, so a hidden tab could take the connection from the one in front, and
+ *  the tab showing "Reload this tab" took it back on focus. Only the reload the card offers reconnects it. */
+let takenOver = false;
 
 function signInError(message: string, failure: SignInFailure): Error {
   return Object.assign(new Error(message), { signInFailure: failure });
@@ -1530,6 +1534,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       if (localBridge) {
         retryLocalBridge();
       } else if (replaced) {
+        takenOver = true;
         noteRefusedAfterConnecting('replaced');
       } else if (isTerminalClose(event.code)) {
         // Unpaired or retired: the credential can never work again. Forget it so the next
@@ -1694,7 +1699,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
  */
 export function checkConnectionAfterWake(): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
-  if (isAndroidLocal()) return;
+  if (isAndroidLocal() || takenOver) return;
   if (!hasConnectedBefore) {
     // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
     // try again, not the end of a backoff of up to a minute (finding 6).

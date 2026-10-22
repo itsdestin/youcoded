@@ -151,10 +151,19 @@ describe('first-page loader (one fill)', () => {
     // Four drops in one run used to stop a phone's conversation from ever loading again until the app restarted.
     let n = 0;
     const drops = FIRST_PAGE_MAX_RUNS * 3;
-    const r = rig(() => (++n <= drops ? Promise.reject(new Error('dropped')) as any : real));
+    const r = rig(() => (++n <= drops ? Promise.reject(Object.assign(new Error('dropped'), { outcomeUnknown: true })) as any : real));
     await r.loader.load('s');
     for (let i = 0; i < drops; i++) { r.loader.noteLiveActivity('s'); await new Promise((res) => setTimeout(res, 0)); }
     await vi.waitFor(() => expect(r.types()).toContain('HISTORY_PAGE_LOADED'));
+  });
+
+  it('a load that fails the same way every time still stops after its runs, however many live events come', async () => {
+    // Only a question the connection lost is uncounted; anything else would be asked again on every live event, without end.
+    let n = 0;
+    const r = rig(() => { n++; return Promise.reject(new Error('no host record')) as any; });
+    await r.loader.load('s');
+    for (let i = 0; i < FIRST_PAGE_MAX_RUNS * 3; i++) { r.loader.noteLiveActivity('s'); await new Promise((res) => setTimeout(res, 0)); }
+    expect(n).toBe(FIRST_PAGE_MAX_RUNS);
   });
 
   it('a catch-up that cannot be applied is a failed fill, not a thrown round', async () => {

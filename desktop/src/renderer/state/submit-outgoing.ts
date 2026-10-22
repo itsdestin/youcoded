@@ -265,7 +265,10 @@ export function settleSavedQueueSends(onlySessionId?: string): Promise<void> {
         clearPendingQueueSend(sessionId, request);
         continue;
       }
-      if (reply?.status === 'unavailable') { clearPendingQueueSend(sessionId, request); continue; }
+      // WHY keep on any other answer (branch review F1/F6): 'unavailable' is also what a conversation whose queue the computer has
+      // not set up again yet says, and a computer older than `lookup` answers 'rejected'. Neither says whether the words arrived,
+      // so the saved send stays — the same words sent again still reuse its id, which is what stops a double delivery.
+      if (reply?.status !== 'lookup') continue;
       const sure = reply?.status === 'lookup' && reply.identity?.sendEpoch === request.payload.sendEpoch;
       const detail: { sessionId: string; text: string; paths: string[]; restored?: boolean } = { sessionId, text: request.payload.originalText, paths: [...request.payload.attachments] };
       window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT, { detail }));

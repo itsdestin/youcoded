@@ -99,6 +99,18 @@ describe('the listener is private by construction', () => {
     expect((server as any).wss.options.perMessageDeflate).toMatchObject({ threshold: 1024, zlibDeflateOptions: { level: 1 } });
   });
 
+  it('two starts at once bind one listener, and the terminal is relayed once', async () => {
+    // The Tailscale retry, the wake handler and the settings switch can all start it; a second bind rolled the first one back.
+    const { mockSessionManager, mockHookRelay, config } = makeServer();
+    const { RemoteServer } = await import('../src/main/remote-server');
+    server = new RemoteServer(mockSessionManager, mockHookRelay, config);
+    const before = mockSessionManager.listenerCount('pty-output');
+    await Promise.all([server.start(), server.start()]);
+    expect(server.isRunning()).toBe(true);
+    expect((server as any).httpServer.listening).toBe(true);
+    expect(mockSessionManager.listenerCount('pty-output')).toBe(before + 1);
+  });
+
   it('refuses to start without a private address instead of falling back', async () => {
     // The fallback IS the open listener this batch exists to remove: binding every
     // interface is what makes conversations readable by anything on the same wifi.

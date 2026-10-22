@@ -78,6 +78,25 @@ describe('host queued Claude submission',()=>{
   await settleSavedQueueSends();
   expect(pendingQueueSend('s','kept',[])).toBeDefined();
  });
+ it.each([
+  ['a computer older than the lookup', { status: 'rejected', message: 'Invalid queue action.' }],
+  ['a conversation whose queue is not set up again yet', { status: 'unavailable' }],
+ ])('when %s cannot say, a saved send is kept and its words are not put back',async(_why,answer)=>{
+  // Putting the words back clears the saved send, and with it the id that stops the same words arriving twice.
+  const action=vi.fn(async(_sid:string,a:any)=>{if(a.kind==='identity')return{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}};
+   if(a.kind==='lookup')return answer;throw Error('lost ack');});
+  (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};
+  const { settleSavedQueueSends, RESTORE_UNSENT_EVENT }=await import('../src/renderer/state/submit-outgoing');
+  sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'maybe sent',content:'maybe sent',paths:[],dispatch:vi.fn()});
+  await vi.waitFor(()=>expect(pendingQueueSend('s','maybe sent',[])).toBeDefined());
+  const restored:string[]=[];const listener=(e:Event)=>{const d=(e as CustomEvent).detail;restored.push(d.text);d.restored=true;};
+  window.addEventListener(RESTORE_UNSENT_EVENT,listener);
+  try{
+   await settleSavedQueueSends();
+   expect(restored).toEqual([]);
+   expect(pendingQueueSend('s','maybe sent',[])).toBeDefined();
+  }finally{window.removeEventListener(RESTORE_UNSENT_EVENT,listener);}
+ });
  it('never falls back to CR or creates a pending transcript bubble after an uncertain enqueue',async()=>{
   const dispatch=vi.fn(),sendInput=vi.fn();const action=vi.fn(async(_sid:string,a:any)=>{if(a.kind==='identity')return{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}};throw Error('receipt lost');});
   (window as any).claude={session:{queue:{action},sendInput}};

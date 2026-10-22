@@ -84,7 +84,14 @@ const OLD_PAGE_NOTICE: Notice = { kind: 'reload', heading: 'This page needs a re
 const OTHER_TAB_NOTICE: Notice = { kind: 'reload', heading: 'Open in another tab', line: 'YouCoded is open in another tab of this browser. Reload this tab to use it here instead.' };
 const KEY_REFUSED_NOTICE: Notice = { kind: 'password', line: 'This computer no longer accepts this device. Enter the password to connect again.' };
 // WHY exported: the photo-only screen list shows this toast with these very words (dev/workbench/ToastPractice).
-export const savedPasswordRefusedNotice = (name: string) => `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`;
+/** WHY by reason (branch review F9): only a refused credential means the saved password is wrong; a computer with remote access
+ *  switched off, or one refusing for another reason, says so instead of sending the person to change a password that is fine. */
+export const savedPasswordRefusedNotice = (name: string, reason = 'invalid-credentials') =>
+  reason === 'no-password-configured'
+    ? `${name} has no remote access password set yet. Set one on that computer, in Settings → Remote access.`
+    : ['invalid-credentials', 'revoked', 'unknown'].includes(reason)
+      ? `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`
+      : `${name} refused this sign-in.`;
 const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
 
 type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
@@ -330,7 +337,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setResume('none');
         const { announce } = await import('./utils/announce');
         // After the app has mounted its toast.
-        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name), 8000), 1500);
+        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name, String(err.signInFailure.reason)), 8000), 1500);
         return;
       }
       setComputerTrouble(true);
