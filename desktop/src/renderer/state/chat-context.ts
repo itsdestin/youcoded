@@ -285,6 +285,18 @@ export function useSessionIsThinking(sessionId: string): boolean {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
+/** Whether a session has nothing in its timeline yet. A boolean, so its reader re-renders only when that flips, never per word
+ *  (the phone's connection strip, components/ConnectionStrip.tsx, reads it from the always-mounted input bar). */
+export function useSessionIsEmpty(sessionId: string): boolean {
+  const store = useStore();
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId, cb),
+    [store, sessionId],
+  );
+  const getSnapshot = useCallback(() => store.getSession(sessionId).timeline.length === 0, [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 export function useChatDispatch(): Dispatch<ChatAction> {
   return useStore().dispatch;
 }

@@ -20,6 +20,7 @@ import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { NativeStartupNotice } from './NativeStartupNotice';
+import { ConnectionStrip, type ConnectionStripProps } from './ConnectionStrip';
 import { useNativeStartup } from '../hooks/use-native-startup';
 import { getNativeStartup } from '../state/native-startup-store';
 import { nativeStartupBlocked } from '../../shared/native-startup';
@@ -114,6 +115,8 @@ interface Props {
   /** Runtime backend of the active session. Native sessions have no PTY, so the
    *  send path routes through native:send instead of the PTY paste machinery. */
   provider?: 'claude' | 'native';
+  /** A phone's connection state, drawn as a band above the box (ConnectionStrip). Never set on the computer's own window. */
+  connection?: Omit<ConnectionStripProps, 'sessionId'>;
 }
 
 // isImage no longer drives the chip (AttachmentChip derives the preview kind
@@ -136,7 +139,7 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked: externalSendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
   const startup = useNativeStartup(provider === 'native' ? sessionId : null);
   const sendBlocked = externalSendBlocked || nativeStartupBlocked(startup);
   const draftAuthority = useRef(createQueueDraft(sessionId));
@@ -1115,6 +1118,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         </div>
       )}
 
+      {/* Where a phone's copy of the conversation stands (reconnecting, catching up…): the same band, above the others —
+          it is about the whole conversation. Chat view only, as when it was a row under the header. */}
+      {connection && view !== 'terminal' && <ConnectionStrip sessionId={sessionId} {...connection} />}
       {/* A model chosen at setup that is still downloading (first-run local
           models, Q-4/Q-7): the same thin band, above the box. */}
       <NativeStartupNotice sessionId={sessionId} enabled={provider === 'native'} />

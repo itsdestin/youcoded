@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   } as any,
   artifact: { drawerOpenBySession: {} as Record<string, boolean>, drawerExpanded: false },
 }));
-vi.mock('../src/renderer/state/chat-context', () => ({ useChatState: () => mocks.state, useChatDispatch: () => vi.fn() }));
+vi.mock('../src/renderer/state/chat-context', () => ({ useChatState: () => mocks.state, useChatDispatch: () => vi.fn(), useSessionIsEmpty: () => mocks.state.timeline.length === 0 }));
 vi.mock('../src/renderer/components/SessionDrawer', () => ({ SessionDrawer: () => <div>Files</div> }));
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
   useArtifactSelector: (select: (s: any) => unknown) => select(mocks.artifact),
@@ -29,6 +29,12 @@ vi.mock('../src/renderer/utils/sounds', () => ({ playSound: vi.fn() }));
 import { playSound } from '../src/renderer/utils/sounds';
 import { useSessionSummaries } from '../src/renderer/hooks/useSessionSummaries';
 import ChatView from '../src/renderer/components/ChatView';
+import { ConnectionStrip } from '../src/renderer/components/ConnectionStrip';
+
+/** What a phone shows: the conversation, and the input bar's connection band (App passes both the same `filling`). */
+function Screen({ sessionId, filling }: { sessionId: string; filling?: boolean }) {
+  return <><ChatView sessionId={sessionId} visible sessionActive provider="claude" filling={filling} /><ConnectionStrip sessionId={sessionId} filling={filling} /></>;
+}
 import { useRemoteWatch } from '../src/renderer/hooks/useRemoteWatch';
 import type { FirstPageLoader } from '../src/renderer/state/first-page-loader';
 
@@ -43,11 +49,11 @@ describe('a conversation the phone is not watching yet', () => {
     const frames: string[] = [];
     const draw = (container: HTMLElement) => frames.push(container.textContent ?? '');
     // The frame the switch is drawn in: the conversation is chosen, nothing has arrived.
-    const { container, rerender } = render(<ChatView sessionId="far" visible sessionActive provider="claude" filling />);
+    const { container, rerender } = render(<Screen sessionId="far" filling />);
     draw(container);
     // The fill lands: the conversation has its messages.
     mocks.state.timeline = [{ kind: 'user', message: { id: 'u1', role: 'user', content: 'hello from the other session', timestamp: 1 } }];
-    rerender(<ChatView sessionId="far" visible sessionActive provider="claude" filling={false} />);
+    rerender(<Screen sessionId="far" filling={false} />);
     draw(container);
     expect(frames[0]).toContain(CATCHING_UP);
     expect(frames[0]).not.toContain(HINT);
@@ -57,18 +63,18 @@ describe('a conversation the phone is not watching yet', () => {
 
   it('a conversation the phone already holds is shown at once while it catches up, with no strip over it', () => {
     mocks.state.timeline = [{ kind: 'user', message: { id: 'u1', role: 'user', content: 'what the page drew before it stopped watching', timestamp: 1 } }];
-    const { container } = render(<ChatView sessionId="recent" visible sessionActive provider="claude" filling />);
+    const { container } = render(<Screen sessionId="recent" filling />);
     expect(container.textContent).not.toContain(CATCHING_UP);
     expect(container.textContent).not.toContain(HINT);
   });
 
   it('a genuinely empty conversation still says so once the fill has finished', () => {
-    const { container } = render(<ChatView sessionId="new" visible sessionActive provider="claude" filling={false} />);
+    const { container } = render(<Screen sessionId="new" filling={false} />);
     expect(container.textContent).toContain(HINT);
   });
 
   it('the computer never passes `filling`, so its empty conversation reads exactly as before', () => {
-    const { container } = render(<ChatView sessionId="s1" visible sessionActive provider="claude" />);
+    const { container } = render(<Screen sessionId="s1" />);
     expect(container.textContent).toContain(HINT);
     expect(container.textContent).not.toContain(CATCHING_UP);
   });

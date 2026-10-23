@@ -1757,6 +1757,12 @@ function AppInner() {
   // Read through a ref by the handlers below that must not re-register every time the watch set changes.
   const remoteWatchRef = useRef(remoteWatch);
   remoteWatchRef.current = remoteWatch;
+  // The phone's connection band above the message box (ConnectionStrip.tsx), for the conversation on screen. Undefined on the
+  // computer's own window, which has no copy to describe. Memoised so the input bar sees a new value only when one changes.
+  const activeFilling = sessionId ? remoteWatch.isFilling(sessionId) : false;
+  const phoneConnection = useMemo(() => (isRemoteMode() ? {
+    conversationStatus, waitingForComputer: computerSlow, filling: activeFilling, onRefresh: handleRefreshConversation, onUsePhoneOnly: handleUsePhoneOnly,
+  } : undefined), [conversationStatus, computerSlow, activeFilling, handleRefreshConversation, handleUsePhoneOnly]);
 
   // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
   // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
@@ -3628,10 +3634,6 @@ function AppInner() {
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                       onSendQueuedNow={handleSendQueuedNow}
-                      conversationStatus={conversationStatus}
-                      onRefreshConversation={handleRefreshConversation}
-                      onUsePhoneOnly={handleUsePhoneOnly}
-                      waitingForComputer={computerSlow}
                       filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
@@ -3739,7 +3741,7 @@ function AppInner() {
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
                   if (sessionId) showBlockedSend(sessionId, block, retry);
-                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
+                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} connection={phoneConnection} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
                   onOpenSync={handleOpenSync}
@@ -4511,9 +4513,9 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
-  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native'; connection?: React.ComponentProps<typeof InputBar>['connection'] }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider, connection }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} connection={connection} />;
   },
 );
 
