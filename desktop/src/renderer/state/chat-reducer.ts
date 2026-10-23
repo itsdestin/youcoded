@@ -14,7 +14,7 @@ import {
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToActions } from './transcript-page-actions';
-import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction } from './timeline-boundaries';
+import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction, replaceTrailingModelMarker } from './timeline-boundaries';
 import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
 import { isPlaceholderModelId } from '../../shared/model-ids';
@@ -3490,24 +3490,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       if (hasMarker(session, action.markerId)) return state; // see CLEAR_TIMELINE
-      // WHY: Shift+Space steps through every model to reach one, so three quick presses wrote three
-      // lines in a row. Back-to-back switches with nothing said between them keep only where the
-      // user landed: the newest line replaces the one directly above it.
-      let last = session.timeline.length - 1;
-      let prev = session.timeline[last];
-      while (prev?.kind === 'user' && prev.pending === true) prev = session.timeline[--last];
-      if (!session.currentTurnId && prev?.kind === 'system-marker' && prev.marker.variant === 'model') {
-        const timeline = [...session.timeline];
-        timeline[last] = { kind: 'system-marker', marker: { id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model' } };
-        next.set(action.sessionId, { ...session, timeline });
-        return next;
-      }
-      next.set(action.sessionId, {
-        ...session,
-        ...appendSystemMarker(session, {
-          id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model',
-        }),
-      });
+      const marker = { id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model' as const };
+      const timeline = replaceTrailingModelMarker(session, marker);
+      next.set(action.sessionId, timeline ? { ...session, timeline } : { ...session, ...appendSystemMarker(session, marker) });
       return next;
     }
 

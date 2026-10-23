@@ -100,6 +100,19 @@ export function appendSystemMarker(session: SessionChatState, marker: SystemMark
   return { timeline, assistantTurns, toolGroups, currentGroupId };
 }
 
+/** WHY: Shift+Space steps through every model to reach one, so three quick presses wrote three lines
+ * in a row. Back-to-back switches with nothing between them keep only where the user landed: the new
+ * line replaces a model line directly above it (pending sends aside). Null when there is none. */
+export function replaceTrailingModelMarker(session: SessionChatState, marker: SystemMarker): TimelineEntry[] | null {
+  let at = session.timeline.length - 1;
+  while (at >= 0 && session.timeline[at].kind === 'user' && (session.timeline[at] as { pending?: boolean }).pending === true) at--;
+  const prev = session.timeline[at];
+  if (session.currentTurnId || prev?.kind !== 'system-marker' || prev.marker.variant !== 'model') return null;
+  const timeline = [...session.timeline];
+  timeline[at] = { kind: 'system-marker', marker };
+  return timeline;
+}
+
 export function matchingCompaction(session: SessionChatState, operationId: string | undefined, recorded = false): boolean {
   const pending = session.compactionPending;
   if (!pending) return false;
