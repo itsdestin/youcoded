@@ -1325,8 +1325,7 @@ export function registerIpcHandlers(
   // store's own track() is a plain overwrite-and-persist with no such guard
   // (design §1: "changes are a handful per session", not one per turn).
   const welcomeBackTracked = new Set<string>();
-  // WHY skipPermissions: remembered so Welcome back reopens the session with
-  // Skip permissions still on if it ran that way (Destin, 2026-10-23).
+  // WHY skipPermissions: Welcome back reopens a session with it still on (Destin, 2026-10-23).
   const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider, skipPermissions = false) => {
     if (!welcomeBackStore || welcomeBackTracked.has(desktopId)) return;
     welcomeBackTracked.add(desktopId);

@@ -3213,8 +3213,7 @@ function AppInner() {
   // Asked ONCE per launch, strip empty, not while a phone catches up, and only
   // in the LEADER window (remote/Android never — S-phone; a non-leader WAITS).
   const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
-  // Conversations that were running with Skip permissions on when the app closed.
-  const welcomeBackSkipIds = useRef<ReadonlySet<string>>(new Set());
+  const welcomeBackSkipIds = useRef<ReadonlySet<string>>(new Set()); // ran with Skip permissions on at close
   const welcomeBackAsked = useRef(false);
   useEffect(() => {
     if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
@@ -3223,11 +3222,8 @@ function AppInner() {
     welcomeBackAsked.current = true;
     if (sessions.length > 0) return;
     let alive = true;
-    void fetchReopenList().then((rows) => {
-      if (!alive || rows.length === 0) return;
-      welcomeBackSkipIds.current = new Set(rows.filter((r) => r.skipPermissions).map((r) => r.id));
-      setWelcomeBackIds(rows.map((r) => r.id));
-    });
+    void fetchReopenList().then((rows) => { if (!alive || rows.length === 0) return;
+      welcomeBackSkipIds.current = new Set(rows.filter((r) => r.skipPermissions).map((r) => r.id)); setWelcomeBackIds(rows.map((r) => r.id)); });
     return () => { alive = false; };
   }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length, myWindowId, leaderWindowId, isLeader]);
   const welcomeBackDone = useCallback(() => {
@@ -3253,11 +3249,9 @@ function AppInner() {
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
         undefined, // no picker here: main reopens it on its transcript's model, never a record a helper overwrote (resume-model.ts)
-        // WHY per session, not the app-wide default: this screen shows no Skip
-        // permissions switch, so each session comes back exactly as it was when
-        // the app closed — on only if it was running with it on (Destin,
-        // 2026-10-23: always-off dropped it). The default is never applied
-        // here, so it cannot switch approvals off on sessions that had them.
+        // WHY per session, never the app-wide default: this screen has no Skip permissions
+        // switch, so each session returns as it was at close (Destin, 2026-10-23: always-off
+        // dropped it), and the default can't turn approvals off unseen on the others.
         welcomeBackSkipIds.current.has(r.sessionId), false, r.provider, binding, r.name, true,
       );
       return ok ? 'launched' : 'failed';
