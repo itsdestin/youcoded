@@ -234,3 +234,61 @@ export function adaptForWire(messages: ModelMessage[], caps: WireImageCaps): Mod
   }
   return out;
 }
+
+// WHY (2026-10 freeze hunt): the AI SDK base64-encodes every image Buffer in the
+// request EVERY step, via a JS loop that appends one byte at a time (~65 ms per MB
+// plus heavy GC) — with ~35 MB of history images that froze the main process ~4 s
+// per tool-result step. The SDK passes an already-base64 STRING through untouched
+// (convertToBase64 / detectMediaType both accept strings and yield the same bytes
+// on the wire), so we encode once per Buffer with the native encoder and cache it.
+// History itself keeps its Buffers (image limits, token estimates and persistence
+// read bytes); only the copy handed to streamText carries strings.
+const base64Cache = new WeakMap<Uint8Array, string>();
+export const wireBase64Stats = { encoded: 0 };
+function b64(buf: Uint8Array): string {
+  let s = base64Cache.get(buf);
+  if (s === undefined) {
+    s = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength).toString('base64');
+    base64Cache.set(buf, s);
+    wireBase64Stats.encoded++;
+  }
+  return s;
+}
+const isImageFile = (p: any) => p?.type === 'file' && typeof p.mediaType === 'string' && p.mediaType.startsWith('image/');
+// Returns a part with its bytes as base64 text, or the SAME object when nothing to do.
+function encodeFilePart(p: any): any {
+  if (!isImageFile(p)) return p;
+  const d = p.data;
+  if (d instanceof Uint8Array) return { ...p, data: { type: 'data', data: b64(d) } };
+  if (d && d.type === 'data' && d.data instanceof Uint8Array) return { ...p, data: { type: 'data', data: b64(d.data) } };
+  return p;
+}
+/** Copy-on-write: messages without image bytes keep their identity; history is never mutated. */
+export function encodeImagesForWire(messages: ModelMessage[]): ModelMessage[] {
+  let changed = false;
+  const out = messages.map((m) => {
+    const content = (m as { content: unknown }).content;
+    if (!Array.isArray(content)) return m;
+    let mChanged = false;
+    const next = (content as any[]).map((part) => {
+      if (part?.type === 'file') {
+        const e = encodeFilePart(part);
+        if (e !== part) mChanged = true;
+        return e;
+      }
+      const v = part?.type === 'tool-result' && part.output?.type === 'content' ? part.output.value : null;
+      if (Array.isArray(v) && v.some(isImageFile)) {
+        const nv = v.map(encodeFilePart);
+        if (nv.some((x: any, i: number) => x !== v[i])) {
+          mChanged = true;
+          return { ...part, output: { ...part.output, value: nv } };
+        }
+      }
+      return part;
+    });
+    if (!mChanged) return m;
+    changed = true;
+    return { ...m, content: next } as ModelMessage;
+  });
+  return changed ? out : messages;
+}
