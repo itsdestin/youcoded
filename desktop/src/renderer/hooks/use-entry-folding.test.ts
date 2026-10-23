@@ -434,6 +434,27 @@ describe('useEntryFolding', () => {
     expect(result.current.isFolded('far')).toBe(true);
   });
 
+  // Freeze hunt 2026-10-22: a fast flick on a loaded renderer showed a blank spacer because unfolding waited
+  // 100 ms after the observer's report. Neither of these may wait for a timer.
+  it('draws an entry the observer reports as near the moment it reports, with no timer wait', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old', 300]]));
+    const el = entry('old', 300);
+    act(() => { result.current.registerEntry(el); fire([{ target: el, isIntersecting: true }]); });
+    expect(result.current.isFolded('old')).toBe(false);
+  });
+
+  it('draws a spacer that a scroll has brought into the band on the scroll event itself', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old', 300]]));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    const el = entry('old', 300);
+    el.getBoundingClientRect = () => ({ top: -900, bottom: -600 } as DOMRect); // inside the 1,500 px lead
+    rootRef.current!.append(el);
+    act(() => { result.current.registerEntry(el); });
+    expect(result.current.isFolded('old')).toBe(true);
+    act(() => { rootRef.current!.dispatchEvent(new Event('scroll')); });
+    expect(result.current.isFolded('old')).toBe(false);
+  });
+
   it('a search jump to the middle inspects a viewport band, not every newer spacer', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
