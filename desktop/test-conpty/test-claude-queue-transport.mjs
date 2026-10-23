@@ -3,11 +3,14 @@
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} from 'node:url';import {fork,spawnSync} from 'node:child_process';import {createRequire} from 'node:module';import assert from 'node:assert/strict';
 import {startFakeApi} from './fake-anthropic.mjs';
 const self=fileURLToPath(import.meta.url),desktop=path.resolve(path.dirname(self),'..'),args=process.argv.slice(2),option=k=>args[args.indexOf(k)+1];
-const out=path.resolve(option('--out')); const cli='/home/destin/.local/share/claude/versions/2.1.303';
+const out=path.resolve(option('--out')); const cli=(()=>{ // WHY: the pinned 2.1.303 binary was pruned; use CLAUDE_CLI or the newest installed version (numeric sort).
+ if(process.env.CLAUDE_CLI)return process.env.CLAUDE_CLI;const dir='/home/destin/.local/share/claude/versions';
+ const v=fs.readdirSync(dir).filter(n=>/^\d+(\.\d+)*$/.test(n)).sort((a,b)=>{const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]??0)-(y[i]??0);if(d)return d;}return 0;});
+ if(!v.length)throw Error('No Claude CLI under '+dir);return path.join(dir,v.at(-1));})();
 if(!args.includes('--no-auth'))throw Error('Explicit --no-auth required');
 if(!args.includes('--inside')){
  fs.mkdirSync(out,{recursive:false});fs.mkdirSync(out+'/tmp');
- const cmd=['--die-with-parent','--new-session','--unshare-net','--unshare-pid','--clearenv','--ro-bind','/','/','--proc','/proc','--dev','/dev','--bind',out,out,'--bind',out+'/tmp','/tmp','--setenv','HOME','/tmp','--setenv','PATH','/usr/bin:/bin','--chdir',desktop,process.execPath,self,'--inside','--no-auth','--out',out,...(args.includes('--review-regressions')?['--review-regressions']:[])];
+ const cmd=['--die-with-parent','--new-session','--unshare-net','--unshare-pid','--clearenv','--ro-bind','/','/','--proc','/proc','--dev','/dev','--bind',out,out,'--bind',out+'/tmp','/tmp','--setenv','HOME','/tmp','--setenv','PATH','/usr/bin:/bin',...(process.env.CLAUDE_CLI?['--setenv','CLAUDE_CLI',process.env.CLAUDE_CLI]:[]),'--chdir',desktop,process.execPath,self,'--inside','--no-auth','--out',out,...(args.includes('--review-regressions')?['--review-regressions']:[])];
  const r=spawnSync('/usr/bin/bwrap',cmd,{env:{PATH:'/usr/bin:/bin'},encoding:'utf8',timeout:120000,maxBuffer:200000});fs.writeFileSync(out+'/launch.json',JSON.stringify({cmd,exit:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr},null,2));console.log(r.stdout);console.error(r.stderr);console.log('sandbox exit='+r.status);process.exitCode=r.status??1;
 }else{
  const require=createRequire(import.meta.url),{ClaudeControlBridge}=require(desktop+'/dist/main/claude-control-bridge.js'),{ClaudeQueue}=require(desktop+'/dist/main/claude-queue.js'),{ClaudeQueueStore}=require(desktop+'/dist/main/claude-queue-store.js'),{ClaudeQueueTransport}=require(desktop+'/dist/main/claude-queue-transport.js');

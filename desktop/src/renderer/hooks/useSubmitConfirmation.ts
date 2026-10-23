@@ -100,7 +100,8 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
       (e) => e.kind === 'user' && e.message.id === messageId && e.pending,
     );
     // WHY: a direct call can be queued or its acknowledgment lost; Enter cannot recover it and may answer a menu.
-    if (!stillPending || (stillPending.kind === 'user' && stillPending.sendTransport === 'direct')) {
+    // A queue send is delivered by the host's own owned Enter; a retry Enter here could submit a draft or answer a menu.
+    if (!stillPending || (stillPending.kind === 'user' && (stillPending.sendTransport === 'direct' || stillPending.sendTransport === 'queue'))) {
       tracked.delete(messageId);
       return;
     }
@@ -202,7 +203,7 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
         const trackProvider = argsRef.current.providerForSession?.(sessionId);
         if (trackProvider === 'native' || trackProvider === 'shell') continue;
         for (const entry of session.timeline) {
-          if (entry.kind !== 'user' || !entry.pending || entry.sendTransport === 'direct') continue;
+          if (entry.kind !== 'user' || !entry.pending || entry.sendTransport === 'direct' || entry.sendTransport === 'queue') continue;
           const messageId = entry.message.id;
           seen.add(messageId);
           if (tracked.has(messageId)) continue;

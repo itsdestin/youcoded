@@ -90,7 +90,7 @@ export class ClaudeQueue {
       // masquerade as an empty runnable queue. Writes are conservative even if a later one fails.
       const recovered = new Map<string, QueueJournal>();
       for (const old of loaded) {
-        const r = structuredClone(old); r.live = null; r.paused = true; r.boundaryHighWater = 0;
+        const r = structuredClone(old); r.live = null; r.paused = true; delete r.pauseCause; r.boundaryHighWater = 0;
         for (const i of r.items) {
           delete i.immediate; delete i.pauseBypass; // reload never preserves a transient readiness grant
           if (i.status === 'delivering' || i.status === 'uncertain') this.quarantine(r, i);
@@ -147,7 +147,7 @@ export class ClaudeQueue {
       if (!r.quarantines.length && !r.items.some(i => i.status === 'uncertain' && !i.attempt?.receipt) && !this.hasPendingClear(r)) {
         if (r.paused) item.pauseBypass = true;
         if (immediate && !r.items.some(i => !r.paused || i.pauseBypass)) item.immediate = true;
-        if (!r.items.length && immediate) r.paused = false;
+        if (!r.items.length && immediate) { r.paused = false; delete r.pauseCause; }
       }
       r.items.push(item);
       return { duplicate: false, item };
@@ -195,8 +195,18 @@ export class ClaudeQueue {
       this.retire(r, i, 'dismissed');
       for (const waiting of r.items) { delete waiting.pauseBypass; delete waiting.immediate; }
       // WHY: keep pre-existing waiting intent paused, but do not poison future queue cycles.
-      if (!r.items.length && !this.hasPendingClear(r)) r.paused = false;
+      if (!r.items.length && !this.hasPendingClear(r)) { r.paused = false; delete r.pauseCause; }
+      // WHY (2026-10-22, "it just kinda broke"): when THIS unconfirmed message is what paused a running queue, the person
+      // dismissing it has resolved the only unknown, so the messages behind it continue by themselves. A queue paused for
+      // any other reason (restart, Clear, an earlier pause) has no matching cause and stays paused exactly as before.
+      this.releaseCause(r, a.attemptId);
     });
+  }
+  /** Lift a pause whose recorded cause was `cause`, once nothing else is unresolved. */
+  private releaseCause(r: QueueJournal, cause: string): void {
+    if (r.pauseCause !== cause) return;
+    delete r.pauseCause;
+    if (!r.quarantines.length && !r.items.some(i => i.status === 'uncertain' && !i.attempt?.receipt) && !this.hasPendingClear(r)) r.paused = false;
   }
   checkout(id: string, itemId: string, editor: QueueCheckout): Promise<QueueItem> {
     validateCheckout(editor); const token = structuredClone(editor);
@@ -244,14 +254,14 @@ export class ClaudeQueue {
   }
   resume(id: string, incarnation: string): Promise<void> {
     return this.transition(id, r => { this.live(r, incarnation); if (r.clear && r.clear.phase !== 'rebound') throw Error('Clear is still frozen');
-      if (r.quarantines.length) throw Error('Composer quarantine remains unresolved'); r.paused = false; });
+      if (r.quarantines.length) throw Error('Composer quarantine remains unresolved'); r.paused = false; delete r.pauseCause; });
   }
   prioritize(id: string, itemId: string, incarnation: string, active = false): Promise<{ interrupt: boolean }> {
     return this.transition(id, r => {
       this.live(r, incarnation); if (r.clear && r.clear.phase !== 'rebound') throw Error('Clear is still frozen');
       if (r.quarantines.length) throw Error('Composer quarantine remains unresolved');
       const i = this.waiting(r, itemId); if (i.checkout) throw Error('Item reserved for checkout');
-      r.items.splice(r.items.indexOf(i), 1); r.items.unshift(i); r.paused = false;
+      r.items.splice(r.items.indexOf(i), 1); r.items.unshift(i); r.paused = false; delete r.pauseCause;
       return { interrupt: active }; // intent for a future adapter, not an Escape side effect
     });
   }
@@ -337,7 +347,10 @@ export class ClaudeQueue {
   uncertain(id: string, attempt: QueueAttempt): Promise<void> {
     const a = structuredClone(attempt); return this.transition(id, r => {
       if (r.tombstones.some(t => t.reason === 'dismissed' && t.attempt && attemptMatches(t.attempt, a))) return;
-      const i = this.attempted(r, a); this.quarantine(r, i); r.paused = true;
+      const i = this.attempted(r, a); this.quarantine(r, i);
+      // Record the cause only when this attempt is what stopped a RUNNING queue (see releaseCause).
+      if (!r.paused) r.pauseCause = a.attemptId;
+      r.paused = true;
     });
   }
   /** Only a future adapter's definitive native pre-admission revocation + clean composer evidence may release this barrier. */
@@ -359,7 +372,7 @@ export class ClaudeQueue {
       const i = this.attempted(r,a); if (i.attempt!.receipt) throw Error('Native acceptance already observed');
       r.quarantines = r.quarantines.filter(id => id !== a.attemptId);
       i.status = 'waiting'; delete i.immediate; delete i.pauseBypass; delete i.attempt; // preserve pause; explicit resolution is never permission to replay automatically
-      r.paused = true;
+      r.paused = true; delete r.pauseCause;
     });
   }
   private unresolved(r: QueueJournal): boolean {
@@ -390,7 +403,7 @@ export class ClaudeQueue {
   }
   freezeForClear(id: string, incarnation: string): Promise<{ clearId: string; revoked: QueueAttempt[] }> {
     return this.transition(id, r => {
-      this.live(r, incarnation); r.paused = true;
+      this.live(r, incarnation); r.paused = true; delete r.pauseCause;
       r.clear ??= { clearId: randomUUID(), phase: 'frozen' }; if (r.clear.phase === 'rebound') r.clear = { clearId: randomUUID(), phase: 'frozen' };
       const revoked = r.items.flatMap(i => i.attempt ? [this.attemptIdentity(i.attempt)] : []);
       for (const i of r.items) if (i.status === 'delivering' || i.status === 'uncertain') this.quarantine(r, i);
@@ -406,7 +419,7 @@ export class ClaudeQueue {
       }
       if (r.clear.phase !== 'executing' || !r.clear.aliasReserved || this.unresolved(r)) throw Error('Clear must safely resolve handoff and begin before rebinding');
       if ([...this.records.values()].some(other => other.queueId !== id && other.aliases.some(a => sameAlias(a, replacement)))) throw Error('Conversation alias already bound');
-      r.alias = replacement; this.compactAliases(r); r.live = { incarnation }; r.boundaryHighWater = 0; r.paused = true; r.clear.phase = 'rebound';
+      r.alias = replacement; this.compactAliases(r); r.live = { incarnation }; r.boundaryHighWater = 0; r.paused = true; delete r.pauseCause; r.clear.phase = 'rebound';
     });
   }
   retireClosed(id: string): Promise<void> {
@@ -418,7 +431,7 @@ export class ClaudeQueue {
   close(id: string, incarnation: string): Promise<void> {
     return this.serial(async () => {
       const previous = this.get(id); const r = structuredClone(previous); this.live(r, incarnation);
-      r.paused = true; r.live = null;
+      r.paused = true; delete r.pauseCause; r.live = null;
       for (const i of r.items) if (i.status === 'delivering' || i.status === 'uncertain') this.quarantine(r, i);
       await this.commit(r, previous.revision);
       if (canRetireQueue(r)) { await this.options.storage.retire(id, r.revision); this.records.delete(id); }

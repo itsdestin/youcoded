@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { CLAUDE_QUEUE_WIRE_LIMITS } from '../shared/claude-queue-wire-limits';
+import { CLAUDE_QUEUE_WIRE_LIMITS, CLAUDE_QUEUE_COMPOSER_DROPPED } from '../shared/claude-queue-wire-limits';
+import { formatQueueWire } from '../shared/claude-queue-wire';
 
 interface QueueInput {
   text: string;
@@ -74,13 +75,15 @@ export async function prepareClaudeQueueInput(input: QueueInput): Promise<{ wire
       files.push(file);
     }
   };
+  // Attached files and @-mentioned files get different wording (formatQueueWire); a file that is both is a mention.
+  const attached: string[] = []; const mentioned: string[] = [];
   for (const attachment of attachments) {
     if (typeof attachment !== 'string' || !attachment || attachment.includes('\0') || attachment.length > 4096) throw Error('Invalid queued attachment');
     const file = path.resolve(cwd, attachment);
     let stat;
     try { stat = await fs.stat(file); } catch { throw Error('A queued attachment is unavailable: ' + attachment); }
     if (!stat.isFile()) throw Error('Queued attachment is not a file: ' + attachment);
-    add(file);
+    add(file); if (!attached.includes(file)) attached.push(file);
   }
 
   // WHY: only resolve real files outside code; an email, decorator example or nonexistent name is not proof of file intent.
@@ -105,14 +108,15 @@ export async function prepareClaudeQueueInput(input: QueueInput): Promise<{ wire
         } catch { /* A mention that cannot be resolved remains literal; explicit attachments refuse above. */ }
       }
       if (!selected) continue;
-      add(selected);
+      add(selected); if (!mentioned.includes(selected)) mentioned.push(selected);
       result += source.slice(at, match.index) + match[1] + JSON.stringify(selected) + suffix;
       at = match.index + match[0].length;
     }
     parts[n] = result + source.slice(at);
   }
-  if (files.length === 0) return prepared(text, files);
+  // WHY strip (2026-10-22): Claude Code's message box drops these characters, so a wire holding one never read back
+  // exactly and the message sat in the box "Unconfirmed". The model would not have received them anyway.
+  const body = parts.join('').replace(/\r\n?/g, '\n').replace(new RegExp(CLAUDE_QUEUE_COMPOSER_DROPPED, 'gu'), '');
   // WHY: leading bare paths can take a different native queue route. Explicit instructions reached the same running turn in real CLI probes.
-  const instructions = files.map(file => 'Read this entire file: ' + JSON.stringify(file)).join('\n');
-  return prepared(instructions + '\nUse Read before answering; read large text in chunks if needed. If a file is unavailable or cannot be read, say so. Do not assume the file contents were supplied automatically.\n\n' + parts.join(''), files);
+  return prepared(formatQueueWire(body, mentioned, attached.filter(file => !mentioned.includes(file))), files);
 }

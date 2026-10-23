@@ -8,7 +8,7 @@ import { log } from './logger';
 import type { ClaudeQueue } from './claude-queue';
 
 const id = z.string().min(1).max(256).regex(/^[^\x00-\x1f]+$/);
-const offerSchema = z.object({ boundaryId: id, boundarySeq: z.number().int().positive().safe(), conversationId: id, turnId: id.nullable(), kind: z.enum(['batch', 'idle']), expiresAt: z.number().finite(), agentId: id.optional() }).strict();
+const offerSchema = z.object({ boundaryId: id, boundarySeq: z.number().int().positive().safe(), conversationId: id, turnId: id.nullable(), kind: z.enum(['batch', 'idle']), expiresAt: z.number().finite(), agentId: id.optional(), composerBusy: z.literal(true).optional() }).strict();
 const eventSchema = z.object({ kind: z.enum(['staged', 'admitted', 'accepted', 'transcript', 'revoked', 'unknown', 'recovered', 'abandoned']), attemptId: z.string().uuid(), wireHash: z.string().regex(/^[a-f0-9]{64}$/), uuid: id.optional(), composerSafe: z.boolean().optional(), beforeAdmission: z.boolean().optional(), beforeInvocation: z.boolean().optional(), detail: z.string().max(256).optional() }).strict();
 export interface QueueBinding { queueId: string; incarnation: string; alias: QueueAlias; cwd: string }
 export interface QueueLease extends QueueAttempt { conversationId: string; turnId: string | null; expiresAt: number; wireText: string }
@@ -24,7 +24,9 @@ export interface ClaudeQueueTransportOptions {
   prepare?: (payload: QueuePayload, cwd: string) => Promise<{ wireText: string; files: string[] }>;
   now?: () => number;
   verifyEvidence?: (attempt: QueueAttempt, uuid: string) => Promise<boolean>;
-  onIssue?: (sessionId: string, issue: { attemptId?: string; message: string }) => void;
+  onIssue?: (sessionId: string, issue: { attemptId?: string; queueItemId?: string; message: string }) => void;
+  /** Claude Code's own message box has text the person left there; the queue waits rather than staging. */
+  onComposerBusy?: (sessionId: string, busy: boolean) => void;
 }
 interface Flow {
   lease?: QueueLease;
@@ -38,7 +40,7 @@ interface Flow {
   resolve(): void;
   done: Promise<void>;
 }
-interface BindingState { binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
+interface BindingState { composerBusy?: boolean; binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
 const released = { released: true as const };
 
 /** Authenticated bridge delegate, intentionally not wired into IPC/UI. No delivery wait holds the queue's journal lock. */
@@ -50,7 +52,20 @@ export class ClaudeQueueTransport {
   constructor(private readonly options: ClaudeQueueTransportOptions) {}
   private now(): number { return (this.options.now ?? Date.now)(); }
   private issue(sessionId: string, message: string, attemptId?: string): void {
-    try { this.options.onIssue?.(sessionId, { message, ...(attemptId ? { attemptId } : {}) }); } catch { /* diagnostics cannot change a durable outcome */ }
+    // WHY (2026-10-22): name the row the problem belongs to, so the screen shows it on THAT message only (it was
+    // prefixed onto every queued row, and onto the text Edit put back in the message box).
+    let queueItemId: string | undefined;
+    if (attemptId) {
+      const s = this.bindings.get(sessionId);
+      queueItemId = s?.attempts.get(attemptId)?.queueItemId;
+      if (!queueItemId && s) { try { const r = this.options.queue.snapshot(s.binding.queueId); queueItemId = r.items.find(i => i.attempt?.attemptId === attemptId)?.queueItemId; } catch { /* unknown queue: no row */ } }
+    }
+    try { this.options.onIssue?.(sessionId, { message, ...(attemptId ? { attemptId } : {}), ...(queueItemId ? { queueItemId } : {}) }); } catch { /* diagnostics cannot change a durable outcome */ }
+  }
+  private setComposerBusy(sessionId: string, s: BindingState, busy: boolean): void {
+    if (!!s.composerBusy === busy) return;
+    s.composerBusy = busy;
+    try { this.options.onComposerBusy?.(sessionId, busy); } catch { /* display only */ }
   }
   bind(sessionId: string, binding: QueueBinding): void {
     if (this.closed || this.bindings.has(sessionId)) throw Error('Queue transport already bound or closed');
@@ -174,6 +189,10 @@ export class ClaudeQueueTransport {
     const s = this.state(sessionId, incarnation); const parsed = offerSchema.safeParse(value);
     if (!s || !parsed.success || s.flow) return released;
     const offer = parsed.data;
+    // Native read Claude Code's box BEFORE offering: text the person left there is not ours to replace. Wait, visibly,
+    // until a later offer finds it empty (the next idle poll, or a terminal change waking the queue).
+    if (offer.composerBusy) { if (!offer.agentId) this.setComposerBusy(sessionId, s, true); return released; }
+    if (!offer.agentId) this.setComposerBusy(sessionId, s, false);
     if (offer.agentId || offer.conversationId !== s.binding.alias.conversationId || offer.expiresAt <= this.now() || offer.expiresAt - this.now() > 15000
       || (offer.kind === 'idle' && offer.turnId !== null) || (offer.kind === 'batch' && offer.turnId === null)) return released;
     // WHY: input safety may briefly disappear after a proven clean handoff. This set
@@ -335,6 +354,7 @@ export class ClaudeQueueTransport {
       }
       case 'revoked': {
         if ((event.beforeAdmission === true || event.beforeInvocation === true) && event.composerSafe === true) {
+          if (event.detail === 'box-not-empty') this.setComposerBusy(sessionId, s, true);
           await this.releaseWorker(sessionId, s, lease);
           if (event.beforeInvocation === true) await this.options.queue.resolveNotInvoked(s.binding.queueId,lease,{notInvokedId:lease.attemptId,composerEmpty:true});
           else await this.options.queue.revokeBeforeAdmission(s.binding.queueId, lease, { revocationId: lease.attemptId, composerEmpty: true });

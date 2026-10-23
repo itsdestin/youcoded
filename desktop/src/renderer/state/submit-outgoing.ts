@@ -38,6 +38,8 @@ export interface OutgoingSend {
   instant?: boolean;
   /** A recoverable old bubble is replaced only once the new request is accepted/uncertain. */
   replaceSendId?: string;
+  /** Claude Code queue: this screen's copy says the conversation is idle (canDrawSendNow), so the bubble goes up at once. */
+  drawNow?: boolean;
 }
 
 /**
@@ -70,16 +72,23 @@ export function sendToClaudeCode(o: OutgoingSend): string {
 // Only settled-unknown persisted requests are retry candidates; reload intentionally resets this set.
 const inFlightQueueSends = new Set<string>();
 async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> {
-  let allowLegacyFallback=false; let activeSendId: string | undefined;
+  let allowLegacyFallback=false; let activeSendId: string | undefined; let drawnSendId: string | undefined;
+  // The instant bubble comes down whenever this send ends up NOT in the queue (refused, fallen back, unknown).
+  const undraw=()=>{if(drawnSendId){o.dispatch({type:'SEND_DISCARD',sessionId:o.sessionId,sendId:drawnSendId});drawnSendId=undefined;}};
   try {
     // The same draft resumes its saved send (same sendId: the queue cannot take it twice). A different draft is never held
     // back by an older unconfirmed one any more; that one is settled by asking the queue once this send is on its way.
     let request=pendingQueueSend(o.sessionId,o.originalText??o.ptyText,o.paths,inFlightQueueSends);
+    // WHY draw now (Destin, 2026-10-22: "the message should appear when i send it"): before the queue, the terminal path drew
+    // the bubble at Send; the queue path drew nothing until Claude Code recorded the line. Only an idle conversation gets one
+    // (a busy one shows the message in the queue strip instead), never a slash command (it may get no echo), and the
+    // 'queue' transport keeps the terminal's retry Enter away from it. Confirmed by identity (QUEUE_SYNCED `bound`).
+    if(o.drawNow&&!(o.originalText??o.ptyText).trimStart().startsWith('/')){drawnSendId=request?.payload.sendId??sendId;o.dispatch({type:'USER_PROMPT',sessionId:o.sessionId,content:o.content,timestamp:Date.now(),attachments:o.paths,sendId:drawnSendId,sendTransport:'queue'});}
     if(!request){
      allowLegacyFallback=true;
      const identity = await window.claude.session.queue.action(o.sessionId,{kind:'identity'});
      allowLegacyFallback=false;
-     if (identity.status === 'unavailable') { sendToClaudeLegacy(o,sendId); return; }
+     if (identity.status === 'unavailable') { undraw(); sendToClaudeLegacy(o,sendId); return; }
      if (identity.status !== 'identity') throw Error('Queue identity is not ready. The original message was not submitted.');
      request={kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId,originalText:o.originalText??o.ptyText,attachments:[...o.paths],displayContent:o.content}};
      savePendingQueueSend(o.sessionId,request);
@@ -93,7 +102,8 @@ async function sendViaHostQueue(o: OutgoingSend, sendId: string): Promise<void> 
     // A settled failure is already a recovery candidate, even while the notice module loads.
     if(activeSendId){inFlightQueueSends.delete(activeSendId);activeSendId=undefined;}
     const unsupported=error as {code?:unknown;channel?:unknown};
-    if(allowLegacyFallback&&unsupported?.code==='REMOTE_UNSUPPORTED'&&unsupported.channel==='session:queue-action'){sendToClaudeLegacy(o,sendId);return;}
+    if(allowLegacyFallback&&unsupported?.code==='REMOTE_UNSUPPORTED'&&unsupported.channel==='session:queue-action'){undraw();sendToClaudeLegacy(o,sendId);return;}
+    undraw();
     // No legacy Enter after an uncertain action. Existing notice + unsent refill is deliberate,
     // not a fabricated history row matching transformed file-read instruction text.
     const { announce } = await import('../utils/announce');

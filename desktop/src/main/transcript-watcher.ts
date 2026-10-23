@@ -6,6 +6,7 @@ import { TranscriptEvent, StampableEvent } from '../shared/types';
 import { SubagentIndex } from './subagent-index';
 import { SubagentWatcher } from './subagent-watcher';
 import { ccProjectSlug } from './slug-encoding';
+import { parseQueueWire } from '../shared/claude-queue-wire';
 
 // ---------------------------------------------------------------------------
 // parseTranscriptLine
@@ -110,7 +111,7 @@ export function parseTranscriptLine(
   const queuedText = queuedPromptText(parsed);
   if (queuedText !== null) {
     if (!queuedText) return [];
-    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp, data: { text: queuedText } }];
+    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp, data: queueWireData(queuedText) }];
   }
 
   // Only process user / assistant message lines
@@ -270,7 +271,7 @@ export function parseTranscriptLine(
         sessionId,
         uuid,
         timestamp,
-        data: { text },
+        data: queueWireData(text),
       });
       return events;
     }
@@ -407,6 +408,13 @@ export function parseTranscriptLine(
  * line with no origin at all is read as typed: all 84 measured on 2026-09-11 carried one, so this
  * only matters for a Claude Code build this was not measured on.
  */
+/** WHY (2026-10-22): a message sent through the queue reached Claude Code with the queue's file lines added; the chat shows
+ *  what the person typed, with the attached files as chips (`attachedFiles`), on every screen and after a reload. */
+function queueWireData(text: string): { text: string; attachedFiles?: string[] } {
+  const parsed = parseQueueWire(text);
+  return parsed.attached.length ? { text: parsed.text, attachedFiles: parsed.attached } : { text: parsed.text };
+}
+
 function queuedPromptText(parsed: any): string | null {
   const a = parsed?.type === 'attachment' ? parsed.attachment : null;
   if (!a || a.type !== 'queued_command' || a.commandMode !== 'prompt') return null;

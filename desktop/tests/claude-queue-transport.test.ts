@@ -71,30 +71,59 @@ describe('Claude queue transport', () => {
     expect(f.queue.snapshot(f.id).items[0]).toMatchObject({status:'delivering',attempt:{attemptId:fresh.attemptId}});
     await f.transport.event('app','incarnation',{kind:'accepted',attemptId:fresh.attemptId,wireHash:fresh.wireHash}); await next; await f.transport.close();
   });
-  it('does not flush paused waiting intent when an unknown is dismissed', async () => {
+  it('continues the messages queued behind an unconfirmed one once the person dismisses it', async () => {
     const f = await fixture(); const first = await f.add(); const pending = f.transport.offer('app','incarnation',f.offer()); const lease = await stage(f);
-    await f.add('paused'); await f.transport.event('app','incarnation',{kind:'unknown',attemptId:lease.attemptId,wireHash:lease.wireHash}); await pending;
+    await f.add('behind'); await f.transport.event('app','incarnation',{kind:'unknown',attemptId:lease.attemptId,wireHash:lease.wireHash}); await pending;
+    expect(f.queue.snapshot(f.id)).toMatchObject({paused:true,pauseCause:lease.attemptId});
+    // Still unresolved: nothing behind it may go.
+    await f.transport.offer('app','incarnation',f.offer(2)); expect(f.worker.mock.calls.filter(c=>c[1].type==='queue-enter')).toHaveLength(1);
     const dismiss = f.transport.dismiss('app',first.item.queueItemId); expect((await f.transport.poll('app','incarnation')).kind).toBe('abandon');
     await f.transport.event('app','incarnation',{kind:'abandoned',attemptId:lease.attemptId,wireHash:lease.wireHash}); await dismiss;
-    expect(f.queue.snapshot(f.id)).toMatchObject({paused:true,quarantines:[],items:[{sendId:'paused',status:'waiting'}]});
-    expect(f.transport.canControl('app')).toBe(true); // paused intent does not own live conversation input
-    await f.transport.offer('app','incarnation',f.offer(2)); expect(f.worker.mock.calls.filter(c=>c[1].type==='queue-enter')).toHaveLength(1);
+    expect(f.queue.snapshot(f.id)).toMatchObject({paused:false,quarantines:[],items:[{sendId:'behind',status:'waiting'}]});
+    expect(f.queue.snapshot(f.id).pauseCause).toBeUndefined();
+    const resumed=f.transport.offer('app','incarnation',f.offer(3)); const behind=await stage(f); expect(behind.sendId).toBe('behind');
+    await f.transport.event('app','incarnation',{kind:'accepted',attemptId:behind.attemptId,wireHash:behind.wireHash});
+    await f.transport.event('app','incarnation',{kind:'transcript',attemptId:behind.attemptId,wireHash:behind.wireHash,uuid:'behind-row'}); await resumed;
     await f.queue.enqueue(f.id,{sendEpoch:f.queue.snapshot(f.id).sendEpoch,sendId:'manual',originalText:'new manual',displayContent:'new manual',attachments:[]},undefined,true);
-    const next=f.transport.offer('app','incarnation',f.offer(3,'idle')); const fresh=await stage(f);
+    const next=f.transport.offer('app','incarnation',f.offer(4,'idle')); const fresh=await stage(f);
     expect(fresh.sendId).toBe('manual');
-    // New intent during this fresh task must form a reusable queue, independently
-    // of the OLD paused item. Neither LIFO promotion nor a permanent global pause is allowed.
+    // New intent during this fresh task forms an ordinary FIFO queue (no LIFO promotion, no leftover pause).
     await f.add('fresh-queued-one'); await f.add('fresh-queued-two');
-    expect(f.queue.snapshot(f.id).items.find(i=>i.sendId==='fresh-queued-one')).toMatchObject({pauseBypass:true});
+    expect(f.queue.snapshot(f.id).paused).toBe(false);
     await f.transport.event('app','incarnation',{kind:'accepted',attemptId:fresh.attemptId,wireHash:fresh.wireHash});
     await f.transport.event('app','incarnation',{kind:'transcript',attemptId:fresh.attemptId,wireHash:fresh.wireHash,uuid:'manual-row'}); await next;
-    for(const [seq,sendId] of [[4,'fresh-queued-one'],[5,'fresh-queued-two']] as const){
+    for(const [seq,sendId] of [[5,'fresh-queued-one'],[6,'fresh-queued-two']] as const){
       const draining=f.transport.offer('app','incarnation',f.offer(seq)); const queued=await stage(f); expect(queued.sendId).toBe(sendId);
       await f.transport.event('app','incarnation',{kind:'accepted',attemptId:queued.attemptId,wireHash:queued.wireHash});
       await f.transport.event('app','incarnation',{kind:'transcript',attemptId:queued.attemptId,wireHash:queued.wireHash,uuid:sendId}); await draining;
     }
-    expect(f.queue.snapshot(f.id)).toMatchObject({paused:true,items:[{sendId:'paused',status:'waiting'}]});
+    expect(f.queue.snapshot(f.id)).toMatchObject({paused:false,items:[]});
     await f.transport.close();
+  });
+  it('keeps a queue that was already paused for another reason paused when an unconfirmed message is dismissed', async () => {
+    const f = await fixture(); const first = await f.add(); const pending = f.transport.offer('app','incarnation',f.offer()); const lease = await stage(f);
+    await f.add('older'); await f.transport.event('app','incarnation',{kind:'unknown',attemptId:lease.attemptId,wireHash:lease.wireHash}); await pending;
+    // Another pause on top (as a restart or Clear makes): the recorded cause is gone.
+    const r = f.queue.snapshot(f.id); delete r.pauseCause; (f.queue as unknown as { records: Map<string, QueueJournal> }).records.set(f.id, r);
+    const dismiss = f.transport.dismiss('app',first.item.queueItemId); await f.transport.poll('app','incarnation');
+    await f.transport.event('app','incarnation',{kind:'abandoned',attemptId:lease.attemptId,wireHash:lease.wireHash}); await dismiss;
+    expect(f.queue.snapshot(f.id)).toMatchObject({paused:true,items:[{sendId:'older',status:'waiting'}]});
+    await f.transport.close();
+  });
+  it('waits without staging while text sits in Claude Code\'s box, then sends once it is empty', async () => {
+    const busy = vi.fn(); const f = await fixture();
+    const transport = new ClaudeQueueTransport({ queue: f.queue, worker: f.worker, inputSafe: () => true, prepare: async p => ({ wireText: p.originalText, files: [] }), onComposerBusy: busy });
+    await f.transport.close(); transport.bind('app', { queueId: f.id, incarnation: 'incarnation', alias: { provider: 'claude', conversationId: 'conversation' }, cwd: '/tmp' });
+    await f.add();
+    await transport.offer('app','incarnation',f.offer(1,'idle',{composerBusy:true}));
+    expect(f.worker).not.toHaveBeenCalled(); expect(f.queue.snapshot(f.id).items[0].status).toBe('waiting'); expect(busy).toHaveBeenLastCalledWith('app', true);
+    const sending = transport.offer('app','incarnation',f.offer(2,'idle')); expect(busy).toHaveBeenLastCalledWith('app', false);
+    const op = await transport.poll('app','incarnation'); expect(op.kind).toBe('stage');
+    // The race: text typed after the offer. Native refuses before any fill: definitely not sent, back to waiting, unpaused.
+    await transport.event('app','incarnation',{kind:'revoked',attemptId:op.lease!.attemptId,wireHash:op.lease!.wireHash,beforeAdmission:true,composerSafe:true,detail:'box-not-empty'}); await sending;
+    expect(f.queue.snapshot(f.id)).toMatchObject({paused:false,quarantines:[],items:[{status:'waiting'}]});
+    expect(f.worker.mock.calls.some(c=>c[1].type==='queue-enter')).toBe(false); expect(busy).toHaveBeenLastCalledWith('app', true);
+    await transport.close();
   });
   it('keeps restored uncertain attempts read-only with original-conversation guidance rather than inventing an armed lease',async()=>{
     const f=await fixture();await f.add();const claim=await f.queue.claim(f.id,{boundaryId:'old-boundary',boundarySeq:1,incarnation:'incarnation',alias:{provider:'claude',conversationId:'conversation'},wireHash:'a'.repeat(64)});if(!claim)throw Error('claim');
