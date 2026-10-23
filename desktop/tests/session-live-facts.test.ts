@@ -319,15 +319,16 @@ describe('words in a reply are not the footer', () => {
 });
 
 describe('confirmed direct commands', () => {
-  it('publishes the observed model rather than assuming the requested alias applied, once per receipt', () => {
+  it('publishes the observed model rather than assuming the requested alias applied, once per receipt, and draws no divider of its own', () => {
     const h = host();
     const request = { kind: 'command', command: 'model', args: 'sonnet', notice: 'model-switch' } as const;
     const result = { status: 'accepted', requestId: 'r1', model: 'claude-haiku-5-5' } as const;
     h.live.directCommandFinished(S, request, result);
     h.live.directCommandFinished(S, request, result);
     expect(h.records.facts(S)!.model).toBe('haiku');
-    expect(h.lives().filter(e => e.kind === 'model-switch')).toHaveLength(1);
-    expect(h.lives().find(e => e.kind === 'model-switch').label).toContain('Haiku');
+    expect(h.lives().filter(e => e.kind === 'model')).toHaveLength(1);
+    // The divider comes from the /model line Claude Code records (the transcript's model-switch event), never from the host.
+    expect(h.lives().filter(e => e.kind === 'model-switch')).toHaveLength(0);
   });
   it('keeps the native cached-model confirmation and restores the observed model when it is declined', () => {
     const timers: Array<() => void> = [];
@@ -360,14 +361,11 @@ describe('confirmed direct commands', () => {
 });
 
 describe('/model, /compact and /clear', () => {
-  it('a typed /model names the model on every screen; only a CHAT-typed one also draws the divider', () => {
+  it('a /model written to the terminal names the model on every screen; the divider is left to the transcript\'s record', () => {
     const h = host();
-    h.live.noteInput(S, '/model opus[1m]\r');                 // picker or Shift+Space: same bytes, no divider
-    expect(h.lives()).toEqual([{ sessionId: S, kind: 'model', model: 'opus[1m]' }]);
-    h.live.noteInput(S, '/model sonnet\r', 'model-switch');   // typed in the chat
-    const l = h.lives();
-    expect(l[1]).toEqual({ sessionId: S, kind: 'model', model: 'sonnet' });
-    expect(l[2]).toMatchObject({ kind: 'model-switch', label: 'Model switched to Sonnet' });
+    h.live.noteInput(S, '/model opus[1m]\r');
+    h.live.noteInput(S, '/model sonnet\r');
+    expect(h.lives()).toEqual([{ sessionId: S, kind: 'model', model: 'opus[1m]' }, { sessionId: S, kind: 'model', model: 'sonnet' }]);
     expect(h.records.facts(S)!.model).toBe('sonnet');
   });
   it('/compact pasted without Enter starts nothing; submitted, it starts the spinner', () => {
@@ -380,7 +378,7 @@ describe('/model, /compact and /clear', () => {
   });
   it('an argument that names no model, plain chat text and a half-written line announce nothing', () => {
     const h = host();
-    for (const t of ['/model claude-weird-9\r', 'please /model opus\r', '/mod', 'hello\r', '/modelx opus\r']) h.live.noteInput(S, t, 'model-switch');
+    for (const t of ['/model claude-weird-9\r', 'please /model opus\r', '/mod', 'hello\r', '/modelx opus\r']) h.live.noteInput(S, t);
     expect(h.sent).toEqual([]);
   });
   it.each(['/compact\r', '/compact focus on the tests\r'])('%s starts one spinner everywhere; the certified summary ends it', (command) => {
@@ -493,8 +491,9 @@ describe('a model switch Claude Code refuses', () => {
   // "model ... not found/unavailable", and the screen holds the conversation as well: a chat that merely said "the model was not found", or Claude Code's own
   // footer "auto mode unavailable for this model", made every /model lose its divider. Two anchored facts remain: a reply from another model, and a
   // "Switch model?" pop-up that came and went without Claude Code ever recording the command (answered "No, go back").
-  const typed = (h: ReturnType<typeof host>) => { h.records.note(S, 'transcript:event', { type: 'assistant-text', sessionId: S, uuid: 'a0', timestamp: 1, data: { text: 'hi', model: 'claude-opus-4-7' } }); h.sent.length = 0; h.live.noteInput(S, '/model haiku\r', 'model-switch'); };
-  const retracted = (h: ReturnType<typeof host>) => h.lives().some((l) => l.kind === 'model-switch-retract');
+  const typed = (h: ReturnType<typeof host>) => { h.records.note(S, 'transcript:event', { type: 'assistant-text', sessionId: S, uuid: 'a0', timestamp: 1, data: { text: 'hi', model: 'claude-opus-4-7' } }); h.sent.length = 0; h.live.noteInput(S, '/model haiku\r'); };
+  // Taken back = the label is put back on the model the session was on (there is no host divider to retract any more).
+  const retracted = (h: ReturnType<typeof host>) => h.lives().filter((l) => l.kind === 'model').at(-1)?.model === 'claude-opus-4-7';
   it.each([
     ['conversation text quoting a refusal', 'the model was not found; an unknown model is invalid\r\n'],
     ["Claude Code's real footer (captured 2.1.287)", '\x1b[H\r\x1b[1B  ⎿  Set model to Haiku 4.5 and saved as your default for new sessions\r\x1b[3B  ⏸ manual mode on · ? for shortcuts            auto mode unavailable for this model'],
@@ -503,7 +502,7 @@ describe('a model switch Claude Code refuses', () => {
     const h = host(); typed(h);
     h.live.noteOutput(S, text);
     expect(retracted(h)).toBe(false);
-    expect(h.lives().map((l) => l.kind)).toEqual(['model', 'model-switch']);
+    expect(h.lives().map((l) => l.kind)).toEqual(['model']);
   });
   describe('a "Switch model?" pop-up', () => {
     const popup = { kind: 'popup' as const, heading: 'Switch model?' };
@@ -512,27 +511,26 @@ describe('a model switch Claude Code refuses', () => {
       const h = host({ setTimer: (fn: () => void) => { timers.push(fn); return timers.length - 1; }, clearTimer: (i: any) => { timers[i] = () => {}; } });
       return { h, fire: () => timers.splice(0).forEach((f) => f()) };
     };
-    it('answered No (the pop-up goes, the command is never recorded): the divider is taken back and the label put back', () => {
+    it('answered No (the pop-up goes, no "Set model to" reply): the label is put back', () => {
       const { h, fire } = rigTimers(); typed(h);
       h.live.inputBlock(S, popup);
       h.live.inputBlock(S, null);
       expect(retracted(h)).toBe(false);   // not yet: Claude Code may still be writing the command's line
       fire();
       const l = h.lives();
-      expect(l.some((x) => x.kind === 'model-switch-retract')).toBe(true);
       expect(l[l.length - 1]).toEqual({ sessionId: S, kind: 'model', model: 'claude-opus-4-7' });
     });
-    it('answered Yes (Claude Code records the /model line): nothing is taken back', () => {
+    it('answered Yes (Claude Code replies "Set model to"): nothing is taken back', () => {
       const { h, fire } = rigTimers(); typed(h);
       h.live.inputBlock(S, popup);
-      h.live.noteTranscript(S, { type: 'user-message', timestamp: 3, data: { text: '/model haiku', slashCommand: true } });
+      h.live.noteTranscript(S, { type: 'model-switch', timestamp: 3, data: { model: 'haiku' } });
       h.live.inputBlock(S, null);
       fire();
       expect(retracted(h)).toBe(false);
     });
     it('a second /model typed before the first is confirmed puts back the model the session REALLY ran, not the first one announced', () => {
       const { h, fire } = rigTimers(); typed(h);
-      h.live.noteInput(S, '/model sonnet\r', 'model-switch');
+      h.live.noteInput(S, '/model sonnet\r');
       h.live.inputBlock(S, popup); h.live.inputBlock(S, null); fire();
       const l = h.lives();
       expect(l[l.length - 1]).toEqual({ sessionId: S, kind: 'model', model: 'claude-opus-4-7' });
@@ -548,17 +546,17 @@ describe('a model switch Claude Code refuses', () => {
   it('a reply from a different model after the next message retracts it; the turn already running does not', () => {
     const h = host(); typed(h);
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: 5, data: { model: 'claude-opus-4-7' } });   // the old turn, still streaming
-    expect(h.lives().some((l) => l.kind === 'model-switch-retract')).toBe(false);
+    expect(retracted(h)).toBe(false);
     h.live.noteTranscript(S, { type: 'user-message', timestamp: 6, data: { text: 'next' } });
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: 7, data: { model: 'claude-opus-4-7' } });
-    expect(h.lives().some((l) => l.kind === 'model-switch-retract')).toBe(true);
+    expect(retracted(h)).toBe(true);
   });
   it('a reply from the model asked for confirms it: nothing is taken back, and a later error line does not matter', () => {
     const h = host(); typed(h);
     h.live.noteTranscript(S, { type: 'user-message', timestamp: 6, data: { text: 'next' } });
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: 7, data: { model: 'claude-haiku-4-5' } });
     h.live.noteOutput(S, 'model not found');
-    expect(h.lives().some((l) => l.kind === 'model-switch-retract')).toBe(false);
+    expect(retracted(h)).toBe(false);
   });
 });
 

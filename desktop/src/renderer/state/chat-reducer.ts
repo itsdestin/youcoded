@@ -14,7 +14,7 @@ import {
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToActions } from './transcript-page-actions';
-import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction } from './timeline-boundaries';
+import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction, replaceTrailingModelMarker } from './timeline-boundaries';
 import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
 import { isPlaceholderModelId } from '../../shared/model-ids';
@@ -3483,20 +3483,16 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // Same divider shape as CLEAR_TIMELINE, just for a typed `/model <alias>`
-    // command — see slash-command-dispatcher.ts for why this never touches
-    // isThinking (the command is Claude-Code-local and never produces a turn
-    // to end one with).
+    // Same divider shape as CLEAR_TIMELINE, for a recorded model switch (the
+    // `model-switch` transcript event, both runtimes). Never touches isThinking:
+    // a switch produces no turn to end one with.
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
       if (hasMarker(session, action.markerId)) return state; // see CLEAR_TIMELINE
-      next.set(action.sessionId, {
-        ...session,
-        ...appendSystemMarker(session, {
-          id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model',
-        }),
-      });
+      const marker = { id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model' as const };
+      const timeline = replaceTrailingModelMarker(session, marker);
+      next.set(action.sessionId, timeline ? { ...session, timeline } : { ...session, ...appendSystemMarker(session, marker) });
       return next;
     }
 

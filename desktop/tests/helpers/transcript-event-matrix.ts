@@ -88,6 +88,10 @@ export const MATRIX: MatrixCase[] = [
   { name: 'context-clear with window after', event: ev('context-clear', { contextUsedAfter: 1234 }) },
   { name: 'context-clear with zero window after', event: ev('context-clear', { contextUsedAfter: 0 }) },
 
+  { name: 'model-switch claude code alias', event: ev('model-switch', { model: 'opus[1m]' }) },
+  { name: 'model-switch native model id', event: ev('model-switch', { model: 'deepseek/deepseek-v4-flash' }) },
+  { name: 'model-switch subagent-stamped', event: ev('model-switch', { model: 'haiku', ...stamp }) },
+
   { name: 'compact-summary pending, harness figures', event: ev('compact-summary', { summary: 'sum', contextUsedAfter: 100, contextUsedBefore: 900, usage }), ctx: { compactionPending: true, statuslineContextTokens: 777 } },
   { name: 'compact-summary pending, statusline fallback', event: ev('compact-summary', { summary: 'sum' }), ctx: { compactionPending: true, statuslineContextTokens: 777 } },
   { name: 'compact-summary pending, nothing known', event: ev('compact-summary', {}), ctx: { compactionPending: true } },

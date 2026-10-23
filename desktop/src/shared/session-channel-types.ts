@@ -31,7 +31,7 @@ export interface SessionChannelTypes {
   'session:switch': { request: { sessionId: string }; response: { ok: true } };
   'session:claude-control': { request: { sessionId: string; request: ClaudeControlRequest }; response: ClaudeControlResult };
   // Terminal traffic: fire-and-forget on every door.
-  'session:input': { request: { sessionId: string; text: string; /** a typed chat command, so the host can draw its divider (R5-4a) */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
+  'session:input': { request: { sessionId: string; text: string; /** a typed chat command (R5-4a); accepted but unread since 2026-10-22, the divider comes from the transcript */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
   'session:resize': { request: { sessionId: string; cols: number; rows: number }; response: void };
   'session:terminal-ready': { request: { sessionId: string }; response: void };
   // Terminal flow control (desktop window only; a phone's copy is refused silently, so a slow phone can never brake the desktop's program).

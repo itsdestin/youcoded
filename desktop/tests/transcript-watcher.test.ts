@@ -47,7 +47,8 @@ describe('parseTranscriptLine', () => {
 
   it('recognizes an app mod command envelope even without promptId', () => {
     const events = parseTranscriptLine(JSON.stringify({ type: 'user', uuid: 'mod-model', origin: { kind: 'plugin', name: 'youcoded-control-bridge' }, message: { role: 'user', content: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>' } }), sessionId);
-    expect(events).toMatchObject([{ type: 'user-message', uuid: 'mod-model', data: { text: '/model sonnet', slashCommand: true } }]);
+    // A /model command line draws nothing itself; the "Set model to" reply after it draws the divider.
+    expect(events).toEqual([]);
   });
 
   it('drops only the bridge command\'s extra compact row, not actual user text or other plugins', () => {
@@ -1191,6 +1192,36 @@ describe('messages recorded outside an ordinary user line', () => {
     expect(parseTranscriptLine(line, 's1')).toEqual([
       expect.objectContaining({ data: { text: '/compact we are going to prepare the plan.', slashCommand: true } }),
     ]);
+  });
+
+  it('a /model command line naming a model, or none, is not a user bubble', () => {
+    for (const args of ['opus[1m]', 'sonnet', 'claude-haiku-5-5', '']) {
+      const line = commandLine(`<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>${args}</command-args>`);
+      expect(parseTranscriptLine(line, 's1')).toEqual([]);
+    }
+  });
+
+  it('a /model command line naming no known model stays the plain command', () => {
+    const line = commandLine('<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>gpt-weird</command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([expect.objectContaining({ type: 'user-message', data: { text: '/model gpt-weird', slashCommand: true } })]);
+  });
+
+  it("Claude Code's \"Set model to\" reply is the model switch, in every spelling it has used", () => {
+    const esc = String.fromCharCode(27);
+    for (const [reply, model] of [
+      [`Set model to ${esc}[1mOpus 5 (1M context)${esc}[22m and saved as your default for new sessions`, 'opus[1m]'],
+      ['Set model to `Sonnet 5.5` and saved as your default for new sessions', 'sonnet'],
+      [`Set model to ${esc}[1mHaiku 4.5${esc}[22m`, 'haiku'],
+      ['Set model to Fable 5 and saved as your default for new sessions · Draws from usage', 'fable'],
+      ['Set model to Mystery 9', 'Mystery 9'],
+    ] as const) {
+      expect(parseTranscriptLine(commandLine(`<local-command-stdout>${reply}</local-command-stdout>`), 's1'))
+        .toEqual([expect.objectContaining({ type: 'model-switch', uuid: 'c1', data: { model } })]);
+    }
+  });
+
+  it('a declined switch ("Kept model as") draws nothing', () => {
+    expect(parseTranscriptLine(commandLine('<local-command-stdout>Kept model as `Opus 5.5 (1M context)`</local-command-stdout>'), 's1')).toEqual([]);
   });
 
   it("the dimmed echo of a command's output stays hidden", () => {

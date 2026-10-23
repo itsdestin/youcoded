@@ -21,6 +21,8 @@
 import { CHATGPT_APP_LIMIT_MESSAGE } from '../../../shared/chatgpt-types';
 import { chatReducer } from '../../state/chat-reducer';
 import type { ChatState, ChatAction, ToolCallState } from '../../state/chat-types';
+import { eventToAction } from '../../state/transcript-event-actions';
+import type { TranscriptEvent } from '../../../shared/types';
 
 const SANDBOX_SESSION_ID = 'sandbox';
 
@@ -499,6 +501,15 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'transcript_event' && parsed.event) {
+        // A transcript event exactly as main publishes it, through the app's ONE translator
+        // (eventToAction) — e.g. a `model-switch` divider, or the "/model …" bubble a Claude Code
+        // switch drew before 2026-10-22, so a before/after review shows both from one checkout.
+        const event = { sessionId, uuid: `${name}-ev-${actions.length}`, timestamp: FIXTURE_T0 + actions.length * 1000, ...parsed.event } as TranscriptEvent;
+        for (const action of eventToAction(event, { live: true })) {
+          state = chatReducer(state, action);
+          actions.push(action);
+        }
       }
       // Unknown types are silently skipped (same policy as before).
     }
