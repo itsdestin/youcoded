@@ -20,6 +20,8 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/detail/connection', 'dialog'),
   mp('marketplace/theme-detail', 'dialog'),
   mp('marketplace/theme-detail/not-installed', 'dialog'),
+  // A built-in theme (ships in the app): Apply only.
+  { ...mp('marketplace/theme-detail/builtin', 'dialog'), newIn: 'after' },
   mp('marketplace/integration-detail', 'dialog'),
   // A failed install: one sentence and Try again in one notice, the reason under Details (small-fixes-1).
   { ...mp('marketplace/integration-detail#failed', 'dialog', 'error-state'), params: { integration: 'failed' } },

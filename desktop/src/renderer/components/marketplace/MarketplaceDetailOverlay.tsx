@@ -176,8 +176,11 @@ export function ShareIcon() {
 /** Favourite + share — the card's quick actions, top right (guide "Cards": quick actions
  *  on a card sit at its top right). Shared buttons now, not a hand-made bordered square:
  *  a favourite is an on/off toggle, share a plain icon button. */
-function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNeedsInstall }: {
+function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNeedsInstall, noShare }: {
   installed: boolean; favorited: boolean; onToggleFavorite(): void; onShare?(): void; shareNeedsInstall: boolean;
+  /** No share button at all — a built-in theme has no link to share, and a greyed
+   *  "Install to share" would be false on something already installed. */
+  noShare?: boolean;
 }) {
   const favTitle = !installed ? "Install to favorite" : favorited ? "Unfavorite" : "Favorite";
   const canShare = !!onShare && (installed || !shareNeedsInstall);
@@ -197,16 +200,18 @@ function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNe
       >
         <StarIcon filled={favorited} />
       </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={canShare ? "Share link · QR" : "Install to share"}
-        title={canShare ? "Share link · QR" : "Install to share"}
-        disabled={!canShare}
-        onClick={onShare}
-      >
-        <ShareIcon />
-      </Button>
+      {!noShare && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={canShare ? "Share link · QR" : "Install to share"}
+          title={canShare ? "Share link · QR" : "Install to share"}
+          disabled={!canShare}
+          onClick={onShare}
+        >
+          <ShareIcon />
+        </Button>
+      )}
     </>
   );
 }
@@ -545,8 +550,13 @@ function ThemeDetail({
     onUninstall();
   };
 
+  // A built-in ships inside the app: nothing to uninstall, update, like or share (it has
+  // no catalog row) — only Apply, and a line saying why the rest is missing.
+  const builtin = !!entry.isBuiltin;
   let actions: React.ReactNode = null;
-  if (isInstalling) {
+  if (builtin) {
+    if (!isActive) actions = <DetailActions><Button size="lg" onClick={onApply}>Apply theme</Button></DetailActions>;
+  } else if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (!installed) {
     if (!installError) actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
@@ -587,9 +597,9 @@ function ThemeDetail({
         <>
           {/* Theme "like" = the public count on the Worker; a heart-only button, its count
               is the "N likes" fact (marketplace-detail-3#M3-1). */}
-          <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />
+          {!builtin && <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />}
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
-          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} />
+          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} noShare={builtin} />
         </>
       }
       quickActionsOnTitle
@@ -598,6 +608,7 @@ function ThemeDetail({
       actions={actions}
     >
       {!installed && !isInstalling && installError && <InstallFailed name={entry.name} message={installError} onRetry={onInstall} />}
+      {builtin && <p className="text-xs text-fg-muted">Built into YouCoded, so it's always here.</p>}
     </DetailIdentity>
   );
 
