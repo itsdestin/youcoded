@@ -40,7 +40,7 @@ interface Flow {
   resolve(): void;
   done: Promise<void>;
 }
-interface BindingState { composerBusy?: boolean; binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
+interface BindingState { composerBusy?: boolean; declinedAt?: Map<string, number>; binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
 const released = { released: true as const };
 
 /** Authenticated bridge delegate, intentionally not wired into IPC/UI. No delivery wait holds the queue's journal lock. */
@@ -61,6 +61,14 @@ export class ClaudeQueueTransport {
       if (!queueItemId && s) { try { const r = this.options.queue.snapshot(s.binding.queueId); queueItemId = r.items.find(i => i.attempt?.attemptId === attemptId)?.queueItemId; } catch { /* unknown queue: no row */ } }
     }
     try { this.options.onIssue?.(sessionId, { message, ...(attemptId ? { attemptId } : {}), ...(queueItemId ? { queueItemId } : {}) }); } catch { /* diagnostics cannot change a durable outcome */ }
+  }
+  /** WHY (2026-10-22): a queue that silently declined every offer left no trace of WHY messages stopped sending
+   *  (the terminal-view stall). Name the guard, once per reason per half minute, never any message text. */
+  private declined(sessionId: string, s: BindingState, reason: string): void {
+    const now = this.now(); const last = s.declinedAt?.get(reason) ?? -Infinity;
+    if (now - last < 30_000) return;
+    (s.declinedAt ??= new Map()).set(reason, now);
+    log('INFO', 'ClaudeQueue', 'Waiting messages not offered', { sessionId, reason });
   }
   private setComposerBusy(sessionId: string, s: BindingState, busy: boolean): void {
     if (!!s.composerBusy === busy) return;
@@ -198,13 +206,18 @@ export class ClaudeQueueTransport {
     // WHY: input safety may briefly disappear after a proven clean handoff. This set
     // contains only already-authorized releases, never permission to stage/Enter or guess an outcome.
     if (this.options.inputSafe(sessionId)) for (const attemptId of s.workerBlocked) {
-      try { await this.retryWorkerRelease(sessionId, attemptId); } catch { return released; }
+      try { await this.retryWorkerRelease(sessionId, attemptId); } catch { this.declined(sessionId, s, 'worker-release-unconfirmed'); return released; }
     }
-    if (this.state(sessionId, incarnation) !== s || s.flow || s.workerBlocked.size > 0 || [...s.attempts.keys()].some(id => !s.accepted.has(id))) return released;
+    if (this.state(sessionId, incarnation) !== s || s.flow) return released;
+    if (s.workerBlocked.size > 0) { this.declined(sessionId, s, 'worker-blocked'); return released; }
+    if ([...s.attempts.keys()].some(id => !s.accepted.has(id))) { this.declined(sessionId, s, 'unaccepted-attempt'); return released; }
     const snapshot = this.options.queue.snapshot(s.binding.queueId);
     const head = snapshot.items.find(i => i.status === 'waiting' && (!snapshot.paused || i.pauseBypass));
-    if ((snapshot.paused && !head?.pauseBypass) || this.options.queue.hasWriteBarrier(s.binding.queueId) || !this.options.inputSafe(sessionId)) return released;
-    if (!head || head.checkout || s.attempts.size >= 64) return released;
+    if (!snapshot.items.some(i => i.status === 'waiting')) return released; // nothing to send: not a refusal worth logging
+    if (snapshot.paused && !head?.pauseBypass) { this.declined(sessionId, s, 'paused'); return released; }
+    if (this.options.queue.hasWriteBarrier(s.binding.queueId)) { this.declined(sessionId, s, 'write-barrier'); return released; }
+    if (!this.options.inputSafe(sessionId)) { this.declined(sessionId, s, 'input-not-safe'); return released; }
+    if (!head || head.checkout || s.attempts.size >= 64) { this.declined(sessionId, s, !head ? 'no-head' : head.checkout ? 'head-being-edited' : 'attempt-book-full'); return released; }
     let resolve!: () => void; const done = new Promise<void>(r => { resolve = r; });
     const flow: Flow = { binding: structuredClone(s.binding), finished: false, revoked: false, entered: false, workerOwned: false, stageIssued: false,
       timer: setTimeout(() => { void this.expire(sessionId, s, flow); }, Math.max(1, offer.expiresAt - this.now())), resolve, done };
