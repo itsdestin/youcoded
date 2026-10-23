@@ -188,7 +188,15 @@ export function useEntryFolding(
       if (entries[mid].getBoundingClientRect().bottom > rootTop) hi = mid;
       else lo = mid + 1;
     }
-    const el = entries[lo];
+    // WHY skip entries that are spacers right now: a spacer on screen is about to be drawn at its real height,
+    // and anchoring to IT keeps its top edge fixed while everything drawn below it shifts by the guess error
+    // (first-draw-stability journey, 13 px at 40-80x CPU throttle). Anchoring to the first DRAWN entry in view
+    // keeps what the reader can actually see in place; with nothing drawn in view, fall back to the topmost.
+    const rootBottom = root.getBoundingClientRect().bottom;
+    let pick = lo;
+    while (pick < entries.length && folded.current.has(entries[pick].dataset.entryKey ?? '')
+      && entries[pick].getBoundingClientRect().top < rootBottom) pick++;
+    const el = entries[pick] && entries[pick].getBoundingClientRect().top < rootBottom ? entries[pick] : entries[lo];
     if (el) anchor.current = { el, top: el.getBoundingClientRect().top - rootTop };
   }, [rootRef]);
   const removalPublishPending = useRef(false);
