@@ -194,9 +194,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // Keeps the Jump-to-bottom button mounted for its fade-out after atBottom flips
-  // true (it unmounts instantly otherwise, which reads as a pop).
-  const [jumpExiting, setJumpExiting] = useState(false);
-  const prevAtBottomRef = useRef(true);
+  // true (it unmounts instantly otherwise, which reads as a pop). WHY "mounted"
+  // rather than an "exiting" flag set on the flip: that flag only lands in the
+  // render AFTER atBottom changes, so for one render the button was unmounted and
+  // came back already faded — the exit looked instant.
+  const [jumpMounted, setJumpMounted] = useState(false);
 
   // Auto-scroll ("stick to bottom"). See use-stick-to-bottom.ts for why this is
   // intent-driven instead of observer-driven — the old IntersectionObserver
@@ -205,12 +207,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
   } = useStickToBottom(scrollContainerRef);
   useEffect(() => {
-    const wasAtBottom = prevAtBottomRef.current;
-    prevAtBottomRef.current = atBottom;
-    if (!atBottom) { setJumpExiting(false); return; }
-    if (wasAtBottom) return; // never showed; nothing to fade out
-    setJumpExiting(true);
-    const t = setTimeout(() => setJumpExiting(false), JUMP_FADE_MS);
+    if (!atBottom) { setJumpMounted(true); return; }
+    const t = setTimeout(() => setJumpMounted(false), JUMP_FADE_MS);
     return () => clearTimeout(t);
   }, [atBottom]);
   // Task 12 review fix: refs for the --queued-strip-height measurement effect
@@ -1295,7 +1293,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
          framed-shell (chat + drawer) without being clipped by chat-pane. */}
-      {(!atBottom || jumpExiting) && (
+      {(!atBottom || jumpMounted) && (
         <button
           onClick={jumpToBottom}
           // data-state drives the fade/slide in globals.css. panel-glass gives the
