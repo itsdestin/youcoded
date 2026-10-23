@@ -45,7 +45,7 @@ To prevent stale `running` / `awaiting-approval` entries from old turns affectin
 
 ## endTurn() helper
 
-`endTurn()` in `chat-reducer.ts:270` is the shared path for ending a turn. It:
+`endTurn()` in `chat-reducer.ts` is the shared path for ending a turn. It:
 
 - Iterates `activeTurnToolIds` and marks any `running` or `awaiting-approval` tool as `failed` with error `'Turn ended'` — **except** a native `preparing` card, which is **deleted** instead (`removePreparingTool`). The model was still composing that call's arguments, so no tool was ever invoked and "failed" would name an event that did not happen. Deleting also prunes the group it emptied and that group's turn segment, or an empty group renders as a stray bar.
 - Returns a fresh empty `activeTurnToolIds: new Set()`
@@ -183,15 +183,14 @@ stalledSince: action.stalled
   : null,
 ```
 
-The naive `session.stalledSince ?? Date.now()` is wrong because **fourteen places in the
-reducer write `attentionState: 'ok'` and only five of them also clear the stamp.** The
-other nine (both `TRANSCRIPT_USER_MESSAGE` branches, both `NATIVE_TOOL_PREPARING`
+The naive `session.stalledSince ?? Date.now()` is wrong because **sixteen places in the
+reducer write `attentionState: 'ok'` and only four of them also clear the stamp.** The
+other twelve (both `TRANSCRIPT_USER_MESSAGE` branches, both `NATIVE_TOOL_PREPARING`
 branches, both `TRANSCRIPT_TOOL_USE` branches, `TRANSCRIPT_TOOL_RESULT`, and both
 `PERMISSION_REQUEST` branches) leave it set, so any of them landing between two parks left
 the SECOND card counting from the FIRST park — "no response for 6m 12s" three seconds in.
 Gating on the state the stamp belongs to closes the whole family at the ONE place the
-field is written, instead of adding nine `stalledSince: null` lines and forgetting the
-tenth. `AttentionBanner` is the only reader, which is what makes that safe.
+field is written, instead of adding a dozen `stalledSince: null` lines and forgetting one. `AttentionBanner` is the only reader, which is what makes that safe.
 
 `endTurn()` clears `attentionState`, `stallWarning` AND `stalledSince`, and every turn
 boundary (`turn-complete` / `user-interrupt` / `session-error`) spreads it — so a parked
@@ -314,7 +313,7 @@ request carries a locator; every one after it has just a cursor.
 `hasMore: false` until 2026-09-07, and the renderer records the second — dropping the
 cursor and the scroll-up sentinel for good, so the rest of the conversation became
 unreachable in that window. `TranscriptPageResult.unresolved` separates them, on
-`ipc-handlers.ts` AND `remote-server.ts` (the same React renderer runs over the remote
+`ipc-handlers.ts` and `transcript-page.ts` (both doors share the one `transcript:page` channel; `remote-server.ts` does not set it) (the same React renderer runs over the remote
 bridge). Callers retry rather than record: `ChatView` on a bounded backoff — at the top of
 the list there is no scroll gesture left to re-trigger the sentinel, so it must heal on a
 timer — and `App`/the buddy floater through `renderer/state/first-page-retry.ts`.
