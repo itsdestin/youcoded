@@ -115,7 +115,13 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
   const preview = workbenchQueuePreview();
   const [dismissed, setDismissed] = React.useState(false);
   const proposed = preview?.endsWith('-after');
-  if (preview) {
+  if (preview === 'stack') {
+    // Two waiting cards, for reviewing the spacing between stacked cards.
+    queuedMessages = [
+      { queueId: 'review-only-1', content: 'Please check the release notes.', timestamp: 0, status: 'waiting' },
+      { queueId: 'review-only-2', content: 'Then update the changelog.', timestamp: 0, status: 'waiting' },
+    ];
+  } else if (preview) {
     queuedMessages = preview === 'idle-after' || preview === 'blocked-after' || dismissed ? [] : [{
       queueId: 'review-only', content: 'Please check the release notes.', timestamp: 0,
       status: preview.startsWith('idle') ? 'delivering' : preview.startsWith('waiting') ? 'waiting' : 'uncertain',
