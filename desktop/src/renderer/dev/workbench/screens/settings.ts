@@ -139,6 +139,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),
   settings('settings/help', 'dialog'),
+  // Scrolled to its last group, where Get beta builds and (#183) Install updates automatically sit.
+  { ...settings('settings/help#updates', 'dialog'), open: [{ do: 'scroll', target: { role: 'button', labelStarts: 'Contribute to YouCoded' }, dir: 'down', times: 3 }] },
   settings('settings/development/bug-report', 'dialog'),
   // Every step and outcome of the ticket (redesign backlog 13), reached the way a person
   // reaches it: typed, ticked and clicked by "open this first". `ticket=hold` keeps a send

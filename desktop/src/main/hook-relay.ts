@@ -6,10 +6,39 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import { HookEvent } from '../shared/types';
 import { log } from './logger';
+import { relistenIfDeleted } from './socket-repair';
 
 const DEFAULT_PIPE_NAME = process.platform === 'win32'
   ? '\\\\.\\pipe\\claude-desktop-hooks'
   : path.join(os.tmpdir(), 'claude-desktop-hooks.sock');
+
+/**
+ * Where this app instance's hook socket lives — main.ts and headless-boot.ts
+ * both build their relay from this, so the two boots can never disagree.
+ *
+ * WHY the per-user runtime folder on Linux (2026-10-22): the socket used to sit
+ * in shared /tmp, and something on Destin's laptop deleted the live app's and the
+ * dev app's socket files while both apps kept running. Every new Claude Code
+ * session then sat on "Initializing session…" forever, because its hooks could
+ * not find the app. The app's other sockets in $XDG_RUNTIME_DIR/youcoded (askpass,
+ * browser MCP) survived the same incident. That folder is private to the user
+ * (0700), temp-folder cleaners never visit it, and it is emptied at logout, so
+ * crashed instances no longer pile up stale socket files either. Windows uses a
+ * named pipe (no file); macOS and Android keep os.tmpdir(), which is already a
+ * per-user/per-app folder there.
+ */
+export function hookPipeName(
+  pid: number = process.pid,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (platform === 'win32') return `\\\\.\\pipe\\claude-desktop-hooks-${pid}`;
+  if (platform === 'linux' && env.XDG_RUNTIME_DIR) {
+    // path.posix: this branch is for Linux whatever machine computes it (the test runs it on Windows too).
+    return path.posix.join(env.XDG_RUNTIME_DIR, 'youcoded', `claude-desktop-hooks-${pid}.sock`);
+  }
+  return path.join(os.tmpdir(), `claude-desktop-hooks-${pid}.sock`);
+}
 
 /**
  * Which Claude Code process owns a session's hooks.
@@ -97,6 +126,11 @@ export class HookRelay extends EventEmitter {
   private holdTimers = new Map<string, NodeJS.Timeout>();
   private sessionGate: ((sessionId: string) => boolean) | null = null;
   private readonly holdMs: number;
+  // Listeners replaced by ensureListening(). Deliberately NEVER closed: closing
+  // a Unix socket server deletes whatever file is at its path at that moment —
+  // which would be the replacement's file (checked 2026-10-22). Each keeps any
+  // permission connection it already accepted working until it ends.
+  private retiredServers: net.Server[] = [];
 
   constructor(pipeName?: string, holdMs: number = APP_HOLD_MS) {
     super();
@@ -269,6 +303,7 @@ export class HookRelay extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    await this.ensureSocketDir();
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await this.tryListen();
@@ -293,6 +328,47 @@ export class HookRelay extends EventEmitter {
       });
       this.server.on('error', reject);
     });
+  }
+
+  /** The runtime folder (hookPipeName) may not exist yet on a fresh login.
+   *  mode 0700 only applies to folders this creates; an existing one (/tmp,
+   *  or one askpass already made 0700) is left exactly as it is. */
+  private async ensureSocketDir(): Promise<void> {
+    if (process.platform === 'win32') return;
+    try {
+      await fs.promises.mkdir(path.dirname(this.pipeName), { recursive: true, mode: 0o700 });
+    } catch (err) {
+      // listen() reports the real failure if the folder is truly unusable.
+      log('WARN', 'HookRelay', 'could not create the hook socket folder', { error: String(err) });
+    }
+  }
+
+  /**
+   * Re-creates the hook socket if its file has disappeared while the app runs.
+   * Called whenever a session is created (main.ts / headless-boot.ts).
+   *
+   * WHY (2026-10-22): a deleted socket file breaks every session silently —
+   * hooks fail to connect and exit quietly, so new sessions sit on
+   * "Initializing session…" and permission cards stop arriving, until the app
+   * restarts. Checking at session creation repairs it at exactly the moment it
+   * matters; a repaired socket also serves sessions that were already open,
+   * because they all reach it by the same path. Claude Code takes well over a
+   * second to fire its first hook, so this async check wins the race.
+   *
+   * Never deletes anything: if a file is present it is left alone, even one
+   * that is not ours, and the replaced listener is kept open (see
+   * retiredServers) because closing it would delete the new file.
+   */
+  async ensureListening(): Promise<void> {
+    if (!this.running) return;
+    // Not start(): its EADDRINUSE retry deletes the file at the path, and
+    // anything that appeared there since the check is not ours.
+    const fresh = await relistenIfDeleted(this.pipeName, () => this.createServer(),
+      { stillWanted: () => this.running });
+    if (!fresh) return;
+    if (this.server) this.retiredServers.push(this.server);
+    this.server = fresh;
+    log('WARN', 'HookRelay', 'hook socket file was missing (something deleted it) — re-created it', { path: this.pipeName });
   }
 
   private async forceReleasePipe(): Promise<void> {
@@ -387,6 +463,9 @@ export class HookRelay extends EventEmitter {
       this.server = null;
       this.running = false;
     }
+    // Shutting down, so the socket file is meant to go — closing these now is safe.
+    for (const s of this.retiredServers) s.close();
+    this.retiredServers = [];
     // Clean up Unix socket file
     if (process.platform !== 'win32') {
       try { fs.unlinkSync(this.pipeName); } catch { /* may already be gone */ }

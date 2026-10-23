@@ -13,8 +13,11 @@ const PATHS: Record<PageIcon, React.ReactNode> = {
   chart: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 20V10M10 20V4M16 20v-8M22 20H2" />,
   calendar: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7zM4 10h16M8 3v4M16 3v4" />,
   list: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />,
-  // Office (built in): a briefcase — the suite as a whole, not one file type.
-  office: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8a1 1 0 011-1h14a1 1 0 011 1v10a1 1 0 01-1 1H5a1 1 0 01-1-1V8zM9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M4 12h16M11 12v2h2v-2" />,
+  // Office (built in): a document behind, a spreadsheet grid in front — what Office is for
+  // ("files you write and edit"). Replaced the briefcase, which read as "work/job" (Destin
+  // picked option A from an icon sheet, 2026-10-22). The page's lower-right is left open
+  // where the grid covers it, so the two shapes never cross.
+  office: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 17H5a1 1 0 01-1-1V4a1 1 0 011-1h6l3 3v3M7 8h4M7 12h1M12 12h8v8h-8zM12 16h8M16 12v8" />,
   // Money (finance dashboard review, 2026-10-05): a dollar sign, so a money page never shares the
   // bar chart with an analytics page (UX review 1, U12). A banknote was tried first and "looks like
   // a camera" at 16px (review 2).

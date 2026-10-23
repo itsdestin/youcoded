@@ -75,6 +75,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
+  // Restart to update with chats open (#183 Q-busy): the same prompt, in restart words.
+  { ...chat('chat/quit-sessions#update', 'dialog'), params: { quitReason: 'update' } },
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh
   // photo-only tab, so every kind is still un-acknowledged).
   ...['skip-permissions', 'full-auto', 'small-model'].map((k) => chat(`chat/first-time-warning/${k}`, 'dialog')),
@@ -217,6 +219,14 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#manage-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-manage-cc' } },
   { ...chat('chat#manage-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-manage-native' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // Automatic updates (#183): the update already downloaded in the background — the chip, the
+  // popup's Restart to update, the password variant, and the close-window prompt it raises
+  // when chats are open (closing it cancels the restart).
+  { ...chat('chat#update-ready', 'view'), params: { update: 'ready' } },
+  { ...chat('chat/update#ready', 'dialog'), params: { update: 'ready' } },
+  { ...chat('chat/update#ready-password', 'dialog'), params: { update: 'ready-password' } },
+  { ...chat('chat/update#ready-manual', 'dialog'), params: { update: 'ready', autoInstall: 'off' } },
+
   // Actual panel driven through its launch callback; only the backend is faked.
   ...['authorizing', 'installing', 'restarting', 'failed', 'timeout'].map(phase => ({
     ...chat(`chat/update#${phase}`, 'dialog', 'update-install'),

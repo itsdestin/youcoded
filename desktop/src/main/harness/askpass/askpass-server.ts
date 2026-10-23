@@ -19,6 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { log } from '../../logger';
+import { relistenIfDeleted } from '../../socket-repair';
 import { peerCredPid, selfTest as peerCredSelfTest, type PeerCred } from './peer-cred';
 import { verifyAskpassPeer, type VerifyResult } from './verify';
 import { createProcReader, type ProcReader, type PidHandle } from './proc-info';
@@ -158,6 +159,8 @@ export class AskpassServer extends EventEmitter {
   private readonly verifyTimeoutMs: number;
 
   private server: net.Server | null = null;
+  // Servers replaced by ensureListening(): kept open until teardown (socket-repair.ts).
+  private retired: net.Server[] = [];
   private socketPathValue: string | null = null;
   private _available = false;
   private readonly pending = new Map<string, PendingAsk>();
@@ -280,6 +283,22 @@ export class AskpassServer extends EventEmitter {
     this._available = true;
   }
 
+  /** Re-creates the socket if its file was deleted while the app runs (2026-10-22:
+   *  the hook socket's file vanished from /tmp mid-run). Every native session's Bash
+   *  env carries this one path for the whole run, so a missing file would make every
+   *  sudo fail. The kernel peer-pid self-test already passed at start(); the
+   *  re-created socket is the same kind on the same machine. Called as each
+   *  session is created (admin-password-startup.ts). */
+  async ensureListening(): Promise<void> {
+    if (!this._available || !this.server) return;
+    const fresh = await relistenIfDeleted(this.socketPathValue, () => net.createServer((socket) => this.handleConnection(socket)),
+      { fileMode: 0o600, platform: this.platform, stillWanted: () => this._available && this.server !== null });
+    if (!fresh || !this.server) return;
+    this.retired.push(this.server);
+    this.server = fresh;
+    log('WARN', 'AskpassServer', 'socket file was missing (something deleted it) — re-created it', { path: this.socketPathValue });
+  }
+
   /** Removes only entries named exactly `askpass-<pid>.sock` whose pid is
    *  provably dead (`process.kill(pid, 0)` throws `ESRCH`) — an `EPERM`
    *  (alive, owned by another user) or any live pid is left alone, and any
@@ -324,6 +343,7 @@ export class AskpassServer extends EventEmitter {
     if (server) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+    for (const r of this.retired.splice(0)) r.close();
     if (this.socketPathValue) {
       try {
         await fs.promises.unlink(this.socketPathValue);

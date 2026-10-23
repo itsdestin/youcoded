@@ -24,7 +24,7 @@ import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
 import { ClaudeControlBridge } from './claude-control-bridge';
-import { HookRelay } from './hook-relay';
+import { HookRelay, hookPipeName } from './hook-relay';
 import { hookWindowTargets } from './hook-window-route';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
@@ -57,7 +57,9 @@ import { getOfficeSessions, quitOfficeSessions } from './office/office-session-r
 import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
 import { syncJournals } from './office/office-journal-sync';
 import { createCloseGate } from './window-close-gate';
-import { gatedQuit, onWillQuit, quitAfterTeardown, shutdownStep } from './app-restart';
+import { gatedQuit, onWillQuit, quitAfterTeardown, shutdownStep, requestInstallRestart, registerInstallExit, currentExitAction, takeUntrackForTeardown } from './app-restart';
+import { createRestartToUpdate } from './update-restart';
+import { bindUpdateRestart } from './ipc/update';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
 import { bindFirstRunManager } from './ipc/first-run';
@@ -102,7 +104,7 @@ import { createWelcomeBackStore, type WelcomeBackStore } from './welcome-back-st
 // Welcome back (design §4, plan T3): the in-app quit warning's request/answer
 // state machine. Extracted so it can be unit-tested without a BrowserWindow —
 // see close-request-manager.ts's header WHY.
-import { createCloseRequestManager, applyCloseAnswer } from './close-request-manager';
+import { createCloseRequestManager, applyCloseAnswer, UPDATE_REQUEST_KEY } from './close-request-manager';
 import { randomUUID } from 'crypto';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
@@ -118,7 +120,7 @@ import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 import { syncHelperOnLaunch, setExperimentKwinDisabled } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
 import { excludeFromCapture } from './window-exclude-capture';
-import { cleanupStaleDownloads } from './update-installer';
+import { getUpdateService, peekUpdateService } from './update-service';
 import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
 import { perfMark, getPerfMarks } from './perf-marks';
@@ -297,12 +299,12 @@ function broadcastWindowState() {
 windowRegistry.on('changed', broadcastWindowState);
 
 
-// Unique pipe name per launch — avoids EADDRINUSE from stale Electron processes
-const pipeName = process.platform === 'win32'
-  ? `\\\\.\\pipe\\claude-desktop-hooks-${process.pid}`
-  : path.join(os.tmpdir(), `claude-desktop-hooks-${process.pid}.sock`);
+// Unique per launch (stale processes); where and why not /tmp: hookPipeName() in hook-relay.ts.
+const pipeName = hookPipeName();
 sessionManager.setPipeName(pipeName);
 const hookRelay = new HookRelay(pipeName);
+// WHY: a deleted socket file left new sessions on "Initializing session…" — re-create it per session.
+sessionManager.on('session-created', () => { void hookRelay.ensureListening(); });
 // Hold /reload-plugins broadcasts away from sessions whose TUI is showing a
 // live permission/AskUserQuestion menu — typing into that menu presses Enter
 // on the highlighted option and silently answers the prompt (stray-Enter fix).
@@ -879,6 +881,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   const forgetPage = () => {
     // WHY: page-specific work dies on reload, but session ownership must survive.
     closeRequests.dropFor(wid);
+    if (win === mainWindow) closeRequests.dropFor(UPDATE_REQUEST_KEY); // its Restart-to-update prompt died with the page
     pendingAcquire.suspend(wid);
     nativeRuntime?.fills.forget(`w${wid}`);
     cancelWindowHandoffs(wid);
@@ -929,6 +932,8 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   });
   // A page's beforeunload veto cancelled the close. Observed only: preventDefault would override it.
   win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
+  // A Windows logoff/shutdown closes our windows; that quit must never also install an update (#183 D4).
+  (win as unknown as { on(e: string, l: () => void): void }).on('session-end', () => { systemShutdown = true; });
   win.on('close', (ev) => { void closeGate.onClose(ev); });
 
   return win;
@@ -944,7 +949,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   // the app.whenReady() block. createAppWindow is synchronous and returns before
   // its loadURL/loadFile promise can settle, so this listener is still attached
   // in the same tick as the load call and cannot miss the event.
-  mainWindow.webContents.once('did-finish-load', () => { perfMark('main:main-window:did-finish-load'); hitchRecorder?.noteMainWindowLoaded(); });
+  mainWindow.webContents.once('did-finish-load', () => { perfMark('main:main-window:did-finish-load'); hitchRecorder?.noteMainWindowLoaded(); getUpdateService().onFirstWindowReady(); /* WHY: background update downloads wait 60 s after this so they never compete with startup (#183 T2) */ });
   // Installer launch check only (scripts/smoke-test.js): report whether the
   // main window actually rendered. Registered here for the same reason as the
   // perf mark above — the main window, not a detached or buddy window.
@@ -1247,6 +1252,19 @@ function bindWindowPlumbing() {
   // Welcome back (design §4, plan T3): the renderer's answer to a window:close-request push. closeRequests routes the
   // answer to the right pending entry by requestId, so one hand-over serves every window.
   bindWindow({ answerClose: (answer) => closeRequests.answer(answer.requestId, { close: answer.close, reopen: answer.reopen }) });
+  // Restart to update (#183 T3): sessions counted across every window; the question goes to the main window under
+  // its OWN request key, so it never shares a slot with a window's close prompt.
+  bindUpdateRestart(createRestartToUpdate({
+    service: () => getUpdateService(),
+    allSessionIds: () => windowRegistry.getWindowIds().flatMap((id) => windowRegistry.sessionsForWindow(id)),
+    ask: async (count) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed() || !canDeliverToRenderer(win.webContents)) return { close: false };
+      return closeRequests.request(UPDATE_REQUEST_KEY, count, (push) => sendToRenderer(win.webContents, IPC.WINDOW_CLOSE_REQUEST, [push]), { reason: 'update' });
+    },
+    shuttingDown: () => !!shuttingDown,
+    quitForUpdate: (untrack, installsAtExit) => requestInstallRestart(() => app.quit(), untrack, installsAtExit),
+  }));
   bindDetach({ windowRegistry, sessionManager, pendingAcquire, fills: nativeRuntime?.fills, createAppWindow, windowFromWcId });
 }
 
@@ -1304,6 +1322,7 @@ void app.whenReady().then(async () => {
   });
   // A sleep or lock makes the event-loop monitor's numbers span hours: tell the recorder to discard them.
   const slept = () => hitchRecorder?.noteSleep();
+  powerMonitor.on('shutdown', () => { systemShutdown = true; }); // an OS shutdown must never also install an update (#183 D4)
   powerMonitor.on('suspend', slept); powerMonitor.on('resume', slept); powerMonitor.on('lock-screen', slept); powerMonitor.on('unlock-screen', slept);
   await rotateLog();
   perfMark('main:chore:rotate-log:done');
@@ -1452,14 +1471,9 @@ void app.whenReady().then(async () => {
   perfMark('main:chore:prompt-suggestion:done');
   perfMark('main:chore:retention-default:done');
 
-  // Sweep abandoned .partial files and downloads older than 24h from the
-  // in-app update cache. Runs at every startup so stale downloads (e.g. from
-  // a cancelled update on a prior session) don't accumulate on disk.
-  try {
-    cleanupStaleDownloads(path.join(app.getPath('userData'), 'update-cache'));
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to clean up stale update downloads', { error: String(e) });
-  }
+  // WHY no cleanupStaleDownloads here any more (#183 T2): the sweep must know which file is the
+  // pending update before it deletes anything, so update-service runs it after the first successful
+  // release check, async.
   perfMark('main:chore:stale-downloads:done');
 
   // Decomposition v3 §9.3 + native MCP phase 1 Task 7: reconcile plugin
@@ -1929,13 +1943,14 @@ wireBrowserSessionCleanup(sessionManager);
 // describing a window that runShutdown() is about to tear down anyway.
 function settlePendingCloseRequests(): void {
   closeRequests.settleAll((windowId, requestId) => {
-    const win = windowFromWcId(windowId);
+    const win = windowId === UPDATE_REQUEST_KEY ? mainWindow : windowFromWcId(windowId); // the update prompt is shown in the main window
     if (win && !win.isDestroyed()) sendToRenderer(win.webContents, IPC.WINDOW_CLOSE_REQUEST_CANCELLED, [{ requestId }]);
   });
 }
 
 let shuttingDown: Promise<void> | null = null;
 let shutdownComplete = false;
+let systemShutdown = false; // the OS is shutting down / logging off (Windows session-end, powerMonitor 'shutdown')
 function shutdownApp(): Promise<void> {
   if (shuttingDown) return shuttingDown;
   settlePendingCloseRequests();
@@ -1944,6 +1959,14 @@ function shutdownApp(): Promise<void> {
 }
 
 async function runShutdown(): Promise<void> {
+  // Restart to update, reopen:false: untrack NOW, once the unsaved-files gate has passed (a held Restart never
+  // gets here, so its chats stay tracked) and before the flush below writes it (#183 rev 4 F6).
+  for (const sid of takeUntrackForTeardown()) welcomeBackStore?.untrack(sid);
+  // The install's prepare step (brake + re-hash) runs in parallel with the rest of teardown (#183 T3).
+  const action = currentExitAction();
+  const updatePrepared = action === 'install' || action === 'install-relaunch'
+    ? shutdownStep('update-install', () => peekUpdateService()?.prepareExit(action, () => systemShutdown))
+    : Promise.resolve();
   // Welcome back (design §1): flush the in-flight write BEFORE any other
   // teardown starts. runShutdown is the ONE function every exit route passes
   // through — including SIGTERM/SIGINT, which skip before-quit entirely — so
@@ -2002,7 +2025,7 @@ async function runShutdown(): Promise<void> {
   // Six seconds covers Office's five-second drain and the engine's stop deadline;
   // a wedged helper must not keep quit pending forever.
   await Promise.race([
-    Promise.allSettled([engineStopped, chatgptDisposed, syncStopped, officeQuit, browserStopped, socialStopped, sessionsStopped, hooksStopped, remoteStopped]),
+    Promise.allSettled([updatePrepared, engineStopped, chatgptDisposed, syncStopped, officeQuit, browserStopped, socialStopped, sessionsStopped, hooksStopped, remoteStopped]),
     new Promise<void>((r) => setTimeout(r, 6_000)),
   ]);
 }
@@ -2025,12 +2048,15 @@ app.on('before-quit', (e) => {
     if (!quitAfterTeardown({ teardownComplete: () => shutdownComplete })) e.preventDefault();
     return;
   }
+  peekUpdateService()?.refreshBrake(); // a quit begins: have a fresh "release not pulled" answer ready (#183 rev 4 F8)
   e.preventDefault(); // Unsaved files first: their list shows before any teardown (unsaved-quit.ts).
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: () => !refuseQuitForUnsaved(),
     shutdown: () => shutdownApp(),
+    quitInstallAllowed: () => !systemShutdown && !!peekUpdateService()?.quitInstallEligible(),
   }).catch(() => {});
 });
+registerInstallExit((relaunch, appRelaunch) => peekUpdateService()?.runExitInstall(relaunch, appRelaunch, systemShutdown));
 app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These

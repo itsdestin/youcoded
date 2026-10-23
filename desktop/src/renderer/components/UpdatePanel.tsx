@@ -11,7 +11,7 @@ import MarkdownContent from './MarkdownContent';
 import { Button, Callout, CARD_LEVEL_1, Dialog, ErrorState, FieldError, LoadingState, ProgressBar, SectionLabel } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { BugReportPopup } from './development/BugReportPopup';
-import { BetaChannelRow } from './BetaChannelToggle';
+import { BetaChannelRow, useAutoInstall } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
@@ -64,7 +64,7 @@ function updateErrorMessage(code: string): string {
 
 /** The one sentence a failed update shows in its notice: the code's own words when it has
  *  some, else which step stopped — never a guessed cause. */
-function updateFailureSentence(code: string, stage: 'download' | 'launch'): string {
+function updateFailureSentence(code: string, stage: 'download' | 'launch' | 'restart'): string {
   const own = updateErrorMessage(code);
   if (own !== 'Launch failed') return own;
   if (stage === 'launch' && code === 'busy') return 'Another update installation is already running.';
@@ -76,6 +76,13 @@ interface UpdateStatus {
   latest: string;
   update_available: boolean;
   download_url: string | null;
+  /** #183: already downloaded in the background; the button becomes Restart to update. */
+  downloaded?: boolean;
+  /** #183: installing asks for a password (Linux package, non-administrator Mac), so
+   *  quitting does not install it — only Restart to update does. */
+  needs_password?: boolean;
+  /** #183 F5: a quit really would install it (staged, not refused, under the failure limit); the switch is separate. */
+  installs_on_quit?: boolean;
 }
 
 // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
@@ -99,6 +106,8 @@ interface Props {
 export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   const [data, setData] = useState<ChangelogData | null>(null);
   const [loading, setLoading] = useState(false);
+  // #183: the line under the title follows the switch in the Updates card (UX review 1, U2).
+  const [autoInstall] = useAutoInstall();
 
   // Escape-to-close, matching AboutPopup/PreferencesPopup convention.
   // When the planned useEscClose stack lands, migrate alongside those popups.
@@ -124,6 +133,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // ── Install state machine ────────────────────────────────────────────────
   type InstallState =
     | { kind: 'idle' }
+    // #183: Restart to update was pressed; waiting on the close-window prompt or the restart.
+    | { kind: 'restarting' }
     | { kind: 'downloading'; jobId: string | null; percent: number }
     | { kind: 'ready'; jobId: string; filePath: string }
     | { kind: 'launching'; jobId: string; phase: 'preparing' | 'handoff' | Exclude<UpdateInstallProgressEvent['phase'], 'failed'>; output: string }
@@ -133,7 +144,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // Linux system package with no way to ask for a password: the download is
     // on disk and `command` finishes it (2026-09-20).
     | { kind: 'manual'; command: string; filePath: string }
-    | { kind: 'error'; code: string; stage: 'download' | 'launch'; command?: string; output?: string };
+    | { kind: 'error'; code: string; stage: 'download' | 'launch' | 'restart'; command?: string; output?: string };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
   const [reportMode, setReportMode] = useState<'report' | 'diagnose' | null>(null);
@@ -207,11 +218,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // Ref rather than state because the progress handler fires asynchronously and
   // we want the freshest jobId without re-subscribing.
   const activeJobIdRef = useRef<string | null>(null);
-  // Aborted-close guard: if the user closes the popup mid-download and the
-  // download() promise still resolves afterwards (cancel didn't race in time),
-  // we must NOT setInstallState(ready) — that would leave stale "Launch installer"
-  // state showing on next open.
-  const abortedRef = useRef(false);
+  // True while THIS view's own download() call is unanswered, so the reopen check does not mistake its job for a stale one.
+  const downloadRequestPending = useRef(false);
 
   // Subscribe to download progress. Main broadcasts progress to every window;
   // we rely on the main-side single-job invariant (only one download in flight
@@ -221,9 +229,20 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // We preserve the raw `percent` (including the -1 sentinel for unknown
   // Content-Length) so the button can render an indeterminate "Downloading…"
   // label — don't clamp here.
+  // WHY also while closed and downloading: a job that dies while the popup is closed (a background
+  // run, or one started before closing) must still take this view out of "Downloading…" — nothing in
+  // the popup cancels a job, so without this it would sit there forever. Closed, only that failure is
+  // acted on; progress ticks are ignored (hidden means idle).
+  const watchProgress = open || installState.kind === 'downloading';
   useEffect(() => {
-    if (!open) return;
+    if (!watchProgress) return;
     const unsub = window.claude.update.onProgress((ev) => {
+      if (ev.failed) {
+        setInstallState(prev => prev.kind === 'downloading'
+          ? { kind: 'error', code: ev.error ?? 'network-failed', stage: 'download' } : prev);
+        return;
+      }
+      if (!openRef.current) return;
       setInstallState(prev => {
         if (prev.kind !== 'downloading') return prev;
         if (!activeJobIdRef.current) activeJobIdRef.current = ev.jobId;
@@ -231,10 +250,11 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       });
     });
     return unsub;
-  }, [open]);
+  }, [watchProgress]);
 
   // When the popup opens and a completed download is already cached for this
-  // version, jump straight to ready state (skip the re-download).
+  // version, jump straight to ready state (skip the re-download). If a job is still running (a
+  // background download, or one started before the popup was closed), show its progress instead.
   // Guard: only overwrite state if we're still in `idle` — don't race against
   // a user-initiated download that already started.
   useEffect(() => {
@@ -243,7 +263,21 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     let cancelled = false;
     (async () => {
       const cached = await window.claude.update.getCachedDownload(updateStatus.latest);
-      if (cancelled || !cached) return;
+      if (cancelled) return;
+      if (!cached) {
+        // Nothing running and nothing on disk: a "Downloading…" left over from before the popup was
+        // closed is stale (its job ended), so show the normal Update now button again.
+        setInstallState(prev => prev.kind === 'downloading' && !downloadRequestPending.current ? { kind: 'idle' } : prev);
+        return;
+      }
+      if ('downloading' in cached) {
+        // WHY: closing the popup no longer cancels, so a reopened popup finds the job still running.
+        activeJobIdRef.current = cached.downloading.jobId;
+        setInstallState(prev => prev.kind === 'idle'
+          ? { kind: 'downloading', jobId: cached.downloading.jobId, percent: cached.downloading.percent }
+          : prev);
+        return;
+      }
       setInstallState(prev => prev.kind === 'idle'
         ? { kind: 'ready', jobId: 'cached', filePath: cached.filePath }
         : prev);
@@ -251,24 +285,20 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     return () => { cancelled = true; };
   }, [open, updateStatus.update_available, updateStatus.latest]);
 
-  // When the popup opens/closes, manage the abortedRef + cancel any in-flight
-  // download. Main's cancelDownload is a no-op if the job isn't active, so we
-  // don't need to check installState — keeping this effect's deps to [open] only.
+  // A download that finished while no click of ours was waiting on it (a background run, or one
+  // this view lost track of when it was closed and reopened) arrives as `downloaded` in the status.
   useEffect(() => {
-    if (open) {
-      // Fresh open — clear the abort flag so a new download can resolve.
-      abortedRef.current = false;
-      return;
-    }
-    // Close — signal abort, cancel any in-flight download, reset to idle.
-    abortedRef.current = true;
-    if (activeJobIdRef.current) {
-      window.claude.update.cancel(activeJobIdRef.current);
-      activeJobIdRef.current = null;
-    }
-    // WHY preserve launch outcomes too: an error can arrive while closed, and
-    // reopening must not offer a second install over an uncertain first one.
-    setInstallState(prev => prev.kind === 'launching' || prev.kind === 'manual'
+    if (updateStatus.downloaded) setInstallState(prev => prev.kind === 'downloading' ? { kind: 'idle' } : prev);
+  }, [updateStatus.downloaded]);
+
+  // WHY this effect no longer cancels or resets a download (Destin, 2026-10-22): closing the popup
+  // after pressing Update used to cancel the download and fall back to "Update now". The job now
+  // belongs to main and keeps running; this popup has no way to stop it, and a failure reaches it
+  // as a failed progress event (above). Launch outcomes are kept too — an error can
+  // arrive while closed, and reopening must not offer a second install over an uncertain first one.
+  useEffect(() => {
+    if (open) return;
+    setInstallState(prev => prev.kind === 'launching' || prev.kind === 'manual' || prev.kind === 'downloading'
       || (prev.kind === 'error' && prev.stage === 'launch') ? prev : { kind: 'idle' });
   }, [open]);
 
@@ -314,6 +344,31 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       phase: progress?.phase === 'restarting' ? 'restarting' : 'handoff', output: progress?.output ?? '' });
   }, [onClose]);
 
+  // #183 Restart to update. Main asks through the close-window prompt when chats are open
+  // (Q-busy: "just show the standard closeout prompt"); closing that prompt resolves
+  // `restarting: false` and the button comes back, so nothing restarts behind the user's back.
+  const handleRestart = useCallback(async () => {
+    setInstallState({ kind: 'restarting' });
+    try {
+      const api = window.claude.update as unknown as { restartToUpdate: () => Promise<{ restarting: boolean; fallback?: { kind: 'browser' } | { kind: 'manual'; command: string; filePath: string } }> };
+      const result = await api.restartToUpdate();
+      // WHY (T3): when today's interactive installer could not simply run, main hands back what it always
+      // showed here: a command to run by hand, or the browser.
+      if (result.fallback?.kind === 'manual') { setInstallState({ kind: 'manual', command: result.fallback.command, filePath: result.fallback.filePath }); return; }
+      if (result.fallback?.kind === 'browser') { setInstallState({ kind: 'idle' }); onClose(); return; }
+      if (!result.restarting) setInstallState({ kind: 'idle' });
+    } catch (e: unknown) {
+      // WHY not "The installer didn't start." (code review F7, error-message-standards): Restart can fail before
+      // any installer exists (the release could not be confirmed, a helper failed to start). A code that has
+      // its own sentence keeps it; anything else is the general error with the real text in Details.
+      const code = downloadErrorCode(e);
+      const known = updateErrorMessage(code) !== 'Launch failed' || code === 'busy';
+      setInstallState(known
+        ? { kind: 'error', code, stage: 'launch' }
+        : { kind: 'error', code: 'restart-failed', stage: 'restart', output: plainMessage(e) });
+    }
+  }, [onClose]);
+
   const handleUpdate = useCallback(async () => {
     // If we already have a ready job, skip straight to launch.
     if (installState.kind === 'ready') {
@@ -324,17 +379,24 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // Content-Length unknown) so the label shows the indeterminate branch.
     try {
       setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
-      const result = await window.claude.update.download();
-      // Guard: if the popup closed during the download, don't leave stale
-      // "Launch installer" state showing on next open.
-      if (abortedRef.current) return;
+      downloadRequestPending.current = true;
+      const result = await window.claude.update.download().finally(() => { downloadRequestPending.current = false; });
+      // WHY no closed-popup guard any more: closing keeps the download running, so finishing while
+      // closed should leave the popup Ready for the next open, not idle.
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
+      // WHY (#183 T3): "Update now" is still ONE press. With the popup open, the finished download goes
+      // straight into Restart to update. Closed meanwhile, nothing restarts behind the person's back: the
+      // popup is simply Ready (Restart to update) the next time they open it.
+      // (Design note from the code review: also not where a password box would come next. Contract R8: on a
+      // password computer the person presses Restart to update themselves.)
+      if (openRef.current && !updateStatus.needs_password) await handleRestart();
     } catch (e: unknown) {
-      if (abortedRef.current) return;
       setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
-  }, [installState, runLaunch]);
+  }, [installState, runLaunch, handleRestart, updateStatus.needs_password]);
+
+  const readyToRestart = !!updateStatus.downloaded && (installState.kind === 'idle' || installState.kind === 'ready');
 
   const handleFallbackBrowser = useCallback(async () => {
     if (updateStatus.download_url) {
@@ -418,7 +480,19 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         open
         onClose={onClose}
         size="document"
-        title={updateStatus.update_available ? 'Update available' : "What's new"}
+        title={updateStatus.update_available ? (updateStatus.downloaded ? 'Update ready' : 'Update available') : "What's new"}
+        // #183: one line on when it installs — by itself on quit, except where installing
+        // needs a password (Q-linux / Q-mac: only when you press the button).
+        subtitle={updateStatus.update_available && updateStatus.downloaded
+          ? (updateStatus.needs_password
+            ? 'Downloaded. Restarting asks for your password, then installs it.'
+            // WHY all three (code review F5): "installs by itself" is only true when the switch is ON (and known),
+            // the copy is staged, the install is not refused here and it has not failed twice. Otherwise the
+            // approved "Restart when you are ready." line, never a promise a quit will not keep.
+            : autoInstall === true && updateStatus.installs_on_quit === true
+              ? 'Downloaded. Installs by itself the next time you quit YouCoded.'
+              : 'Downloaded. Restart when you are ready.')
+          : undefined}
         // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
         // notes with no fade and drew a full-width line above its footer (guide: no full-width
         // line in a popup; the content fades at the hidden edge). The footer slot keeps Update
@@ -446,7 +520,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 where a fresh attempt can help (guide "A failed action replaces the buttons it
                 came from"; small-fixes-1#SF-1). No browser fallback for a damaged download:
                 that file is the one the check refused (2026-09-10 #7 review). */}
-            {installState.kind === 'launching' ? (
+            {installState.kind === 'launching' || installState.kind === 'restarting' ? (
               <div role="status" aria-live="polite">
                 {/* WHY retain the button (LU-1/LU-2/LU-5 review): Destin rejected bare
                     status text. Keep the original full-width action shape as its label
@@ -457,7 +531,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                       itself to update, with no extra text or expandable log below it.
                       Main bounds/sanitizes output; cap the label too for noisy scripts. */}
                   <span className="min-w-0 truncate">
-                    {installState.phase === 'preparing' ? 'Preparing the installer…'
+                    {installState.kind === 'restarting' ? 'Restarting YouCoded…'
+                      : installState.phase === 'preparing' ? 'Preparing the installer…'
                       : installState.phase === 'authorizing' ? 'Waiting for administrator approval…'
                       : installState.phase === 'restarting' ? 'Restarting YouCoded…'
                       : installState.phase === 'handoff' ? 'Opening the installer…'
@@ -465,6 +540,15 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                   </span>
                 </Button>
               </div>
+            ) : installState.kind === 'error' && installState.stage === 'restart' ? (
+              <ErrorState
+                title="Couldn't restart to update."
+                explainer="Your current version is still running."
+                onDiagnose={() => setReportMode('diagnose')}
+                onReportBug={() => setReportMode('report')}
+                onRetry={handleRestart}
+                details={installState.output}
+              />
             ) : installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
               <ErrorState
                 {...(unknownOutcome ? {
@@ -484,7 +568,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             <Button
               size="lg"
               className="w-full"
-              onClick={handleUpdate}
+              onClick={readyToRestart ? handleRestart : handleUpdate}
               disabled={
                 installState.kind === 'downloading' ||
                 // The download is done and waiting on a terminal — the block
@@ -494,11 +578,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
               }
             >
-              {installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
+              {/* #183: replaces Update now once the background download is done. */}
+              {readyToRestart && `Restart to update: v${updateStatus.current} → v${updateStatus.latest}`}
+              {!readyToRestart && installState.kind === 'idle' && `Update now: v${updateStatus.current} → v${updateStatus.latest}`}
               {installState.kind === 'downloading' && (
                 installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
               )}
-              {installState.kind === 'ready' && 'Launch installer'}
+              {!readyToRestart && installState.kind === 'ready' && 'Launch installer'}
               {installState.kind === 'manual' && 'Downloaded — one step left'}
               {/* Only a blocked update still reaches here in the error state; every other failure
                   is the notice above. WHY the stage picks the sentence there (error inventory

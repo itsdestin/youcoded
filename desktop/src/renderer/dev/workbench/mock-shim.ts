@@ -277,6 +277,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel', 'update.onInstallProgress',
+  // Automatic updates (#183): the two settings channels (T1) and restartToUpdate (T3) are real channels.
+  'update.getAutoInstall', 'update.setAutoInstall', 'update.restartToUpdate',
   // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
   // hand-written so the workbench serves the seeded comment fixtures instead
   // of the catch-all's `[]`, which the store's own `list()` would read as
@@ -587,9 +589,25 @@ function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void 
   }
 }
 
-/** `?update=available` — the status pill's update, which no scenario otherwise sends. */
-function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
-  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
+/** `?update=available` — the status pill's update, which no scenario otherwise sends.
+ *  `?update=ready` (#183): the update already downloaded in the background and waiting for a
+ *  restart; `?update=ready-password` the same on a computer where installing asks for a
+ *  password (a Linux package, or a Mac account that is not an administrator). */
+function updateStatusSwitch(): {
+  current: string; latest: string; update_available: true; download_url: string;
+  downloaded?: boolean; needs_password?: boolean; installs_on_quit?: boolean;
+} | null {
+  const mode = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('update');
+  if (mode === 'ready' || mode === 'ready-password') return {
+    current: '1.3.2',
+    latest: '1.4.0',
+    update_available: true,
+    download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.4.0',
+    downloaded: true,
+    needs_password: mode === 'ready-password',
+    installs_on_quit: mode === 'ready',
+  };
+  if (mode !== 'available') return null;
   return {
     current: '1.2.4',
     latest: '1.3.0',
@@ -3408,6 +3426,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // gating whether presence even tries to connect. One fixed id for both
   // sides of the comparison is enough — there is only ever one workbench tab.
   const WORKBENCH_WINDOW_ID = 1;
+  // Shared by windowNs and update.restartToUpdate (#183): the restart asks through the
+  // window's own close prompt, exactly as main will.
+  let closeRequestListener: ((req: { requestId: string; sessions: number; reason?: 'update' }) => void) | null = null;
+  let settleRestart: ((restarting: boolean) => void) | null = null;
   // `window` is Electron-only plumbing absent from useIpc.ts entirely (like
   // `theme` below) — no Ns<'window'> to type against, so this stays a plain
   // object.
@@ -3418,13 +3440,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // manager; the answer is only logged. requestId is a fixed string: the
     // workbench is a single tab with no whole-app quit to race this prompt
     // against, so nothing here needs it to be unique.
-    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number; reason?: 'update' }) => void) => {
+      // Restart to update (#183) raises the same prompt, so it needs the callback too.
+      closeRequestListener = cb;
       if (typeof location === 'undefined' || new URLSearchParams(location.search).get('quit') !== 'ask') return () => {};
       const t = setTimeout(() => cb({ requestId: 'workbench-close', sessions: store.getState().sessions.length }), 400);
       return () => clearTimeout(t);
     },
     answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) => {
       console.info('[workbench] close answer', answer);
+      // Restart to update waits on this answer: closing the prompt cancels the restart.
+      if (answer.requestId === 'workbench-update-restart') settleRestart?.(answer.close);
     },
     // Real main.ts pushes this only when a whole-app quit settles a request
     // the renderer was still waiting on (design §4 step 5) — never reachable
@@ -3984,12 +4010,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // states without ever asking for privileges or modifying an installed app.
   const updateInstall = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('updateInstall') : null;
   const updateInstallListeners = new Set<(event: UpdateInstallProgressEvent) => void>();
+  // `?autoInstall=off` (#183): the switch already off, for the popup's off wording.
+  let autoInstall = typeof location === 'undefined' || new URLSearchParams(location.search).get('autoInstall') !== 'off';
   const update = {
     onInstallProgress: (handler: (event: UpdateInstallProgressEvent) => void) => {
       updateInstallListeners.add(handler);
       return () => { updateInstallListeners.delete(handler); };
     },
-    changelog: async () => ({
+    // ?update=ready* (#183) is 1.3.2 → 1.4.0, so its notes must be 1.4.0's (UX review 1, U1:
+    // a 1.3.0 note under a 1.4.0 button read as three different versions).
+    changelog: async () => updateStatusSwitch()?.downloaded ? ({
+      markdown: '## 1.4.0\n\n- Updates download by themselves and install when you quit.\n- Clearer messages when a reply fails.\n\n## 1.3.2\n\n- Fixes for the file viewer.',
+      entries: [
+        { version: '1.4.0', date: '2026-10-29', body: '- Updates download by themselves and install when you quit.\n- Clearer messages when a reply fails.' },
+        { version: '1.3.2', date: '2026-10-20', body: '- Fixes for the file viewer.' },
+      ],
+      fromCache: false,
+    }) : ({
       markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
       entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
       fromCache: false,
@@ -4000,6 +4037,25 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // the row in the state most people see.
     getBetaChannel: async () => ({ betaChannel: null, effective: false }),
     setBetaChannel: async (enabled: boolean) => ({ betaChannel: enabled, effective: enabled }),
+    // Automatic updates (#183). On unless turned off, like the real default will be.
+    // WHY the {supported:true, ...} shape: the real channel answers it (supported:false hides the row).
+    getAutoInstall: async () => ({ supported: true as const, enabled: autoInstall }),
+    setAutoInstall: async (enabled: boolean) => { autoInstall = enabled; return { supported: true as const, enabled }; },
+    // With sessions open, the restart asks through the close-window prompt and resolves with
+    // whether it went ahead; with none, it goes ahead at once. Parked after "yes": a browser
+    // tab cannot restart, and a stable "Restarting YouCoded…" is the state to review.
+    restartToUpdate: async (): Promise<{ restarting: boolean }> => {
+      const sessions = store.getState().sessions.length;
+      if (sessions > 0 && closeRequestListener) {
+        const restarting = await new Promise<boolean>((resolve) => {
+          settleRestart = resolve;
+          closeRequestListener!({ requestId: 'workbench-update-restart', sessions, reason: 'update' });
+        });
+        settleRestart = null;
+        if (!restarting) return { restarting: false };
+      }
+      return new Promise(() => {});
+    },
     download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
     cancel: async () => undefined,
     launch: async (jobId: string): Promise<UpdateLaunchResult> => {

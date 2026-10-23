@@ -31,6 +31,7 @@ import * as path from 'path';
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { BROWSER_MCP_INSTRUCTIONS, BROWSER_TOOL_NAMES, browserToolsAsMcp } from './browser-tool-specs';
 import type { RunResult } from './browser-tool-runners';
+import { relistenIfDeleted } from '../socket-repair';
 
 export const BROWSER_MCP_DIR = 'claude-code-browser-mcp';
 /** Env names the deployed config passes to the script. */
@@ -193,6 +194,8 @@ export async function relaySocketPath(platform: NodeJS.Platform, socketDir?: str
 
 export class BrowserRelayServer {
   private server: net.Server | null = null;
+  // Servers replaced by ensureListening(): kept open until stop() (see there).
+  private retired: net.Server[] = [];
   readonly token = randomBytes(24).toString('hex');
   socketPath = '';
 
@@ -208,6 +211,20 @@ export class BrowserRelayServer {
     });
     if (platform !== 'win32') await fs.promises.chmod(this.socketPath, 0o600).catch(() => undefined);
     return this.socketPath;
+  }
+
+  /** Re-creates the socket if its file was deleted while the app runs — every
+   *  Claude Code session's config points at this one path for the whole run.
+   *  The replaced server stays open: closing it would delete the new file
+   *  (socket-repair.ts). Called as each session is created (browser-main.ts). */
+  async ensureListening(): Promise<void> {
+    if (!this.server) return;
+    const fresh = await relistenIfDeleted(this.socketPath, () => net.createServer((sock) => this.onConnection(sock)),
+      { fileMode: 0o600, platform: this.opts.platform, stillWanted: () => this.server !== null });
+    if (!fresh || !this.server) return;
+    this.retired.push(this.server);
+    this.server = fresh;
+    this.opts.log?.('WARN', 'relay socket file was missing (something deleted it) — re-created it', { path: this.socketPath });
   }
 
   private tokenOk(given: unknown): boolean {
@@ -259,6 +276,7 @@ export class BrowserRelayServer {
     const s = this.server;
     this.server = null;
     if (s) await new Promise<void>((r) => s.close(() => r()));
+    for (const r of this.retired.splice(0)) r.close();
     if ((this.opts.platform ?? process.platform) !== 'win32' && this.socketPath) await fs.promises.rm(this.socketPath, { force: true }).catch(() => undefined);
   }
 }

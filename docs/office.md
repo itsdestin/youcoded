@@ -4,7 +4,7 @@
 
 ## What the person gets
 
-- An **Office page** (built-in, pinnable; the header briefcase goes to it): Home (New document / spreadsheet / presentation, Recent, this project's files) and one tab per open document. A **Versions** button lists kept copies.
+- An **Office page** (built-in, pinnable; the header Office icon goes to it): Home (New document / spreadsheet / presentation, Recent, this project's files) and one tab per open document. A **Versions** button lists kept copies.
 - **Edit** on a `.docx`/`.xlsx`/`.pptx` in the session drawer or Project View opens a *slim* editor (the editor's own chrome hidden, the app's one-row bar instead); *Open in Office* hands it to the full page.
 - Autosave, crash recovery, Save As / Export / PDF, Print, pictures, comments the assistant can add to an open file, the app's theme and fonts.
 - **Desktop only.** The remote browser and the phone refuse every `office:*` call (`remote-shim.ts`, `SessionService.kt`), and the renderer hides every Office entry point unless `office.status()` says `available` (`office-availability.ts`). On a platform with no add-on (Linux ARM) Office is hidden and files open with the default app.

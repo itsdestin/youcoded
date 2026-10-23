@@ -1275,7 +1275,7 @@ export function registerIpcHandlers(
     deliver: (data) => { send(IPC.STATUS_DATA, data); if (remoteServer) remoteServer.broadcastStatusData(data); },
     mainWindow, windowRegistry, remoteServer,
   });
-  setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
+  setSyncHealthGate(statusPush.hasAudience); updateService.onStatusChange(() => statusPush.push()); // 2nd: WHY (#183 T2, E13) "ready to restart" shows the moment a background download lands, not up to 10 s later // the sync health check asks the same question (audit W12)
   // WHY (one-core R5-1): the per-session summary rides its own push beside attentionMap; a phone's dots and attention sound read it (R5-3).
   const summaryPush = startSessionSummaryPush({
     records: runtime.records,
