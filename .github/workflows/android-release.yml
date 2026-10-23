@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       base:
-        description: 'Next-patch beta prefix; leave blank to select it automatically. Beta numbers reset after each official release.'
+        description: 'Next-feature-release beta prefix; leave blank to select it automatically. Beta numbers reset after each feature release (X.Y.0), not after a bug-fix release.'
         required: false
         default: ''
         type: string
