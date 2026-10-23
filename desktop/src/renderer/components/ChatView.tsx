@@ -326,11 +326,19 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // session. The bottom bar is the one whose height varies with drafts/multi-line.
     const chrome = document.querySelector('.chrome-wrapper--bottom');
     if (!chrome) return;
+    // WHY the rAF: useChromeMeasurements publishes --bottom-chrome-height from
+    // its OWN ResizeObserver on this same element, and observers run in
+    // registration order. When ours ran first we pinned against the OLD padding,
+    // then the padding grew and nothing re-pinned — a theme with a taller input
+    // bar opened 16-24px short of the bottom, the last message under the bar.
+    // One frame later every observer has run and the padding is current.
+    let raf = 0;
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     });
     observer.observe(chrome);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(raf); };
   }, [visible, scrollToBottom, stickRef]);
 
   // Auto-scroll when new content arrives and the view is still stuck to the
@@ -814,7 +822,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // hardcodes an offset — so once .chat-scroll's padding-bottom grows by
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
-  const QUEUED_STRIP_GAP = '0.5rem'; // visual breathing room above the strip's top edge (Destin's ask)
+  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.5rem)'; // the shared stack gap — see :root in globals.css
   // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
   const queuePreview = workbenchQueuePreview();
   const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
@@ -838,6 +846,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // read a single number instead of remembering to add the gap itself.
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--queued-strip-height', `calc(${h}px + ${QUEUED_STRIP_GAP})`);
+      // The var grows .chat-scroll's padding, which no content observer sees —
+      // re-pin so the last message moves up above the cards instead of under them.
+      if (stickRef.current) scrollToBottom();
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -865,7 +876,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // modelStatusRef.current directly after each render: null means the component
   // rendered nothing this pass, so the effect zeroes the var instead of
   // guessing from a re-derived boolean.
-  const MODEL_STATUS_GAP = '0.75rem'; // matches .jump-to-bottom's own gap so the two bands stack evenly
+  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.5rem)'; // the shared stack gap, so every band stacks evenly
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;
@@ -877,6 +888,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     const update = () => {
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--model-status-height', `calc(${h}px + ${MODEL_STATUS_GAP})`);
+      if (stickRef.current) scrollToBottom(); // same reason as the queued strip's
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
