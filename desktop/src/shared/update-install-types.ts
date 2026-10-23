@@ -61,6 +61,15 @@ export interface UpdateCachedDownload {
   version: string;
 }
 
+/** WHY (#183 auto-updates): closing the popup no longer cancels a download, so reopening it must be
+ *  able to learn that a job is still running. `percent` is -1 while the size is unknown; `jobId`
+ *  lets the popup's Cancel button reach the job it did not start. */
+interface UpdateDownloadingState {
+  downloading: { percent: number; jobId: string | null };
+}
+/** What `update:get-cached-download` answers: a finished file, a job in flight, or nothing. */
+export type UpdateCachedDownloadResult = UpdateCachedDownload | UpdateDownloadingState;
+
 // WHY (2026-09-30 one-core R3-2): the beta-channel answer and the changelog answer were typed
 // inline in the window.claude type; the channel table's rows now share these.
 /** `betaChannel` is the saved answer (null = never chosen); `effective` is what the next check uses. */

@@ -216,11 +216,6 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // Ref rather than state because the progress handler fires asynchronously and
   // we want the freshest jobId without re-subscribing.
   const activeJobIdRef = useRef<string | null>(null);
-  // Aborted-close guard: if the user closes the popup mid-download and the
-  // download() promise still resolves afterwards (cancel didn't race in time),
-  // we must NOT setInstallState(ready) — that would leave stale "Launch installer"
-  // state showing on next open.
-  const abortedRef = useRef(false);
 
   // Subscribe to download progress. Main broadcasts progress to every window;
   // we rely on the main-side single-job invariant (only one download in flight
@@ -243,7 +238,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   }, [open]);
 
   // When the popup opens and a completed download is already cached for this
-  // version, jump straight to ready state (skip the re-download).
+  // version, jump straight to ready state (skip the re-download). If a job is still running (a
+  // background download, or one started before the popup was closed), show its progress instead.
   // Guard: only overwrite state if we're still in `idle` — don't race against
   // a user-initiated download that already started.
   useEffect(() => {
@@ -253,6 +249,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     (async () => {
       const cached = await window.claude.update.getCachedDownload(updateStatus.latest);
       if (cancelled || !cached) return;
+      if ('downloading' in cached) {
+        // WHY: closing the popup no longer cancels, so a reopened popup finds the job still running.
+        activeJobIdRef.current = cached.downloading.jobId;
+        setInstallState(prev => prev.kind === 'idle'
+          ? { kind: 'downloading', jobId: cached.downloading.jobId, percent: cached.downloading.percent }
+          : prev);
+        return;
+      }
       setInstallState(prev => prev.kind === 'idle'
         ? { kind: 'ready', jobId: 'cached', filePath: cached.filePath }
         : prev);
@@ -260,24 +264,19 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     return () => { cancelled = true; };
   }, [open, updateStatus.update_available, updateStatus.latest]);
 
-  // When the popup opens/closes, manage the abortedRef + cancel any in-flight
-  // download. Main's cancelDownload is a no-op if the job isn't active, so we
-  // don't need to check installState — keeping this effect's deps to [open] only.
+  // A download that finished while no click of ours was waiting on it (a background run, or one
+  // this view lost track of when it was closed and reopened) arrives as `downloaded` in the status.
   useEffect(() => {
-    if (open) {
-      // Fresh open — clear the abort flag so a new download can resolve.
-      abortedRef.current = false;
-      return;
-    }
-    // Close — signal abort, cancel any in-flight download, reset to idle.
-    abortedRef.current = true;
-    if (activeJobIdRef.current) {
-      window.claude.update.cancel(activeJobIdRef.current);
-      activeJobIdRef.current = null;
-    }
-    // WHY preserve launch outcomes too: an error can arrive while closed, and
-    // reopening must not offer a second install over an uncertain first one.
-    setInstallState(prev => prev.kind === 'launching' || prev.kind === 'manual'
+    if (updateStatus.downloaded) setInstallState(prev => prev.kind === 'downloading' ? { kind: 'idle' } : prev);
+  }, [updateStatus.downloaded]);
+
+  // WHY this effect no longer cancels or resets a download (Destin, 2026-10-22): closing the popup
+  // after pressing Update used to cancel the download and fall back to "Update now". The job now
+  // belongs to main; only the Cancel button stops it. Launch outcomes are kept too — an error can
+  // arrive while closed, and reopening must not offer a second install over an uncertain first one.
+  useEffect(() => {
+    if (open) return;
+    setInstallState(prev => prev.kind === 'launching' || prev.kind === 'manual' || prev.kind === 'downloading'
       || (prev.kind === 'error' && prev.stage === 'launch') ? prev : { kind: 'idle' });
   }, [open]);
 
@@ -334,13 +333,11 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     try {
       setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
       const result = await window.claude.update.download();
-      // Guard: if the popup closed during the download, don't leave stale
-      // "Launch installer" state showing on next open.
-      if (abortedRef.current) return;
+      // WHY no closed-popup guard any more: closing keeps the download running, so finishing while
+      // closed should leave the popup Ready for the next open, not idle.
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
     } catch (e: unknown) {
-      if (abortedRef.current) return;
       setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
   }, [installState, runLaunch]);

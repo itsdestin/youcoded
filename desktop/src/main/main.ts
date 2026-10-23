@@ -118,7 +118,7 @@ import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 import { syncHelperOnLaunch, setExperimentKwinDisabled } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
 import { excludeFromCapture } from './window-exclude-capture';
-import { cleanupStaleDownloads } from './update-installer';
+import { getUpdateService } from './update-service';
 import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
 import { perfMark, getPerfMarks } from './perf-marks';
@@ -944,7 +944,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   // the app.whenReady() block. createAppWindow is synchronous and returns before
   // its loadURL/loadFile promise can settle, so this listener is still attached
   // in the same tick as the load call and cannot miss the event.
-  mainWindow.webContents.once('did-finish-load', () => { perfMark('main:main-window:did-finish-load'); hitchRecorder?.noteMainWindowLoaded(); });
+  mainWindow.webContents.once('did-finish-load', () => { perfMark('main:main-window:did-finish-load'); hitchRecorder?.noteMainWindowLoaded(); getUpdateService().onFirstWindowReady(); /* WHY: background update downloads wait 60 s after this so they never compete with startup (#183 T2) */ });
   // Installer launch check only (scripts/smoke-test.js): report whether the
   // main window actually rendered. Registered here for the same reason as the
   // perf mark above — the main window, not a detached or buddy window.
@@ -1452,14 +1452,9 @@ void app.whenReady().then(async () => {
   perfMark('main:chore:prompt-suggestion:done');
   perfMark('main:chore:retention-default:done');
 
-  // Sweep abandoned .partial files and downloads older than 24h from the
-  // in-app update cache. Runs at every startup so stale downloads (e.g. from
-  // a cancelled update on a prior session) don't accumulate on disk.
-  try {
-    cleanupStaleDownloads(path.join(app.getPath('userData'), 'update-cache'));
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to clean up stale update downloads', { error: String(e) });
-  }
+  // WHY no cleanupStaleDownloads here any more (#183 T2): the sweep must know which file is the
+  // pending update before it deletes anything, so update-service runs it after the first successful
+  // release check, async.
   perfMark('main:chore:stale-downloads:done');
 
   // Decomposition v3 §9.3 + native MCP phase 1 Task 7: reconcile plugin

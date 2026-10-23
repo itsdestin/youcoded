@@ -36,7 +36,7 @@ import type {
   ApiResult, AuthStartResponse, AuthPollResponse, MarketplaceUser, AccountExportResult,
 } from './account-types';
 import type {
-  UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownload, UpdateBetaChannelState, UpdateAutoInstallState, UpdateChangelogResult,
+  UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownloadResult, UpdateBetaChannelState, UpdateAutoInstallState, UpdateChangelogResult,
 } from './update-install-types';
 import type { SessionInfo, TranscriptEvent } from './types';
 import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
@@ -987,7 +987,7 @@ export interface ChannelTypes extends ConversationQueueChannelTypes, BrowserChan
   'update:download': { request: void; response: UpdateDownloadResult };
   'update:cancel': { request: { jobId: string }; response: { success: boolean } };
   'update:launch': { request: { jobId: string; filePath: string }; response: UpdateLaunchResult };
-  'update:get-cached-download': { request: { version: string }; response: UpdateCachedDownload | null };
+  'update:get-cached-download': { request: { version: string }; response: UpdateCachedDownloadResult | null };
   'update:get-beta-channel': { request: void; response: UpdateBetaChannelState };
   'update:set-beta-channel': { request: { enabled: boolean }; response: UpdateBetaChannelState };
   'update:get-auto-install': { request: void; response: UpdateAutoInstallState };
@@ -1193,7 +1193,7 @@ interface ClaudeApi {
     download: () => Promise<UpdateDownloadResult>;
     cancel: (jobId: string) => Promise<{ success: boolean }>;
     launch: (jobId: string, filePath: string) => Promise<UpdateLaunchResult>;
-    getCachedDownload: (version: string) => Promise<UpdateCachedDownload | null>;
+    getCachedDownload: (version: string) => Promise<UpdateCachedDownloadResult | null>;
     // Beta update channel. `betaChannel` is the saved answer (null = never
     // chosen); `effective` is what the next check will use, which for an
     // unchosen install is whether this build is itself a pre-release.

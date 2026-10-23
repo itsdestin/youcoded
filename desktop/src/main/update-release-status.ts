@@ -34,6 +34,13 @@ export interface UpdateStatus {
   manifest_url: string | null;
   signature_url: string | null;
   tag: string | null;
+  /** #183: the update finished downloading (verified, staged) and waits for a restart. Added by the
+   *  service's getUpdateStatus; the release parser never sets them. */
+  downloaded?: boolean;
+  /** #183: installing needs an administrator (Linux package; Mac not writable; Windows per-machine). */
+  needs_password?: boolean;
+  /** #183: no in-app install here (unpackaged; Mac bundle misnamed/translocated; AppImage folder read-only). */
+  install_refused?: boolean;
 }
 
 /** The file a Linux install of each kind can actually apply to itself. */

@@ -209,6 +209,29 @@ describe('UpdatePanel — the version pill popup', () => {
       expect(onClose).toHaveBeenCalled();
     });
 
+    it('closing the popup mid-download sends no cancel and keeps the download going', async () => {
+      let finish!: (r: { jobId: string; filePath: string; bytesTotal: number }) => void;
+      (window as any).claude.update.download.mockReturnValue(new Promise((r) => { finish = r; }));
+      const { rerender } = render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+      await screen.findByRole('button', { name: /downloading/i });
+      rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      expect((window as any).claude.update.cancel).not.toHaveBeenCalled();
+      // It was not reset either: reopening still shows a download in progress, not "Update now".
+      rerender(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      expect(await screen.findByRole('button', { name: /downloading/i })).toBeInTheDocument();
+      // And the download finishing while the popup was closed still lands as ready.
+      await act(async () => { finish({ jobId: 'j', filePath: '/tmp/x.exe', bytesTotal: 1 }); });
+      expect(await screen.findByRole('button', { name: /launch installer/i })).toBeInTheDocument();
+    });
+
+    it('reopening while a job is running shows its progress', async () => {
+      (window as any).claude.update.getCachedDownload.mockResolvedValue({ downloading: { percent: 45, jobId: 'job-9' } });
+      render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      expect(await screen.findByRole('button', { name: /downloading.*45%/i })).toBeInTheDocument();
+      expect((window as any).claude.update.download).not.toHaveBeenCalled(); // asked, did not start a second job
+    });
+
     it('does not fetch when open=false', () => {
       render(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
       expect((window as any).claude.update.changelog).not.toHaveBeenCalled();
