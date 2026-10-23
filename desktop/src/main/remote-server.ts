@@ -1,5 +1,4 @@
 import http from 'http';
-import zlib from 'zlib';
 // A phone's project watcher is dropped when its socket closes (the file channels themselves are table entries).
 import { dropSubscriber } from './artifacts/project-watcher';
 import { RemoteDownloads } from './remote-download';
@@ -7,6 +6,7 @@ import { RemoteDownloads } from './remote-download';
 // its stale-board cache (main/arcade-handlers.ts).
 import { dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import { staticAssetPolicy } from './remote-static-policy';
+import { CompressedAssets } from './remote-asset-compression';
 import fs from 'fs';
 import path from 'path';
 import { sweepOldUploads } from './upload-store';
@@ -223,9 +223,8 @@ export class RemoteServer {
   private unauthSockets = 0;
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
   private devices: RemoteDeviceStore;
-  // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
-  // because Vite content-hashes the URLs it serves; see compressStatic().
-  private compressedAssets = new Map<string, Buffer>();
+  /** The page's files, compressed once each (remote-asset-compression.ts). */
+  private assets = new CompressedAssets();
   /** Messages a socket's opening request carried (handleProtocols), handed to its sign-in once the connection exists. */
   private firstFrames = new WeakMap<http.IncomingMessage, string[]>();
   // Channels already warned about, so an unbridged channel that a client polls
@@ -543,6 +542,8 @@ export class RemoteServer {
         // The liveness ping is armed by addClient (first client) and disarmed on
         // the last drop — see startLiveness (simplification audit W14).
         console.log(`[RemoteServer] Listening on ${this.bindAddress ?? '*'}:${port}`);
+        // The page's own files get their tight compressed copies in the background, after the app has finished starting.
+        if (hasStaticBuild && !this.local) setTimeout(() => { void this.assets.warm(staticDir); }, 30_000).unref?.();
         this.emitStatus();
         resolve();
       });
@@ -792,42 +793,10 @@ export class RemoteServer {
       return;
     }
 
-    const body = this.compressStatic(urlPath, policy.encoding, data);
+    const body = this.assets.get(urlPath, policy.encoding, data);
     headers['Content-Encoding'] = policy.encoding;
     res.writeHead(200, headers);
     res.end(body);
-  }
-
-  /**
-   * Compresses once per (asset, encoding) and reuses the result.
-   *
-   * Assets under assets/ are content-hashed, so a given URL's bytes never
-   * change and the cached output can never go stale. This is what makes brotli
-   * affordable — compressing a 2 MB chunk per request would cost far more than
-   * the transfer it saves.
-   */
-  private compressStatic(urlPath: string, encoding: 'br' | 'gzip', data: Buffer): Buffer {
-    const key = `${encoding}:${urlPath}`;
-    const cached = this.compressedAssets.get(key);
-    if (cached) return cached;
-
-    const compressed = encoding === 'br'
-      // Quality 5 rather than the default 11: near-gzip CPU cost for
-      // meaningfully better ratios. At 11 the first request for the entry chunk
-      // would stall for seconds.
-      // Measured on the real 1,969 kB entry chunk (2026-07-20): q5 = 38 ms,
-      // q11 = 4,719 ms. Do NOT raise this — the default (11) would stall the
-      // first request by ~5 s, costing more than the transfer it saves.
-      ? zlib.brotliCompressSync(data, {
-          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
-        })
-      : zlib.gzipSync(data);
-
-    // Bound the cache. A production build emits a handful of assets, but this
-    // is fed by request URLs, so it must not be allowed to grow without limit.
-    if (this.compressedAssets.size >= 64) this.compressedAssets.clear();
-    this.compressedAssets.set(key, compressed);
-    return compressed;
   }
 
   // --- WebSocket connection handling ---
