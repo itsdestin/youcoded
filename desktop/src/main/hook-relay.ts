@@ -34,7 +34,8 @@ export function hookPipeName(
 ): string {
   if (platform === 'win32') return `\\\\.\\pipe\\claude-desktop-hooks-${pid}`;
   if (platform === 'linux' && env.XDG_RUNTIME_DIR) {
-    return path.join(env.XDG_RUNTIME_DIR, 'youcoded', `claude-desktop-hooks-${pid}.sock`);
+    // path.posix: this branch is for Linux whatever machine computes it (the test runs it on Windows too).
+    return path.posix.join(env.XDG_RUNTIME_DIR, 'youcoded', `claude-desktop-hooks-${pid}.sock`);
   }
   return path.join(os.tmpdir(), `claude-desktop-hooks-${pid}.sock`);
 }
