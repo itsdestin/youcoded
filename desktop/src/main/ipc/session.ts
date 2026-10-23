@@ -584,7 +584,7 @@ const sessionEntries: MainChannelDef[] = [
       const store = ops().welcomeBackStore;
       if (!store) return [];
       await store.ready;
-      return store.offerIds();
+      return store.offerEntries();
     },
   }),
   defineChannel({

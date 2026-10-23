@@ -645,7 +645,7 @@ export function registerIpcHandlers(
       // unlike a brand-new session, which only earns that once its first user
       // message actually lands (the hook on the transcript-event listeners
       // below). 'shell' has no conversation id to remember (welcome-back-store.ts).
-      if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider);
+      if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider, info.skipPermissions === true);
       // WHY: a resumed Claude Code session's pill sat on the 'Resuming...'
       // placeholder for its whole life — only native resumes re-applied the
       // stored title below (Destin, 2026-09-24). Same re-apply, same rename
@@ -1325,10 +1325,12 @@ export function registerIpcHandlers(
   // store's own track() is a plain overwrite-and-persist with no such guard
   // (design §1: "changes are a handful per session", not one per turn).
   const welcomeBackTracked = new Set<string>();
-  const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider) => {
+  // WHY skipPermissions: remembered so Welcome back reopens the session with
+  // Skip permissions still on if it ran that way (Destin, 2026-10-23).
+  const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider, skipPermissions = false) => {
     if (!welcomeBackStore || welcomeBackTracked.has(desktopId)) return;
     welcomeBackTracked.add(desktopId);
-    welcomeBackStore.track(desktopId, conversationId, provider);
+    welcomeBackStore.track(desktopId, conversationId, provider, skipPermissions);
   };
   const untrackWelcomeBack = (desktopId: string) => {
     welcomeBackTracked.delete(desktopId);
@@ -1544,7 +1546,7 @@ export function registerIpcHandlers(
     // remembered (S-sent) — this is where a brand-new (non-resume) session
     // earns its spot, the moment its first user message actually lands.
     // trackWelcomeBack no-ops after the first call, so later messages are free.
-    if (claudeId && event.type === 'user-message') trackWelcomeBack(event.sessionId, claudeId, 'claude');
+    if (claudeId && event.type === 'user-message') trackWelcomeBack(event.sessionId, claudeId, 'claude', sessionManager.getSession(event.sessionId)?.skipPermissions === true);
     // Claude Code sessions are named by the SAME policy as native ones: this
     // tailer emits 'turn-complete' only when stop_reason !== 'tool_use', so a
     // turn that ran twenty tools counts as the one reply it is.

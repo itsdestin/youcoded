@@ -11,7 +11,7 @@
 // WHY injected fs: the caller (main.ts, T2) passes `fs.promises`; tests pass
 // an in-memory fake, so this module's tests never touch a real disk and can
 // assert on the exact write sequence (temp file, then rename).
-import type { SessionProvider } from '../shared/types';
+import type { ReopenEntry, SessionProvider } from '../shared/types';
 
 /** `shell` sessions are a terminal, not an AI conversation — they have no
  *  conversation id to remember, so they never appear in `open` or `offer`. */
@@ -24,6 +24,10 @@ export type WelcomeBackProvider = Exclude<SessionProvider, 'shell'>;
 interface WelcomeBackEntry {
   conversationId: string;
   provider: WelcomeBackProvider;
+  // WHY: Welcome back used to reopen every session with Skip permissions off,
+  // so a session Destin ran with it on came back asking for approvals (Destin,
+  // 2026-10-23). Written only when true, so older files read back as "off".
+  skipPermissions?: true;
 }
 
 interface WelcomeBackState {
@@ -45,7 +49,11 @@ function asEntry(value: unknown): WelcomeBackEntry | null {
   if (!e || typeof e !== 'object') return null;
   if (typeof e.conversationId !== 'string' || !e.conversationId) return null;
   if (!VALID_PROVIDERS.includes(e.provider as WelcomeBackProvider)) return null;
-  return { conversationId: e.conversationId, provider: e.provider as WelcomeBackProvider };
+  return {
+    conversationId: e.conversationId,
+    provider: e.provider as WelcomeBackProvider,
+    ...(e.skipPermissions === true ? { skipPermissions: true as const } : {}),
+  };
 }
 
 // Corrupt or partial JSON must never throw — a bad file reads the same as a
@@ -90,8 +98,8 @@ function dedupeByConversationId(entries: WelcomeBackEntry[]): WelcomeBackEntry[]
 // assigned `state` wholesale). Each is idempotent-shaped (a set or a filter,
 // never an increment), so replaying one that ALSO ran against the pre-load
 // placeholder state is harmless — only the replayed result survives anyway.
-function applyTrack(s: WelcomeBackState, desktopId: string, conversationId: string, provider: WelcomeBackProvider): void {
-  s.open[desktopId] = { conversationId, provider };
+function applyTrack(s: WelcomeBackState, desktopId: string, conversationId: string, provider: WelcomeBackProvider, skipPermissions: boolean): void {
+  s.open[desktopId] = { conversationId, provider, ...(skipPermissions ? { skipPermissions: true as const } : {}) };
 }
 function applyRemap(s: WelcomeBackState, desktopId: string, conversationId: string): void {
   const existing = s.open[desktopId];
@@ -125,8 +133,9 @@ export interface WelcomeBackStore {
    *  again before Destin answers the Welcome back screen, the still-unanswered
    *  offer survives (design §1). Resolves once that change is durable. */
   startup(): Promise<void>;
-  /** A desktop session started resuming, or sent its first user message. */
-  track(desktopId: string, conversationId: string, provider: WelcomeBackProvider): void;
+  /** A desktop session started resuming, or sent its first user message.
+   *  `skipPermissions`: it was started with Skip permissions on. */
+  track(desktopId: string, conversationId: string, provider: WelcomeBackProvider, skipPermissions?: boolean): void;
   /** The conversation id backing an already-tracked desktop session changed
    *  (`/clear` rotation, in-session `/resume`, a SessionStart remap). A no-op
    *  if `desktopId` isn't tracked — remap fires for every mapping change,
@@ -138,6 +147,8 @@ export interface WelcomeBackStore {
   untrack(desktopId: string): void;
   /** Conversation ids the Welcome back screen should offer. */
   offerIds(): string[];
+  /** The same offer, each with whether it ran with Skip permissions on. */
+  offerEntries(): ReopenEntry[];
   /** Removes these conversation ids from `offer` (the screen was answered or left). */
   forget(ids: string[]): void;
   /** Resolves once every write queued so far has landed on disk. */
@@ -232,9 +243,9 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
       await enqueueWrite();
     },
 
-    track(desktopId, conversationId, provider): void {
-      if (!loaded) { pendingOps.push((s) => applyTrack(s, desktopId, conversationId, provider)); return; }
-      applyTrack(state, desktopId, conversationId, provider);
+    track(desktopId, conversationId, provider, skipPermissions = false): void {
+      if (!loaded) { pendingOps.push((s) => applyTrack(s, desktopId, conversationId, provider, skipPermissions)); return; }
+      applyTrack(state, desktopId, conversationId, provider, skipPermissions);
       // Fire-and-forget: the returned promise is `tail`-chained and self-caught
       // (see enqueueWrite), so an unawaited call here can never surface as an
       // unhandled rejection — `void` only satisfies the no-floating-promises lint.
@@ -259,6 +270,10 @@ export function createWelcomeBackStore(filePath: string, fs: WelcomeBackFs): Wel
 
     offerIds(): string[] {
       return state.offer.map((entry) => entry.conversationId);
+    },
+
+    offerEntries(): ReopenEntry[] {
+      return state.offer.map((entry) => ({ id: entry.conversationId, skipPermissions: entry.skipPermissions === true }));
     },
 
     forget(ids): void {

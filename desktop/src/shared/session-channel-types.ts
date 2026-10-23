@@ -5,7 +5,7 @@
 // like marketplace-channel-types.ts and sync-channel-types.ts, ChannelTypes extends this so a
 // row is still found by name through ChannelTypes.
 import type {
-  SessionInfo, SessionCreateResult, SessionMetaResult, HistoryMessage, PastSession,
+  SessionInfo, SessionCreateResult, SessionMetaResult, HistoryMessage, PastSession, ReopenEntry,
   TranscriptPageRequest, TranscriptPageResult,
 } from './types';
 import type { CreateSessionOpts } from '../main/session-manager';
@@ -61,6 +61,7 @@ export interface SessionChannelTypes {
   'session-naming:title': { request: { sessionId: string; fallback: string }; response: { title: string; manual: boolean } };
   'session-naming:rename': { request: { sessionId: string; title: string }; response: { ok: true; name: string } | { ok: false; error: string } };
   // Welcome back: the conversations open at the last shutdown (the computer's own screen).
-  'session:reopen-list': { request: void; response: string[] };
+  // Each row also says whether that session ran with Skip permissions on.
+  'session:reopen-list': { request: void; response: ReopenEntry[] };
   'session:forget-reopen': { request: { ids: string[] }; response: { ok: boolean } };
 }

@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult, TranscriptEvent } from '../shared/types';
+import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, ReopenEntry, SessionMetaResult, TranscriptEvent } from '../shared/types';
 // Type-only (erased at build), so the sandboxed preload still resolves nothing at
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
@@ -1153,7 +1153,7 @@ contextBridge.exposeInMainWorld('claude', {
     getMeta: (sessionId: string): Promise<SessionMetaResult> =>
       ipcRenderer.invoke(IPC.SESSION_GET_META, { sessionId }),
     // Welcome back (design §3): conversation ids open at the last shutdown.
-    reopenList: (): Promise<string[]> =>
+    reopenList: (): Promise<ReopenEntry[]> =>
       ipcRenderer.invoke(IPC.SESSION_REOPEN_LIST),
     forgetReopen: (ids: string[]): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, { ids }),

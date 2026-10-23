@@ -52,7 +52,7 @@ import type { OfficeChannelTypes } from './office-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
-  SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
+  SessionMetaResult, ReopenEntry, HandoffAttemptResult, HandoffCreateParams,
   SpecialistsEvent, ShellEvent,
 } from './types';
 import type { Capabilities } from './capabilities';
@@ -1088,7 +1088,7 @@ interface SessionBridge {
   // exposing this at all), but the SHARED bridge still carries it — a remote
   // browser's preload-equivalent (remote-shim) implements it too; the
   // renderer is what skips calling it off-desktop (App.tsx, T4).
-  reopenList(): Promise<string[]>;
+  reopenList(): Promise<ReopenEntry[]>;
   forgetReopen(ids: string[]): Promise<{ ok: boolean }>;
 }
 
