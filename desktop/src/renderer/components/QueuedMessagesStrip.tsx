@@ -133,7 +133,7 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
     <>
     <div
       ref={ref}
-      className="queued-messages-strip absolute left-3 right-3 z-10 flex flex-col gap-2"
+      className="queued-messages-strip absolute left-3 right-3 z-10 flex flex-col gap-1.5"
       aria-label="Queued messages"
     >
       {queuedMessages.map((q) => (

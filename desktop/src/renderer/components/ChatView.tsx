@@ -822,7 +822,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // hardcodes an offset — so once .chat-scroll's padding-bottom grows by
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
-  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.5rem)'; // the shared stack gap — see :root in globals.css
+  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap — see :root in globals.css
   // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
   const queuePreview = workbenchQueuePreview();
   const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
@@ -876,7 +876,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // modelStatusRef.current directly after each render: null means the component
   // rendered nothing this pass, so the effect zeroes the var instead of
   // guessing from a re-derived boolean.
-  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.5rem)'; // the shared stack gap, so every band stacks evenly
+  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap, so every band stacks evenly
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;
