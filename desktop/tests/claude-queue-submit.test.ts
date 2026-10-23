@@ -6,6 +6,21 @@ import { sendToClaudeCode } from '../src/renderer/state/submit-outgoing';
 import { pendingQueueSend } from '../src/renderer/state/pending-queue-send';
 afterEach(()=>{delete(window as any).claude;window.localStorage.clear();});
 describe('host queued Claude submission',()=>{
+ it('draws an idle send at once as a queue bubble, takes it down if the queue refuses, and never draws a slash command',async()=>{
+  let refuse=false;const action=vi.fn(async(_sid:string,a:any)=>a.kind==='identity'?{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}}:refuse?{status:'rejected',message:'Queue full'}:{status:'queued',identity:{queueId:'root',sendEpoch:'epoch'},itemId:'item',sendId:a.payload.sendId});
+  (window as any).claude={session:{queue:{action},sendInput:vi.fn()}};
+  const dispatch=vi.fn();
+  sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'hi',content:'hi',paths:[],dispatch,drawNow:true});
+  // Drawn before the queue has answered anything.
+  expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({type:'USER_PROMPT',content:'hi',sendTransport:'queue'}));
+  await vi.waitFor(()=>expect(action).toHaveBeenCalledTimes(2));
+  expect(dispatch.mock.calls.some(([a])=>a.type==='SEND_DISCARD')).toBe(false);
+  refuse=true;const refused=vi.fn();
+  sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'no room',content:'no room',paths:[],dispatch:refused,drawNow:true});
+  await vi.waitFor(()=>expect(refused).toHaveBeenCalledWith(expect.objectContaining({type:'SEND_DISCARD'})));
+  const slash=vi.fn();sendToClaudeCode({sessionId:'s',provider:'claude',ptyText:'/compact',content:'/compact',paths:[],dispatch:slash,drawNow:true});
+  expect(slash).not.toHaveBeenCalled();
+ });
  it('captures root/epoch once, preserves original text/files and draws no premature or transformed-wire bubble',async()=>{
   const dispatch=vi.fn(),sendInput=vi.fn();const action=vi.fn(async(_sid:string,a:any)=>a.kind==='identity'?{status:'identity',identity:{queueId:'root',sendEpoch:'epoch'}}:{status:'queued',identity:{queueId:'root',sendEpoch:'epoch'},itemId:'item',sendId:a.payload.sendId});
   (window as any).claude={session:{queue:{action},sendInput}};

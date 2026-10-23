@@ -75,6 +75,9 @@ function SendNowButton({ onClick, paused = false, uncertain = false }: { onClick
   );
 }
 
+/** What an Unconfirmed row says (the host's own diagnostic wording is for logs, not people). */
+const UNCONFIRMED_NOTE = 'This may not have reached Claude Code. Check the conversation above; Dismiss puts the words back in your message box.';
+
 interface QueuedMessage {
   queueId: string;
   content: string;
@@ -148,7 +151,7 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
             {/* WHY (2026-10-22, "no real way to recover"): say what is known and what Dismiss does, on this row only. */}
             {(q.notice || q.status === 'uncertain') && (
               <div className="text-3xs text-fg-muted">
-                {q.notice ?? 'This may not have reached Claude Code. Check the conversation above; Dismiss puts the words back in your message box.'}
+                {q.status === 'uncertain' ? UNCONFIRMED_NOTE : q.notice}
               </div>
             )}
           </div>
