@@ -182,7 +182,8 @@ export async function verifyDownloadedUpdate(input: VerifyUpdateInput): Promise<
   if (!entry) {
     throw new UpdateInstallError('verify-failed', `no manifest entry for ${fileName}`);
   }
-  const actualSize = fs.statSync(filePath).size;
+  // WHY async (#183 T2): this now runs on the background download path, never a main-thread stat.
+  const actualSize = (await fs.promises.stat(filePath)).size;
   if (actualSize !== entry.size) {
     throw new UpdateInstallError('verify-failed', `size ${actualSize} != manifest ${entry.size}`);
   }

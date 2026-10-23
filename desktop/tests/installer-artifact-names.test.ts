@@ -49,7 +49,7 @@ describe('installer file names (electron-builder.yml)', () => {
   beforeEach(() => { cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'installer-names-')); });
   afterEach(() => { fs.rmSync(cacheDir, { recursive: true, force: true, maxRetries: 3 }); });
 
-  it('Windows: says Installer, and every reader still finds it', () => {
+  it('Windows: says Installer, and every reader still finds it', async () => {
     const pattern = sectionValue('nsis', 'artifactName');
     expect(pattern, 'nsis.artifactName must be set — the default name is "YouCoded Setup"').toBeTruthy();
     const name = expand(pattern!, { version: VERSION, arch: 'x64', ext: 'exe' });
@@ -61,10 +61,10 @@ describe('installer file names (electron-builder.yml)', () => {
     expect(deriveDownloadFilename(releaseUrl(name), 'win32')).toBe(name);
 
     fs.writeFileSync(path.join(cacheDir, name), 'x');
-    expect(findCachedDownload(cacheDir, VERSION, 'win32')?.filePath).toBe(path.join(cacheDir, name));
+    expect((await findCachedDownload(cacheDir, VERSION, 'win32'))?.filePath).toBe(path.join(cacheDir, name));
   });
 
-  it('macOS: both chips say Installer, and the website and updater tell them apart', () => {
+  it('macOS: both chips say Installer, and the website and updater tell them apart', async () => {
     const pattern = sectionValue('dmg', 'artifactName');
     expect(pattern, 'dmg.artifactName must be set').toBeTruthy();
     const arm = expand(pattern!, { version: VERSION, arch: 'arm64', ext: 'dmg' });
@@ -84,7 +84,7 @@ describe('installer file names (electron-builder.yml)', () => {
     expect(intel.includes('arm64')).toBe(false);
 
     fs.writeFileSync(path.join(cacheDir, intel), 'x');
-    expect(findCachedDownload(cacheDir, VERSION, 'darwin')?.filePath).toBe(path.join(cacheDir, intel));
+    expect((await findCachedDownload(cacheDir, VERSION, 'darwin'))?.filePath).toBe(path.join(cacheDir, intel));
   });
 
   it('macOS: the opened disk is named as the installer', () => {

@@ -38,6 +38,9 @@ export interface UpdateProgressEvent {
   bytesReceived: number;
   bytesTotal: number;  // 0 if Content-Length was absent
   percent: number;     // 0-100, or -1 if bytesTotal unknown
+  /** A job that died: the popup leaves "Downloading…" for its normal download error (Try again). */
+  failed?: true;
+  error?: UpdateInstallErrorCode;
 }
 
 /** Recent real installer output; deliberately no estimated percentage. */
@@ -61,10 +64,29 @@ export interface UpdateCachedDownload {
   version: string;
 }
 
+/** WHY (#183 auto-updates): closing the popup no longer cancels a download, so reopening it must be
+ *  able to learn that a job is still running. `percent` is -1 while the size is unknown; `jobId`
+ *  lets the popup's Cancel button reach the job it did not start. */
+interface UpdateDownloadingState {
+  downloading: { percent: number; jobId: string | null };
+}
+/** What `update:get-cached-download` answers: a finished file, a job in flight, or nothing. */
+export type UpdateCachedDownloadResult = UpdateCachedDownload | UpdateDownloadingState;
+
 // WHY (2026-09-30 one-core R3-2): the beta-channel answer and the changelog answer were typed
 // inline in the window.claude type; the channel table's rows now share these.
 /** `betaChannel` is the saved answer (null = never chosen); `effective` is what the next check uses. */
 export interface UpdateBetaChannelState { betaChannel: boolean | null; effective: boolean }
+/** "Install updates automatically" (#183). `supported:false` = no in-app updater here (Android's
+ *  headless backend; an unpackaged build without YOUCODED_DEV_FAKE_UPDATE=1): the row is hidden. */
+export type UpdateAutoInstallState = { supported: true; enabled: boolean } | { supported: false };
+/** Restart to update (#183 T3). `restarting:false` = nothing happened (cancelled, pulled, a shutdown began);
+ *  `fallback` = today's interactive installer ended in something the popup must show (a command to run by
+ *  hand, or the browser). A real failure rejects instead, carrying its code like a launch failure. */
+export interface UpdateRestartResult {
+  restarting: boolean;
+  fallback?: { kind: 'browser' } | { kind: 'manual'; command: string; filePath: string };
+}
 export interface UpdateChangelogResult {
   markdown: string | null;
   entries: Array<{ version: string; date?: string; body: string }>;

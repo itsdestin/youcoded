@@ -3,7 +3,7 @@
 // fake fs) lets these assert on exact ordering — including that a reused
 // request never sends a second push.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createCloseRequestManager, applyCloseAnswer, type CloseRequestManager, type CloseRequestPush } from '../src/main/close-request-manager';
+import { createCloseRequestManager, applyCloseAnswer, UPDATE_REQUEST_KEY, type CloseRequestManager, type CloseRequestPush } from '../src/main/close-request-manager';
 
 function createIdSequence() {
   let n = 0;
@@ -25,6 +25,19 @@ describe('createCloseRequestManager', () => {
     expect(pushes).toEqual([{ requestId: 'req-1', sessions: 2 }]);
     manager.answer('req-1', { close: false });
     await expect(promise).resolves.toEqual({ close: false });
+  });
+
+  it('an update prompt carries reason:"update", has its own slot, and a whole-app quit settles it as Cancel', async () => {
+    const pushes: CloseRequestPush[] = [];
+    const update = manager.request(UPDATE_REQUEST_KEY, 3, (p) => pushes.push(p), { reason: 'update' });
+    const windowClose = manager.request(1, 1, (p) => pushes.push(p)); // a window's own close prompt: a different slot
+    expect(pushes).toEqual([{ requestId: 'req-1', sessions: 3, reason: 'update' }, { requestId: 'req-2', sessions: 1 }]);
+    const cancelled: number[] = [];
+    manager.settleAll((windowId) => cancelled.push(windowId));
+    // The window prompt keeps the old rule (close, keep tracked); the update prompt must NOT read as a Yes.
+    await expect(update).resolves.toEqual({ close: false });
+    await expect(windowClose).resolves.toEqual({ close: true, reopen: true });
+    expect(cancelled.sort()).toEqual([UPDATE_REQUEST_KEY, 1].sort());
   });
 
   it('resolves {close:true, reopen:false} when the switch was left off', async () => {

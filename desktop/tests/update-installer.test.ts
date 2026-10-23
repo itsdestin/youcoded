@@ -260,31 +260,44 @@ describe('cleanupStaleDownloads', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
-  it('creates the cacheDir if missing', () => {
+  it('treats a missing cache folder as nothing to sweep', async () => {
     const dir = path.join(tmpDir, 'does-not-exist');
-    cleanupStaleDownloads(dir);
-    expect(fs.existsSync(dir)).toBe(true);
+    await expect(cleanupStaleDownloads(dir)).resolves.toBeUndefined();
+    expect(fs.existsSync(dir)).toBe(false);
   });
 
-  it('deletes .partial files unconditionally', () => {
+  it('deletes .partial files unconditionally', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded.exe.partial'), 'x');
-    cleanupStaleDownloads(tmpDir);
+    await cleanupStaleDownloads(tmpDir);
     expect(fs.existsSync(path.join(tmpDir, 'YouCoded.exe.partial'))).toBe(false);
   });
 
-  it('deletes non-.partial files older than 24h', () => {
+  it('deletes non-.partial files older than 24h', async () => {
     const old = path.join(tmpDir, 'YouCoded.exe');
     fs.writeFileSync(old, 'x');
     const twentyFiveHoursAgo = Date.now() / 1000 - (25 * 3600);
     fs.utimesSync(old, twentyFiveHoursAgo, twentyFiveHoursAgo);
-    cleanupStaleDownloads(tmpDir);
+    await cleanupStaleDownloads(tmpDir);
     expect(fs.existsSync(old)).toBe(false);
   });
 
-  it('keeps non-.partial files newer than 24h', () => {
+  it('never deletes a kept name or the update bookkeeping files, however old', async () => {
+    const old = Date.now() / 1000 - (72 * 3600);
+    for (const name of ['YouCoded-Installer-2.0.0.exe', 'pending.json', 'attempt.json', 'YouCoded-Installer-0.9.0.exe']) {
+      fs.writeFileSync(path.join(tmpDir, name), 'x');
+      fs.utimesSync(path.join(tmpDir, name), old, old);
+    }
+    await cleanupStaleDownloads(tmpDir, new Set(['YouCoded-Installer-2.0.0.exe']));
+    expect(fs.existsSync(path.join(tmpDir, 'YouCoded-Installer-2.0.0.exe'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'pending.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'attempt.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'YouCoded-Installer-0.9.0.exe'))).toBe(false);
+  });
+
+  it('keeps non-.partial files newer than 24h', async () => {
     const fresh = path.join(tmpDir, 'YouCoded.exe');
     fs.writeFileSync(fresh, 'x');
-    cleanupStaleDownloads(tmpDir);
+    await cleanupStaleDownloads(tmpDir);
     expect(fs.existsSync(fresh)).toBe(true);
   });
 });
@@ -298,76 +311,76 @@ describe('findCachedDownload', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
-  it('returns null when no file matches the version', () => {
-    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+  it('returns null when no file matches the version', async () => {
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 
-  it('returns null when cacheDir does not exist', () => {
-    expect(findCachedDownload(path.join(tmpDir, 'missing'), '1.2.3', 'win32')).toBeNull();
+  it('returns null when cacheDir does not exist', async () => {
+    expect(await findCachedDownload(path.join(tmpDir, 'missing'), '1.2.3', 'win32')).toBeNull();
   });
 
-  it('finds a matching .exe by version substring on Windows', () => {
+  it('finds a matching .exe by version substring on Windows', async () => {
     const filePath = path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe');
     fs.writeFileSync(filePath, 'x');
-    const hit = findCachedDownload(tmpDir, '1.2.3', 'win32');
+    const hit = await findCachedDownload(tmpDir, '1.2.3', 'win32');
     expect(hit).toEqual({ filePath, version: '1.2.3' });
   });
 
   // WHY: the two tests above use invented names. These use the names releases
   // actually publish, which is how the dotted-name miss below went unnoticed.
-  it('finds the renamed Windows installer, beta version included', () => {
+  it('finds the renamed Windows installer, beta version included', async () => {
     const filePath = path.join(tmpDir, 'YouCoded-Installer-1.3.0-beta.77.exe');
     fs.writeFileSync(filePath, 'x');
-    const hit = findCachedDownload(tmpDir, '1.3.0-beta.77', 'win32');
+    const hit = await findCachedDownload(tmpDir, '1.3.0-beta.77', 'win32');
     expect(hit).toEqual({ filePath, version: '1.3.0-beta.77' });
   });
 
-  it('finds the renamed macOS installer for both chips', () => {
+  it('finds the renamed macOS installer for both chips', async () => {
     const arm = path.join(tmpDir, 'YouCoded-Installer-1.2.3-arm64.dmg');
     fs.writeFileSync(arm, 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: arm, version: '1.2.3' });
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: arm, version: '1.2.3' });
     fs.rmSync(arm);
     const intel = path.join(tmpDir, 'YouCoded-Installer-1.2.3-x64.dmg');
     fs.writeFileSync(intel, 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: intel, version: '1.2.3' });
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: intel, version: '1.2.3' });
   });
 
-  it('never matched the old dotted Windows name GitHub published (why the rename puts a dash there)', () => {
+  it('never matched the old dotted Windows name GitHub published (why the rename puts a dash there)', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded.Setup.1.2.3.exe'), 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 
-  it('finds a matching .dmg by version substring on macOS', () => {
+  it('finds a matching .dmg by version substring on macOS', async () => {
     const filePath = path.join(tmpDir, 'YouCoded-1.2.3-arm64.dmg');
     fs.writeFileSync(filePath, 'x');
-    const hit = findCachedDownload(tmpDir, '1.2.3', 'darwin');
+    const hit = await findCachedDownload(tmpDir, '1.2.3', 'darwin');
     expect(hit).toEqual({ filePath, version: '1.2.3' });
   });
 
-  it('ignores .partial files', () => {
+  it('ignores .partial files', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe.partial'), 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 
-  it('ignores files for a different version', () => {
+  it('ignores files for a different version', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.2.exe'), 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 
-  it('does NOT match "1.2.3" against YouCoded-Setup-1.2.30.exe (version substring false-positive guard)', () => {
+  it('does NOT match "1.2.3" against YouCoded-Setup-1.2.30.exe (version substring false-positive guard)', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.30.exe'), 'x');
-    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+    expect(await findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 
-  it('does NOT match "2.0" against YouCoded-Setup-1.2.0.exe (version embedded in another)', () => {
+  it('does NOT match "2.0" against YouCoded-Setup-1.2.0.exe (version embedded in another)', async () => {
     fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.0.exe'), 'x');
-    expect(findCachedDownload(tmpDir, '2.0', 'win32')).toBeNull();
+    expect(await findCachedDownload(tmpDir, '2.0', 'win32')).toBeNull();
   });
 
-  it('finds underscore-delimited .deb by version', () => {
+  it('finds underscore-delimited .deb by version', async () => {
     const filePath = path.join(tmpDir, 'youcoded_1.2.3_amd64.deb');
     fs.writeFileSync(filePath, 'x');
-    const hit = findCachedDownload(tmpDir, '1.2.3', 'linux');
+    const hit = await findCachedDownload(tmpDir, '1.2.3', 'linux');
     expect(hit).toEqual({ filePath, version: '1.2.3' });
   });
 });

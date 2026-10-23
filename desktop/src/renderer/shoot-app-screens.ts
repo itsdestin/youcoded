@@ -41,7 +41,7 @@ export type AppScreenSetters = {
   showNativeResumeModel: () => void;
   // Fakes the main process's onCloseRequest push (App.tsx's own real trigger
   // needs a whole-app quit to race, which a browser tab can't do).
-  setQuitPrompt: Setter<{ requestId: string; sessions: number } | null>;
+  setQuitPrompt: Setter<{ requestId: string; sessions: number; reason?: 'update' } | null>;
   // The three useFirstTimeGate() instances App.tsx owns. Each `gate` shows the
   // dialog only when its kind was never acknowledged before (localStorage) —
   // true by default in a fresh photo-only tab, so `() => {}` (never actually
@@ -100,7 +100,9 @@ export function useAppScreens(s: AppScreenSetters): void {
   useScreenOpen('library', () => s.setActiveView('library'));
   // The main process's "N sessions are still running" quit confirmation —
   // faked directly since a browser tab has no whole-app quit to race it with.
-  useScreenOpen('chat/quit-sessions', () => s.setQuitPrompt({ requestId: 'shoot-quit', sessions: 2 }));
+  // `?quitReason=update` (#183): the same prompt raised by Restart to update, in its restart words.
+  useScreenOpen('chat/quit-sessions', () => s.setQuitPrompt({ requestId: 'shoot-quit', sessions: 2,
+    ...(new URLSearchParams(location.search).get('quitReason') === 'update' ? { reason: 'update' as const } : {}) }));
   // Each first-run warning, once per kind — `gate(() => {})` shows the dialog
   // (never runs `proceed`) as long as this kind was never acknowledged, true
   // by default in a fresh photo-only tab.
