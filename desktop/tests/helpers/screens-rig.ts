@@ -28,6 +28,8 @@ export interface Rig {
   settle: () => Promise<void>;
   /** Hook events and transcript events, as the core feeds them to the record. */
   note: (type: string, payload: unknown) => void;
+  /** How many times the screens told the queue that input became safe. */
+  wakes: () => number;
 }
 
 export function makeRig(opts: { started?: boolean; claude?: boolean } = {}): Rig {
@@ -45,7 +47,9 @@ export function makeRig(opts: { started?: boolean; claude?: boolean } = {}): Rig
   });
   const live = new SessionLiveFacts({ publish, records, isClaude: () => opts.claude !== false, now: () => t });
   const timers: Array<{ at: number; fn: () => void; dead?: boolean; every?: number }> = [];
+  let wakes = 0;
   const screens = new SessionScreens({
+    onQueueInputReady: () => { wakes++; },
     records, live, isClaude: () => opts.claude !== false, now: () => t,
     setTimer: (fn, ms) => { const e = { at: t + ms, fn }; timers.push(e); return e; },
     clearTimer: (h) => { if (h) (h as any).dead = true; },
@@ -88,6 +92,7 @@ export function makeRig(opts: { started?: boolean; claude?: boolean } = {}): Rig
     output: (data) => { screens.noteOutput(S, data); },
     advance, settle,
     note: (type, payload) => { records.note(S, type, payload); },
+    wakes: () => wakes,
   };
 }
 

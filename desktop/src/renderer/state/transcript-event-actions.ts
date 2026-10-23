@@ -89,6 +89,7 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
         timestamp,
         // A slash command read from its command tags starts no turn (chat-reducer).
         slashCommand: ev.data.slashCommand,
+        ...(ev.data.attachedFiles?.length ? { attachedFiles: ev.data.attachedFiles } : {}),
         // Host-injected turn marker (a delivered specialist report) + its header.
         injected: ev.data.injected,
         injectedMeta: ev.data.injectedMeta,

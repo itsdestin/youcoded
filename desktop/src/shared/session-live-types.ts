@@ -12,7 +12,7 @@ import type { NativeStartupState } from './native-startup';
 // Types only: nothing here runs. In shared/ because the renderer reads them and renderer code does not import from main/.
 
 /** One message waiting behind the running turn (native sessions): what the docked strip draws. */
-export interface QueuedItem { queueId: string; content: string; timestamp: number; sendEpoch?: string; sendId?: string; attachments?: string[]; status?: 'waiting' | 'delivering' | 'uncertain'; editing?: boolean; paused?: boolean }
+export interface QueuedItem { queueId: string; content: string; timestamp: number; sendEpoch?: string; sendId?: string; attachments?: string[]; status?: 'waiting' | 'delivering' | 'uncertain'; editing?: boolean; paused?: boolean; /** One plain sentence about THIS message (why it waits or was not sent). */ notice?: string }
 
 export interface PromptCardButton { label: string; input: string; submitInput?: string; pick?: { signature: string; index: number } }
 
@@ -22,7 +22,7 @@ export type SessionLiveBody =
   /** History may be open while optional tool connections are not ready for a turn. */
   | { kind: 'native-startup'; state: NativeStartupState }
   /** The queue as it is NOW (a snapshot, so a screen that missed events is right after the next one). Native sessions only. */
-  | { kind: 'queue'; queue: QueuedItem[]; queueIdentity?: { queueId: string; sendEpoch: string }; paused?: boolean }
+  | { kind: 'queue'; queue: QueuedItem[]; queueIdentity?: { queueId: string; sendEpoch: string }; paused?: boolean; /** Recent sends and the transcript line each became (Claude Code queue). */ bound?: { sendId: string; uuid: string }[] }
   /** The session's model changed: the raw model id or alias the chip is drawn from. */
   | { kind: 'model'; model: string }
   /** The thin "Model switched to Opus" divider. `id` is deterministic, so a replay cannot draw it twice. */

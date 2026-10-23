@@ -45,6 +45,43 @@ function harness(durable = new Map<string, any>()) {
   return { $, events, emit, arm, scheduled, release: () => finishFence(), pollCommand: async (op: any) => { await vi.waitFor(() => expect(scheduled.some(fn => String(fn).includes('queuePoll'))).toBe(true)); command = op; await scheduled.find(fn => String(fn).includes('queuePoll'))!(); }, stateValue: () => value, box: () => box, setBox: (s: string) => { box = s; }, revokeState: () => { value = { ...value, state: 'revoked' }; version++; } };
 }
 describe('single-module native queue admission', () => {
+  it('delivers the exact original text when Claude Code\'s box drops invisible characters as it goes in', async () => {
+    const h = harness(); const drop = (t: string) => t.replace(/[\u200B\u2060]/g, '');
+    h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(drop(text)); return { isFilled: true }; });
+    const wire = 'hello\u200B world\u2060'; const { pending, lease } = await h.arm(wire);
+    expect(h.events).toContainEqual(expect.objectContaining({ kind: 'staged', attemptId: lease.attemptId }));
+    // Enter submits what the box holds; admission restores the staged wire bytes.
+    const next = vi.fn(async (e: any) => e);
+    expect(await h.emit('prompt.submit', { text: drop(wire), turnId: 'turn' }, next)).toMatchObject({ text: wire });
+    h.release(); await pending;
+  });
+  it('takes its own changed text back out of the box when a staged attempt is revoked', async () => {
+    const h = harness(); const drop = (t: string) => t.replace(/\u200B/g, '');
+    h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(drop(text)); return { isFilled: true }; });
+    const { pending, lease } = await h.arm('take\u200B back');
+    h.revokeState(); await h.pollCommand({ kind: 'revoke', lease });
+    // revokeState marks the CAS state, so the plugin's own revoke reads it as not ours only if the identity changed; here it is the same attempt.
+    expect(h.box()).toBe('');
+    expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', composerSafe: true });
+    h.release(); await pending;
+  });
+  it('does not take text that is more than the dropped characters away from ours', async () => {
+    const h = harness();
+    h.$.prompt.fill.mockImplementation(async ({ text }: any) => { h.setBox(text + ' extra'); return { isFilled: true }; });
+    const { pending, lease } = await h.arm('mine');
+    expect(h.events.some(e => e.kind === 'staged')).toBe(false);
+    expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', attemptId: lease.attemptId, composerSafe: false });
+    expect(h.box()).toBe('mine extra');
+    h.release(); await pending;
+  });
+  it('says the box is busy instead of offering, and backs out unsent when text appears before staging', async () => {
+    const h = harness(); h.setBox('typed by the person');
+    const { pending, lease } = await h.arm('queued');
+    expect(h.events.find(e => e.kind === 'offer')).toMatchObject({ composerBusy: true });
+    expect(h.$.prompt.fill).not.toHaveBeenCalled(); expect(h.box()).toBe('typed by the person');
+    expect(h.events.at(-1)).toMatchObject({ kind: 'revoked', attemptId: lease.attemptId, beforeAdmission: true, composerSafe: true, detail: 'box-not-empty' });
+    h.release(); await pending;
+  });
   it('abandons owned staging, fences late stage and admission, and preserves a changed human draft', async () => {
     for (const draft of ['', 'human draft']) {
       const h = harness(); const { pending, lease } = await h.arm('discard me');

@@ -46,6 +46,9 @@ export interface QueueJournal {
   aliases: QueueAlias[];
   live: { incarnation: string } | null;
   paused: boolean;
+  /** WHY (2026-10-22): the ONE attempt whose trouble paused a running queue. Resolving exactly that
+   *  lets the rest continue; any other pause (restart, Clear, identity change) deletes it, so those stay paused as before. */
+  pauseCause?: string;
   items: QueueItem[];
   tombstones: QueueTombstone[];
   /** Bounded terminal checkout identities in this send epoch; stale retries cannot reserve again. */

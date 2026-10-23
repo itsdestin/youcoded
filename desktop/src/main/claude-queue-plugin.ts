@@ -1,4 +1,4 @@
-import { CLAUDE_QUEUE_WIRE_LIMITS } from '../shared/claude-queue-wire-limits';
+import { CLAUDE_QUEUE_WIRE_LIMITS, CLAUDE_QUEUE_COMPOSER_DROPPED, CLAUDE_QUEUE_COMPOSER_MAY_DROP } from '../shared/claude-queue-wire-limits';
 
 /** WHY embedded with the existing module: this CLI permits ONE hooks module per plugin. */
 export const CLAUDE_QUEUE_PLUGIN_SOURCE = String.raw`
@@ -63,7 +63,10 @@ async function queueOffer($, kind, signal) {
   const f = { id: incarnation + ':' + seq, generation, conversationId, turnId, signal };
   queueFence = f;
   try {
-    await post($, 'queue-offer', { offer: { boundaryId: f.id, boundarySeq: seq, conversationId, turnId: f.turnId, kind, expiresAt: await $.clock.now() + 10000 } });
+    // WHY (2026-10-22): text the person left in Claude Code's own box is never ours to send or erase. Say so instead of
+    // offering, so the host shows why the queue is waiting and does not claim, stage and back out in a loop.
+    const box = await $.prompt.read();
+    await post($, 'queue-offer', { offer: { boundaryId: f.id, boundarySeq: seq, conversationId, turnId: f.turnId, kind, expiresAt: await $.clock.now() + 10000, ...(box.text !== '' ? { composerBusy: true } : {}) } });
   } catch (_) { /* host failure closes the native fence, never grants a retry */ }
   finally {
     if (queueFence === f) queueFence = null;
@@ -101,11 +104,13 @@ async function queueStage($, lease) {
   if (queueOwned || queueEvidence.size >= 64) throw new Error('Composer owned or evidence retention full');
   const before = await $.prompt.read();
   if (before.text !== '') {
-    // Not our draft: do not claim it was empty/clean and never erase it. Retain
-    // a revoked native identity so a later deliberate empty-box reconciliation is possible.
+    // Not our draft: never erase it. Nothing was filled and no Enter can follow (the identity is
+    // revoked before the event), so this attempt definitely did not send: composerSafe means "none
+    // of OUR text is in the box". WHY (2026-10-22): reporting it unsafe marked the message
+    // "Unconfirmed" and paused the whole queue behind text the person had simply typed.
     const previous = await $.state.get(queueRef);
     await $.state.set(queueRef, { attemptId: lease.attemptId, incarnation, wireHash: lease.wireHash, state: 'revoked' }, { ifVersion: previous.version });
-    await queueEvent($, lease, 'revoked', { beforeAdmission: true, composerSafe: false }); return;
+    await queueEvent($, lease, 'revoked', { beforeAdmission: true, composerSafe: true, detail: 'box-not-empty' }); return;
   }
   queueOwned = { ...lease, staged: false }; // reserve before awaits; reservation alone never authorizes erasing text
   const held = await $.state.get(queueRef);
@@ -118,10 +123,26 @@ async function queueStage($, lease) {
   const fill = await $.prompt.fill({ text: lease.wireText, mode: 'replace' });
   if (fill.isFilled && queueOwned?.attemptId === lease.attemptId) queueOwned.staged = true;
   const readback = await $.prompt.read();
+  // WHY (2026-10-22): the box silently drops some invisible characters (measured on 2.1.309: zero-width space, word
+  // joiner, BOM, soft hyphen, stray control characters; zero-width (non-)joiners outside a real joining context; CR
+  // becomes LF). An exact-only read-back left such a message sitting in the box "Unconfirmed". The box holds OUR text
+  // when it is the wire minus only those characters; that read-back is what Enter will submit, and admission restores
+  // the exact wire bytes (onQueueAdmission). Anything else is not ours.
+  const ours = readback.text === lease.wireText || (readback.text !== '' && queueSameModuloDropped(readback.text, lease.wireText));
+  if (ours && queueOwned?.attemptId === lease.attemptId) queueOwned.stagedText = readback.text;
   const latest = await $.state.get(queueRef);
-  if (!fill.isFilled || readback.text !== lease.wireText || latest.value?.attemptId !== lease.attemptId || latest.value.state !== 'armed'
+  if (!fill.isFilled || !ours || latest.value?.attemptId !== lease.attemptId || latest.value.state !== 'armed'
     || !queueFenceValid(lease) || await $.clock.now() >= lease.expiresAt) throw new Error('Queue staging no longer owned');
   await queueEvent($, lease, 'staged');
+}
+// Equal once the characters Claude Code's box may drop are removed (cc-dependencies.md, "Queued native composer transport").
+function queueSameModuloDropped(a, b) {
+  const strip = (t) => t.replace(/\r\n?/g, '\n').replace(new RegExp(${JSON.stringify(CLAUDE_QUEUE_COMPOSER_DROPPED)}, 'gu'), '').replace(new RegExp(${JSON.stringify(CLAUDE_QUEUE_COMPOSER_MAY_DROP)}, 'gu'), '');
+  return strip(a) === strip(b);
+}
+// The box holds exactly what OUR staging put there: the wire, or the read-back staging accepted as ours.
+function queueBoxIsOurs(text, owned) {
+  return !!owned && (text === owned.wireText || (typeof owned.stagedText === 'string' && owned.stagedText !== '' && text === owned.stagedText));
 }
 async function queueRevoke($, lease) {
   if (!lease || lease.incarnation !== incarnation || queueWasAbandoned(lease)) return;
@@ -152,7 +173,7 @@ async function queueRevoke($, lease) {
     const box = await $.prompt.read();
     cleanupDetail = 'cleanupLength=' + box.text.length + '; trimEqual=' + (box.text === lease.wireText.trim());
     if (box.text === '') safe = true;
-    else if (queueOwned?.attemptId === lease.attemptId && queueOwned.staged === true && (box.text === lease.wireText || (beforeInvocation && box.text === lease.wireText.trim()))) {
+    else if (queueOwned?.attemptId === lease.attemptId && queueOwned.staged === true && (queueBoxIsOurs(box.text, queueOwned) || (beforeInvocation && (box.text === lease.wireText.trim() || box.text === queueOwned.stagedText?.trim())))) {
       // Never erase a changed human draft. Exact staged bytes are required, except
       // actual 2.1.303 restores the exact trim on a terminal not-invoked drop (measured).
       // That exception requires BOTH the same lease's terminal proof and staged ownership.
@@ -182,7 +203,7 @@ async function queueAbandon($, attempt) {
     // Explicit discard accepts delivery ambiguity, including a fill whose reply was lost.
     // Read back only our exact issued bytes (or the proven terminal not-invoked trim).
     // A changed human draft is never ours to erase.
-    if (box.text === owned.wireText || (queueEvidence.get(attempt.attemptId)?.status === 'not-invoked' && box.text === owned.wireText.trim())) {
+    if (queueBoxIsOurs(box.text, owned) || (queueEvidence.get(attempt.attemptId)?.status === 'not-invoked' && (box.text === owned.wireText.trim() || box.text === owned.stagedText?.trim()))) {
       const cleared = await $.prompt.fill({ text: '', mode: 'replace' });
       if (!cleared.isFilled) throw new Error('Queue staging cleanup not acknowledged');
     }
@@ -228,7 +249,8 @@ async function onQueueAdmission($, e, next) {
     // Actual 2.1.303 trims the composer at Enter (captured queued_command). The
     // exact staged readback remains the ownership proof; restore those same bytes
     // through the supported prompt rewrite after admission, never silently truncate.
-    if (e.text !== lease.wireText && e.text !== lease.wireText.trim()) {
+    const staged = typeof lease.stagedText === 'string' && lease.stagedText !== '' ? lease.stagedText : lease.wireText;
+    if (e.text !== lease.wireText && e.text !== lease.wireText.trim() && e.text !== staged && e.text !== staged.trim()) {
       await queueEvent($, lease, 'unknown', { detail: 'Submitted input no longer matches the owned composer' });
       return { drop: 'The message box changed during queued delivery. Review the message before sending again.' };
     }

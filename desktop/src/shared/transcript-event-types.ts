@@ -125,6 +125,8 @@ interface UserMessageData extends SubagentStamp {
   /** A slash command read from its command tags. The chat starts no turn for
    *  it, because many commands get no reply (2026-09-11). */
   slashCommand?: boolean;
+  /** Claude Code queue: files the person attached, read back off the message's "Attached:" lines (shared/claude-queue-wire.ts). */
+  attachedFiles?: string[];
   /** Native: absolute composer attachment paths, persisted so resume can
    *  re-read the pixels (events carry no binary). #290 follow-up fix 2. */
   attachments?: string[];

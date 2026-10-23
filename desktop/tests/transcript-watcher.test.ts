@@ -1172,6 +1172,16 @@ describe('messages recorded outside an ordinary user line', () => {
     ]);
   });
 
+  it('a queue send shows the words the person typed, with its attached files and without the read instruction', () => {
+    const wire = 'Read this entire file: "/p/notes.md"\nUse Read before answering; read large text in chunks if needed. If a file is unavailable or cannot be read, say so. Do not assume the file contents were supplied automatically.\n\nCompare "/p/notes.md"\n\nAttached: "/q/shot.png"';
+    expect(parseTranscriptLine(queued(wire, 'prompt', { kind: 'human' }), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', uuid: 'q1', data: { text: 'Compare "/p/notes.md"', attachedFiles: ['/q/shot.png'] } }),
+    ]);
+    expect(parseTranscriptLine(commandLine('what is this\n\nAttached: "/q/shot.png"'), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', data: { text: 'what is this', attachedFiles: ['/q/shot.png'] } }),
+    ]);
+  });
+
   it('a background task notice stays hidden', () => {
     expect(parseTranscriptLine(queued('<task-notification><task-id>b1</task-id></task-notification>', 'task-notification'), 's1')).toEqual([]);
   });

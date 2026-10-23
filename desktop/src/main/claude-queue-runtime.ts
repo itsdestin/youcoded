@@ -19,13 +19,19 @@ interface Options {
  publish(sessionId: string, body: SessionLiveBody): void;
  noteSend(sessionId: string, sendId: string): void;
 }
+/** How long an idle send may stay out of the strip while it is being delivered (its bubble is already drawn). */
+const IMMEDIATE_HIDE_MS = 8000;
+/** Recent confirmed sends whose transcript identity is republished with every queue snapshot. */
+const BOUND_SENDS = 16;
 interface Binding { incarnation: string; conversationId?: string; queueId?: string; ready: Promise<void>; clearId?: string; transitioning?: boolean }
 /** One lazy instance per runtime. No userData read/staging before final dev profile selection. */
 export class ClaudeQueueRuntime {
  private service?: Promise<{ queue: ClaudeQueue; transport: ClaudeQueueTransport }>;
  private readonly bindings = new Map<string, Binding>();
  private closed = false;
- private readonly issues = new Map<string,string>();
+ private readonly issues = new Map<string,{ message: string; queueItemId?: string }>();
+ private readonly composerBusy = new Set<string>();
+ private readonly republishTimers = new Map<string, ReturnType<typeof setTimeout>>();
  private readonly onReady: (id: string, incarnation: string) => void;
  private readonly onState: (id: string, state: { claudeSessionId?: string }) => void;
  constructor(private readonly options: Options) {
@@ -63,16 +69,47 @@ export class ClaudeQueueRuntime {
    } });
    const transport = new ClaudeQueueTransport({ queue, worker: (id,c) => this.options.manager.queueWorkerCommand(id,c), inputSafe: id => this.options.inputSafe(id), waitInputSafe: this.options.waitInputSafe,
     prepare: (p,cwd) => prepareClaudeQueueInput({text:p.originalText,attachments:p.preparedAttachments ?? p.attachments,cwd}),
-    onIssue: (id,issue) => { this.issues.set(id,issue.message); const root=this.bindings.get(id)?.queueId;if(root)this.publish(id,queue.snapshot(root)); } });
+    onIssue: (id,issue) => { this.issues.set(id,{ message: issue.message, ...(issue.queueItemId ? { queueItemId: issue.queueItemId } : {}) }); const root=this.bindings.get(id)?.queueId;if(root)this.publish(id,queue.snapshot(root)); },
+    onComposerBusy: (id,busy) => { if (busy) this.composerBusy.add(id); else this.composerBusy.delete(id); const root=this.bindings.get(id)?.queueId;if(root)this.publish(id,queue.snapshot(root)); } });
    await queue.restore(); this.options.bridge.attachQueueTransport(transport); return { queue, transport };
   })();
   return this.service;
  }
  private publish(id: string, r: QueueJournal): void {
+  const now = Date.now();
+  // A problem belongs to one message; once that message has left the queue, its note goes too.
+  const issue = this.issues.get(id);
+  if (issue?.queueItemId && !r.items.some(i => i.queueItemId === issue.queueItemId)) this.issues.delete(id);
+  let nextReveal = Infinity;
+  // WHY: immediate readiness is a classification, not a hide timer. Unknown and genuinely
+  // waiting work remains visible; an accepted receipt is tracked internally until its UUID arrives.
+  // WHY the IMMEDIATE_HIDE_MS cap (2026-10-22): the chat now draws an idle send's bubble at once, so a hidden item that
+  // stalls would look sent while nothing happens. After the cap it shows in the strip, which takes its bubble's place.
+  const hidden = (i: QueueJournal['items'][number]) => {
+   // A send waiting on text in the terminal's box shows at once, with its note, rather than as a bubble that looks sent.
+   if (!i.immediate || this.composerBusy.has(id) || !(i.status === 'delivering' || (i.status === 'waiting' && !this.options.working(id) && this.options.inputSafe(id)))) return false;
+   const left = i.timestamp + IMMEDIATE_HIDE_MS - now;
+   if (left <= 0) return false;
+   nextReveal = Math.min(nextReveal, left); return true;
+  };
+  const visible = r.items.filter(i => !i.attempt?.receipt && !hidden(i));
+  const firstWaiting = visible.find(i => i.status === 'waiting' && (!r.paused || i.pauseBypass));
+  const noticeOf = (i: QueueJournal['items'][number]): string | undefined => {
+   const current = this.issues.get(id);
+   if (current && (current.queueItemId ? current.queueItemId === i.queueItemId : i === visible[0])) return current.message;
+   if (this.composerBusy.has(id) && i === firstWaiting) return 'Waiting for the message box in the terminal to be empty.';
+   return undefined;
+  };
   this.options.publish(id, { kind: 'queue', queueIdentity: { queueId: r.queueId, sendEpoch: r.sendEpoch }, paused: r.paused,
-   // WHY: immediate readiness is a classification, not a hide timer. Unknown and genuinely
-   // waiting work remains visible; an accepted receipt is tracked internally until its UUID arrives.
-   queue: r.items.filter(i => !i.attempt?.receipt && !(i.immediate && (i.status === 'delivering' || (i.status === 'waiting' && !this.options.working(id) && this.options.inputSafe(id))))).map(i => ({ queueId: i.queueItemId, content: this.issues.has(id) ? this.issues.get(id) + ' — ' + i.displayContent : i.displayContent, timestamp: i.timestamp, sendId: i.sendId, sendEpoch: i.sendEpoch, attachments: [...i.attachments], status: i.status, editing: !!i.checkout, paused: r.paused && !i.pauseBypass })) });
+   queue: visible.map(i => { const notice = noticeOf(i); return { queueId: i.queueItemId, content: i.displayContent, timestamp: i.timestamp, sendId: i.sendId, sendEpoch: i.sendEpoch, attachments: [...i.attachments], status: i.status, editing: !!i.checkout, paused: r.paused && !i.pauseBypass, ...(notice ? { notice } : {}) }; }),
+   // Which transcript line each recent send became, so every screen can show what the person typed instead of the
+   // text the queue gave Claude Code, and confirm the sender's instant bubble by identity rather than by wording.
+   bound: r.tombstones.filter(t => t.reason === 'confirmed' && t.transcriptUuid).slice(-BOUND_SENDS).map(t => ({ sendId: t.sendId, uuid: t.transcriptUuid! })) });
+  const pending = this.republishTimers.get(id); if (pending) { clearTimeout(pending); this.republishTimers.delete(id); }
+  if (nextReveal !== Infinity) {
+   const timer = setTimeout(() => { this.republishTimers.delete(id); const root = this.bindings.get(id)?.queueId; if (root && this.service) void this.service.then(s => this.publish(id, s.queue.snapshot(root))).catch(() => {}); }, nextReveal + 50);
+   timer.unref?.(); this.republishTimers.set(id, timer);
+  }
  }
  /** Wake only after authoritative parsed terminal changes/reconnect, never from a guessed timer. */
  wake(id: string): void { if (this.service && this.options.inputSafe(id)) void this.service.then(s => s.transport.requestIdle(id)).catch(() => {}); }
@@ -137,8 +174,13 @@ export class ClaudeQueueRuntime {
     return { status: 'queued', identity, itemId: result.item.queueItemId, sendId: action.payload.sendId };
    }
    if (action.kind === 'dismiss') {
+    const dismissed = queue.snapshot(root).items.find(i => i.queueItemId === action.itemId);
     await transport.dismiss(id, action.itemId); this.issues.delete(id); this.publish(id, queue.snapshot(root));
-    return { status: 'done' }; // no idle wake/resume: pre-existing waiting intent stays paused
+    // WHY wake (2026-10-22): dismissing the message that paused a running queue lifts that pause (ClaudeQueue.releaseCause),
+    // and the messages behind it should continue without a click each. A queue still paused for another reason ignores the wake.
+    transport.requestIdle(id);
+    // The words go back to the person's message box (only an empty one; the screen decides), so dismissing loses nothing.
+    return { status: 'done', ...(dismissed ? { restore: { text: dismissed.originalText, attachments: [...dismissed.attachments] } } : {}) };
    }
    if (action.kind === 'remove') { await queue.remove(root, action.itemId); return { status: 'done' }; }
    if (action.kind === 'checkout') return { status: 'reserved', item: await queue.checkout(root, action.itemId, action.token) };
@@ -167,6 +209,9 @@ export class ClaudeQueueRuntime {
  }
  async forget(id: string): Promise<void> {
   const b = this.bindings.get(id); if (!b) return;
+  // Per-session notes and timers end with the session, so a reopened conversation never inherits a stale "waiting" note.
+  this.issues.delete(id); this.composerBusy.delete(id);
+  const timer = this.republishTimers.get(id); if (timer) { clearTimeout(timer); this.republishTimers.delete(id); }
   if (this.service) { const s = await this.service; await s.transport.unbind(id); if (b.queueId) {
     const r=s.queue.snapshot(b.queueId);
     // Closing a fully resolved queue can retire its old namespace; stale queueId/epoch requests cannot recreate it.

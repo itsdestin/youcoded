@@ -41,7 +41,7 @@ import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative, retainFailedOutgoing, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
 import { sendClaudeCommand } from '../state/claude-control';
 import { clearRecoveryDraft } from '../state/draft-recovery';
-import { readComposerDraft, writeComposerDraft } from './composer-draft-recovery';
+import { readComposerDraft, writeComposerDraft, tokenizeComposeRefs } from './composer-draft-recovery';
 import { optimisticScreen, connected } from '../state/pending-action';
 import { sendFailureCopy } from '../state/native-send-copy';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -316,7 +316,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     if (prev === sessionId) {
       const transfer=readQueueTransferDraft(sessionId);const pending=pendingQueueSend(sessionId);
       const recovered=transfer??(pending?{text:pending.payload.originalText,files:pending.payload.attachments}:undefined);
-      if(recovered&&draftAuthority.current.snapshot().empty){setText(recovered.text);setAttachments(recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));}
+      if(recovered&&draftAuthority.current.snapshot().empty){setText(tokenizeComposeRefs(recovered.text));setAttachments(recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));}
       draftStorageSession.current=sessionId;return;
     }
     // Save outgoing session's draft (read DOM directly to avoid stale closure)
@@ -338,7 +338,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const restored = draftsRef.current.get(sessionId) ?? (saved ? {
       text: saved.text, attachments: (saved.attachments ?? []).map((path) =>
         ({ path, name: fileNameFromPath(path), isImage: isImagePath(path) })),
-    } : recovered ? {text:recovered.text,attachments:recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)}))} : undefined);
+    } : recovered ? {text:tokenizeComposeRefs(recovered.text),attachments:recovered.files.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)}))} : undefined);
     setText(restored?.text ?? '');
     setAttachments(restored?.attachments ?? []);
     draftStorageSession.current=sessionId;prevSessionRef.current = sessionId;
@@ -398,11 +398,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const current=draftAuthority.current.snapshot();
       if(!current.empty||current.sessionId!==before.sessionId||current.revision!==before.revision)return false;
       saveQueueTransferDraft(before,draftText,paths); // durable text/files BEFORE host checkout acknowledgement
-      if (!draftAuthority.current.fill(before,draftText,paths)) return false;
+      // The queue holds sent-form reference markers; the composer shows them as chips again.
+      const shown = tokenizeComposeRefs(draftText);
+      if (!draftAuthority.current.fill(before,shown,paths)) return false;
       // Commit refs synchronously before scheduling React so two in-flight edit
       // responses cannot both see an empty draft or discard attachment-only input.
-      setText(draftText); setAttachments(paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
-      if (inputRef.current) inputRef.current.value = draftText;
+      setText(shown); setAttachments(paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
+      if (inputRef.current) inputRef.current.value = shown;
       return true;
     },
     clear: () => {
@@ -609,7 +611,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const listener = (e: Event) => {
       const d = (e as CustomEvent<{ sessionId?: string; text?: string; paths?: string[]; restored?: boolean }>).detail;
       if ((!d?.text && !d?.paths?.length) || d.sessionId !== sessionId || d.sessionId !== draftAuthority.current.snapshot().sessionId || !draftAuthority.current.snapshot().empty) return;
-      setText(d.text ?? '');
+      // Restored text carries sent-form reference markers; show them as chips again, not raw marker text.
+      setText(tokenizeComposeRefs(d.text ?? ''));
       if(d.paths)setAttachments(d.paths.map(path=>({path,name:fileNameFromPath(path),isImage:isImagePath(path)})));
       // Tells settleSavedQueueSends the words are back on screen, so it may forget its saved copy.
       d.restored = true;
@@ -868,7 +871,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // composer holds display-sized tokens so its caret lines up (see
       // compose-ref.ts "Draft tokens"). A refused send restores
       // effectiveMessage, which still holds the display tokens.
-      const outgoing = buildOutgoingMessage(expandDraftTokens(effectiveMessage), files.map((f) => f.path));
+      const expandedMessage = expandDraftTokens(effectiveMessage);
+      const outgoing = buildOutgoingMessage(expandedMessage, files.map((f) => f.path));
       if (!outgoing) return true; // nothing to send — treat as consumed
       if (disabled) return false;
 
@@ -909,7 +913,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // (see TRANSCRIPT_USER_MESSAGE dedup). Claude Code's input handler auto-resolves file paths into attachments, but paths arriving within Ink's
       // 500ms PASTE_TIMEOUT coalesce into one paste and each new path REPLACES the staged attachment (a 4-image send showed only the last), so each path
       // goes FILE_GAP_MS apart and the text + \r goes last as one write (the pty-worker splits it with its own gap). All of that is in submit-outgoing.ts.
-      sendToClaudeCode({ sessionId, provider, originalText: effectiveMessage, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
+      // WHY expandedMessage, never effectiveMessage (2026-10-22): the queue sends originalText as typed into Claude Code's box.
+      // A draft chip's invisible key characters were dropped by that box, the exact read-back failed and the message sat
+      // there "Unconfirmed". The restore path turns the expanded markers back into chips (tokenizeComposeRefs).
+      sendToClaudeCode({ sessionId, provider, originalText: expandedMessage, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch, drawNow: canDrawSendNow(getSessionState?.(sessionId)) });
       return true;
     },
     [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],

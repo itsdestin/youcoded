@@ -266,7 +266,9 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
+  // `sendTransport: 'queue'` = a Claude Code send handed to the host queue (never given the terminal's retry Enter); `boundUuid` = the transcript line the
+  // host says it became, so the bubble is confirmed by identity even when Claude Code recorded different words.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
   | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -572,7 +574,7 @@ export type ChatAction =
       /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
       sendId?: string;
       /** Direct/uncertain sends must never receive the terminal's automatic Enter retry. */
-      sendTransport?: 'direct' | 'pty';
+      sendTransport?: 'direct' | 'pty' | 'queue';
     }
   | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
   | {
@@ -606,6 +608,8 @@ export type ChatAction =
       type: 'QUEUE_SYNCED';
       sessionId: string;
       queue: QueuedItem[];
+      /** Recent Claude Code queue sends and the transcript line each became. */
+      bound?: { sendId: string; uuid: string }[];
     }
   | {
       // The host took back a "Model switched to X" divider because Claude Code refused the switch (one-core R5-4a review).
@@ -914,6 +918,8 @@ export type ChatAction =
       // A slash command read from its command tags (TranscriptEvent.data.slashCommand). It starts
       // no turn: many commands get no reply, and a watching device would stay "thinking".
       slashCommand?: boolean;
+      /** Files attached to a Claude Code queue send (TranscriptEvent.data.attachedFiles), drawn as chips. */
+      attachedFiles?: string[];
       // Host-injected user-role turn (TranscriptEvent.data.injected, e.g.
       // 'specialist-report') + its structured header. Carried onto the
       // timeline entry so the renderer draws a compact report card, not a bubble.

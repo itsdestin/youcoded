@@ -17,6 +17,7 @@ import { pageEventToActions } from './transcript-page-actions';
 import { appendAbovePending, hasMarker, markerAnchor, appendSystemMarker, matchingCompaction, replaceTrailingModelMarker } from './timeline-boundaries';
 import { reconcilePageSources } from './page-source-anchors';
 import { localUserMessage } from './local-user-message';
+import { reconcileQueueBubbles, boundPendingIndex, recordedUserMessage } from './queue-bubbles';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, applyTaskStop, ccBackgroundOnLaunch, markHelperReopened, reopenResumedHelper, stopRunningBackground, stopRunningCommands } from './cc-background';
@@ -1089,9 +1090,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const cur = session.queuedMessages;
+      const { timeline, movedToStrip } = reconcileQueueBubbles(session.timeline, action.queue, action.bound);
       // Bounded host rows include epoch/pause/checkout/status; equal text is not equal ownership.
-      if (JSON.stringify(cur) === JSON.stringify(action.queue)) return state;
-      next.set(action.sessionId, { ...session, queuedMessages: structuredClone(action.queue) });
+      if (timeline === session.timeline && JSON.stringify(cur) === JSON.stringify(action.queue)) return state;
+      next.set(action.sessionId, { ...session, timeline, queuedMessages: JSON.stringify(cur) === JSON.stringify(action.queue) ? cur : structuredClone(action.queue), ...(movedToStrip ? spinnerWithNoTurn(session) : {}) }); // a bubble moved to the strip started no turn
       return next;
     }
 
@@ -1494,7 +1496,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // `return state` after it would record the uuid without applying the
       // message. Capturing the narrowed entry removes the guard and the hazard.
       let confirmedEntry: Extract<TimelineEntry, { kind: 'user' }> | null = null;
-      for (let i = 0; i < session.timeline.length; i++) {
+      // A queue send's bubble is confirmed by identity first (queue-bubbles.ts): Claude Code records the queue's wording.
+      confirmedIdx = boundPendingIndex(session.timeline, action.uuid);
+      if (confirmedIdx >= 0) confirmedEntry = session.timeline[confirmedIdx] as Extract<TimelineEntry, { kind: 'user' }>;
+      for (let i = 0; confirmedIdx < 0 && i < session.timeline.length; i++) {
         const entry = session.timeline[i];
         if (
           entry.kind === 'user' &&
@@ -1637,12 +1642,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // position confirm: this is the ONLY place its timeline entry gets
       // created, at the end), a remote/replay client, or the user typed
       // directly into the terminal. Append as a new confirmed entry.
-      const message = {
-        id: nextMessageId(),
-        role: 'user' as const,
-        content: action.text,
-        timestamp: action.timestamp,
-      };
+      const message = recordedUserMessage(nextMessageId(), action);
 
       next.set(action.sessionId, {
         ...session,

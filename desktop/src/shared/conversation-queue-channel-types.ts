@@ -17,7 +17,7 @@ export type ConversationQueueReply =
   | { status: 'queued'; identity: ConversationQueueIdentity; itemId: string; sendId: string }
   | { status: 'reserved'; item: QueueItem }
   | { status: 'lookup'; identity: ConversationQueueIdentity; found: boolean }
-  | { status: 'done' }
+  | { status: 'done'; /** Dismiss: the words to put back in the dismissing screen's empty message box. */ restore?: { text: string; attachments: string[] } }
   | { status: 'rejected' | 'unknown'; message: string };
 export interface ConversationQueueBridge { action(sessionId: string, action: ConversationQueueAction): Promise<ConversationQueueReply> }
 export interface ConversationQueueChannelTypes {
