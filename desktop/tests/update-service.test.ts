@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   // Download tests (#183): a private userData folder, a scriptable download engine and release answer.
   userData: '/unused', installer: {} as Record<string, unknown>, httpStatus: 200, setBeta: vi.fn(),
   release: null as null | Record<string, unknown>,
+  kind: 'deb' as string, stageAppImage: vi.fn(),
 }));
 const DEFAULT_RELEASE = { manifest_url: 'https://github.com/manifest', signature_url: 'https://github.com/signature', tag: 'v2.0.0' };
 vi.mock('electron', () => ({
@@ -40,7 +41,11 @@ vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class {
   async setAutoInstall(v: unknown) { if (typeof v !== 'boolean') throw new TypeError('bad'); mocks.savedAutoInstall = v; }
 } }));
 vi.mock('../src/main/native-home', () => ({ NativeHome: class {} }));
-vi.mock('../src/main/linux-install-kind', () => ({ linuxInstallKind: () => 'deb', primeLinuxInstallKind: async () => {} }));
+vi.mock('../src/main/linux-install-kind', () => ({ linuxInstallKind: () => mocks.kind, primeLinuxInstallKind: async () => {} }));
+vi.mock('../src/main/update-staging', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/main/update-staging')>();
+  return { ...actual, stageAppImage: mocks.stageAppImage };
+});
 vi.mock('../src/main/update-release-status', () => ({
   readReleaseStatus: () => mocks.release ?? DEFAULT_RELEASE,
 }));
@@ -195,6 +200,7 @@ describe('update service downloads', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     userData = fs.mkdtempSync(path.join(os.tmpdir(), 'update-service-dl-'));
     cacheDir = path.join(userData, 'update-cache');
+    mocks.kind = 'deb'; mocks.stageAppImage.mockResolvedValue('.YouCoded-update-2.0.0.AppImage');
     mocks.userData = userData; mocks.packaged = true; mocks.savedAutoInstall = true; mocks.readGate = null; mocks.httpStatus = 200;
     mocks.release = release('2.0.0');
     mocks.verify.mockResolvedValue({ assets: [] });
@@ -413,20 +419,202 @@ describe('update service downloads', () => {
     expect(fs.existsSync(path.join(cacheDir, 'pending.json'))).toBe(false);
   });
 
-  it('stops background downloads after Cancel until the next check', async () => {
-    const s = await load();
-    await check(s);                 // a check passed; the first window is not up yet
-    s.cancel('job-1');              // the person pressed Cancel
-    await armed(s);                 // the 60 seconds elapse: nothing starts behind their back
-    await s.afterCheckDone();
-    expect(started).not.toHaveBeenCalled();
-    await check(s);                 // the next check lifts it
-    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
-  });
-
   it('carries the HTTP status of the last hop on a failed signed-file fetch', async () => {
     mocks.httpStatus = 404;
     const s = await load();
     await expect(s.fetchUrlToBuffer('https://github.com/manifest', 1024)).rejects.toMatchObject({ code: 'network-failed', httpStatus: 404 });
+  });
+
+  // ---- failures, races and the guards behind them (T2 review) ----
+
+  it('tells every window when a download dies, so the popup leaves "Downloading…"', async () => {
+    started.mockRejectedValue(new Error('boom'));
+    const s = await load();
+    await armed(s);
+    await check(s);
+    expect(mocks.send).toHaveBeenCalledWith('update:progress', expect.objectContaining({ failed: true, error: 'network-failed' }));
+  });
+
+  it('cancel stops whichever job is running even when it is given a stale or empty id', async () => {
+    const s = await load();
+    s.cancel('some-older-job');
+    s.cancel(null);
+    expect(mocks.installer.cancelDownload).toHaveBeenNthCalledWith(1, 'job-1');
+    expect(mocks.installer.cancelDownload).toHaveBeenNthCalledWith(2, 'job-1');
+  });
+
+  it('throws away a download that finished after the beta channel changed, files and all', async () => {
+    let open!: () => void;
+    gate = new Promise<void>((r) => { open = r; });
+    const s = await load();
+    await s.fetchLatestRelease();
+    const job = s.download();
+    job.catch(() => {});
+    await vi.waitFor(() => expect(started).toHaveBeenCalled());
+    mocks.release = { ...release('2.0.0'), update_available: false };
+    await s.setBetaChannel(true);
+    open();
+    await expect(job).rejects.toMatchObject({ code: 'network-failed' });
+    expect(fs.existsSync(path.join(cacheDir, asset('2.0.0')))).toBe(false);
+    expect(s.getUpdateStatus().downloaded).toBe(false);
+  });
+
+  it('deletes the old pending file, not just the record, when the beta channel changes', async () => {
+    const s = await load();
+    await s.fetchLatestRelease();
+    await s.download();
+    mocks.release = { ...release('2.0.0'), update_available: false };
+    await s.setBetaChannel(true);
+    expect(fs.existsSync(path.join(cacheDir, asset('2.0.0')))).toBe(false);
+  });
+
+  it('starts the newer release after the running job and never hands back the older file', async () => {
+    let open!: () => void;
+    gate = new Promise<void>((r) => { open = r; });
+    const s = await load();
+    await s.fetchLatestRelease();
+    const first = s.download();
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+    mocks.release = release('2.1.0');
+    await s.fetchLatestRelease();           // 2.1.0 is announced mid-download
+    const second = s.download();
+    open();
+    expect((await second).filePath).toBe(path.join(cacheDir, asset('2.1.0')));
+    expect((await first).filePath).toBe(path.join(cacheDir, asset('2.1.0'))); // the first caller is moved on too
+    expect(started.mock.calls.map((c) => c[0])).toEqual([release('2.0.0').download_url, release('2.1.0').download_url]);
+  });
+
+  it('does not sweep while a download runs, then sweeps once it ends', async () => {
+    let open!: () => void;
+    let release1!: () => void;
+    gate = new Promise<void>((r) => { open = r; });
+    mocks.readGate = new Promise<void>((r) => { release1 = r; }); // holds the first check's follow-up work open
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const stale = path.join(cacheDir, asset('0.5.0'));
+    fs.writeFileSync(stale, 'x');
+    fs.utimesSync(stale, Date.now() / 1000 - 72 * 3600, Date.now() / 1000 - 72 * 3600);
+    const s = await load();
+    await s.fetchLatestRelease();             // the check landed; its follow-up (and sweep) is still waiting
+    const job = s.download();                 // the person pressed Update now meanwhile
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+    release1();
+    await s.afterCheckDone();                 // the follow-up has now run to its end
+    expect(fs.existsSync(stale)).toBe(true);  // ...and left the folder alone while the job runs
+    open();
+    await job;
+    await vi.waitFor(() => expect(fs.existsSync(stale)).toBe(false));
+  });
+
+  it('a Cancel blocks the next background run until the next check', async () => {
+    const s = await load();
+    await check(s);
+    s.cancel(null);
+    await armed(s);
+    await s.afterCheckDone();
+    expect(started).not.toHaveBeenCalled();
+    await check(s);                           // the next check lifts it
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+  });
+
+  it('a Cancel does not stop the person turning the switch on', async () => {
+    mocks.savedAutoInstall = false;
+    const s = await load();
+    await check(s);
+    s.cancel(null);
+    await s.setAutoInstall(true);
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not retry a release whose signed file failed until the next check', async () => {
+    const { UpdateInstallError } = await import('../src/main/update-installer');
+    mocks.verify.mockRejectedValue(new UpdateInstallError('signature-invalid', 'forged'));
+    const s = await load();
+    await armed(s);
+    await check(s);
+    expect(started).toHaveBeenCalledTimes(1);
+    await s.setAutoInstall(true);            // asks for a background run again, with no new check
+    await s.afterCheckDone();
+    await vi.waitFor(() => expect(mocks.savedAutoInstall).toBe(true));
+    expect(started).toHaveBeenCalledTimes(1);
+  });
+
+  it('says downloaded only for the release it holds, not for a newer latest', async () => {
+    const s = await load();
+    await s.fetchLatestRelease();
+    await s.download();
+    expect(s.getUpdateStatus().downloaded).toBe(true);
+    mocks.release = release('2.1.0');
+    await s.fetchLatestRelease();
+    expect(s.getUpdateStatus()).toMatchObject({ latest: '2.1.0', downloaded: false });
+  });
+
+  it('keeps the file when the same asset is adopted again', async () => {
+    const first = await load();
+    await first.fetchLatestRelease();
+    await first.download();
+    vi.resetModules();                        // the app restarts: pending.json is loaded back, unverified
+    const s = await load();
+    await s.fetchLatestRelease();
+    expect(s.getUpdateStatus().downloaded).toBe(false);
+    await s.download();                       // verifies the file already on disk and adopts it again
+    expect(fs.existsSync(path.join(cacheDir, asset('2.0.0')))).toBe(true);
+    expect(s.getUpdateStatus().downloaded).toBe(true);
+  });
+
+  it('adopts and stages nothing when a file already on disk fails its check', async () => {
+    const { UpdateInstallError } = await import('../src/main/update-installer');
+    mocks.kind = 'appimage';
+    process.env.APPIMAGE = path.join(userData, 'YouCoded.AppImage');
+    fs.writeFileSync(process.env.APPIMAGE, 'running');
+    const name = 'YouCoded-2.0.0.AppImage';
+    mocks.release = { ...release('2.0.0'), download_url: `https://github.com/itsdestin/youcoded/releases/download/v2.0.0/${name}` };
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, name), 'tampered');
+    mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+    const s = await load();
+    await s.fetchLatestRelease();
+    try {
+      await expect(s.download()).rejects.toMatchObject({ code: 'verify-failed' });
+    } finally { delete process.env.APPIMAGE; }
+    expect(mocks.stageAppImage).not.toHaveBeenCalled();
+    expect(s.getUpdateStatus().downloaded).toBe(false);
+    expect(fs.existsSync(path.join(cacheDir, 'pending.json'))).toBe(false);
+  });
+
+  it('only pushes a status change when the pending download really changed', async () => {
+    const s = await load();
+    await s.fetchLatestRelease();
+    await s.download();
+    const listener = vi.fn();
+    s.onStatusChange(listener);
+    mocks.release = { ...release('2.0.0'), update_available: false };
+    await s.setBetaChannel(true);             // clears pending: one change
+    await s.setBetaChannel(false);            // nothing left to clear: no change
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call a loaded pending download "downloaded" until it is re-checked after the 60 seconds', async () => {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, asset('2.0.0')), 'x');
+    writePendingJson();
+    const s = await load();
+    await check(s);                           // startup has finished and pending.json is loaded
+    expect(s.getUpdateStatus().downloaded).toBe(false);
+    await armed(s);
+    await vi.waitFor(() => expect(s.getUpdateStatus().downloaded).toBe(true));
+  });
+
+  it('removes a loaded pending download that fails its re-check', async () => {
+    const { UpdateInstallError } = await import('../src/main/update-installer');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, asset('2.0.0')), 'x');
+    writePendingJson();
+    mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+    mocks.savedAutoInstall = false;          // so only the re-check, not a fresh download, touches it
+    const s = await load();
+    await s.fetchLatestRelease();
+    await armed(s);
+    await vi.waitFor(() => expect(fs.existsSync(path.join(cacheDir, asset('2.0.0')))).toBe(false));
+    expect(s.getUpdateStatus().downloaded).toBe(false);
   });
 });

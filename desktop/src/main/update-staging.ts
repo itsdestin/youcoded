@@ -14,13 +14,28 @@ import { UpdateInstallError } from './update-installer';
 interface RunResult { code: number | null; stdout: string; stderr: string }
 export type RunCommand = (cmd: string, args: string[]) => Promise<RunResult>;
 
-/** Production runner: never rejects, reports the exit code. */
-export const runCommand: RunCommand = (cmd, args) => new Promise((resolve) => {
-  execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-    const code = err ? (typeof (err as NodeJS.ErrnoException & { code?: unknown }).code === 'number' ? (err as unknown as { code: number }).code : 1) : 0;
-    resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+/** WHY a limit on every command (review of T2): a wedged disk image or a codesign stuck on a network
+ *  volume would otherwise hold the single download slot forever. Attach/ditto copy ~180 MB, codesign
+ *  walks the whole bundle, detach should be instant. */
+export function commandTimeoutMs(cmd: string, args: string[]): number {
+  if (cmd === 'codesign') return 2 * 60_000;
+  if (cmd === 'hdiutil' && args[0] === 'detach') return 30_000;
+  return 5 * 60_000; // hdiutil attach, ditto
+}
+
+/** Run one command with a time limit; never rejects. A timeout is a failure (code 1) with a stderr that says so. */
+export function runWithTimeout(cmd: string, args: string[], timeoutMs: number): Promise<RunResult> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024, timeout: timeoutMs }, (err, stdout, stderr) => {
+      const timedOut = !!err && (err as { killed?: boolean }).killed === true;
+      const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as unknown as { code: number }).code : 1) : 0;
+      resolve({ code, stdout: String(stdout ?? ''), stderr: timedOut ? `timed out after ${timeoutMs} ms\n${stderr ?? ''}` : String(stderr ?? '') });
+    });
   });
-});
+}
+
+/** Production runner. */
+export const runCommand: RunCommand = (cmd, args) => runWithTimeout(cmd, args, commandTimeoutMs(cmd, args));
 
 const SAFE_VERSION = /^[0-9A-Za-z.+-]+$/;
 function assertSafeVersion(version: string): void {
@@ -110,7 +125,8 @@ export interface MacStageInput {
 
 /** Pull the `designated => …` requirement out of `codesign -d -r-` output (it may arrive on either stream). */
 export function parseDesignatedRequirement(output: string): string | null {
-  const m = /^designated => (.+)$/m.exec(output);
+  // `codesign -d -r-` prints the requirement as `designated => …` on some macOS versions and `# designated => …` on others
+  const m = /^(?:# )?designated => (.+)$/m.exec(output);
   return m ? m[1].trim() : null;
 }
 
@@ -130,7 +146,7 @@ export async function stageMacApp(input: MacStageInput): Promise<string> {
   const mountPoint = await fs.promises.mkdtemp(path.join(tmpDir, 'youcoded-mount-'));
   let attached = false;
   try {
-    const attach = await input.run('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mountPoint, input.dmgPath]);
+    const attach = await input.run('hdiutil', ['attach', '-nobrowse', '-noautoopen', '-readonly', '-mountpoint', mountPoint, input.dmgPath]);
     if (attach.code !== 0) throw new UpdateInstallError('dmg-corrupt', attach.stderr.slice(0, 300));
     attached = true;
     const apps = (await fs.promises.readdir(mountPoint)).filter((n) => n.endsWith('.app'));

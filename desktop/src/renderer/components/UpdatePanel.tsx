@@ -216,6 +216,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // Ref rather than state because the progress handler fires asynchronously and
   // we want the freshest jobId without re-subscribing.
   const activeJobIdRef = useRef<string | null>(null);
+  // True while THIS view's own download() call is unanswered, so the reopen check does not mistake its job for a stale one.
+  const downloadRequestPending = useRef(false);
 
   // Subscribe to download progress. Main broadcasts progress to every window;
   // we rely on the main-side single-job invariant (only one download in flight
@@ -225,9 +227,20 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   // We preserve the raw `percent` (including the -1 sentinel for unknown
   // Content-Length) so the button can render an indeterminate "Downloading…"
   // label — don't clamp here.
+  // WHY also while closed and downloading: a job that dies while the popup is closed (a background
+  // run, or one started before closing) must still take this view out of "Downloading…" — nothing in
+  // the popup cancels a job, so without this it would sit there forever. Closed, only that failure is
+  // acted on; progress ticks are ignored (hidden means idle).
+  const watchProgress = open || installState.kind === 'downloading';
   useEffect(() => {
-    if (!open) return;
+    if (!watchProgress) return;
     const unsub = window.claude.update.onProgress((ev) => {
+      if (ev.failed) {
+        setInstallState(prev => prev.kind === 'downloading'
+          ? { kind: 'error', code: ev.error ?? 'network-failed', stage: 'download' } : prev);
+        return;
+      }
+      if (!openRef.current) return;
       setInstallState(prev => {
         if (prev.kind !== 'downloading') return prev;
         if (!activeJobIdRef.current) activeJobIdRef.current = ev.jobId;
@@ -235,7 +248,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       });
     });
     return unsub;
-  }, [open]);
+  }, [watchProgress]);
 
   // When the popup opens and a completed download is already cached for this
   // version, jump straight to ready state (skip the re-download). If a job is still running (a
@@ -248,7 +261,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     let cancelled = false;
     (async () => {
       const cached = await window.claude.update.getCachedDownload(updateStatus.latest);
-      if (cancelled || !cached) return;
+      if (cancelled) return;
+      if (!cached) {
+        // Nothing running and nothing on disk: a "Downloading…" left over from before the popup was
+        // closed is stale (its job ended), so show the normal Update now button again.
+        setInstallState(prev => prev.kind === 'downloading' && !downloadRequestPending.current ? { kind: 'idle' } : prev);
+        return;
+      }
       if ('downloading' in cached) {
         // WHY: closing the popup no longer cancels, so a reopened popup finds the job still running.
         activeJobIdRef.current = cached.downloading.jobId;
@@ -272,7 +291,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
 
   // WHY this effect no longer cancels or resets a download (Destin, 2026-10-22): closing the popup
   // after pressing Update used to cancel the download and fall back to "Update now". The job now
-  // belongs to main; only the Cancel button stops it. Launch outcomes are kept too — an error can
+  // belongs to main and keeps running; this popup has no way to stop it, and a failure reaches it
+  // as a failed progress event (above). Launch outcomes are kept too — an error can
   // arrive while closed, and reopening must not offer a second install over an uncertain first one.
   useEffect(() => {
     if (open) return;
@@ -332,7 +352,8 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // Content-Length unknown) so the label shows the indeterminate branch.
     try {
       setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
-      const result = await window.claude.update.download();
+      downloadRequestPending.current = true;
+      const result = await window.claude.update.download().finally(() => { downloadRequestPending.current = false; });
       // WHY no closed-popup guard any more: closing keeps the download running, so finishing while
       // closed should leave the popup Ready for the next open, not idle.
       activeJobIdRef.current = result.jobId;

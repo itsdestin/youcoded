@@ -38,6 +38,9 @@ export interface UpdateProgressEvent {
   bytesReceived: number;
   bytesTotal: number;  // 0 if Content-Length was absent
   percent: number;     // 0-100, or -1 if bytesTotal unknown
+  /** A job that died: the popup leaves "Downloading…" for its normal download error (Try again). */
+  failed?: true;
+  error?: UpdateInstallErrorCode;
 }
 
 /** Recent real installer output; deliberately no estimated percentage. */

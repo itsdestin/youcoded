@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
-import { parseDesignatedRequirement, stageAppImage, stageMacApp, stagedPathFor, sweepStaging, type RunCommand } from '../src/main/update-staging';
+import { commandTimeoutMs, parseDesignatedRequirement, runWithTimeout, stageAppImage, stageMacApp, stagedPathFor, sweepStaging, type RunCommand } from '../src/main/update-staging';
 
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'update-staging-')); });
@@ -65,7 +65,7 @@ describe('staging a Mac update', () => {
     const staged = path.join(path.dirname(running), name);
     expect(fs.existsSync(path.join(staged, 'Contents', 'x'))).toBe(true);
     const attach = calls.find(([c, a]) => c === 'hdiutil' && a[0] === 'attach')!;
-    expect(attach[1]).toEqual(expect.arrayContaining(['-nobrowse', '-readonly', '-mountpoint']));
+    expect(attach[1]).toEqual(expect.arrayContaining(['-nobrowse', '-noautoopen', '-readonly', '-mountpoint']));
     expect(attach[1][attach[1].length - 1]).toBe('/dl/YouCoded.dmg');
     expect(calls.map(([c, a]) => `${c} ${a[0]}`)).toEqual(['hdiutil attach', 'ditto ' + path.join(attach[1][attach[1].indexOf('-mountpoint') + 1], 'YouCoded.app'), 'hdiutil detach', 'codesign -d', 'codesign --verify']);
     expect(calls.find(([c, a]) => c === 'codesign' && a[0] === '-d')![1]).toEqual(['-d', '-r-', running]);
@@ -97,7 +97,36 @@ describe('staging a Mac update', () => {
     expect(fs.existsSync(path.join(folder, 'YouCoded.app', 'Contents', 'x'))).toBe(true);
   });
 
-  it('reads the designated requirement from codesign output', () => {
+  it('forces the detach when the plain one fails', async () => {
+    const { run, calls } = fakeMac();
+    const stubborn: RunCommand = async (cmd, args) => cmd === 'hdiutil' && args[0] === 'detach' && args[1] !== '-force' ? { code: 16, stdout: '', stderr: 'busy' } : run(cmd, args);
+    await stageMacApp({ dmgPath: '/dl/a.dmg', version: '2.0.0', runningBundle: bundle(), needsPassword: false, tmpDir: root, run: stubborn });
+    expect(calls.filter(([c, a]) => c === 'hdiutil' && a[0] === 'detach' && a[1] === '-force')).toHaveLength(1);
+  });
+
+  it('removes a half-copied staged app when ditto fails', async () => {
+    const { run } = fakeMac();
+    const running = bundle();
+    const failing: RunCommand = async (cmd, args) => {
+      if (cmd === 'ditto') { fs.mkdirSync(args[1], { recursive: true }); fs.writeFileSync(path.join(args[1], 'half'), 'x'); return { code: 1, stdout: '', stderr: 'no space' }; }
+      return run(cmd, args);
+    };
+    await expect(stageMacApp({ dmgPath: '/dl/a.dmg', version: '2.0.0', runningBundle: running, needsPassword: false, tmpDir: root, run: failing })).rejects.toBeTruthy();
+    expect(fs.existsSync(path.join(path.dirname(running), '.YouCoded-update-2.0.0.app'))).toBe(false);
+  });
+
+  it('gives every command a time limit, and a timeout is a failure', async () => {
+    expect(commandTimeoutMs('hdiutil', ['attach', 'x'])).toBe(300_000);
+    expect(commandTimeoutMs('ditto', ['a', 'b'])).toBe(300_000);
+    expect(commandTimeoutMs('codesign', ['--verify'])).toBe(120_000);
+    expect(commandTimeoutMs('hdiutil', ['detach', 'x'])).toBe(30_000);
+    const res = await runWithTimeout(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], 100);
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain('timed out');
+  });
+
+  it('reads the designated requirement from codesign output, with or without a leading "# "', () => {
+    expect(parseDesignatedRequirement(`Executable=/a\n# designated => ${requirement}\n`)).toBe(requirement);
     expect(parseDesignatedRequirement(`Executable=/a\ndesignated => ${requirement}\n`)).toBe(requirement);
     expect(parseDesignatedRequirement('nothing here')).toBeNull();
   });

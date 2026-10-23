@@ -232,6 +232,20 @@ describe('UpdatePanel — the version pill popup', () => {
       expect((window as any).claude.update.download).not.toHaveBeenCalled(); // asked, did not start a second job
     });
 
+    it('a download that dies leaves "Downloading…" for the normal error with Try again, open or closed', async () => {
+      const handlers: Array<(ev: unknown) => void> = [];
+      (window as any).claude.update.onProgress.mockImplementation((h: (ev: unknown) => void) => { handlers.push(h); return () => {}; });
+      (window as any).claude.update.getCachedDownload.mockResolvedValue({ downloading: { percent: 10, jobId: 'bg' } });
+      const { rerender } = render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      await screen.findByRole('button', { name: /downloading.*10%/i });
+      rerender(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      // the job fails while the popup is closed
+      await act(async () => { handlers.forEach((h) => h({ jobId: 'bg', bytesReceived: 0, bytesTotal: 0, percent: -1, failed: true, error: 'network-failed' })); });
+      rerender(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+      expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /downloading/i })).not.toBeInTheDocument();
+    });
+
     it('does not fetch when open=false', () => {
       render(<UpdatePanel open={false} onClose={() => {}} updateStatus={UPDATE_STATUS_OK} />);
       expect((window as any).claude.update.changelog).not.toHaveBeenCalled();

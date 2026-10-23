@@ -351,10 +351,17 @@ function createUpdateService() {
   }
 
   async function setBetaChannel(enabled: boolean): Promise<UpdateBetaChannelState> {
+    // WHY bump first: a download already running was chosen for the OTHER channel; when it finishes
+    // it sees the new number and throws itself away instead of becoming pending (design E3).
+    channelGen++;
     await updateSettings.setBetaChannel(enabled);
     // WHY clear pending (design E3): what is waiting was picked for the OTHER channel. Leaving it
     // could install a beta after someone turned betas off, or hide a stable release behind it.
+    // The record AND the files: a leftover beta installer or staged copy would otherwise sit there
+    // (kept by the sweep's rules) until something else removed it.
+    const stale = pending;
     await setPending(null);
+    if (stale) await removePendingFiles(stale);
     // WHY re-check immediately: the status cache holds one answer for 30 minutes,
     // and it was computed against the OTHER channel. Without this, turning the
     // channel on leaves "you're up to date" on screen for up to half an hour —
@@ -369,11 +376,14 @@ function createUpdateService() {
     return ensureDownloaded('popup');
   }
 
-  function cancel(jobId: string) {
+  function cancel(jobId: string | null) {
     // WHY suppress (design §2): a person who cancelled does not want the next check to start it again
     // behind their back. The next successful release check lifts it.
     suppressed = true;
-    installer.cancelDownload(jobId);
+    // WHY the active job wins over the id we were given: a popup reopened onto a background job, or
+    // one holding an id from an earlier job, has a stale or null id; "cancel" must still stop the job
+    // that is actually running (nothing in the popup calls this today, but the channel must work).
+    installer.cancelDownload(installer.getActiveProgress?.()?.jobId ?? jobId ?? '');
     return { success: true };
   }
 
@@ -437,6 +447,9 @@ function createUpdateService() {
   let backgroundArmed = false;     // false until 60 s after the first window is ready
   let armTimer: ReturnType<typeof setTimeout> | null = null;
   let sweptOnce = false;
+  let checkedOnce = false;         // a release check has succeeded: the sweep now knows what "latest" is
+  let channelGen = 0;              // bumped by setBetaChannel; a job started under another number is discarded
+  let inFlightKey = '';            // channel number + tag of the running job
   let brakedTag: string | null = null; // an unsigned/forged release is not retried until the next check
   const statusListeners = new Set<() => void>();
 
@@ -535,7 +548,7 @@ function createUpdateService() {
       if (!staged || !(await fileExists(staged))) return; // staging lost: the next run re-verifies and re-stages the file
     }
     pending = p;
-    pendingFileOk = true;
+    pendingFileOk = false; // not "downloaded" until verifyLoadedPending re-checks the file (item 8 of the T2 review)
     notifyStatusChanged();
   }
 
@@ -545,7 +558,27 @@ function createUpdateService() {
     const stillNewer = compareVersions(pending.version, app.getVersion()) > 0;
     const ok = stillNewer && await fileExists(pendingFilePath(pending));
     if (!ok) { await setPending(null); return; }
-    if (!pendingFileOk) { pendingFileOk = true; notifyStatusChanged(); }
+    // (does not set pendingFileOk: only a fresh verify does — see verifyLoadedPending)
+  }
+
+  /** WHY (review of T2): a pending.json read at startup describes a file that may have changed on disk
+   *  since (disk error, another program). It is not "downloaded" until its hash is checked against the
+   *  signed file again; that check waits for the 60 s deferral so it never competes with startup. */
+  async function verifyLoadedPending(): Promise<void> {
+    const p = pending;
+    if (!p || pendingFileOk || devFakeUpdate) return;
+    const res = await verifyAgainstRelease(pendingFilePath(p), p);
+    if (pending !== p) return; // replaced while we checked
+    if (res.code === null) { pendingFileOk = true; notifyStatusChanged(); return; }
+    if (res.transient) return; // could not reach the signed file: stay "not downloaded", try again later
+    await setPending(null);
+    await removePendingFiles(p);
+  }
+
+  /** Delete a pending download's installer and its staged copy. */
+  async function removePendingFiles(p: Pending): Promise<void> {
+    await fs.promises.rm(pendingFilePath(p), { force: true }).catch(() => {});
+    if (p.stagedName) await removeStagedByName(p.stagedName, stagingContext()).catch(() => {});
   }
 
   let initDone: Promise<void> = Promise.resolve();
@@ -628,12 +661,14 @@ function createUpdateService() {
   async function adopt(next: Pending): Promise<void> {
     const old = pending;
     await setPending(next);
+    // Same asset = the very file we just adopted: never delete it.
     if (old && old.assetName !== next.assetName) await fs.promises.rm(pendingFilePath(old), { force: true }).catch(() => {});
     if (old?.stagedName && old.stagedName !== next.stagedName) await removeStagedByName(old.stagedName, stagingContext()).catch(() => {});
   }
 
   async function downloadAndVerify(): Promise<UpdateDownloadResult> {
     await initDone;
+    const gen = channelGen;
     if (devFakeUpdate) return fakeDownload();
     // WHY (design D26): an unpackaged build has nothing it could install, and a developer's checkout
     // must not pull 150 MB because it is older than the latest release.
@@ -683,20 +718,53 @@ function createUpdateService() {
 
     // (5) Stage right after verify, record, tell the windows.
     const assetName = path.basename(filePath);
-    const stagedName = await stageVerified(filePath, target.version, verified?.sha256);
+    // A file already staged for this very asset (loaded from pending.json) is reused, not copied again.
+    const held = pending && pending.tag === target.tag && pending.assetName === assetName ? pending.stagedName : undefined;
+    const heldPath = held ? stagedPathFor(held, stagingContext()) : null;
+    const stagedName = held && heldPath && await fileExists(heldPath) ? held : await stageVerified(filePath, target.version, verified?.sha256);
+    if (gen !== channelGen) {
+      // The channel changed while this ran: what we fetched was picked for the other channel.
+      await removePendingFiles({ ...base, assetName, ...(stagedName ? { stagedName } : {}) });
+      throw new UpdateInstallError('network-failed', 'the update channel changed during the download');
+    }
     await adopt({ ...base, assetName, ...(stagedName ? { stagedName } : {}) });
     return { jobId, filePath, bytesTotal: (await fs.promises.stat(filePath)).size };
   }
 
-  /** The service's one download function. A second caller (popup, switch-on, next check) gets the
-   *  SAME promise: one job, never `busy`. */
-  function ensureDownloaded(_reason: 'popup' | 'background' | 'switch-on'): Promise<UpdateDownloadResult> {
-    if (inFlight) return inFlight;
+  /** Which release a job is for. A job for another tag (or another channel) is not "the same job". */
+  function currentKey(): string {
+    const st = devFakeUpdate ? getUpdateStatus() : cachedUpdateStatus;
+    return `${channelGen}:${st?.tag ?? st?.latest ?? ''}`;
+  }
+
+  /** Tell every window a job died, so a popup showing "Downloading…" lands in its normal error state
+   *  (Try again) instead of waiting forever. Nothing in the popup cancels a job any more, so a
+   *  background or reopened download that fails must announce it. */
+  function broadcastFailure(err: unknown) {
+    const error: UpdateInstallErrorCode = err instanceof UpdateInstallError ? err.code : 'network-failed';
+    const ev: UpdateProgressEvent = { jobId: installer.getActiveProgress?.()?.jobId ?? 'failed', bytesReceived: 0, bytesTotal: 0, percent: -1, failed: true, error };
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('update:progress', ev);
+    }
+  }
+
+  /** The service's one download function. A second caller (popup, switch-on, next check) for the
+   *  SAME release gets the SAME promise: one job, never `busy`. A caller for a NEWER release waits for
+   *  the running job to end, then starts its own; and no caller is ever handed a file for a release
+   *  that stopped being the latest while it ran. */
+  function ensureDownloaded(reason: 'popup' | 'background' | 'switch-on'): Promise<UpdateDownloadResult> {
+    const key = currentKey();
+    const fresh = (run: Promise<UpdateDownloadResult>, startedFor: string) =>
+      run.then((r) => (currentKey() === startedFor ? r : ensureDownloaded(reason)));
+    if (inFlight && inFlightKey === key) return fresh(inFlight, key);
+    if (inFlight) return inFlight.then(() => undefined, () => undefined).then(() => ensureDownloaded(reason));
     const run = downloadAndVerify();
     inFlight = run;
-    const clear = () => { if (inFlight === run) inFlight = null; };
+    inFlightKey = key;
+    const clear = () => { if (inFlight === run) inFlight = null; void sweepIfDue(); };
     run.then(clear, clear);
-    return run;
+    run.catch(broadcastFailure);
+    return fresh(run, key);
   }
 
   /** The background trigger: after each successful check, on switch-on. Resolves quietly when the rules say no. */
@@ -721,8 +789,25 @@ function createUpdateService() {
   /** The first window is up: start the 60 s clock for the first background run. */
   function onFirstWindowReady(): void {
     if (armTimer || backgroundArmed) return;
-    armTimer = setTimeout(() => { backgroundArmed = true; armTimer = null; void runBackground('check'); }, FIRST_BACKGROUND_DELAY_MS);
+    armTimer = setTimeout(() => {
+      backgroundArmed = true; armTimer = null;
+      // tracked in afterCheck too, so a caller can wait for the first background run to end
+      afterCheck = Promise.all([verifyLoadedPending().catch(() => {}), runBackground('check')]).then(() => undefined);
+    }, FIRST_BACKGROUND_DELAY_MS);
     armTimer.unref?.();
+  }
+
+  /** The first stale-file sweep: after the first successful check (design D15: only then do we know
+   *  which file is "the latest"), and never while a download runs — the sweep must not race a file
+   *  that is about to be adopted. A job that ends triggers it again. */
+  async function sweepIfDue(): Promise<void> {
+    if (sweptOnce || !checkedOnce || inFlight) return;
+    sweptOnce = true;
+    const keep = new Set<string>(RESERVED_CACHE_FILES);
+    if (pending) keep.add(pending.assetName);
+    try { if (cachedUpdateStatus?.download_url) keep.add(deriveDownloadFilename(cachedUpdateStatus.download_url, process.platform)); } catch { /* not an installer url */ }
+    await cleanupStaleDownloads(updateCacheDir, keep).catch(() => {});
+    await sweepStaging(stagingContext(), new Set(pending?.stagedName ? [pending.stagedName] : [])).catch(() => {});
   }
 
   /** Everything that follows a SUCCESSFUL release check. */
@@ -732,16 +817,9 @@ function createUpdateService() {
     await refreshAutoInstall(); // the dev instance and the installed app share config.json
     await initDone;
     await revalidatePending();
-    if (!sweptOnce) {
-      sweptOnce = true;
-      // WHY after the first check and not at startup (design D15): only now do we know which file is
-      // "the latest", and the pending one is loaded. Neither is ever swept.
-      const keep = new Set<string>(RESERVED_CACHE_FILES);
-      if (pending) { keep.add(pending.assetName); }
-      try { if (cachedUpdateStatus?.download_url) keep.add(deriveDownloadFilename(cachedUpdateStatus.download_url, process.platform)); } catch { /* not an installer url */ }
-      await cleanupStaleDownloads(updateCacheDir, keep).catch(() => {});
-      await sweepStaging(stagingContext(), new Set(pending?.stagedName ? [pending.stagedName] : [])).catch(() => {});
-    }
+    checkedOnce = true;
+    if (backgroundArmed) await verifyLoadedPending().catch(() => {});
+    await sweepIfDue();
     await runBackground('check');
   }
 
