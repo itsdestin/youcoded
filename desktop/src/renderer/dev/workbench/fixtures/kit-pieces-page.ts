@@ -162,7 +162,22 @@ const KIT_PIECES_HTML = `<!doctype html>
     // WHY load, not a timer: the frame must be able to take focus (Escape belongs to its menu),
     // and the requested state must exist when loading finishes, not 300 ms after it.
     window.addEventListener('load', function () {
-      document.getElementById(saved.demoMenu).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      var demoSel = document.getElementById(saved.demoMenu);
+      demoSel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      // WHY keep asking for focus until it lands (2026-10-22, shoot --check "frame never took focus" under heavy
+      // load): the page runs in its own browser process, and the press's single focus() call can arrive before
+      // the browser has finished attaching that process to the app window - then it is silently dropped. The
+      // list still opens, but focus stays on the app, so Escape closes the whole page instead of the list.
+      // Measured with the app's tab slowed down 8x: ~5 in 6 runs ended with the list open and focus lost; a
+      // second focus() a moment later always landed and kept the list open. So repeat it (cheap, workbench
+      // only) until the select really has focus, giving up after 30 s.
+      var tries = 0;
+      (function ensureFocus() {
+        if (document.activeElement === demoSel && document.hasFocus()) return;
+        if (++tries > 300) return;
+        try { demoSel.focus(); } catch (e) {}
+        setTimeout(ensureFocus, 100);
+      })();
     }, { once: true });
   }
   // The filter chips are the page's own: one meal at a time, as an author would write them.

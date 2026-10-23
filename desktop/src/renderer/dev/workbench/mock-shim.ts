@@ -4360,8 +4360,10 @@ function createPagesMock(scenario: string): PagesBridge {
         const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number') {
           w.__shootInflight += 1;
-          w.__shootHoldUntil = performance.now() + 8000;
-          const until = performance.now() + 8000;
+          // WHY 30 s, not 8 (2026-10-22): the frame retries its own focus for up to 30 s (kit-pieces-page.ts), and this hold
+          // ends the moment focus lands, so the longer cap costs nothing on a quiet machine but covers a very busy one.
+          w.__shootHoldUntil = performance.now() + 30000;
+          const until = performance.now() + 30000;
           const poll = () => {
             if (document.activeElement?.tagName !== 'IFRAME' && performance.now() < until) { setTimeout(poll, 50); return; }
             w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1;
