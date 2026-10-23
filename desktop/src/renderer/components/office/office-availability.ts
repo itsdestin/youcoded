@@ -4,7 +4,7 @@
 // desktop, the remote browser and the phone — so its presence says nothing. Only the desktop
 // host answers status().available true (the add-on is installed at the pinned version); the
 // remote client and the phone refuse the call, which reads as false here. Every Office entry
-// point (Edit on an Office file, the header briefcase, the Pages rail's Office row and the
+// point (Edit on an Office file, the header Office icon, the Pages rail's Office row and the
 // Office page) is shown only once this says true, so remote and phone look exactly as they did
 // before Office existed.
 //

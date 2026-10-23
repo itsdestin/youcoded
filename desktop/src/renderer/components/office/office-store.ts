@@ -43,7 +43,7 @@ export function officeTabsNow(): OfficeTabs {
 
 // ── One editor per file (design §5) ──
 // A file panel's in-place editor registers here while it is mounted, with how to end it.
-// WHY: opening the same file in an Office tab from anywhere (the briefcase, Recent, the
+// WHY: opening the same file in an Office tab from anywhere (the Office icon, Recent, the
 // project list) must close the in-place editor first, or two editors would hold one file and
 // the older one's autosave would overwrite the newer one's work.
 const inlineHolders = new Map<string, () => void>();
@@ -63,7 +63,7 @@ export type FlushResult = { ok: true } | { ok: false; message: string };
 
 // Each mounted editor's "save what is unsaved, then resolve" (EditorFrame's flush).
 // WHY: autosave waits 3–20 s after the last change, so anything that ends an editor — Done, the
-// briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, a reload — would
+// Office icon, closing the panel, leaving a tab, the hand-off to an Office tab, a reload — would
 // leave the last few seconds of typing only in the recovery journal (Task 8). Those paths wait
 // for this first (≤5 s), so the file itself holds them.
 const flushers = new Map<string, (capMs?: number) => Promise<FlushResult>>();
@@ -112,7 +112,7 @@ function syncUnsavedHold(path: string): void {
 }
 
 // ── In-place edits that moved to their copy ("Save a copy…", fix round 2) ──
-// The file panel still shows the original; its briefcase must open the copy (fix round 3).
+// The file panel still shows the original; its Office icon must open the copy (fix round 3).
 const inlineCopies = new Map<string, string>();
 export function noteInlineCopy(original: string, copy: string | null): void {
   if (copy) inlineCopies.set(original, copy); else inlineCopies.delete(original);

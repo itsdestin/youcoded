@@ -424,7 +424,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     };
   }, [file.path, attempt]);
 
-  // Registered so a file panel's Done and the header briefcase can wait for the last save
+  // Registered so a file panel's Done and the header Office icon can wait for the last save
   // before this editor goes (office-store flushOffice), and so the quit prompt's Discard reaches it.
   useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), {
     discard: () => discardRef.current(), journal: () => journalRef.current(),
