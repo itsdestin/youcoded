@@ -43,9 +43,12 @@ import { useBrowserExpanded } from '../state/browser-store';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
- *  short enough that it can never feel like the view is fighting you. Any user
- *  input releases it immediately. */
+ *  short enough that it can never feel like the view is fighting you. It only ever
+ *  corrects the entry's movement within the document, never the reader's own scrolling. */
 const ANCHOR_SETTLE_MS = 700;
+
+/** The entry held in place while an older page is prepended: where it sits in the scrolled document. */
+interface PrependAnchor { el: Element; key: string | null; docTop: number }
 
 /** Retry budget for a page main could not LOCATE (`unresolved`) — as opposed to
  *  a page that genuinely does not exist. The usual cause is a just-resumed
@@ -418,18 +421,21 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // measures the drift that ACTUALLY happened and can be re-applied as late
   // content settles, because "put this element back where it was" stays true no
   // matter what else moved.
-  const prependAnchorRef = useRef<{ el: Element; topOffset: number } | null>(null);
+  const prependAnchorRef = useRef<PrependAnchor | null>(null);
+  /** Ends the correction window of the last prepend (see the layout effect below). */
+  const endAnchorWindowRef = useRef<(() => void) | null>(null);
 
-  /** The topmost entry still on screen, and how far below the viewport's top edge
-   *  it sits. Null when nothing is rendered yet. */
-  const captureScrollAnchor = useCallback(() => {
+  /** The topmost entry still on screen, and where it sits in the SCROLLED DOCUMENT (its distance from the
+   *  top of the scrollable content, which scrolling by the reader does not change). Null when nothing is
+   *  rendered yet. */
+  const captureScrollAnchor = useCallback((): PrependAnchor | null => {
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
     if (!scroller || !content) return null;
     const scrollerTop = scroller.getBoundingClientRect().top;
     for (const el of Array.from(content.querySelectorAll('.timeline-entry'))) {
       const r = el.getBoundingClientRect();
-      if (r.bottom > scrollerTop) return { el, topOffset: r.top - scrollerTop };
+      if (r.bottom > scrollerTop) return { el, key: el.getAttribute('data-entry-key'), docTop: r.top - scrollerTop + scroller.scrollTop };
     }
     return null;
   }, []);
@@ -525,42 +531,67 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => io.disconnect();
   }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
 
-  // Put the anchored entry back where it was. Runs BEFORE paint
-  // (useLayoutEffect), so the prepended turns are never SEEN to push the view
-  // down, and keeps correcting for a short window afterwards because a code block
-  // or an image inside the new page finishes laying out a frame or two later.
+  // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
+  // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
+  // a code block or an image inside the new page finishes laying out a frame or two later.
+  //
+  // WHY it follows the entry's place in the DOCUMENT and never its place on screen (2026-10-23): the first
+  // version put the entry back at the screen position it had when the page arrived. Every layout callback
+  // for the next 700 ms then dragged the view back to that spot, undoing whatever the reader had scrolled
+  // meanwhile (scrollbar drag, touch fling, keys, a scripted scroll; only a wheel/touch/key EVENT let go),
+  // and a page arriving right after a release moved the view ~1,600 px. Now the only thing corrected is
+  // the entry moving within the document (content ABOVE it changing height): its document position is
+  // unchanged by any scrolling, so nothing the reader does is ever undone, whatever the input.
+  //
+  // WHY the browser's own scroll anchoring is off for the window: it would also move scrollTop for the very
+  // same insertion, and with two correctors the shift is applied twice. Off here, this effect is the only
+  // one; the previous inline value is restored when the window ends.
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
     if (!anchor) return;
     prependAnchorRef.current = null;
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
-    if (!scroller || !content || !anchor.el.isConnected) return;
+    if (!scroller || !content) return;
+    // A newer page replaces the previous page's window.
+    endAnchorWindowRef.current?.();
+    let el: Element | null = anchor.el;
+    let lastDocTop = anchor.docTop;
+    const priorAnchoring = scroller.style.overflowAnchor;
+    scroller.style.overflowAnchor = 'none';
 
     let live = true;
     const restore = () => {
-      if (!live || !anchor.el.isConnected) return;
-      const drift = (anchor.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - anchor.topOffset;
-      // Sub-pixel drift is not worth a write — and writing would restart the
-      // ResizeObserver for nothing.
-      if (Math.abs(drift) > 0.5) scroller.scrollTop += drift;
+      if (!live) return;
+      // The entry's wrapper can be re-created by a re-render; find it again by key.
+      if (!el || !el.isConnected) {
+        el = anchor.key ? content.querySelector(`[data-entry-key="${CSS.escape(anchor.key)}"]`) : null;
+        if (!el) return;
+      }
+      const docTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const shift = docTop - lastDocTop;
+      lastDocTop = docTop;
+      // Sub-pixel shift is not worth a write - and writing would restart the ResizeObserver for nothing.
+      if (Math.abs(shift) > 0.5) scroller.scrollTop += shift;
     };
     restore();
 
-    // Stop the moment the user takes over. Deliberately NOT the 'scroll' event:
-    // restore() scrolls, so that would cancel the correction with its own effect.
-    const release = () => { live = false; cleanup(); };
     const ro = new ResizeObserver(restore);
     ro.observe(content);
-    for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller.addEventListener(ev, release, { passive: true });
-    const stop = setTimeout(() => { live = false; cleanup(); }, ANCHOR_SETTLE_MS);
-    function cleanup() {
+    const stop = setTimeout(end, ANCHOR_SETTLE_MS);
+    function end() {
+      if (!live) return;
+      live = false;
       clearTimeout(stop);
       ro.disconnect();
-      for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller!.removeEventListener(ev, release);
+      scroller!.style.overflowAnchor = priorAnchoring;
+      if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
-    return cleanup;
+    endAnchorWindowRef.current = end;
   }, [state.timeline]);
+  // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
+  // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
+  useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);
 
   useEffect(() => {
     const node = contentRef.current;
