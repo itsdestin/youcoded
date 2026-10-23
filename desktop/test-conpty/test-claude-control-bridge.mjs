@@ -20,7 +20,7 @@ const desktop = path.resolve(path.dirname(self), '..');
 const argv = process.argv.slice(2);
 const option = (name) => argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
 // WHY: validate a newly installed CLI without changing the recorded 2.1.302 baseline.
-const cli = path.resolve(option('--cli') ?? '/home/destin/.local/share/claude/versions/2.1.302');
+const cli = path.resolve(option('--cli') ?? path.join(process.env.HOME||'','.local/share/claude/versions/2.1.302'));
 const expectedVersion = option('--expect-version') ?? '2.1.302';
 const internal = argv.includes('--sandbox-child');
 if (!argv.includes('--no-auth')) throw new Error('Explicit --no-auth required; only the local fake API is supported');

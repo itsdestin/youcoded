@@ -4,7 +4,7 @@ import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} fro
 import {startFakeApi} from './fake-anthropic.mjs';
 const self=fileURLToPath(import.meta.url),desktop=path.resolve(path.dirname(self),'..'),args=process.argv.slice(2),option=k=>args[args.indexOf(k)+1];
 const out=path.resolve(option('--out')); const cli=(()=>{ // WHY: the pinned 2.1.303 binary was pruned; use CLAUDE_CLI or the newest installed version (numeric sort).
- if(process.env.CLAUDE_CLI)return process.env.CLAUDE_CLI;const dir='/home/destin/.local/share/claude/versions';
+ if(process.env.CLAUDE_CLI)return process.env.CLAUDE_CLI;const dir=path.join(process.env.HOME||'','.local/share/claude/versions');
  const v=fs.readdirSync(dir).filter(n=>/^\d+(\.\d+)*$/.test(n)).sort((a,b)=>{const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<Math.max(x.length,y.length);i++){const d=(x[i]??0)-(y[i]??0);if(d)return d;}return 0;});
  if(!v.length)throw Error('No Claude CLI under '+dir);return path.join(dir,v.at(-1));})();
 if(!args.includes('--no-auth'))throw Error('Explicit --no-auth required');
