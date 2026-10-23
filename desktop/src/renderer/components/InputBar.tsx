@@ -21,6 +21,7 @@ import { StatusStrip } from './ui/StatusStrip';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { NativeStartupNotice } from './NativeStartupNotice';
 import { ConnectionStrip, type ConnectionStripProps } from './ConnectionStrip';
+import { useRemeasureOnFontOrWidth } from '../hooks/use-remeasure-on-font-or-width';
 import { useNativeStartup } from '../hooks/use-native-startup';
 import { getNativeStartup } from '../state/native-startup-store';
 import { nativeStartupBlocked } from '../../shared/native-startup';
@@ -944,6 +945,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   useLayoutEffect(() => {
     autoResize();
   }, [text, autoResize]);
+  useRemeasureOnFontOrWidth(inputRef, autoResize);   // a box measured in a stand-in font kept the wrong height
 
   const send = useCallback((force = false) => {
     // Read directly from the DOM element to avoid stale-closure races
