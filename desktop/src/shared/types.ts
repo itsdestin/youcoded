@@ -1434,6 +1434,9 @@ export const SESSION_FLAG_NAMES: SessionFlagName[] = ['complete', 'priority'];
 export const META_UNSUPPORTED_FALLBACK =
   "Tags and notes aren't available for this session.";
 
+/** A session:reopen-list row (Welcome back): was it running with Skip permissions on at close. */
+export interface ReopenEntry { id: string; skipPermissions: boolean }
+
 /** session:get-meta result. `supported: false` means writes will be REFUSED for
  *  this session — render the controls disabled rather than accepting edits. */
 export interface SessionMetaResult {

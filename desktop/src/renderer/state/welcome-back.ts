@@ -6,18 +6,28 @@
 // (S-device: "each computer only offers back its own sessions"). These helpers
 // are the renderer's side of it plus the pure pieces a batch resume needs.
 import type { ModelBinding } from '../../shared/provider-types';
-import type { PortableModelRef } from '../../shared/types';
+import type { PortableModelRef, ReopenEntry } from '../../shared/types';
 
 // main/preload/remote-shim all carry the two channels now (design §3), so
 // window.claude.session is fully typed — no `as any` needed.
 const sessionApi = () => window.claude?.session;
 
-/** Ids that were open at the last shutdown. Empty when there is nothing to
- *  offer, or on a build/platform with no such list (Android, today). */
-export async function fetchReopenList(): Promise<string[]> {
+/** Conversations that were open at the last shutdown, each with whether it ran
+ *  with Skip permissions on. Empty when there is nothing to offer, or on a
+ *  build/platform with no such list (Android, today). */
+export async function fetchReopenList(): Promise<ReopenEntry[]> {
   try {
-    const ids = await sessionApi()?.reopenList?.();
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+    const rows: unknown = await sessionApi()?.reopenList?.();
+    if (!Array.isArray(rows)) return [];
+    // WHY a bare string is still accepted: it is the list's older shape (ids
+    // only), read as Skip permissions off — the safe reading.
+    return rows.flatMap((r): ReopenEntry[] => {
+      if (typeof r === 'string') return [{ id: r, skipPermissions: false }];
+      if (r && typeof r === 'object' && typeof (r as ReopenEntry).id === 'string') {
+        return [{ id: (r as ReopenEntry).id, skipPermissions: (r as ReopenEntry).skipPermissions === true }];
+      }
+      return [];
+    });
   } catch {
     // A failed read only means no Welcome back screen this launch; the
     // sessions are all still in Resume session.

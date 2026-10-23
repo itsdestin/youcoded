@@ -788,7 +788,7 @@ interface UntypedSessionWrites {
   setNote: (sessionId: string, note: string) => Promise<{ ok: boolean }>;
   getMeta: (sessionId: string) => Promise<{ tags: string[]; note: string; supported: boolean; flags: Record<string, boolean> }>;
   // Welcome back (MOCK_ONLY — see mock-only.ts).
-  reopenList: () => Promise<string[]>;
+  reopenList: () => Promise<Array<{ id: string; skipPermissions: boolean }>>;
   forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
 }
 
@@ -1116,7 +1116,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onRefill: () => () => {},
     browse: async () => store.getState().past,
     // Welcome back — MOCK_ONLY until the per-install list lands in main.
-    reopenList: async () => delay(store.getState().reopen),
+    reopenList: async () => delay(store.getState().reopen.map((id) => ({ id, skipPermissions: false }))),
     forgetReopen: async (ids: string[]) => {
       store.setState((s) => ({ ...s, reopen: s.reopen.filter((id) => !ids.includes(id)) }));
       return delay({ ok: true });
