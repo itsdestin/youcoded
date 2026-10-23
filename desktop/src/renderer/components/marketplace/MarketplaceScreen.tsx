@@ -418,7 +418,8 @@ export default function MarketplaceScreen({
   // for a spinner each time would be a visible flash. The error text is
   // mp.error verbatim — the real message, never a guessed cause
   // (docs/error-message-standards.md). Retry re-runs the same fetch.
-  const registryEmpty = mp.skillEntries.length === 0 && mp.themeEntries.length === 0;
+  // Built-in themes are always listed, loaded or not, so they don't count toward "loaded".
+  const registryEmpty = mp.skillEntries.length === 0 && !mp.themeEntries.some(t => !t.isBuiltin);
   const registryState = registryEmpty && mp.loading
     ? <LoadingState what="the marketplace" />
     : registryEmpty && mp.error

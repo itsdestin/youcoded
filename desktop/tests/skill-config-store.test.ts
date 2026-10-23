@@ -105,6 +105,39 @@ describe('SkillConfigStore theme favorites', () => {
     expect(favs.filter(s => s === 'dark')).toHaveLength(1);
   });
 
+  // WHY: a profile seeded before v1.3.1 never showed YouCoded / YouCoded Night in the
+  // favorites-only Appearance panel (Destin, 2026-10-22). They are starred once; an
+  // older built-in the user had unstarred stays unstarred, and so does a new one later.
+  function writeOldProfile(themeFavorites: string[]) {
+    const p = path.join(tmpHome, '.claude', 'youcoded-skills.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ version: 2, favorites: [], chips: [], overrides: {}, privateSkills: [], packages: {}, themeFavorites }));
+  }
+
+  it('stars the new built-ins once on a pre-1.3.1 profile, without restoring unstarred old ones', async () => {
+    writeOldProfile(['light', 'creme', 'meadow-mist']);
+    const { SkillConfigStore } = await import('../src/main/skill-config-store');
+    const favs = new SkillConfigStore().getThemeFavorites();
+    expect([...favs].sort()).toEqual(['creme', 'light', 'meadow-mist', 'youcoded', 'youcoded-night']);
+  });
+
+  it('does not re-star a new built-in the user unstarred afterwards', async () => {
+    writeOldProfile(['light']);
+    const { SkillConfigStore } = await import('../src/main/skill-config-store');
+    new SkillConfigStore().getThemeFavorites();
+    new SkillConfigStore().setThemeFavorite('youcoded-night', false);
+    expect(new SkillConfigStore().getThemeFavorites()).not.toContain('youcoded-night');
+  });
+
+  it('unstarring a new built-in as the very first action sticks', async () => {
+    writeOldProfile(['light']);
+    const { SkillConfigStore } = await import('../src/main/skill-config-store');
+    new SkillConfigStore().setThemeFavorite('youcoded', false);
+    const favs = new SkillConfigStore().getThemeFavorites();
+    expect(favs).not.toContain('youcoded');
+    expect(favs).toContain('youcoded-night');
+  });
+
   it('setThemeFavorite cold-start seeds defaults before applying the mutation', async () => {
     const { SkillConfigStore } = await import('../src/main/skill-config-store');
     const store = new SkillConfigStore();

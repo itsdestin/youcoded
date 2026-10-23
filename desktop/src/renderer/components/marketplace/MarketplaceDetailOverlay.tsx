@@ -545,8 +545,13 @@ function ThemeDetail({
     onUninstall();
   };
 
+  // A built-in ships inside the app: nothing to uninstall, update, like or share (it has
+  // no catalog row) — only Apply, and a line saying why the rest is missing.
+  const builtin = !!entry.isBuiltin;
   let actions: React.ReactNode = null;
-  if (isInstalling) {
+  if (builtin) {
+    if (!isActive) actions = <DetailActions><Button size="lg" onClick={onApply}>Apply theme</Button></DetailActions>;
+  } else if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (!installed) {
     if (!installError) actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
@@ -587,9 +592,9 @@ function ThemeDetail({
         <>
           {/* Theme "like" = the public count on the Worker; a heart-only button, its count
               is the "N likes" fact (marketplace-detail-3#M3-1). */}
-          <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />
+          {!builtin && <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />}
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
-          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} />
+          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={builtin ? undefined : onShare} shareNeedsInstall={false} />
         </>
       }
       quickActionsOnTitle
@@ -598,6 +603,7 @@ function ThemeDetail({
       actions={actions}
     >
       {!installed && !isInstalling && installError && <InstallFailed name={entry.name} message={installError} onRetry={onInstall} />}
+      {builtin && <p className="text-xs text-fg-muted">Built into YouCoded, so it's always here.</p>}
     </DetailIdentity>
   );
 

@@ -13,6 +13,27 @@ let tmpSeq = 0;
 // createDefaultConfig. Must stay in sync with BUILTIN_THEMES in theme-context.tsx.
 const DEFAULT_THEME_FAVORITES = ['youcoded', 'youcoded-night', 'light', 'dark', 'midnight', 'creme'];
 
+// The built-ins the seed held before the YouCoded pair shipped (v1.3.1). A profile
+// with favorites but no `themeFavoritesOffered` record was seeded with exactly these.
+const ORIGINAL_BUILTIN_THEMES = ['light', 'dark', 'midnight', 'creme'];
+
+/** Star each built-in theme this profile has never been offered, once. Returns true
+ *  when the config changed, so the caller persists exactly once.
+ *  WHY (Destin, 2026-10-22: "our new youcoded/youcoded night themes dont seem to be
+ *  selectable"): the Appearance panel shows favorites only, and the seed runs once —
+ *  so a profile seeded before a built-in existed never showed it. The offered record
+ *  is what makes it once: a user who later unstars a built-in keeps it unstarred. */
+function offerNewBuiltinThemes(config: UserSkillConfig): boolean {
+  const offered = new Set(config.themeFavoritesOffered ?? ORIGINAL_BUILTIN_THEMES);
+  const fresh = DEFAULT_THEME_FAVORITES.filter(s => !offered.has(s));
+  if (fresh.length === 0 && config.themeFavoritesOffered) return false;
+  const favs = new Set(config.themeFavorites ?? []);
+  for (const s of fresh) favs.add(s);
+  config.themeFavorites = [...favs];
+  config.themeFavoritesOffered = [...new Set([...offered, ...DEFAULT_THEME_FAVORITES])];
+  return true;
+}
+
 const DEFAULT_CHIPS: ChipConfig[] = [
   { skillId: 'journaling-assistant', label: 'Journal', prompt: "let's journal" },
   { skillId: 'claudes-inbox', label: 'Inbox', prompt: 'check my inbox' },
@@ -182,13 +203,20 @@ export class SkillConfigStore {
     // unstarred everything) and must be preserved.
     if (config.themeFavorites === undefined) {
       config.themeFavorites = [...DEFAULT_THEME_FAVORITES];
+      config.themeFavoritesOffered = [...DEFAULT_THEME_FAVORITES];
+      this.save();
+    } else if (offerNewBuiltinThemes(config)) {
       this.save();
     }
-    return config.themeFavorites;
+    return config.themeFavorites!;
   }
 
   setThemeFavorite(slug: string, favorited: boolean): void {
     const config = this.load();
+    // Offer any new built-in BEFORE applying the change, so unstarring a new
+    // built-in on its very first touch is not undone by a later offer.
+    if (config.themeFavorites !== undefined) offerNewBuiltinThemes(config);
+    else config.themeFavoritesOffered = [...DEFAULT_THEME_FAVORITES];
     const current = config.themeFavorites ?? [...DEFAULT_THEME_FAVORITES];
     const set = new Set(current);
     if (favorited) set.add(slug); else set.delete(slug);
