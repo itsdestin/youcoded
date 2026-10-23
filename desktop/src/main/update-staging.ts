@@ -224,3 +224,25 @@ export async function sweepStaging(ctx: StagedPathContext, keep: ReadonlySet<str
     }
   }
 }
+
+/**
+ * Startup, BEFORE any helper can be started: delete go files left by a helper that died (code review F10).
+ * WHY separate from sweepStaging: that sweep waits for the first successful release check, and a quit before
+ * then could start a NEW helper that finds an old "go" and swaps in on a quit nobody made an install quit.
+ * Only go files are removed here; staged apps stay for the pending update to use.
+ */
+export async function removeStaleGoFiles(ctx: StagedPathContext): Promise<void> {
+  const dirs: string[] = [];
+  if (ctx.platform === 'darwin') {
+    if (ctx.runningBundle) dirs.push(path.dirname(ctx.runningBundle));
+    dirs.push(ctx.tmpDir ?? os.tmpdir());
+  }
+  for (const dir of dirs) {
+    let entries: string[];
+    try { entries = await fs.promises.readdir(dir); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.startsWith('.YouCoded-update-') && entry.endsWith('.app.go')) await fs.promises.rm(path.join(dir, entry), { force: true }).catch(() => {});
+      else if (/^youcoded-update-[0-9A-Za-z.+-]+$/.test(entry)) await fs.promises.rm(path.join(dir, entry, 'go'), { force: true }).catch(() => {});
+    }
+  }
+}

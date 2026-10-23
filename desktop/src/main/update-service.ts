@@ -15,7 +15,7 @@ import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateI
 import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState, UpdateDownloadResult, UpdateCachedDownloadResult, UpdateLaunchResult } from '../shared/update-install-types';
 import { verifyDownloadedUpdate, compareVersions, hashFileSha256 } from './update-manifest-verify';
 import { computeInstallFacts, macBundleOf, type InstallFacts } from './update-install-facts';
-import { isValidStagedName, stagedPathFor, stageAppImage, stageMacApp, removeStagedByName, sweepStaging, runCommand, runWithTimeout, parseDesignatedRequirement, type StagedPathContext } from './update-staging';
+import { isValidStagedName, stagedPathFor, stageAppImage, stageMacApp, removeStagedByName, removeStaleGoFiles, sweepStaging, runCommand, runWithTimeout, parseDesignatedRequirement, type StagedPathContext } from './update-staging';
 import { runExitPlan, readAttempt, macGoPaths, macHelperArgv, macRootStartArgs, type ExitPlan } from './update-exit';
 import { internalAppQuit } from './internal-quit';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
@@ -322,7 +322,7 @@ function createUpdateService() {
   /** Read the file once, off the main thread, and apply it unless a save landed meanwhile. */
   async function readAutoInstallInto(): Promise<void> {
     const startedAt = autoInstallWrites;
-    const saved = await updateSettings.readAsync(); // readAsync maps failures to defaults
+    const saved = await updateSettings.readAsync(); // rejects on a failed read: the callers keep the last known value (review F3)
     if (startedAt === autoInstallWrites) autoInstallCache = saved.autoInstall;
   }
   /** Read the saved value once. T2 calls this at startup; get calls it lazily. */
@@ -612,6 +612,10 @@ function createUpdateService() {
           },
         });
       } catch (e) { console.warn('[update] could not work out install facts:', e); }
+      // Before anything can start a helper: a go file left by a dead one must not be read as this quit's go (review F10).
+      await removeStaleGoFiles(stagingContext()).catch(() => {});
+      // The switch's saved value, read once at startup as its comment always promised (review F12).
+      if (autoInstallSupported) void loadAutoInstall();
       await loadPending().catch(() => {});
       await processAttempt().catch(() => {});
       notifyStatusChanged(); // `needs_password` / `install_refused` just became known
@@ -1030,6 +1034,24 @@ function createUpdateService() {
     | { kind: 'linux-package' }                      // pkexec, then relaunch
     | { kind: 'exit-install'; macPassword: boolean }; // quit, install at exit, reopen
 
+  /** The staged copy exists and the installer it came from still matches its signed hash; re-stages when it is gone. */
+  async function ensureStaged(p: Pending): Promise<boolean> {
+    const signed = brakeCache && brakeCache.key === brakeKey(p) ? brakeCache.signed : null;
+    if (!signed) return false;
+    const file = pendingFilePath(p);
+    const res = await verifyAgainstRelease(file, p, { signed, fileName: p.assetName });
+    if (res.code !== null) {
+      if (!res.transient && pending === p) { await setPending(null); await removePendingFiles(p); }
+      return false;
+    }
+    const staged = stagedPathOf(p);
+    if (staged && await fileExists(staged)) return true;
+    const name = await stageVerified(file, p.version, res.sha256);
+    if (!name || pending !== p) return false;
+    await setPending({ ...p, stagedName: name });
+    return true;
+  }
+
   async function planRestart(): Promise<RestartKind> {
     await initDone;
     const p = pending;
@@ -1051,7 +1073,11 @@ function createUpdateService() {
     const exitKind = exitInstallKind(p);
     if (!exitKind) return { kind: 'interactive' };
     // The disk image / installer must still match its signed hash before a password is asked for.
-    if (!(await rehash(p, pendingFilePath(p)))) return { kind: 'none' };
+    if (exitKind === 'win') { if (!(await rehash(p, pendingFilePath(p)))) return { kind: 'none' }; }
+    // WHY the staged copy is checked too (code review F1): on a password Mac it lives in $TMPDIR, which the
+    // system clears. Asking for a password and quitting, only to find nothing to install, is the worst
+    // outcome; so re-stage it now, or fall back to today's interactive path (the disk image) with no password asked.
+    else if (!(await ensureStaged(p))) return { kind: 'interactive' };
     return { kind: 'exit-install', macPassword: exitKind === 'mac-root' };
   }
 

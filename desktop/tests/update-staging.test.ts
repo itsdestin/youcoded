@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import { MAC_HELPER_SCRIPT, macGoPaths, macHelperArgv, macRootStartArgs, nsisArgs, readAttempt, runExitPlan } from '../src/main/update-exit';
-import { commandTimeoutMs, parseDesignatedRequirement, runWithTimeout, stageAppImage, stageMacApp, stagedPathFor, sweepStaging, type RunCommand } from '../src/main/update-staging';
+import { removeStaleGoFiles, commandTimeoutMs, parseDesignatedRequirement, runWithTimeout, stageAppImage, stageMacApp, stagedPathFor, sweepStaging, type RunCommand } from '../src/main/update-staging';
 
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'update-staging-')); });
@@ -250,21 +250,24 @@ describe('the Mac helper arguments', () => {
 // The helper script itself, run for real with /bin/sh against temp folders (a Linux runner has no
 // codesign/open/launchctl, so the YC_* seams stand in for them).
 describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () => {
-  let bin: string; let log: string;
+  let bin: string; let log: string; let rootTmp: string;
   const me = process.getuid?.() ?? 0; // the root helper insists the private folder belongs to the user who started it
   const dead = () => { const r = spawnSync('true'); return String(spawnSync('sh', ['-c', 'true & echo $!']).stdout).trim() || String(r.pid); };
   beforeEach(() => {
-    bin = path.join(root, 'bin'); fs.mkdirSync(bin); log = path.join(root, 'log.txt'); fs.writeFileSync(log, '');
+    bin = path.join(root, 'bin'); fs.mkdirSync(bin); rootTmp = path.join(root, 'roottmp'); fs.mkdirSync(rootTmp); log = path.join(root, 'log.txt'); fs.writeFileSync(log, '');
     const stub = (name: string, body: string) => { const f = path.join(bin, name); fs.writeFileSync(f, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return f; };
     stub('open', `echo "open $*" >> "${log}"`);
     stub('launchctl', `echo "launchctl $*" >> "${log}"; shift; shift; "$@"`);
     stub('chown', `echo "chown $*" >> "${log}"`);
     stub('codesign-ok', `echo "codesign $*" >> "${log}"`);
+    stub('copy', `cp -R "$1" "$2"`);
+    // The attack: a same-user process swaps the staged folder's contents the moment the signature check has run.
+    stub('codesign-swap', `echo "codesign $*" >> "${log}"; if [ -n "$YC_SWAP" ]; then rm -rf "$YC_SWAP"; mkdir "$YC_SWAP"; echo evil > "$YC_SWAP/v"; echo swapped >> "${log}"; fi`);
     stub('codesign-bad', `echo "codesign $*" >> "${log}"; exit 1`);
     // mv that fails when the destination is the installed bundle (the second move of a swap)
     stub('mv-fail-second', `case "$2" in *.bak) /bin/mv "$@";; *) exit 1;; esac`);
   });
-  const env = (extra: Record<string, string> = {}) => ({ ...process.env, YC_SLEEP: '0.05', YC_OPEN: path.join(bin, 'open'), YC_LAUNCHCTL: path.join(bin, 'launchctl'), YC_CHOWN: path.join(bin, 'chown'), YC_CODESIGN: path.join(bin, 'codesign-ok'), ...extra });
+  const env = (extra: Record<string, string> = {}) => ({ ...process.env, YC_SLEEP: '0.05', YC_OPEN: path.join(bin, 'open'), YC_LAUNCHCTL: path.join(bin, 'launchctl'), YC_CHOWN: path.join(bin, 'chown'), YC_CODESIGN: path.join(bin, 'codesign-ok'), YC_COPY: path.join(bin, 'copy'), YC_ROOT_TMP: rootTmp, ...extra });
   function layout(base: string) {
     const parent = path.join(root, base); fs.mkdirSync(parent, { recursive: true });
     const old = path.join(parent, 'YouCoded.app'); fs.mkdirSync(old); fs.writeFileSync(path.join(old, 'v'), 'old');
@@ -314,15 +317,15 @@ describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () =
     expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('new');
   });
 
-  it('waits for the app to exit, and gives up after its limit without swapping or deleting', () => {
+  it('waits for the app to exit, and gives up after its limit without swapping, removing its staging', () => {
     const l = layout('e'); fs.writeFileSync(l.go, 'install\n');
     const alive = spawn('sleep', ['30']);
     try {
       const r = run(l, env({ YC_MAX_WAIT: '4' }), 'user', String(alive.pid));
       expect(r.status).toBe(0);
       expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
-      expect(fs.existsSync(l.staged)).toBe(true);
-      expect(fs.existsSync(l.go)).toBe(true);
+      expect(fs.existsSync(l.staged)).toBe(false); // review F10: 180 MB of staging is not left behind
+      expect(fs.existsSync(l.go)).toBe(false);
     } finally { alive.kill(); }
   });
 
@@ -334,9 +337,11 @@ describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () =
     const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: old, staged, mode: 'root', requirement: 'identifier "x"', uid: me }), { env: env(), encoding: 'utf8' });
     expect(r.status).toBe(0);
     const calls = fs.readFileSync(log, 'utf8');
-    expect(calls).toContain('chown -h root:wheel'); // the folder, and links are never followed
-    expect(calls).toContain('chown -R -h root:wheel');
-    expect(calls).toContain(`codesign --verify --deep --strict -R=identifier "x" ${staged}`);
+    expect(calls).toContain('chown -R -h root:wheel'); // the root-owned copy; links are never followed
+    // The signature is checked on the root-owned COPY, not on the user's folder (review F2).
+    expect(calls).toContain(`codesign --verify --deep --strict -R=identifier "x" ${rootTmp}/`);
+    expect(calls).not.toContain(`-R=identifier "x" ${staged}`);
+    expect(fs.readdirSync(rootTmp)).toEqual([]); // and its working folder is gone afterwards
     expect(calls).toMatch(/chown -R -h \d+:\d+ /); // the original owner restored after the swap
     expect(calls).toContain(`launchctl asuser ${me} ${path.join(bin, 'open')} ${old}`);
     expect(fs.readFileSync(path.join(old, 'v'), 'utf8')).toBe('new');
@@ -387,11 +392,44 @@ describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () =
     expect(fs.readFileSync(log, 'utf8')).not.toContain('chown');
   });
 
+  it('root mode: an app swapped into the user-side folder AFTER the signature check is never installed (review F2)', () => {
+    const l = rootLayout('r6');
+    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: l.old, staged: l.staged, mode: 'root', requirement: 'req', uid: me }),
+      { env: env({ YC_CODESIGN: path.join(bin, 'codesign-swap'), YC_SWAP: l.staged }), encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(log, 'utf8')).toContain('swapped'); // the swap really happened, after the check
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('new');               // the CHECKED copy went in, not "evil"
+  });
+
+  it('root mode: an app swapped in while it was being copied fails the check on the copy and is not installed', () => {
+    const l = rootLayout('r7');
+    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: l.old, staged: l.staged, mode: 'root', requirement: 'req', uid: me }),
+      { env: env({ YC_CODESIGN: path.join(bin, 'codesign-bad') }), encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
+    expect(fs.readdirSync(rootTmp)).toEqual([]);
+  });
+
   it('puts back a lone backup when the bundle path is missing (a helper killed mid-swap), before anything else', () => {
     const l = layout('f');
     fs.renameSync(l.old, l.old + '.bak'); // the state a killed swap leaves
     run(l); // no go file: it also removes the staging
     expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
     expect(fs.existsSync(l.old + '.bak')).toBe(false);
+  });
+});
+
+describe('stale go files at startup (code review F10)', () => {
+  it('removes go files a dead helper left, beside the bundle and in a private folder, but keeps the staged apps', async () => {
+    const apps = path.join(root, 'apps'); fs.mkdirSync(path.join(apps, 'YouCoded.app', 'Contents', 'MacOS'), { recursive: true });
+    const tmp = path.join(root, 'tmp'); fs.mkdirSync(path.join(tmp, 'youcoded-update-2.0.0', 'YouCoded.app'), { recursive: true });
+    fs.mkdirSync(path.join(apps, '.YouCoded-update-2.0.0.app'));
+    fs.writeFileSync(path.join(apps, '.YouCoded-update-2.0.0.app.go'), 'install\n');
+    fs.writeFileSync(path.join(tmp, 'youcoded-update-2.0.0', 'go'), 'relaunch\n');
+    await removeStaleGoFiles({ platform: 'darwin', runningBundle: path.join(apps, 'YouCoded.app'), tmpDir: tmp });
+    expect(fs.existsSync(path.join(apps, '.YouCoded-update-2.0.0.app.go'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'youcoded-update-2.0.0', 'go'))).toBe(false);
+    expect(fs.existsSync(path.join(apps, '.YouCoded-update-2.0.0.app'))).toBe(true);
+    expect(fs.existsSync(path.join(tmp, 'youcoded-update-2.0.0', 'YouCoded.app'))).toBe(true);
   });
 });

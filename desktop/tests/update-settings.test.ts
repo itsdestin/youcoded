@@ -91,7 +91,8 @@ describe('UpdateSettings — persistence', () => {
       fs.writeFileSync(file, JSON.stringify({ updates: { autoInstall: 'nope' } }));
       expect(settings.read().autoInstall).toBe(true);
       fs.writeFileSync(file, '{ not json');
-      expect((await settings.readAsync()).autoInstall).toBe(true);
+      // (a file that cannot be parsed is not a choice either: readAsync rejects and the service keeps its value, review F3)
+      await expect(settings.readAsync()).rejects.toBeTruthy();
     });
   });
 
@@ -115,5 +116,30 @@ describe('UpdateSettings — persistence', () => {
       expect(fs.existsSync(path.join(dir, '.youcoded', 'config.json'))).toBe(false);
       expect(settings.read().autoInstall).toBe(true);
     });
+  });
+});
+
+// Code review F3: only a MISSING file means "on"; a read that fails must not undo a saved "off".
+describe('UpdateSettings.readAsync — a failed read is not a choice', () => {
+  const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-update-settings-async-'));
+  it('a missing file reads as the defaults (on)', async () => {
+    const dir = home();
+    try { expect((await new UpdateSettings(new NativeHome(dir)).readAsync()).autoInstall).toBe(true); }
+    finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+  it('an unreadable file rejects instead of reading as on', async () => {
+    const dir = home();
+    try {
+      fs.mkdirSync(path.join(dir, '.youcoded', 'config.json'), { recursive: true }); // a directory where the file should be: EISDIR, not ENOENT
+      await expect(new UpdateSettings(new NativeHome(dir)).readAsync()).rejects.toBeTruthy();
+    } finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+  it('a half-written file rejects instead of reading as on', async () => {
+    const dir = home();
+    try {
+      fs.mkdirSync(path.join(dir, '.youcoded'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.youcoded', 'config.json'), '{"updates": {"autoInstall": fa');
+      await expect(new UpdateSettings(new NativeHome(dir)).readAsync()).rejects.toBeTruthy();
+    } finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
   });
 });

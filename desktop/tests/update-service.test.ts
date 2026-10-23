@@ -8,7 +8,7 @@ import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 
 const mocks = vi.hoisted(() => ({
   launch: vi.fn(), verify: vi.fn(), quit: vi.fn(), relaunch: vi.fn(), send: vi.fn(),
-  deps: null as LaunchInstallerDeps | null, savedAutoInstall: true, packaged: true, readGate: null as Promise<void> | null, readValue: true,
+  deps: null as LaunchInstallerDeps | null, savedAutoInstall: true, packaged: true, readGate: null as Promise<void> | null, readValue: true, readFails: false,
   // Download tests (#183): a private userData folder, a scriptable download engine and release answer.
   userData: '/unused', installer: {} as Record<string, unknown>, httpStatus: 200, setBeta: vi.fn(),
   release: null as null | Record<string, unknown>,
@@ -33,6 +33,7 @@ vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class {
   async readAsync() {
     const gate = mocks.readGate;
     const value = mocks.savedAutoInstall;
+    if (mocks.readFails) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
     if (gate) await gate; // a test can hold the read open
     return { betaChannel: null, autoInstall: gate ? mocks.readValue : value };
   }
@@ -169,6 +170,14 @@ describe('update service auto-install', () => {
     release();                                      // the read resolves with the older "true"
     expect(await asked).toEqual({ supported: true, enabled: false });
     expect(s.autoInstallEnabled()).toBe(false);
+  });
+
+  it('keeps a saved off when a later re-read fails (a locked or half-written config file)', async () => {
+    const s = await load();
+    await s.setAutoInstall(false);
+    mocks.readFails = true;
+    try { await s.refreshAutoInstall(); expect(s.autoInstallEnabled()).toBe(false); }
+    finally { mocks.readFails = false; }
   });
 
   it('applies two quick saves in the order they were made', async () => {
@@ -788,6 +797,29 @@ describe('update service installing', () => {
       setup('win32'); const s = await load(); await ready(s);
       mocks.httpStatus = 500;
       await expect(s.planRestart()).rejects.toMatchObject({ code: 'network-failed' });
+    });
+  });
+
+  describe('Restart when the staged copy has gone missing (code review F1)', () => {
+    it('re-stages it before any password is asked for', async () => {
+      setup('darwin'); const s = await load(); await ready(s);
+      fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
+      mocks.stageMacApp.mockClear();
+      expect(await s.planRestart()).toEqual({ kind: 'exit-install', macPassword: false });
+      expect(mocks.stageMacApp).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'))).toBe(true);
+    });
+    it('falls back to the disk image (the interactive path) when it cannot be re-staged, instead of asking for a password', async () => {
+      setup('darwin'); const s = await load(); await ready(s);
+      fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
+      mocks.stageMacApp.mockRejectedValue(new Error('disk full'));
+      expect(await s.planRestart()).toEqual({ kind: 'interactive' });
+    });
+    it('a stale go file left by a dead helper is removed at startup, before any helper can read it', async () => {
+      setup('darwin');
+      fs.writeFileSync(path.join(appsDir, '.YouCoded-update-2.0.0.app.go'), 'install\n');
+      await load(); // no release check yet: the later sweep (which also removes it) has not run
+      await vi.waitFor(() => expect(fs.existsSync(path.join(appsDir, '.YouCoded-update-2.0.0.app.go'))).toBe(false));
     });
   });
 

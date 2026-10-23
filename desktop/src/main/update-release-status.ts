@@ -107,6 +107,19 @@ export function isPreRelease(version: string): boolean {
   return version.replace(/^v/, '').split('+')[0].includes('-');
 }
 
+/** The signed-release files. A release must carry BOTH to be offered (contract R13). The ONLY place their names
+ *  are written: youcoded-admin's release-skill test reads this file to check the brake procedure names them. */
+function signedFiles<T extends { name: string }>(assets: ReadonlyArray<T>): { manifest: T | undefined; signature: T | undefined } {
+  return {
+    manifest: assets.find((a) => a.name === 'youcoded-release.json'),
+    signature: assets.find((a) => a.name === 'youcoded-release.json.sig'),
+  };
+}
+function hasSignedFiles(assets: ReadonlyArray<{ name: string }>): boolean {
+  const { manifest, signature } = signedFiles(assets);
+  return !!manifest && !!signature;
+}
+
 /**
  * Pick the release this computer should be offered out of a `/releases` listing.
  *
@@ -139,6 +152,9 @@ export function selectRelease(
     // computer is not an offer yet. One tag starts the Android and desktop
     // workflows separately, so a fresh tag is briefly assets-less.
     if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch, opts.linuxKind, opts.translated)) continue;
+    // WHY (code review F4, the brake): a release whose signed file was deleted is a PULLED release. On the
+    // beta channel it must not win as "highest version" and hide the good one below it.
+    if (!hasSignedFiles(readAssets(release))) continue;
     const version = tagName.replace(/^v/, '');
     if (!best || compareVersions(version, bestVersion) > 0) {
       best = release;
@@ -178,13 +194,16 @@ export function readReleaseStatus(
     // desktop builds finish, and /releases/latest already points at the release
     // in the meantime — so the pill used to say "update available" while the
     // Update button could only fail, and that answer is cached for 30 minutes.
-    update_available: compareVersions(latestVersion, currentVersion) > 0 && !!installer,
+    // And WHY "and its signed files are attached" (code review F4): deleting them is how a release is pulled
+    // (the brake). Without this the chip kept saying "Update available" and Update now downloaded 150 MB only
+    // to fail verification. A release still being uploaded waits the same way until its signing step lands.
+    update_available: compareVersions(latestVersion, currentVersion) > 0 && !!installer && hasSignedFiles(assets),
     // No installer yet → the release page, which is what "Open in browser" shows.
     download_url: installer?.browser_download_url ?? htmlUrl,
     // Signed-manifest assets (2026-09-10 security review #7). An unsigned release
     // has neither, and the app then refuses to launch what it cannot verify.
-    manifest_url: assets.find((a) => a.name === 'youcoded-release.json')?.browser_download_url ?? null,
-    signature_url: assets.find((a) => a.name === 'youcoded-release.json.sig')?.browser_download_url ?? null,
+    manifest_url: signedFiles(assets).manifest?.browser_download_url ?? null,
+    signature_url: signedFiles(assets).signature?.browser_download_url ?? null,
     tag: tagName,
   };
 }

@@ -60,14 +60,19 @@ export class UpdateSettings {
   }
 
   /** read() off the main thread, for the service's startup cache (#183: no sync file read on a
-   *  check or quit path). A missing, unreadable or corrupt file reads as the defaults. */
+   *  check or quit path). ONLY a missing file reads as the defaults ("on", like a fresh install). WHY a
+   *  failed read REJECTS (code review F3): a locked file (the dev instance holds the config lock), or a
+   *  half-written one, is not a choice, and turning it into "on" would silently re-enable automatic
+   *  installs for someone who switched them off. The caller keeps its last known value. */
   async readAsync(): Promise<UpdatePreferences> {
+    let raw: string;
     try {
-      const raw = await fs.promises.readFile(path.join(this.home.root, CONFIG_FILE), 'utf8');
-      return parsePreferences(JSON.parse(raw));
-    } catch {
-      return { ...DEFAULT_UPDATE_PREFERENCES };
+      raw = await fs.promises.readFile(path.join(this.home.root, CONFIG_FILE), 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { ...DEFAULT_UPDATE_PREFERENCES };
+      throw e;
     }
+    return parsePreferences(JSON.parse(raw));
   }
 
   /** The channel this install should check, accounting for the running build. */

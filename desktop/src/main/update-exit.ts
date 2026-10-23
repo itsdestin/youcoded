@@ -108,9 +108,13 @@ export async function readAttempt(attemptPath: string): Promise<AttemptRecord | 
  * microseconds. The password case stages in $TMPDIR, which may be another volume, so `mv staged → old` can be
  * a copy and the gap longer: that case relies on this recovery and on the rollback below.
  *
- * Root mode trusts nothing a user could have swapped: it refuses symlinks at the folder and the staged app,
- * insists the private folder is owned by the user who started it ($8), and uses `chown -h` so a link is
- * never followed to a file outside the staging folder.
+ * Root mode (code review F2) never trusts anything a user can rename. The staged app sits in a folder the
+ * USER owns, and a same-user process can swap a different folder into that path at any moment: checking an app
+ * by path and then moving it by path would install whatever won the race, as root. So root first COPIES the
+ * staged app into a folder it creates itself (mktemp -d under a root-owned location, mode 700), takes ownership
+ * of the copy, runs the `codesign -R` check on THAT copy, and moves only that copy into place. Nothing
+ * user-writable is read after the copy. It also refuses a symlinked folder/app and a folder that does not
+ * belong to the starting user ($8) before copying, and uses `chown -h` so a link is never followed.
  * The YC_* variables are test seams only (a Linux runner has no codesign/open); osascript's root shell
  * starts with a clean environment, so they cannot reach the real run.
  */
@@ -121,21 +125,26 @@ if [ ! -e "$old" ] && [ -d "$old.bak" ]; then mv "$old.bak" "$old"; fi
 n=0
 while kill -0 "$pid" 2>/dev/null; do
   n=$((n + 1))
-  [ "$n" -gt "$limit" ] && exit 0
+  # 24 h and the app is still running: give up, and do not leave 180 MB of staging behind (review F10)
+  if [ "$n" -gt "$limit" ]; then rm -rf "$cleanup"; rm -f "$go"; exit 0; fi
   sleep "$tick"
 done
 if [ ! -f "$go" ]; then rm -rf "$cleanup"; exit 0; fi
 action=$(head -n 1 "$go")
 rm -f "$go"
 bak="$old.bak"
-fail() { rm -rf "$cleanup"; exit 1; }
+work=""
+fail() { rm -rf "$cleanup"; if [ -n "$work" ]; then rm -rf "$work"; fi; exit 1; }
 [ -d "$staged" ] && [ -d "$old" ] || fail
 if [ "$mode" = root ]; then
   if [ -L "$cleanup" ] || [ -L "$staged" ]; then exit 1; fi
   [ "$(ls -dn "$cleanup" | awk '{print $3}')" = "$uid" ] || exit 1
   owner=$(ls -dn "$old" | awk '{print $3":"$4}')
-  \${YC_CHOWN:-chown} -h root:wheel "$cleanup" || fail
-  chmod 700 "$cleanup" || fail
+  work=$(mktemp -d "\${YC_ROOT_TMP:-/var/root}/.youcoded-update.XXXXXX") || fail
+  chmod 700 "$work" || fail
+  \${YC_COPY:-ditto} "$staged" "$work/YouCoded.app" || fail
+  staged="$work/YouCoded.app"
+  if [ -L "$staged" ] || [ ! -d "$staged" ]; then fail; fi
   \${YC_CHOWN:-chown} -R -h root:wheel "$staged" || fail
   \${YC_CODESIGN:-codesign} --verify --deep --strict -R="$req" "$staged" || fail
 fi
@@ -150,6 +159,7 @@ else
   fail
 fi
 rm -rf "$cleanup"
+if [ -n "$work" ]; then rm -rf "$work"; fi
 if [ "$action" = relaunch ]; then
   if [ "$mode" = root ]; then \${YC_LAUNCHCTL:-launchctl} asuser "$uid" \${YC_OPEN:-open} "$old"; else \${YC_OPEN:-open} "$old"; fi
 fi
