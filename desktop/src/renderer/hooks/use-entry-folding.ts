@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 /**
  * Perf cycle 3 — stop DRAWING conversation entries that are far off screen,
@@ -46,13 +47,14 @@ export const FOLD_ROOT_MARGIN = `${FOLD_MARGIN_PX}px 0px`;
  * Folding waits for scrolling to STOP; unfolding does not.
  *
  * Asymmetric on purpose. Unfolding late shows the user a blank gap, so it runs
- * on a short debounce — and FOLD_ROOT_MARGIN means it fires ~1.5 screens before
+ * at once (it used to wait 100 ms; a fast flick outran that) — and FOLD_ROOT_MARGIN means it fires ~1.5 screens before
  * the entry could be seen. Folding late costs nothing but memory, so it waits
  * for an idle moment: folding mid-scroll re-renders the list under a moving
  * viewport, and scroll judder is the one regression in this area the user has
  * already reported by feel (2026-08-28, cycle 2).
  */
-export const UNFOLD_DEBOUNCE_MS = 100;
+// Unfold is no longer debounced (see the observer callback and the scroll listener): kept at 0 for the tests.
+export const UNFOLD_DEBOUNCE_MS = 0;
 export const FOLD_IDLE_MS = 800;
 
 /**
@@ -252,6 +254,7 @@ export function useEntryFolding(
     // (`{ root, rootMargin: '400px 0px' }`), which is what identified it.
     const root = rootRef.current ?? null;
     const io = new IntersectionObserver((entries) => {
+      let enteredBand = false;
       for (const entry of entries) {
         const key = (entry.target as HTMLElement).dataset.entryKey;
         if (!key) continue;
@@ -265,7 +268,7 @@ export function useEntryFolding(
             if (h > 0) heights.current.set(key, h);
           }
           outOfView.current.delete(key);
-          if (unfoldTimer.current == null) unfoldTimer.current = setTimeout(flushUnfold, UNFOLD_DEBOUNCE_MS);
+          enteredBand = true;
         } else {
           outOfView.current.add(key);
           // Restarted on every out-of-view report, so this only fires once the
@@ -273,6 +276,14 @@ export function useEntryFolding(
           if (foldTimer.current != null) clearTimeout(foldTimer.current);
           foldTimer.current = setTimeout(flushFold, activeRef.current ? FOLD_IDLE_MS : INACTIVE_FOLD_MS);
         }
+      }
+      // WHY immediately, not after UNFOLD_DEBOUNCE_MS: a fast flick on a loaded renderer covers the whole
+      // 1,500 px lead inside a 100 ms wait (Chrome 10x CPU throttle: the first-draw-stability journey
+      // showed a blank spacer in view). One observer callback already batches every entry that crossed
+      // the line together, so there is nothing left to coalesce; the timer only added latency.
+      if (enteredBand) {
+        if (unfoldTimer.current != null) { clearTimeout(unfoldTimer.current); unfoldTimer.current = null; }
+        flushUnfold();
       }
     }, { root, rootMargin: FOLD_ROOT_MARGIN });
     observer.current = io;
@@ -357,6 +368,23 @@ export function useEntryFolding(
     }
     if (changed) publish();
   }, [publish, rootRef, captureAnchor]);
+
+  // WHY a scroll listener on top of the observer: the observer reports a frame AFTER the scroll that
+  // moved an entry into the band, and its callback queues behind whatever the page is busy with. On a
+  // loaded renderer a fast flick outran that and the reader saw a blank spacer (first-draw-stability
+  // journey under Chrome CPU throttling). A scroll event fires before the frame it belongs to, and
+  // unfoldNearViewport reads positions directly, and flushSync commits it before this frame paints
+  // (a plain setState can be scheduled after the paint, which is a blank frame).
+  // Costs one binary search per scroll event, and only while something is folded.
+  const unfoldRef = useRef<() => void>(NOOP);
+  unfoldRef.current = unfoldNearViewport;
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onScroll = () => { if (enabledRef.current && activeRef.current && folded.current.size > 0) flushSync(() => unfoldRef.current()); };
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => root.removeEventListener('scroll', onScroll);
+  }, [rootRef]);
 
   // Suspending folding must unfold what is already folded, synchronously enough
   // that the find bar never walks a DOM with holes in it.
