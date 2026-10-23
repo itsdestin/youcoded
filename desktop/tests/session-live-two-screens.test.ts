@@ -55,11 +55,10 @@ describe('two screens match with no reply from the second', () => {
 
   it('model: /model typed on one screen changes the chip on the other at once, and a later reply replaces it', () => {
     const { A, B, facts } = setup();
-    facts.noteInput(S, '/model sonnet\r', 'model-switch');
+    facts.noteInput(S, '/model sonnet\r');
     for (const s of [A, B]) expect(s.get().modelAnnounced?.model).toBe('sonnet');
-    // The typed command's divider: once on each screen.
-    expect(markers(A.get())).toEqual(['Model switched to Sonnet']);
-    expect(markers(B.get())).toEqual(['Model switched to Sonnet']);
+    // No divider from the host: it is drawn from the transcript's model-switch record (transcript-event-actions).
+    expect(markers(A.get())).toEqual([]);
   });
 
   it('clear: the SessionStart hook draws "Conversation cleared" once on both', () => {
@@ -140,9 +139,9 @@ describe('the screen that typed draws each line exactly once', () => {
     expect(markers(A.get())).toEqual([]);
     expect(A.get().compactionPending).toBeNull();
     facts.noteSessionStart(S, 'clear', 'c');
-    facts.noteInput(S, '/model opus\r', 'model-switch');
+    facts.noteInput(S, '/model opus\r');
     facts.noteInput(S, '/compact\r');
-    expect(markers(A.get())).toEqual(['Conversation cleared', 'Model switched to Opus']);
+    expect(markers(A.get())).toEqual(['Conversation cleared']);
     expect(A.get().timeline.filter((e: any) => e.kind === 'compacting')).toHaveLength(1);
   });
 

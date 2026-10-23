@@ -232,6 +232,9 @@ export type TranscriptEventType =
   // Unlike session-error this IS persisted: a barrier that vanished on resume
   // would silently resurrect the context the user deliberately dropped.
   | 'context-clear'
+  // BOTH runtimes: the "Model switched to …" divider (2026-10-22). Claude Code's is read from its
+  // "Set model to" reply (transcript-watcher.ts), a native one is persisted by HarnessSession.setBinding.
+  | 'model-switch'
   // Native-runtime only: a user-invoked skill (/skill-name, M3 item 1). Persisted
   // because the skill's instructions ARE part of the model's history — a resume
   // that dropped them would replay a conversation whose first move makes no sense.
@@ -1115,10 +1118,10 @@ export interface PackageInfo {
 export interface UserSkillConfig {
   version: 1 | 2;
   favorites: string[];
-  /** Slugs of themes the user has pinned as favorites. Drives the Appearance
-   *  panel (favorites-only) and the "My favorite themes" section in Library.
-   *  Seeded with the four built-ins on first read; see SkillConfigStore.getThemeFavorites(). */
+  /** Starred theme slugs: the Appearance panel (favorites-only) and the Library's favorites. */
   themeFavorites?: string[];
+  /** Built-ins already starred once (offerNewBuiltinThemes, skill-config-store.ts). */
+  themeFavoritesOffered?: string[];
   chips: ChipConfig[];
   overrides: Record<string, MetadataOverride>;
   privateSkills: SkillEntry[];

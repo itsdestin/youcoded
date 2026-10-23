@@ -7,6 +7,7 @@ import { SubagentIndex } from './subagent-index';
 import { SubagentWatcher } from './subagent-watcher';
 import { ccProjectSlug } from './slug-encoding';
 import { parseQueueWire } from '../shared/claude-queue-wire';
+import { claudeAliasForModelId } from '../shared/model-ids';
 
 // ---------------------------------------------------------------------------
 // parseTranscriptLine
@@ -205,9 +206,11 @@ export function parseTranscriptLine(
     // an ordinary-looking plugin row before its real command/summary. Neither is a new chat turn.
     const bridgeCommand = parsed.origin?.kind === 'plugin' && parsed.origin.name === 'youcoded-control-bridge' && parsed.origin.asUser !== true;
     if (bridgeCommand && /^\/compact(?:[ \t]|$)/.test(rawUserText)) return [];
+    const switchedTo = modelSwitchFromStdout(rawUserText);
+    if (switchedTo) return [{ type: 'model-switch', sessionId, uuid, timestamp, data: { model: switchedTo } }];
     if (/^\s*<command-name>/.test(rawUserText)) {
       const command = slashCommandText(rawUserText);
-      if (command) return [{ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } }];
+      if (command) { const event = slashCommandEvent(command, sessionId, uuid, timestamp); return event ? [event] : []; }
     }
 
     // User-typed prompt: has a promptId and text content (not tool results)
@@ -225,7 +228,8 @@ export function parseTranscriptLine(
         // "stuck thinking" trap described on STRIP_ENTIRELY_RE below.
         const command = slashCommandText(raw);
         if (!command) return events; // a notice, or e.g. interrupted tool use placeholders
-        events.push({ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } });
+        const event = slashCommandEvent(command, sessionId, uuid, timestamp);
+        if (event) events.push(event);
         return events;
       }
 
@@ -529,6 +533,29 @@ function slashCommandText(raw: string): string | null {
   const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(raw)?.[1]?.replace(ANSI_RE, '').trim() ?? '';
   const command = name.startsWith('/') ? name : `/${name}`;
   return args ? `${command} ${args}` : command;
+}
+
+/** A recorded slash command as its event, or null for one the chat shows another way. WHY `/model` is
+ *  dropped (2026-10-22): drawn as a user bubble it read as something said to Claude ("/model opus[1m]").
+ *  Its outcome is drawn instead, from Claude Code's reply line (modelSwitchFromStdout). An argument
+ *  naming no known model (a typo) stays the plain command, as before. */
+function slashCommandEvent(command: string, sessionId: string, uuid: string, timestamp: number): StampableEvent | null {
+  const model = /^\/model(?:[ \t]+(\S+))?\s*$/.exec(command);
+  if (model && (!model[1] || claudeAliasForModelId(model[1]))) return null;
+  return { type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } };
+}
+
+/** The model a `/model` reply line says the conversation is now on, or null. WHY the reply and not the
+ *  command line: Claude Code records the command even when the switch does not happen ("Kept model as
+ *  Opus 4.8" after `/model fable`, a "Switch model?" pop-up answered No: 15+ times in local transcripts,
+ *  2026-10-22). Only "Set model to <name>" means it switched. The name comes bold (ANSI) or in backticks
+ *  depending on the version; mapped onto the app's alias where it names one, else kept as written. */
+function modelSwitchFromStdout(raw: string): string | null {
+  const body = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(raw)?.[1];
+  if (!body) return null;
+  const name = /^Set model to\s+(.+?)(?:\s+and saved\b|\s+·|\n|$)/.exec(body.replace(ANSI_RE, '').replace(/`/g, '').trim())?.[1]?.trim();
+  if (!name) return null;
+  return claudeAliasForModelId(name) ?? name;
 }
 
 function extractTextFromBlocks(content: any): string {

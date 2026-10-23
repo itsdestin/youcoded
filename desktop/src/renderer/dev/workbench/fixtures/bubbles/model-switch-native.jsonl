@@ -1,0 +1,7 @@
+{"type":"user_message","text":"Can you summarize the meeting notes in three bullets?"}
+{"type":"assistant_text","text":"- The launch moves to March 3.\n- Priya owns the pricing page.\n- Next check-in is Friday."}
+{"type":"turn_complete"}
+{"type":"transcript_event","event":{"type":"model-switch","data":{"model":"deepseek/deepseek-v4-flash"}}}
+{"type":"user_message","text":"Now draft the follow-up email to the team."}
+{"type":"assistant_text","text":"Here's a draft:\n\nHi all, quick recap of today: launch is now March 3, Priya has the pricing page, and we'll check in again Friday. Shout if anything looks off."}
+{"type":"turn_complete"}

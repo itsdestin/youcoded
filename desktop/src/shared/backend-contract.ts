@@ -1055,7 +1055,7 @@ interface SessionBridge {
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */
   canSend(): boolean;
-  /** Typed model-switch notice + stable send ID permit host dividers and lost-reply sendOutcomes reconciliation. */
+  /** Stable send ID permits lost-reply sendOutcomes reconciliation. `notice` is accepted but unread since 2026-10-22 (the model-switch divider comes from the transcript). */
   sendInput(sessionId: string, text: string, notice?: 'model-switch', sendId?: string): void;
   control(sessionId: string, request: ClaudeControlRequest): Promise<ClaudeControlResult>; // explicit intent; only unavailable permits legacy fallback
   /** Android's own runtime only (it has no host screen reader): reports whether a Claude Code pop-up holds the keyboard. Elsewhere the computer reads the terminal (session-screens.ts). */

@@ -1,6 +1,16 @@
 import type { TranscriptEvent } from '../../shared/types';
 import type { ChatAction } from './chat-types';
 import { clearDividerId } from '../../shared/divider-ids';
+import { CLAUDE_ALIASES, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
+import { nativeModelLabel } from '../components/native-model-label';
+
+/** The divider's model name, read the way the status chip reads it: a Claude Code alias by the chip's
+ *  word, a native provider id by the native chip's shortened name. A Claude Code model the app has no
+ *  alias for arrives as Claude Code wrote it ("Opus 4.7 (1M context)"), already a name, so it is kept. */
+function switchedModelLabel(model: string): string {
+  if ((CLAUDE_ALIASES as readonly string[]).includes(model)) return CLAUDE_ALIAS_LABELS[model as ClaudeAlias];
+  return /\s/.test(model) ? model : (nativeModelLabel(model) || model);
+}
 
 /**
  * ONE transcript event -> the reducer actions that draw it.
@@ -342,6 +352,13 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
       }
       return out;
     }
+
+    // Both runtimes, live and on a page alike: the line comes from the conversation's own record, so
+    // a reopen shows every switch exactly where it happened. The uuid-based id keeps a page and the live
+    // stream from drawing one switch twice. A specialist's switch is not the conversation's.
+    case 'model-switch':
+      if (ev.data.parentAgentToolUseId || !ev.data.model) return [];
+      return [{ type: 'MODEL_SWITCH_MARKER', sessionId, markerId: `model-switch-${uuid}`, timestamp, label: `Model switched to ${switchedModelLabel(ev.data.model)}` }];
 
     case 'compact-summary': {
       const out: ChatAction[] = [];

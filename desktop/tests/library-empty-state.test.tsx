@@ -113,11 +113,16 @@ describe('LibraryScreen empty state', () => {
     expect(screen.queryByRole('button', { name: 'Browse the Marketplace' })).toBeNull();
   });
 
-  it('renders the Themes empty states on the Themes tab', async () => {
+  // The built-in themes are always installed, so "Installed themes" is never empty —
+  // with nothing downloaded it lists exactly the six built-ins (none favorited here).
+  it('lists the built-in themes on the Themes tab when nothing is downloaded', async () => {
     await renderLibrary({ onOpenMarketplace: () => {}, initialTab: 'themes' });
-    expect(screen.getByText('No themes installed yet.')).toBeInTheDocument();
+    expect(screen.queryByText('No themes installed yet.')).not.toBeInTheDocument();
     expect(screen.getByText('Star an installed theme and it appears here.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Browse the Marketplace' })).toBeInTheDocument();
+    for (const name of ['YouCoded', 'YouCoded Night', 'Light', 'Dark', 'Midnight', 'Crème']) {
+      // getAll: a built-in's author chip also reads "YouCoded".
+      expect(screen.getAllByText(name).length).toBeGreaterThan(0);
+    }
   });
 
   it('uses the pill switcher with icon + label + count segments', async () => {
@@ -131,6 +136,7 @@ describe('LibraryScreen empty state', () => {
     expect(skills.className).toContain('rounded-control');
     // Count of installed skills — 0 with an empty marketplace.
     expect(skills).toHaveTextContent('Plugins0');
-    expect(screen.getByRole('tab', { name: /Themes/ })).toHaveTextContent('Themes0');
+    // Themes counts the six built-ins, which are always installed.
+    expect(screen.getByRole('tab', { name: /Themes/ })).toHaveTextContent('Themes6');
   });
 });

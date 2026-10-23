@@ -20,6 +20,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { SkillEntry, PackageInfo, FeaturedData } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 import { useTheme } from './theme-context';
+import type { LoadedTheme } from '../themes/theme-types';
+import { themePreviewSrc } from '../themes/builtin/previews';
 import { useSkills } from './skill-context';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -154,6 +156,38 @@ function answeredFailure(res: unknown): string | null {
   return typeof r.error === 'string' && r.error ? r.error : 'no reason was given';
 }
 
+/** The themes built into the app, as catalog rows, so the Library and the Marketplace
+ *  list them beside downloaded themes.
+ *  WHY (Destin, 2026-10-22: "we should also show the built ins in the marketplace and
+ *  library"): the theme catalog only held downloadable themes, so a built-in reached the
+ *  screen only through the favorites-only Appearance panel — unstar one and it was gone
+ *  for good. Cached per theme object: the built-ins never change while the app runs, so
+ *  each keeps one row object and the cards' memo stays intact. */
+const builtinRowCache = new WeakMap<LoadedTheme, ThemeRegistryEntryWithStatus>();
+function builtinThemeEntry(t: LoadedTheme): ThemeRegistryEntryWithStatus {
+  const cached = builtinRowCache.get(t);
+  if (cached) return cached;
+  const tk = t.tokens;
+  const row: ThemeRegistryEntryWithStatus = {
+    slug: t.slug,
+    name: t.name,
+    author: 'YouCoded',
+    dark: !!t.dark,
+    preview: themePreviewSrc(t) ?? undefined,
+    previewTokens: {
+      canvas: tk.canvas, panel: tk.panel, accent: tk.accent, 'on-accent': tk['on-accent'],
+      fg: tk.fg, 'fg-muted': tk['fg-muted'], edge: tk.edge,
+    },
+    source: 'youcoded-core',
+    features: t.background?.type === 'image' ? ['wallpaper'] : [],
+    manifestUrl: '',
+    installed: true,
+    isBuiltin: true,
+  };
+  builtinRowCache.set(t, row);
+  return row;
+}
+
 export function MarketplaceProvider({ children }: { children: React.ReactNode }) {
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [themeEntries, setThemeEntries] = useState<ThemeRegistryEntryWithStatus[]>([]);
@@ -175,7 +209,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // fallback effect then misses the slug and reverts to the default theme,
   // producing a "briefly applies then unapplies" flicker. Force a reload
   // synchronously after install/uninstall/update so the lookup always succeeds.
-  const { reloadUserThemes } = useTheme();
+  const { reloadUserThemes, allThemes } = useTheme();
+  // The catalog plus the built-in themes, which is what every screen lists. Appended
+  // AFTER the catalog so the Marketplace still leads with themes you can get. A catalog
+  // row sharing a built-in's slug is dropped: applying that slug always picks the
+  // built-in (theme-context looks built-ins up first), so its row is the true one.
+  // `allThemes ?? []` because some tests stand in a theme context without it.
+  const themeEntriesWithBuiltins = useMemo(() => {
+    const builtins = (allThemes ?? []).filter(t => t.source === 'youcoded-core').map(builtinThemeEntry);
+    const builtinSlugs = new Set(builtins.map(b => b.slug));
+    return [...themeEntries.filter(t => !builtinSlugs.has(t.slug)), ...builtins];
+  }, [themeEntries, allThemes]);
   // SkillContext owns the installed list and the favourites (audit W17):
   // this context READS them and exposes them under its old names, and every
   // mutator below awaits refreshInstalled() before clearing its progress key
@@ -598,7 +642,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const value = useMemo<MarketplaceContextValue>(() => ({
     skillEntries,
-    themeEntries,
+    themeEntries: themeEntriesWithBuiltins,
     featured,
     packages,
     updateAvailable,
@@ -626,7 +670,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     publishSkill,
     ensureLoaded,
   }), [
-    skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
+    skillEntries, themeEntriesWithBuiltins, featured, packages, updateAvailable, installedSkills,
     favorites, themeFavorites, installingIds, installOps, installError, dismissInstallError, loading, skillsLoading,
     error, skillsLoadError, themesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,

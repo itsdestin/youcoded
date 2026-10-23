@@ -338,6 +338,11 @@ interface ContextClearData {
   contextUsedAfter?: number;
 }
 
+interface ModelSwitchData extends SubagentStamp {
+  /** The model the conversation is on from here: a Claude Code alias (`opus[1m]`) or a native provider model id. */
+  model: string;
+}
+
 interface SkillInvokedData {
   /** The resolved, qualified id (wecoded-themes-plugin:theme-builder). */
   skillId: string;
@@ -376,6 +381,7 @@ interface TranscriptDataMap {
   'replay-complete': ReplayCompleteData;
   'session-error': SessionErrorData;
   'context-clear': ContextClearData;
+  'model-switch': ModelSwitchData;
   'skill-invoked': SkillInvokedData;
   'subagent-usage': SubagentUsageData;
   'background-task': BackgroundTaskData;

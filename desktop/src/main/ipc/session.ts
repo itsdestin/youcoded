@@ -273,14 +273,15 @@ const sessionEntries: MainChannelDef[] = [
   // ── Terminal traffic (fire-and-forget) ───────────────────────────────────────
   // WHY these two call straight through: they run at typing speed. The table lookup is one Map read and
   // the desktop door calls the handler directly (no promise hop), so they carry no overhead they lacked.
-  // `notice` is optional: a typed chat command says so, so the host knows which kind of write drew a divider (one-core R5-4a).
+  // `notice` (a typed chat command, one-core R5-4a) is still accepted from older screens but no longer read: the model-switch divider
+  // comes from the transcript's own record of the switch (2026-10-22).
   defineChannel({
     name: IPC.SESSION_INPUT, kind: 'on',
-    handler: ({ sessionId, text, notice, sendId }, ctx) => {
+    handler: ({ sessionId, text, sendId }, ctx) => {
       const o = ops();
       // Only a write that reached the terminal is a fact worth announcing (a refused one changed nothing).
       if (o.sessionManager.sendInput(sessionId, text)) {
-        o.liveFacts?.noteInput(sessionId, text, notice);
+        o.liveFacts?.noteInput(sessionId, text);
         o.screens?.noteInput(sessionId, text);
         // The write was accepted, so the computer "received" this send: a phone that lost its connection right after can learn that (R5-4b).
         if (sendId !== undefined) ctx.runtime?.records.noteSend(sessionId, sendId);
