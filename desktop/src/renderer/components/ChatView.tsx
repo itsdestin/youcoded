@@ -737,6 +737,20 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => window.removeEventListener('keydown', onKey, true);
   }, [visible]);
 
+  // A click on a "quoted words" chip (jump-to-ref, chat-ref-highlight.ts) scrolls to a message that may still be a
+  // first-draw spacer. WHY release the stick here (2026-10-22 review): that scroll alone does not un-pin the chat
+  // (only wheel/touch/keys do), so when the spacer was replaced by its real body the content height changed and the
+  // ResizeObserver above re-pinned to the bottom, undoing the jump (measured: the words ended ~42,000 px away).
+  // Chat Find already does the same through its beforeReveal. Only the visible chat answers, as with Ctrl+F.
+  useEffect(() => {
+    if (!visible) return;
+    const onJump = (e: Event) => {
+      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') releaseStick();
+    };
+    window.addEventListener('youcoded:jump-to-ref', onJump);
+    return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
+  }, [visible, releaseStick]);
+
   // The find row changes the scroll container's height (it takes its own row
   // above the messages). Shrinking a container does not fire a scroll event
   // and none of the ResizeObservers above watch the container itself, so a
