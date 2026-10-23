@@ -715,23 +715,10 @@ describe('remote-shim — heartbeat', () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    it('coming back after a long absence asks first, and keeps a connection that still answers', async () => {
-      // Every unlock after a minute used to throw away a working connection and refill the screen.
+    it('coming back to a connection that died during a short absence replaces it once the question goes unanswered', async () => {
       const ws = await signedIn();
       hide();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
-      show();
-      const ping = ws.sentOf('remote:ping')[0];
-      expect(ping).toBeTruthy();
-      ws.receive({ type: 'remote:ping:response', id: ping.id, payload: { ok: true } });
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(FakeWebSocket.instances).toHaveLength(1);
-    });
-
-    it('coming back to a connection that died while away replaces it once the question goes unanswered', async () => {
-      const ws = await signedIn();
-      hide();
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       show();
       expect(ws.sentOf('remote:ping')).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000);
@@ -748,16 +735,13 @@ describe('remote-shim — heartbeat', () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    it('after minutes away a connection that does not answer is replaced within a few seconds, not ten', async () => {
-      // Destin: "very slow reconnects after leaving phone for a while and resuming" — the computer had long since dropped it.
+    it('after minutes away the connection is replaced at once, without waiting for an answer', async () => {
+      // Destin: "very slow reconnects after leaving phone for a while and resuming"; he chose reconnecting right away.
       const ws = await signedIn();
       hide();
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       show();
-      expect(ws.sentOf('remote:ping')).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(FakeWebSocket.instances).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(600);
+      expect(ws.sentOf('remote:ping')).toHaveLength(0);
       expect(FakeWebSocket.instances).toHaveLength(2);
     });
 

@@ -1779,13 +1779,6 @@ const WAKE_CHECK_TIMEOUT_MS = 10_000;
 /** Away at least this long, the computer has usually already given up on this connection: it closes one whose
  *  pings go unanswered for ~60 s (remote-server MAX_MISSED_PINGS), and a phone's browser freezes a hidden page. */
 const LONG_AWAY_MS = 45_000;
-/** The wake check's deadline after a long absence.
- *  WHY (2026-10-22 phone speed; Destin: "very slow reconnects after leaving phone for a while and resuming"): after
- *  minutes away the old connection was usually dead, and the full 10 s question was spent before reconnecting — most
- *  of the wait he saw. A live connection answers within a couple of round trips (~1 s on his phone); a dead one is
- *  now replaced 2.5 s after waking. A good connection that answers late is replaced too, which costs a ~1 s
- *  reconnect that fetches only what it missed. */
-const QUICK_WAKE_CHECK_MS = 2_500;
 /** How often the page looks at whether the computer is still talking, while it is in front. */
 const HEARTBEAT_INTERVAL_MS = 10_000;
 /** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
@@ -1835,12 +1828,20 @@ export function checkConnectionAfterWake(awayMs = 0): void {
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
   }
-  // Always ask first, however long the page was away. WHY (2026-10-22 phone reliability, cause 3): a
-  // page hidden 60 s or more used to replace its connection on sight, assuming the computer had given
-  // up on it — but a backgrounded phone's browser keeps answering the computer's pings, so the
-  // connection was usually still good, and every unlock cost a reconnect, a refill and a blocked Send.
-  // A connection that really is dead fails this question within WAKE_CHECK_TIMEOUT_MS.
-  probeConnection(awayMs >= LONG_AWAY_MS ? QUICK_WAKE_CHECK_MS : WAKE_CHECK_TIMEOUT_MS, 'after waking');
+  // Away a long time: replace the connection now, without asking. WHY (Destin, 2026-10-22, choosing between this and
+  // asking first: "lets just reconnect right away"): after minutes away the old connection was usually dead, and asking
+  // first spent seconds waiting for an answer that never came (10 s, then 2.5 s) before reconnecting — most of the wait he
+  // saw on resume. A new connection takes ~1 s and fetches only what was missed. The cost, accepted: a connection that
+  // was still fine is replaced too, with a brief "reconnecting".
+  if (awayMs >= LONG_AWAY_MS && ws) {
+    abandonSocket(ws);
+    if (token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
+  // A short absence: ask first. A backgrounded phone's browser keeps answering the computer's pings, so after a few
+  // seconds away the connection is usually still good (2026-10-22 phone reliability, cause 3); a dead one fails this
+  // question within WAKE_CHECK_TIMEOUT_MS.
+  probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
 }
 
 /**
