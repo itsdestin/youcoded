@@ -20,6 +20,11 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
   { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
   { ...chat('chat#remote-reconnecting-wide', 'view'), session: 'wb-1', params: { connection: 'remote', conversation: 'reconnecting' } },
+  // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
+  // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
+  ...(['cc', 'native'] as const).flatMap(rt => (['before-', ''] as const).map(when => ({
+    ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
+  }))),
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
