@@ -118,5 +118,8 @@ export async function prepareClaudeQueueInput(input: QueueInput): Promise<{ wire
   // exactly and the message sat in the box "Unconfirmed". The model would not have received them anyway.
   const body = parts.join('').replace(/\r\n?/g, '\n').replace(new RegExp(CLAUDE_QUEUE_COMPOSER_DROPPED, 'gu'), '');
   // WHY: leading bare paths can take a different native queue route. Explicit instructions reached the same running turn in real CLI probes.
-  return prepared(formatQueueWire(body, mentioned, attached.filter(file => !mentioned.includes(file))), files);
+  const wire = formatQueueWire(body, mentioned, attached.filter(file => !mentioned.includes(file)));
+  // Never stage an empty box: Enter would do nothing and the send would sit unresolved.
+  if (!wire.trim()) throw Error('Nothing to send: the message held only characters Claude Code cannot receive.');
+  return prepared(wire, files);
 }
