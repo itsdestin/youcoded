@@ -2822,11 +2822,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   const conversationSwitch = typeof location !== 'undefined'
     ? new URLSearchParams(location.search).get('conversation') as ConversationPhase | null : null;
-  const conversationSubs = new Set<(s: { phase: ConversationPhase }) => void>();
+  // WHY (2026-10-22 phone reliability): `&slow=1` is the new "computer slow to answer" flag the shim pushes beside the phase,
+  // so the "Waiting for your computer…" strip can be photographed. With no `conversation` switch it rides on a complete copy.
+  const slowSwitch = typeof location !== 'undefined' && new URLSearchParams(location.search).get('slow') === '1';
+  const conversationSubs = new Set<(s: { phase: ConversationPhase; slow?: boolean }) => void>();
   const pushConversation = (phase: ConversationPhase) => conversationSubs.forEach((cb) => cb({ phase }));
-  const onRemoteConversationStatus = (cb: (s: { phase: ConversationPhase }) => void) => {
+  const onRemoteConversationStatus = (cb: (s: { phase: ConversationPhase; slow?: boolean }) => void) => {
     conversationSubs.add(cb);
-    if (conversationSwitch) cb({ phase: conversationSwitch });
+    if (conversationSwitch || slowSwitch) cb({ phase: conversationSwitch ?? 'complete', ...(slowSwitch ? { slow: true } : {}) });
     return () => { conversationSubs.delete(cb); };
   };
   const rehydrate = async () => {

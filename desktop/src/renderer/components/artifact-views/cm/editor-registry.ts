@@ -26,6 +26,20 @@ export function editorViewFor(el: Element | null): EditorView | null {
   return null;
 }
 
+/** The visible code editor showing `path`, if any. Used by ref-line-highlight's
+ *  chip hover/click AND by `use-code-comment-anchors.ts` — the same lookup, so
+ *  a comment's resolved lines and a chip's never disagree about which mounted
+ *  EditorView is "the" one for a path.
+ *  WHY here, not in ref-line-highlight.ts (2026-10-22 phone speed): that file
+ *  loads CodeMirror itself, and the comments rail imported this from it, which
+ *  put ~380 KB of editor into the startup download of every page. */
+export function visibleEditorFor(path: string): EditorView | null {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-artifact-source="cm6"]')) {
+    if (el.dataset.docPath === path && el.getClientRects().length > 0) return editorViewFor(el);
+  }
+  return null;
+}
+
 /** The EditorView mounted anywhere INSIDE `root` (ancestor lookup), or null. */
 export function editorViewWithin(root: Element | null): EditorView | null {
   if (!root) return null;

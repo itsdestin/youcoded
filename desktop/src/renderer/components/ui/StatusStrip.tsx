@@ -40,12 +40,18 @@ export type StatusStripProps = {
   detail?: React.ReactNode;
   /** The single action that resolves this state. Usually a <Button size="sm">. */
   action?: React.ReactNode;
+  /**
+   * Put the action on its own full-width line under the words instead of beside them. WHY (phone-reliability review
+   * P-1, Destin: "dont like the button styling or wrapped copy"): at phone width a button beside the words squeezed the
+   * status line onto two lines; the guide's rule is that buttons which cannot share the line go full width below.
+   */
+  actionBelow?: boolean;
   className?: string;
 };
 
-export function StatusStrip({ tone = 'idle', children, detail, action, className = '' }: StatusStripProps) {
-  return (
-    <div className={`status-strip px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
+export function StatusStrip({ tone = 'idle', children, detail, action, actionBelow = false, className = '' }: StatusStripProps) {
+  const row = (
+    <>
       <span className="shrink-0 flex items-center justify-center w-2">
         {tone === 'busy' ? (
           <BrailleSpinner size="xs" />
@@ -57,6 +63,19 @@ export function StatusStrip({ tone = 'idle', children, detail, action, className
         <span className="block text-xs text-fg-2">{children}</span>
         {detail && <span className="block text-3xs text-fg-muted mt-0.5">{detail}</span>}
       </span>
+    </>
+  );
+  if (actionBelow && action) {
+    return (
+      <div className={`status-strip px-3 py-2.5 rounded-lg bg-inset flex flex-col gap-2 ${className}`.trim()}>
+        <div className="flex items-center gap-3">{row}</div>
+        {action}
+      </div>
+    );
+  }
+  return (
+    <div className={`status-strip px-3 py-2.5 rounded-lg bg-inset flex items-center gap-3 ${className}`.trim()}>
+      {row}
       {action}
     </div>
   );

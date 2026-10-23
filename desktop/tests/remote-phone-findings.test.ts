@@ -81,8 +81,8 @@ describe('a phone browser knows it is remote', () => {
     // host's address goes through connect(), so isRemoteMode() was false there — on the one
     // surface the flag exists for. Everything keyed on it was inert: the terminal poll, the
     // wallpaper, the disabled Unpair button.
-    expect(shim).toContain('if (!isAndroidLocal()) {');
-    expect(shim).toMatch(/markConnectedForNotices\(\);[\s\S]{0,1400}setConnectionMode\('remote'\)/);
+    expect(shim).toContain("if (!isAndroidLocal()) setConnectionMode('remote');");
+    expect(shim).toMatch(/markConnectedForNotices\(\);[\s\S]{0,2000}setConnectionMode\('remote'\)/);
   });
 
   it('leaves an Android WebView on its own device local', () => {

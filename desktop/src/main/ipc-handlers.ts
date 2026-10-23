@@ -414,7 +414,7 @@ export function registerIpcHandlers(
   runtime.fills.setExpireHandler((key, sessionId) => {
     const id = Number(key.slice(1));
     if (key[0] === 'w') sendToRenderer(webContents.fromId(id), IPC.SESSION_REFILL, [sessionId]);
-    else remoteServer?.dropAudience(id);
+    else remoteServer?.dropAudience(id, sessionId);
   });
   const publish = createPublish({
     records: runtime.records,

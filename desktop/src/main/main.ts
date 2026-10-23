@@ -1524,6 +1524,9 @@ void app.whenReady().then(async () => {
   } catch (e) {
     log('ERROR', 'Main', 'Failed to start remote server', { error: String(e) });
   }
+  // WHY (2026-10-22 phone reliability): Tailscale reconnects after the laptop wakes; look for it
+  // then instead of leaving a phone unable to connect until the next 20 s retry or an app restart.
+  powerMonitor.on('resume', () => remoteServer.startAfterWake());
   perfMark('main:chore:remote-server:done');
 
   // WHY (2026-10-01 one-core R3-8): favorites:* and game:* are table entries (main/ipc/game.ts); prefs-service.ts owns the file.

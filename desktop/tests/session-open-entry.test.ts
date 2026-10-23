@@ -43,6 +43,22 @@ describe('session:open for a phone', () => {
     expect(got).toEqual([1]);
   });
 
+  it('sends the terminal once: after the terminal-alone answer, the ordinary open leaves it out', async () => {
+    // Both answers carried up to 4 M characters of terminal, the second only to be thrown away.
+    const w = world();
+    w.records.notePty(S, 'screen so far');
+    const ctx: any = { door: 'remote', runtime: w.runtime, audienceId: -1000, broadcast: () => {}, afterReply: w.afterReply };
+    const early: any = await w.def.handler({ sessionId: S, ptyOnly: true, pty: {} }, ctx);
+    expect(early.pty.data).toBe('screen so far');
+    const full: any = await w.def.handler({ sessionId: S, pty: {} }, ctx);
+    expect(full.ok).toBe(true);
+    expect(full.pty).toBeUndefined();
+    w.after.forEach((f) => f());
+    // An older page that never asks for the terminal alone still gets it with the ordinary open.
+    const again: any = await w.def.handler({ sessionId: S, pty: {} }, ctx);
+    expect(again.pty.data).toBe('screen so far');
+  });
+
   it('a phone that asks about a session the computer does not run gets "gone" and is not subscribed', async () => {
     const w = world({ known: false });
     const ctx: any = { door: 'remote', runtime: w.runtime, audienceId: -1000, broadcast: () => {}, afterReply: w.afterReply };

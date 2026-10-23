@@ -35,7 +35,6 @@ import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
@@ -99,14 +98,6 @@ interface Props {
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
   onSendQueuedNow?: (sessionId: string, queueId: string) => void;
-  /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
-   *  where a PHONE's copy of this conversation stands. `reconnecting` and
-   *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
-   *  behind the computer and offers Refresh. Undefined / `complete` shows
-   *  nothing. Only ever set on a remote client — App owns the subscription. */
-  conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
-  /** Asks the host for a fresh copy — the strip's Refresh. */
-  onRefreshConversation?: () => void;
   /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
    *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
    *  Never set on the computer. */
@@ -120,7 +111,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType }: Props) {
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -129,31 +120,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
-  // What the conversation strip shows: the live status, plus a 2.5 s "Up to
-  // date" after a refresh so the person can see it worked (tester U9). An
-  // initial `complete` — the desktop, or a phone that connected cleanly —
-  // shows nothing; only a transition OUT of restoring/incomplete earns the beat.
-  const [stripStatus, setStripStatus] = useState<'reconnecting' | 'restoring' | 'incomplete' | 'up-to-date' | null>(null);
-  const prevStatusRef = useRef<typeof conversationStatus>(undefined);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = conversationStatus;
-    if (conversationStatus === 'complete') {
-      if (prev === 'restoring' || prev === 'incomplete') {
-        setStripStatus('up-to-date');
-        const t = window.setTimeout(() => setStripStatus(null), 2500);
-        return () => window.clearTimeout(t);
-      }
-      setStripStatus(null);
-      return;
-    }
-    setStripStatus(conversationStatus ?? null);
-  }, [conversationStatus]);
   // WHY (one-core R5-3): a phone watches only a few conversations, so switching to one it has not opened means its content is still
-  // on its way. Until some arrives, show the SAME "Catching up with your computer…" strip a reconnect shows (no new copy) and not the
-  // "Start a conversation" hint, which would claim a conversation with history is empty for the moment the fill takes.
+  // on its way. Until some arrives, the input bar's connection strip says "Catching up with your computer…" (ConnectionStrip.tsx),
+  // and this view does not draw the "Start a conversation" hint, which would claim a conversation with history is empty.
   const waitingForFill = !!filling && state.timeline.length === 0;
-  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : null);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -968,7 +938,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
-          {visible && <ChatEdgeFade belowFindRow={findOpen || !!shownStrip} />}
+          {visible && <ChatEdgeFade belowFindRow={findOpen} />}
           {/* Center the hint between measured chrome edges, clearing even a
               floating header's extra margin. Use the actual provider name. */}
           {state.timeline.length === 0 && !state.isThinking && !waitingForFill && (
@@ -1003,41 +973,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               onClose={() => setFindOpen(false)}
             />
           )}
-          {/* Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say
-              so"): where the phone's copy of this conversation stands. Its own
-              ROW above the messages, like the find bar — not inside the scroller,
-              because the chat sticks to its newest message and a strip at the
-              top of the scroll content was never on screen (measured 2026-09-10).
-              `.find-row` clears the overlaid header the same way. Desktop never
-              sets the prop, so nothing changes there. */}
-          {shownStrip && (
-            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={shownStrip}>
-              {shownStrip === 'incomplete' ? (
-                // Wording per the first phone tester (U11, 2026-09-10): "behind
-                // your computer" read as a place, not a time.
-                <StatusStrip
-                  tone="warn"
-                  detail="The last refresh didn’t finish, so newer messages may be missing."
-                  action={<Button size="sm" onClick={onRefreshConversation}>Refresh</Button>}
-                >
-                  This conversation may be out of date.
-                </StatusStrip>
-              ) : shownStrip === 'reconnecting' ? (
-                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
-                  Reconnecting to your computer…
-                </StatusStrip>
-              ) : shownStrip === 'restoring' ? (
-                // No draft line here: the connection IS back (tester U8).
-                <StatusStrip tone="busy" detail="Loading the newest messages…">
-                  Catching up with your computer…
-                </StatusStrip>
-              ) : (
-                // A beat of "Up to date" after a refresh, so it visibly worked
-                // (tester U9) — then the row goes away on its own.
-                <StatusStrip tone="ok">Up to date.</StatusStrip>
-              )}
-            </div>
-          )}
           {/* flex-1 min-h-0 (was h-full): with the find row in flow above it,
               h-full would overflow the pane by the row's height and clip the
               last message under the input bar. chat-scroll--below-find-row
@@ -1051,7 +986,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               wallpaper laid OVER this scroller (pinned by float-chrome-pops.test.ts); the framed
               layouts cut messages at the frame's edge and have no fade yet — an open question for
               Destin, not decided here. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || shownStrip ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}

@@ -9,9 +9,51 @@
 //
 // Only TYPES come from remote-shim. The caller loads the shim with a dynamic import, so the
 // desktop bundle never evaluates it (the same reason remote-events.ts exists).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, FieldError, TextInput } from './components/ui';
+import { BrandWordmark } from './components/brand/BrandLockup';
+import BrailleSpinner from './components/BrailleSpinner';
 import type { RemoteConnectionState, SavedKeySignInEvent, SignInFailure } from './remote-shim';
+
+/**
+ * Every screen before the app: the brand surface setup wears — lavender, the stacked name, Outfit, one white card.
+ * WHY (phone-reliability review, P-3/P-5, Destin: "style this properly w brand material", "this breaks a bunch of design
+ * guide principles"): these were bare centred lines and buttons on the theme's panel, a title in plain bold type, a
+ * borderless "Use this phone only" that read as loose text, and a password box under a notice that no password could fix.
+ * They are sign-in screens, and the guide gives sign-in screens setup's look.
+ */
+function GateShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="brand-surface absolute inset-0">
+      <div className="scroll-mask absolute inset-0 overflow-y-auto">
+        <div className="brand-stage">
+          <BrandWordmark size="clamp(40px, min(8vh, 14vw), 64px)" tagline="stack" />
+          <div className="flex flex-col items-center gap-4 w-full max-w-sm">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** One white card: a heading, its plain sentence, then whatever acts on it, stacked full width. */
+function GateCard({ heading, line, children, role }: { heading: string; line?: React.ReactNode; children?: React.ReactNode; role?: string }) {
+  return (
+    <section className="brand-card w-full p-6 flex flex-col gap-4" role={role}>
+      <div className="text-center">
+        <h2 className="brand-heading text-xl text-fg">{heading}</h2>
+        {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** A full-width button on the gate: the one filled action in the name's gradient, anything else outlined under it. */
+function GateButton({ main, ...rest }: { main?: boolean } & React.ComponentProps<typeof Button>) {
+  return main
+    ? <Button variant="primary" size="lg" {...rest} className="brand-primary w-full justify-center" />
+    : <Button variant="secondary" size="lg" {...rest} className="w-full justify-center" />;
+}
 
 /** The part of the shim this screen drives. */
 export interface RemoteGateShim {
@@ -23,12 +65,33 @@ export interface RemoteGateShim {
   retrySavedKeyNow(): void;
   stopSavedKeySignIn(): void;
   onCredentialRefused(cb: (reason: string) => void): void;
+  connectToHost(host: string, port: number, password: string): Promise<void>;
+  disconnectFromHost(): Promise<void>;
 }
 
 /** Refusals that mean the computer will not take this device's key again. */
+/** Why the gate is showing instead of the app, after the computer closed this page's connection. */
+type Notice =
+  // A reload of this tab is the only fix, so the card offers that and no password box (P-5).
+  | { kind: 'reload'; heading: string; line: string }
+  // The computer stopped taking this device's key: the password box, with the reason over it.
+  | { kind: 'password'; line: string };
 // WHY: the host closes with 4005 when this page is older than the computer's YouCoded. Before
 // this, the gate showed a bare password box with no hint, so later version bumps looped silently.
-const OLD_PAGE_NOTICE = "This page is older than your computer's YouCoded. Refresh to update.";
+const OLD_PAGE_NOTICE: Notice = { kind: 'reload', heading: 'This page needs a refresh', line: "Your computer's YouCoded was updated. Refresh to get the new page." };
+// WHY (2026-10-22): the computer now closes an older connection when the same browser signs in again, so a second tab
+// takes over from the first. Only a reload of THIS tab brings it back; the password is not needed.
+const OTHER_TAB_NOTICE: Notice = { kind: 'reload', heading: 'Open in another tab', line: 'YouCoded is open in another tab of this browser. Reload this tab to use it here instead.' };
+const KEY_REFUSED_NOTICE: Notice = { kind: 'password', line: 'This computer no longer accepts this device. Enter the password to connect again.' };
+// WHY exported: the photo-only screen list shows this toast with these very words (dev/workbench/ToastPractice).
+/** WHY by reason (branch review F9): only a refused credential means the saved password is wrong; a computer with remote access
+ *  switched off, or one refusing for another reason, says so instead of sending the person to change a password that is fine. */
+export const savedPasswordRefusedNotice = (name: string, reason = 'invalid-credentials') =>
+  reason === 'no-password-configured'
+    ? `${name} has no remote access password set yet. Set one on that computer, in Settings → Remote access.`
+    : ['invalid-credentials', 'revoked', 'unknown'].includes(reason)
+      ? `${name} didn't accept the saved password. Update it in Settings → Connect to Desktop.`
+      : `${name} refused this sign-in.`;
 const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
 
 type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
@@ -42,7 +105,7 @@ export function troubleText(kind: Trouble): string {
 }
 
 /** Minimal login screen for remote browser access. */
-function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promise<void>; notice?: string | null }) {
+function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promise<void>; notice?: Notice | null }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -89,85 +152,118 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
     }
   };
 
+  if (notice?.kind === 'reload') {
+    // WHY no password box (P-5): a password can't fix a page that is older than its computer, or bring back a tab another
+    // tab took over; only a reload does, so the card carries that one button and nothing to type.
+    return (
+      <GateShell>
+        <GateCard heading={notice.heading} line={notice.line} role="status">
+          <GateButton main type="button" onClick={() => window.location.reload()}>Reload this tab</GateButton>
+        </GateCard>
+      </GateShell>
+    );
+  }
+
   if (needsSetup) {
     // No password on the host: there is nothing to type, so nothing is offered to type
     // into. The one thing that moves this forward happens on the other computer.
     return (
-      <div className="flex items-center justify-center h-full bg-panel text-fg">
-        <div className="flex flex-col gap-3 w-72 text-center">
-          <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
-          <p className="text-sm text-fg-2">This computer has no remote access password yet.</p>
-          <p className="text-xs text-fg-muted">
-            On the computer itself, open Settings &rarr; Remote access and set a password.
-            Then reload this page.
-          </p>
-        </div>
-      </div>
+      <GateShell>
+        <GateCard
+          heading="No password set yet"
+          line="On the computer itself, open Settings → Remote access and set a password. Then reload this page."
+        />
+      </GateShell>
     );
   }
 
   return (
-    <div className="flex items-center justify-center h-full bg-panel text-fg">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-72">
-        <h1 className="text-xl font-bold text-center mb-2">YouCoded Remote</h1>
-        {notice && <p className="text-xs text-fg-2 text-center" role="status">{notice}</p>}
-        {/* WHY: a password can't fix a page that is older than its computer; only a reload
-            fetches the new page, so the notice carries the one button that helps. */}
-        {notice === OLD_PAGE_NOTICE && (
-          <Button type="button" onClick={() => window.location.reload()}>Refresh</Button>
-        )}
-        {/* Was a hand-rolled field with gray focus (`focus:border-fg-muted`) — the
-            exact paradigm change 20 retires. Fields focus by accent border now. */}
-        <TextInput
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-          disabled={loading}
-        />
-        {/* Was `bg-blue-600 hover:bg-blue-500` — a hardcoded blue that ignored the
-            theme entirely. The button stays BELOW the field rather than inside it
-            (change 77): this is a stacked submit form, not a field with an inline action. */}
-        <Button type="submit" disabled={loading} size="lg" className="justify-center">
-          {loading ? 'Connecting...' : 'Connect'}
-        </Button>
-        {/* WHY FieldError (guide: no red/coloured body text for messages) */}
-        {error && (
-          <FieldError as="p" size="2xs" className="text-center">{error}</FieldError>
-        )}
+    <GateShell>
+      <form onSubmit={handleSubmit} className="brand-card w-full p-6 flex flex-col gap-4">
+        <div className="text-center">
+          <h2 className="brand-heading text-xl text-fg">Connect to your computer</h2>
+          <p className="mt-1 text-sm text-fg-dim" role={notice ? 'status' : undefined}>
+            {notice?.line ?? 'Enter the password you set for remote access.'}
+          </p>
+        </div>
+        {/* The guide's text box: its name above it, its error under it (Text and numbers). */}
+        <div className="flex flex-col gap-2">
+          <label htmlFor="remote-password" className="text-xs font-medium text-fg-dim">Password</label>
+          <TextInput
+            id="remote-password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+            disabled={loading}
+          />
+          {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+          {error && <FieldError as="p" size="2xs">{error}</FieldError>}
+        </div>
+        <GateButton main type="submit" disabled={loading}>{loading ? 'Connecting…' : 'Connect'}</GateButton>
       </form>
-    </div>
+    </GateShell>
   );
 }
 
-/** The saved key is signing in, or trying to. No password box: none is needed yet. */
-function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword }: {
+/** Connecting with nothing to decide: the heading with the app's spinner beside it, as setup's busy steps show. */
+function GateConnecting({ label }: { label: string }) {
+  return (
+    <GateShell>
+      <h1 className="brand-heading text-2xl text-fg inline-flex items-center gap-3" role="status">
+        <BrailleSpinner size="lg" />
+        {label}
+      </h1>
+    </GateShell>
+  );
+}
+
+/** The saved key is signing in, or trying to. No password box: none is needed yet. Also the Android
+ *  app's way back to the computer it was last using (`computerName` set, the way out is the phone). */
+function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword, computerName, otherLabel = 'Enter password instead' }: {
   trouble: Trouble | null;
   /** "Try now" was pressed and that attempt has not finished (review finding 7). */
   attempting: boolean;
   onTryNow: () => void;
   onPassword: () => void;
+  /** The saved computer's own name, when the Android app is going back to it. */
+  computerName?: string;
+  otherLabel?: string;
 }) {
+  if (!trouble) return <GateConnecting label={computerName ? `Connecting to ${computerName}…` : 'Connecting to your computer…'} />;
+  const heading = attempting ? 'Trying to connect…' : computerName ? `Can't reach ${computerName}` : troubleText(trouble).replace(/\.$/, '');
   return (
-    <div className="flex items-center justify-center h-full bg-panel text-fg">
-      <div className="flex flex-col gap-3 w-72 text-center">
-        <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
-        {trouble ? (
-          <>
-            <p className="text-sm text-fg-2" role="status">{attempting ? 'Trying to connect…' : troubleText(trouble)}</p>
-            {!attempting && <p className="text-xs text-fg-muted">Trying again…</p>}
-            <Button size="lg" className="justify-center" onClick={onTryNow} disabled={attempting}>Try now</Button>
-            {/* The way out when the computer is gone for good, or this browser should pair
-                again. The saved key is kept: a reload tries it once more. */}
-            <Button variant="ghost" className="justify-center" onClick={onPassword}>Enter password instead</Button>
-          </>
-        ) : (
-          <p className="text-sm text-fg-2" role="status">Connecting to your computer…</p>
-        )}
-      </div>
-    </div>
+    <GateShell>
+      <GateCard heading={heading} line="It keeps trying by itself every few seconds." role="status">
+        {/* WHY "Try again" (was "Try now"): the guide names every retry button exactly that. Filled on top, the way out
+            outlined under it (Buttons → two buttons, stacked); the way out was a borderless line before (P-4). */}
+        <GateButton main onClick={onTryNow} disabled={attempting}>Try again</GateButton>
+        {/* The way out when the computer is gone for good, or this browser should pair
+            again. The saved key is kept: a reload tries it once more. */}
+        <GateButton onClick={onPassword}>{otherLabel}</GateButton>
+      </GateCard>
+    </GateShell>
   );
+}
+
+/** A computer the Android app can go back to: the saved row from the phone's own list, password included. */
+interface SavedComputer { name: string; host: string; port: number; password: string }
+
+/** How long the Android app waits before trying its computer again, by attempt. The last value repeats. */
+const COMPUTER_RETRY_MS = [5_000, 10_000, 20_000, 30_000];
+
+/** The saved computer the app was last using, if it is still in the phone's list. Never throws. */
+async function findLastComputer(): Promise<SavedComputer | null> {
+  const { lastComputer } = await import('./last-computer');
+  const last = lastComputer();
+  if (!last) return null;
+  try {
+    const reply = await (window as any).claude?.android?.getPairedDevices?.();
+    const list: SavedComputer[] = reply?.devices ?? reply ?? [];
+    return list.find((d) => d.host === last.host && d.port === last.port) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** How long a saved-key sign-in shows only the spinner before it says what it is doing. */
@@ -212,9 +308,66 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   const [savedKey, setSavedKey] = useState<SavedKey>('pending');
   const [attempting, setAttempting] = useState(false);
   // Why the password box is back, when the computer stopped accepting this device.
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   // A saved-key sign-in still going after CONNECTING_WORDS_AFTER_MS.
   const [slow, setSlow] = useState(false);
+  // Android only: going back to the computer the app was last using. 'pending' until the phone's
+  // own runtime has answered and the saved list was read; then the computer being tried, or 'none'.
+  // WHY the app waits here (2026-10-22 phone reliability, cause 1 + review item 9): mounting the app
+  // on the phone's own runtime first would show the phone's conversations for seconds and let a
+  // message go to the wrong place before the switch.
+  const [resume, setResume] = useState<'pending' | 'none' | SavedComputer>(isAndroid ? 'pending' : 'none');
+  const [computerTrouble, setComputerTrouble] = useState(false);
+  const [computerAttempting, setComputerAttempting] = useState(false);
+  const computerRetry = useRef<{ timer: ReturnType<typeof setTimeout> | null; n: number; cancelled: boolean }>({ timer: null, n: 0, cancelled: false });
+
+  const tryComputer = useCallback(async (s: RemoteGateShim, c: SavedComputer) => {
+    const r = computerRetry.current;
+    if (r.timer) { clearTimeout(r.timer); r.timer = null; }
+    setComputerAttempting(true);
+    try {
+      await s.connectToHost(c.host, c.port, c.password);
+      // "Use this phone only" was pressed while this attempt was still going: honour it.
+      if (r.cancelled) { await s.disconnectFromHost().catch(() => {}); return; }
+      setResume('none');
+    } catch (err: any) {
+      if (r.cancelled) return;
+      if (err?.signInFailure?.kind === 'refused') {
+        // A changed password will not fix itself: open the phone's own runtime and say where to fix it.
+        setResume('none');
+        const { announce } = await import('./utils/announce');
+        // After the app has mounted its toast.
+        window.setTimeout(() => announce(savedPasswordRefusedNotice(c.name, String(err.signInFailure.reason)), 8000), 1500);
+        return;
+      }
+      setComputerTrouble(true);
+      const delay = COMPUTER_RETRY_MS[Math.min(r.n++, COMPUTER_RETRY_MS.length - 1)];
+      r.timer = setTimeout(() => { void tryComputer(s, c); }, delay);
+    } finally {
+      setComputerAttempting(false);
+    }
+  }, []);
+
+  const choosePhoneOnly = useCallback(async () => {
+    const r = computerRetry.current;
+    r.cancelled = true;
+    if (r.timer) { clearTimeout(r.timer); r.timer = null; }
+    const { forgetLastComputer } = await import('./last-computer');
+    forgetLastComputer();
+    setResume('none');
+  }, []);
+
+  useEffect(() => () => { const t = computerRetry.current.timer; if (t) clearTimeout(t); }, []);
+
+  // The phone's own runtime answered: is there a computer to go back to?
+  useEffect(() => {
+    if (!isAndroid || !shim || !connected || resume !== 'pending') return;
+    void findLastComputer().then((c) => {
+      if (!c) { setResume('none'); return; }
+      setResume(c);
+      void tryComputer(shim, c);
+    });
+  }, [isAndroid, shim, connected, resume, tryComputer]);
   useEffect(() => {
     if (savedKey !== 'connecting') { setSlow(false); return; }
     const timer = setTimeout(() => setSlow(true), CONNECTING_WORDS_AFTER_MS);
@@ -238,7 +391,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setConnected(false);
         setHasConnectedOnce(false);
         setSavedKey('none');
-        setNotice(reason === 'unsupported-version' ? OLD_PAGE_NOTICE : KEY_REFUSALS.has(reason) ? 'This computer no longer accepts this device. Enter the password to connect again.' : null);
+        setNotice(reason === 'replaced' ? OTHER_TAB_NOTICE : reason === 'unsupported-version' ? OLD_PAGE_NOTICE : KEY_REFUSALS.has(reason) ? KEY_REFUSED_NOTICE : null);
       });
       setShim(s);
       // Android WebView: auto-connect to LocalBridgeServer. If the bridge server isn't
@@ -266,8 +419,22 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
     await shim.connect(password);
   }, [shim]);
 
+  // Android: going back to the last computer, before the app shows anything.
+  if (isAndroid && shim && typeof resume === 'object') {
+    return (
+      <SavedKeyScreen
+        trouble={computerTrouble ? 'unreachable' : null}
+        attempting={computerAttempting && computerTrouble}
+        computerName={resume.name}
+        otherLabel="Use this phone only"
+        onTryNow={() => { void tryComputer(shim, resume); }}
+        onPassword={() => { void choosePhoneOnly(); }}
+      />
+    );
+  }
+
   // Once connected, keep showing the app even during transient disconnections.
-  if (connected || hasConnectedOnce) return <>{renderApp()}</>;
+  if ((connected || hasConnectedOnce) && resume === 'none') return <>{renderApp()}</>;
 
   if (!shim || savedKey === 'pending') return <BootSpinner label="Loading YouCoded" />;
 
@@ -276,7 +443,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   // pre-auth window (theme:list, skills:list, etc.) are dropped by LocalBridgeServer's
   // unauthenticated-client guard (LocalBridgeServer.kt:116), then time out silently after 30s.
   if (isAndroid) {
-    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Connecting...</div>;
+    return <GateConnecting label="Starting YouCoded…" />;
   }
 
   if (savedKey === 'connecting' && !slow) return <BootSpinner label="Connecting to your computer" />;

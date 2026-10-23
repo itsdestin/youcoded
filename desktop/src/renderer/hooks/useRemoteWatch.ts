@@ -18,9 +18,11 @@ export function useRemoteWatch(opts: {
   activeId: string | null;
   /** Every conversation the computer lists (an ended one is forgotten). */
   sessionIds: readonly string[];
+  /** The computer's list has arrived: before it, an empty `sessionIds` means "not known yet", not "every conversation ended". */
+  listLoaded?: boolean;
   loader: FirstPageLoader;
 }) {
-  const { enabled, activeId, sessionIds, loader } = opts;
+  const { enabled, activeId, sessionIds, listLoaded = true, loader } = opts;
   const setRef = useRef(createWatchSet());
   /** Conversations whose fill is running now: their screen shows the loading state, not an empty conversation. */
   const [filling, setFilling] = useState<ReadonlySet<string>>(new Set());
@@ -45,11 +47,13 @@ export function useRemoteWatch(opts: {
   // The conversation on screen is always watched. (A tap calls `watch` itself first, so its loading state is up before the switch is drawn.)
   useEffect(() => { if (activeId) void watch(activeId); }, [activeId, watch]);
 
-  // An ended conversation: forget it (the computer already did).
+  // An ended conversation: forget it (the computer already did). WHY only once the list is in (2026-10-22 phone speed): a reopened phone
+  // watches the conversation it was on before the list arrives, and pruning against the empty list forgot it, so it was filled twice.
   useEffect(() => {
+    if (!listLoaded) return;
     const live = new Set(sessionIds);
     for (const id of setRef.current.ids()) if (!live.has(id)) setRef.current.forget(id);
-  }, [sessionIds]);
+  }, [sessionIds, listLoaded]);
 
   return useMemo(() => ({
     watch,

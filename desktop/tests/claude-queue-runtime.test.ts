@@ -20,6 +20,16 @@ async function fixture() {
  return { root, bridge, manager, runtime, publish, noteSend, safe: () => { safe = true; } };
 }
 describe('instance-owned Claude queue runtime', () => {
+ it('says whether it ever accepted a send, without sending anything', async () => {
+  const f=await fixture(); const identity=await f.runtime.action('s',{kind:'identity'}); if(identity.status!=='identity')throw Error('identity');
+  await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'arrived',originalText:'hi',displayContent:'hi',attachments:[]}});
+  const enqueues=f.noteSend.mock.calls.length;
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:identity.identity.queueId,sendId:'arrived'})).toMatchObject({status:'lookup',found:true,identity:identity.identity});
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:identity.identity.queueId,sendId:'never-sent'})).toMatchObject({status:'lookup',found:false});
+  expect(await f.runtime.action('s',{kind:'lookup',queueId:'00000000-0000-4000-8000-000000000000',sendId:'arrived'})).toMatchObject({status:'unknown'});
+  expect(f.noteSend.mock.calls.length).toBe(enqueues);
+  await f.runtime.close();
+ });
  it('keeps an idle-ready send quiet until it genuinely waits or becomes unconfirmed', async () => {
   const f=await fixture(); f.safe(); const identity=await f.runtime.action('s',{kind:'identity'}); if(identity.status!=='identity')throw Error('identity');
   await f.runtime.action('s',{kind:'enqueue',queueId:identity.identity.queueId,payload:{sendEpoch:identity.identity.sendEpoch,sendId:'quiet',originalText:'hi',displayContent:'hi',attachments:[]}});

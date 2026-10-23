@@ -198,10 +198,12 @@ describe('remote-shim — send queue', () => {
       const invokePromise = (window as any).claude.skills.list();
       expect(ws.sent).toEqual([]);
       ws.open();
-      expect(ws.sent).toHaveLength(1); // auth message only
+      // The sign-in, and the session list a browser page asks for with it (the computer holds it until signed in); the queued
+      // application message waits for the sign-in's answer.
+      expect(ws.sent.map(s => JSON.parse(s).type)).toEqual(['auth', 'session:list']);
       ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
       await connectPromise;
-      const sentTypes = ws.sent.slice(1).map(s => JSON.parse(s).type);
+      const sentTypes = ws.sent.slice(2).map(s => JSON.parse(s).type);
       expect(sentTypes).toContain('skills:list');
       const queuedMsg = JSON.parse(ws.sent[ws.sent.length - 1]);
       ws.receive({ type: 'skills:list:response', id: queuedMsg.id, payload: [] });
@@ -244,8 +246,8 @@ describe('remote-shim — send queue', () => {
       shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
       ws.open();
-      expect(ws.sent).toHaveLength(1);
-      expect(JSON.parse(ws.sent[0]).type).toBe('auth');
+      // First the sign-in; the only thing behind it is the session list a browser page asks for with it.
+      expect(ws.sent.map(s => JSON.parse(s).type)).toEqual(['auth', 'session:list']);
     });
 
     it('clears the queue on host change so messages do not leak across hosts', async () => {
@@ -302,8 +304,9 @@ describe('remote-shim — send queue', () => {
       // After auth:ok, flushSendQueue ran. The fallback WS should have ONLY
       // the auth message — the two pre-fallback application messages must
       // NOT have been flushed to it (they were bound for the failed remote).
+      // (The session list is the fallback page's own request sent with its sign-in, not one of the remote's.)
       const fallbackTypes = fallbackWs.sent.map(s => JSON.parse(s).type);
-      expect(fallbackTypes).toEqual(['auth']);
+      expect(fallbackTypes).toEqual(['auth', 'session:list']);
       expect(fallbackTypes).not.toContain('skills:list');
     });
 
@@ -323,7 +326,8 @@ describe('remote-shim — send queue', () => {
       ws.receive({ type: 'auth:ok', token: 't', platform: 'browser' });
       await new Promise(r => setTimeout(r, 0));
       // ws.sent[0] is the auth message; everything after is the flushed queue.
-      const flushedMsgs = ws.sent.slice(1).map(s => JSON.parse(s));
+      // (Less the session list the page asked for with its sign-in, which was never queued.)
+      const flushedMsgs = ws.sent.slice(1).map(s => JSON.parse(s)).filter(m => m.type !== 'session:list');
       expect(flushedMsgs).toHaveLength(256);
       // FIFO drop-oldest assertion: surviving ids are the LAST 256, in order.
       const flushedIds = flushedMsgs.map(m => m.id);

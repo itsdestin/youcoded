@@ -12,6 +12,14 @@ export const CHAT: readonly ScreenEntry[] = [
     ...(q === 'idle-after' ? { sameAs: { name: 'chat', why: 'Immediate delivery intentionally has no extra chrome.' } } : {}),
   })),
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
+  // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
+  // before master the same state reads the old words and has no button.
+  { ...chat('chat#phone-reconnecting', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', conversation: 'reconnecting' } },
+  { ...chat('chat#phone-slow', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, newIn: 'after' as const },
+  // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
+  { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
+  { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
+  { ...chat('chat#remote-reconnecting-wide', 'view'), session: 'wb-1', params: { connection: 'remote', conversation: 'reconnecting' } },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),

@@ -10,6 +10,8 @@ export interface ClaudeQueueOptions {
   ready?: (queueId: string, input: QueueClaimInput) => boolean;
   maxItems?: number;
   maxTombstones?: number;
+  /** Cancelled checkouts kept per send epoch (default and ceiling 1024). WHY an option: a test that fills the real 1,024 took ~27 s. */
+  maxCheckouts?: number;
 }
 // Worst-case JSON escaping for two replacement alias copies and a new live incarnation (256 UTF-16 units each).
 const CLEAR_RESERVATION_BYTES = 8192;
@@ -33,9 +35,11 @@ export class ClaudeQueue {
   private chain: Promise<unknown> = Promise.resolve();
   private readonly maxItems: number;
   private readonly maxTombstones: number;
+  private readonly maxCheckouts: number;
   constructor(private readonly options: ClaudeQueueOptions) {
     this.maxItems = Math.max(1, Math.min(64, options.maxItems ?? 64));
     this.maxTombstones = Math.max(1, Math.min(1024, options.maxTombstones ?? 1024));
+    this.maxCheckouts = Math.max(1, Math.min(1024, options.maxCheckouts ?? 1024));
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     // WHY instance-owned short transitions also serialize alias binding across queues. There is
@@ -204,7 +208,7 @@ export class ClaudeQueue {
       if ([...r.items, ...r.tombstones].some(x => x.queueItemId !== itemId && x.checkout?.checkoutId === token.checkoutId)) throw Error('Checkout ID already used');
       // Reserve cancellation history before granting ownership; never forget an old
       // terminal token and then let its delayed checkout reserve the item again.
-      if (!i.checkout && r.cancelledCheckouts.length + r.items.filter(x => x.checkout).length >= 1024) throw Error('Checkout history full in this epoch');
+      if (!i.checkout && r.cancelledCheckouts.length + r.items.filter(x => x.checkout).length >= this.maxCheckouts) throw Error('Checkout history full in this epoch');
       i.checkout = token; return i;
     });
   }
@@ -231,7 +235,7 @@ export class ClaudeQueue {
       // A stale/unknown cancel is a safe terminal no-op, never permission to clear
       // somebody else's checkout. New grants always check epoch and cancelled IDs.
       if (token.sendEpoch === undefined && r.legacyCheckoutEpoch !== r.sendEpoch) return;
-      if (r.cancelledCheckouts.length + r.items.filter(i => i.checkout).length >= 1024) throw Error('Checkout history full in this epoch');
+      if (r.cancelledCheckouts.length + r.items.filter(i => i.checkout).length >= this.maxCheckouts) throw Error('Checkout history full in this epoch');
       r.cancelledCheckouts.push(token); // fences a reordered late checkout in this epoch
     });
   }

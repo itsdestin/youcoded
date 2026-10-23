@@ -1444,3 +1444,34 @@ describe('InputBar — words restored by Discard', () => {
     expect(box.value).toBe('');
   });
 });
+
+describe('InputBar — the empty box re-measures when the theme font arrives', () => {
+  // Destin, 2026-10-22: the placeholder sat at the top of a two-line box on his phone. The box measured the placeholder in a
+  // stand-in font (wider, wrapped) before the theme's font loaded, and nothing measured again until the text changed.
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      session: { sendInput: vi.fn() },
+      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+    };
+  });
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('takes the placeholder\'s height again once fonts finish loading', () => {
+    const fonts = new EventTarget();
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    let measured = 42;   // two lines, as laid out in the stand-in font
+    const spy = vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(() => measured);
+    try {
+      render(<ChatProvider><SkillProvider><InputBar sessionId="sess-fonts" provider="claude" /></SkillProvider></ChatProvider>);
+      const box = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+      expect(box.style.height).toBe('42px');
+      measured = 21;      // the theme's font: one line
+      act(() => { fonts.dispatchEvent(new Event('loadingdone')); });
+      expect(box.style.height).toBe('21px');
+    } finally {
+      spy.mockRestore();
+      delete (document as any).fonts;
+    }
+  });
+});
