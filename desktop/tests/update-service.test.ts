@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   // Download tests (#183): a private userData folder, a scriptable download engine and release answer.
   userData: '/unused', installer: {} as Record<string, unknown>, httpStatus: 200, setBeta: vi.fn(),
   release: null as null | Record<string, unknown>,
-  kind: 'deb' as string, stageAppImage: vi.fn(), stageMacApp: vi.fn(), spawn: vi.fn(), httpHang: false,
+  kind: 'deb' as string, reads: 0, cleanupGate: null as Promise<void> | null, cleanupCalls: 0, stageAppImage: vi.fn(), stageMacApp: vi.fn(), spawn: vi.fn(), httpHang: false,
 }));
 const DEFAULT_RELEASE = { manifest_url: 'https://github.com/manifest', signature_url: 'https://github.com/signature', tag: 'v2.0.0' };
 vi.mock('electron', () => ({
@@ -22,7 +22,7 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../src/main/update-installer', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/update-installer')>();
-  return { ...actual, createUpdateInstaller: () => mocks.installer, makeLaunchInstaller: (deps: LaunchInstallerDeps) => { mocks.deps = deps; return mocks.launch; } };
+  return { ...actual, cleanupStaleDownloads: async (...a: Parameters<typeof actual.cleanupStaleDownloads>) => { mocks.cleanupCalls++; if (mocks.cleanupGate) await mocks.cleanupGate; return actual.cleanupStaleDownloads(...a); }, createUpdateInstaller: () => mocks.installer, makeLaunchInstaller: (deps: LaunchInstallerDeps) => { mocks.deps = deps; return mocks.launch; } };
 });
 vi.mock('../src/main/update-manifest-verify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/update-manifest-verify')>();
@@ -33,6 +33,7 @@ vi.mock('../src/main/update-settings', () => ({ UpdateSettings: class {
   async readAsync() {
     const gate = mocks.readGate;
     const value = mocks.savedAutoInstall;
+    mocks.reads++;
     if (mocks.readFails) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
     if (gate) await gate; // a test can hold the read open
     return { betaChannel: null, autoInstall: gate ? mocks.readValue : value };
@@ -217,7 +218,7 @@ describe('update service downloads', () => {
     mocks.userData = userData; mocks.packaged = true; mocks.savedAutoInstall = true; mocks.readGate = null; mocks.httpStatus = 200;
     mocks.release = release('2.0.0');
     mocks.verify.mockResolvedValue({ assets: [] });
-    gate = null;
+    gate = null; mocks.cleanupGate = null; mocks.cleanupCalls = 0; mocks.reads = 0;
     // A download engine that writes the file it is asked for, optionally held open by `gate`.
     started = vi.fn(async (url: string) => {
       if (gate) await gate;
@@ -606,6 +607,41 @@ describe('update service downloads', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it('does not start the same failing download again at every check (review F8): it backs off 1 h, then 2 h, and the person is never held back', async () => {
+    const { UpdateInstallError } = await import('../src/main/update-installer');
+    started.mockRejectedValue(new UpdateInstallError('disk-full', 'no space'));
+    const s = await load(); await armed(s); await check(s);
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+    const base = Date.now(); const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(base + 31 * 60_000); await check(s);
+      expect(started).toHaveBeenCalledTimes(1);                       // the next 30-minute check does nothing
+      now.mockReturnValue(base + 61 * 60_000); await check(s);
+      await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(2)); // after the hour it tries again...
+      now.mockReturnValue(base + 61 * 60_000 + 90 * 60_000); await check(s);
+      expect(started).toHaveBeenCalledTimes(2);                       // ...and then waits longer (2 h)
+      await expect(s.download()).rejects.toMatchObject({ code: 'disk-full' }); // Update now / Try again still goes straight in
+      expect(started).toHaveBeenCalledTimes(3);
+    } finally { now.mockRestore(); }
+  });
+
+  it('a download started while the stale-file sweep is still reading the folder waits for it (review F9)', async () => {
+    let open!: () => void; mocks.cleanupGate = new Promise<void>((r) => { open = r; });
+    const s = await load(); await s.fetchLatestRelease();             // the first successful check starts the sweep, held open
+    await vi.waitFor(() => expect(mocks.cleanupCalls).toBe(1));
+    const popup = s.download();
+    for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); // settle: let any file reads the download makes first finish
+    expect(started).not.toHaveBeenCalled();                            // not while the sweep could delete its .partial
+    open();
+    await popup;
+    expect(started).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the saved switch at startup, not only when something first asks (review F12)', async () => {
+    await load();
+    await vi.waitFor(() => expect(mocks.reads).toBeGreaterThan(0));
+  });
+
   it('does not call a loaded pending download "downloaded" until it is re-checked after the 60 seconds', async () => {
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, asset('2.0.0')), 'x');
@@ -723,6 +759,13 @@ describe('update service installing', () => {
       expect(s.quitInstallEligible()).toBe(false);
       expect(await s.planRestart()).toEqual({ kind: 'exit-install', macPassword: false });
     });
+    it('the status says a quit will install only when it really will (the popup promises nothing else)', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      expect(s.getUpdateStatus().installs_on_quit).toBe(true);
+      process.env.ProgramFiles = path.dirname(process.execPath); vi.resetModules();
+      const perMachine = await load(); await ready(perMachine);
+      expect(perMachine.getUpdateStatus().installs_on_quit).toBe(false);
+    });
     it('not in an unpackaged build', async () => {
       setup('win32'); mocks.packaged = false;
       const s = await load(); await s.fetchLatestRelease();
@@ -823,6 +866,47 @@ describe('update service installing', () => {
     });
   });
 
+  describe('Restart is told now when the install cannot be prepared (code review F6)', () => {
+    it('a re-hash done moments ago is remembered, so the quit-time prepare does not hash the file again', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      await s.confirmInstallReady();
+      mocks.verify.mockClear();
+      await s.prepareExit('install-relaunch');
+      expect(mocks.verify).not.toHaveBeenCalled();
+      s.runExitInstall(true, vi.fn());
+      expect(mocks.spawn).toHaveBeenCalledTimes(1);                    // and the plan still came out
+    });
+    it('confirmInstallReady fails visibly when the release cannot be confirmed', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.httpStatus = 500;
+      await expect(s.confirmInstallReady()).rejects.toMatchObject({ code: 'network-failed' });
+    });
+    it('confirmInstallReady fails visibly when the file no longer matches its signed hash', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      const { UpdateInstallError } = await import('../src/main/update-installer');
+      mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+      await expect(s.confirmInstallReady()).rejects.toBeTruthy();
+    });
+    it('the quit-time prepare gives up by itself after 5 s instead of racing the teardown', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.verify.mockImplementation(() => new Promise(() => {})); // a hash that never finishes
+      const done = s.prepareExit('install-relaunch');
+      await vi.advanceTimersByTimeAsync(5_000);
+      await done;
+      s.runExitInstall(true, vi.fn());
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it('releaseLaunch frees the interactive launch lock so a later Restart is not "busy" (review F11)', async () => {
+    setup('win32'); const s = await load(); await s.fetchLatestRelease();
+    mocks.launch.mockResolvedValue({ success: true, quitPending: true });
+    await s.launch({ jobId: 'a', filePath: '/x/setup.exe' }, false);
+    expect(await s.launch({ jobId: 'b', filePath: '/x/setup.exe' }, false)).toMatchObject({ error: 'busy' });
+    s.releaseLaunch();
+    expect(await s.launch({ jobId: 'c', filePath: '/x/setup.exe' }, false)).toMatchObject({ success: true });
+  });
+
   describe('guards inside prepare', () => {
     it('a brake that cannot be answered in time blocks the install even though an older answer is still cached', async () => {
       setup('win32'); const s = await load(); await ready(s);
@@ -858,9 +942,8 @@ describe('update service installing', () => {
       s.runExitInstall(true, relaunch, true);
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(relaunch).not.toHaveBeenCalled();
-      let late = false;                                       // shutdown begins while prepare is still working
-      mocks.verify.mockImplementationOnce(async () => { late = true; return { assets: [] }; });
-      await s.prepareExit('install', () => late);
+      let asked = 0;                                          // shutdown begins while prepare is still working:
+      await s.prepareExit('install', () => ++asked >= 2);     // not at its start, but by the time the plan would be stored
       s.runExitInstall(false, vi.fn());
       expect(mocks.spawn).not.toHaveBeenCalled();
     });

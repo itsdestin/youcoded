@@ -416,6 +416,10 @@ function createUpdateService() {
   }
 
   // `scheduleTheQuit` false = Restart to update quits through its own path (so it can untrack after the gate).
+  /** A shutdown took over after an interactive install succeeded: nothing will quit for us, so let go of the
+   *  launch lock (code review F11) or every later Restart in this session would answer "busy". */
+  function releaseLaunch(): void { launchActive = false; }
+
   async function launchVerified(payload: { jobId: string; filePath: string }, scheduleTheQuit = true) {
     if (devFakeUpdate) {
       // Never actually launch anything in dev — just surface the cached file in
@@ -465,6 +469,7 @@ function createUpdateService() {
   let checkedOnce = false;         // a release check has succeeded: the sweep now knows what "latest" is
   let channelGen = 0;              // bumped by setBetaChannel; a job started under another number is discarded
   let inFlightKey = '';            // channel number + tag of the running job
+  let backoff: { tag: string; count: number; until: number } | null = null; // repeated background download failures (review F8)
   let brakedTag: string | null = null; // an unsigned/forged release is not retried until the next check
   const statusListeners = new Set<() => void>();
 
@@ -484,6 +489,9 @@ function createUpdateService() {
       downloaded: !!pending && pendingFileOk && pending.version === status.latest,
       needs_password: !!facts?.needsPassword,
       install_refused: !!facts?.installRefused,
+      // WHY (code review F5): the popup may say "installs by itself when you quit" only when a quit really will.
+      // Everything except the switch (the renderer holds the live switch and ANDs it).
+      installs_on_quit: quitInstallPossible(),
     };
   }
 
@@ -687,6 +695,9 @@ function createUpdateService() {
   }
 
   async function downloadAndVerify(): Promise<UpdateDownloadResult> {
+    // WHY (code review F9): the stale-file sweep deletes every `.partial`; a download that starts while it is
+    // still reading the folder would lose its own. One lock: downloads wait for a running sweep.
+    if (sweepRunning) await sweepRunning;
     await initDone;
     const gen = channelGen;
     if (devFakeUpdate) return fakeDownload();
@@ -800,9 +811,22 @@ function createUpdateService() {
       if (pending && pendingFileOk && pending.version === status.latest) return;
       if (!devFakeUpdate && brakedTag && brakedTag === status.tag) return;
       if (reason === 'switch-on') suppressed = false;
+      // WHY a back-off (code review F8): a download that keeps failing (a bad CDN copy, a full disk) used to be
+      // started from zero at every 30-minute check, ~180 MB each time, for a switch the person never touched.
+      // The person's own actions (switch-on, the popup's Update now / Try again) are never held back.
+      if (reason === 'check' && backoff && backoff.tag === (status.tag ?? status.latest) && Date.now() < backoff.until) return;
       await ensureDownloaded('background');
+      backoff = null;
     } catch (e) {
       console.warn('[update] background download did not finish:', e instanceof Error ? e.message : e);
+      const st = devFakeUpdate ? getUpdateStatus() : cachedUpdateStatus;
+      const tag = st?.tag ?? st?.latest ?? '';
+      // A failure while already backed off is the SAME job reported by a second caller (the check and the 60 s
+      // timer share one download), not a new failure: it must not double the wait.
+      if (backoff && backoff.tag === tag && Date.now() < backoff.until) return;
+      const count = (backoff && backoff.tag === tag ? backoff.count : 0) + 1;
+      // 1 h, 2 h, 4 h … capped at 24 h
+      backoff = { tag, count, until: Date.now() + Math.min(24 * 3_600_000, 3_600_000 * 2 ** (count - 1)) };
     }
   }
 
@@ -820,9 +844,15 @@ function createUpdateService() {
   /** The first stale-file sweep: after the first successful check (design D15: only then do we know
    *  which file is "the latest"), and never while a download runs — the sweep must not race a file
    *  that is about to be adopted. A job that ends triggers it again. */
-  async function sweepIfDue(): Promise<void> {
-    if (sweptOnce || !checkedOnce || inFlight) return;
+  let sweepRunning: Promise<void> | null = null;
+  function sweepIfDue(): Promise<void> {
+    if (sweptOnce || !checkedOnce || inFlight) return Promise.resolve();
     sweptOnce = true;
+    const run = sweepNow();
+    sweepRunning = run;
+    return run.finally(() => { if (sweepRunning === run) sweepRunning = null; });
+  }
+  async function sweepNow(): Promise<void> {
     const keep = new Set<string>(RESERVED_CACHE_FILES);
     if (pending) keep.add(pending.assetName);
     try { if (cachedUpdateStatus?.download_url) keep.add(deriveDownloadFilename(cachedUpdateStatus.download_url, process.platform)); } catch { /* not an installer url */ }
@@ -875,6 +905,7 @@ function createUpdateService() {
   let brakeCache: { key: string; at: number; signed: { ok: true } & SignedBytes } | null = null;
   let brakeFlight: { key: string; promise: Promise<BrakeResult> } | null = null;
   let preparedPlan: ExitPlan | null = null;
+  const hashedOk = new Map<string, number>(); // path+size+mtime+release → when it last matched its signed hash
   /** Staged name for which a root Mac helper is already waiting (so a second Restart does not ask again). */
   let rootHelperFor: string | null = null;
   let userHelperFor: string | null = null;
@@ -911,8 +942,10 @@ function createUpdateService() {
   }
 
   /** Sync and memory-only (the quit path never reads a file): may a person's plain quit install the update? */
-  function quitInstallEligible(): boolean {
-    if (!autoInstallEnabled() || devFakeUpdate) return false;
+  function quitInstallEligible(): boolean { return autoInstallEnabled() && quitInstallPossible(); }
+  /** quitInstallEligible without the switch: staged, not refused, under the failure limit, latest. */
+  function quitInstallPossible(): boolean {
+    if (devFakeUpdate) return false;
     const p = pending;
     if (!p || !pendingFileOk || cachedUpdateStatus?.latest !== p.version) return false;
     if (failuresFor(p.version) >= MAX_FAILED_ATTEMPTS) return false;
@@ -958,8 +991,15 @@ function createUpdateService() {
   async function rehash(p: Pending, target: string): Promise<boolean> {
     const signed = brakeCache && brakeCache.key === brakeKey(p) ? brakeCache.signed : null;
     if (!signed) return false;
+    // WHY remembered (code review F6): Restart already hashed this exact file moments before the quit; hashing
+    // 150-180 MB again inside the 6 s teardown window was how a Restart ran out of time and reopened the old
+    // version. Same path, size and modification time, and the same signed answer, within the brake's 10 minutes.
+    const st = await fs.promises.stat(target).catch(() => null);
+    const tag = st ? `${brakeKey(p)}|${target}|${st.size}|${st.mtimeMs}` : '';
+    const seen = tag ? hashedOk.get(tag) : undefined;
+    if (seen !== undefined && Date.now() - seen <= BRAKE_TTL_MS) return true;
     const res = await verifyAgainstRelease(target, p, { signed, fileName: p.assetName });
-    if (res.code === null) return true;
+    if (res.code === null) { if (tag) hashedOk.set(tag, Date.now()); return true; }
     if (!res.transient && pending === p) { await setPending(null); await removePendingFiles(p); } // a file that fails its check is never kept
     return false;
   }
@@ -974,7 +1014,7 @@ function createUpdateService() {
     child.unref();
   }
 
-  async function buildPlan(p: Pending, kind: NonNullable<ReturnType<typeof exitInstallKind>>): Promise<ExitPlan | null> {
+  async function buildPlan(p: Pending, kind: NonNullable<ReturnType<typeof exitInstallKind>>, startHelper = true): Promise<ExitPlan | null> {
     if (kind === 'win') {
       const installer = pendingFilePath(p);
       return await rehash(p, installer) ? { kind: 'win-nsis', version: p.version, installer } : null;
@@ -988,7 +1028,7 @@ function createUpdateService() {
     // Mac: the signed disk image is re-hashed (the staged bundle was signature-checked when it was staged).
     if (!(await rehash(p, pendingFilePath(p)))) return null;
     if (kind === 'mac-root' && rootHelperFor !== p.stagedName) return null; // the password box was never answered
-    if (kind === 'mac-user') startMacUserHelper(p);
+    if (kind === 'mac-user' && startHelper) startMacUserHelper(p);
     return { kind: 'mac-go', version: p.version, goFile: macGoPaths(staged).goFile };
   }
 
@@ -997,6 +1037,16 @@ function createUpdateService() {
    * memory — or nothing. The quit waits at most 3 s for the brake; no answer => no install this quit.
    */
   async function prepareExit(action: 'install' | 'install-relaunch', systemShutdown: () => boolean = () => false): Promise<void> {
+    // WHY the whole run is capped (code review F6): teardown waits at most 6 s for this; a plan that would land
+    // after that is useless, so give up at 5 s rather than leave the quit's outcome to a race.
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      prepareExitNow(action, systemShutdown),
+      new Promise<void>((resolve) => { cap = setTimeout(resolve, PREPARE_CAP_MS); }),
+    ]).finally(() => { if (cap) clearTimeout(cap); });
+  }
+  const PREPARE_CAP_MS = 5_000;
+  async function prepareExitNow(action: 'install' | 'install-relaunch', systemShutdown: () => boolean): Promise<void> {
     preparedPlan = null;
     const p = pending;
     // WHY the shutdown veto here AND at the exit hook (review): an installer racing an OS shutdown is the
@@ -1024,6 +1074,23 @@ function createUpdateService() {
     // (the brake could not be confirmed); reopening the old version beats an app that just vanishes.
     if (!plan) { if (relaunch) appRelaunch(); return; }
     runExitPlan(plan, relaunch, { attemptPath, failures: failuresFor(plan.version), relaunch: appRelaunch, warn: (m, d) => console.warn('[update]', m, d) });
+  }
+
+  /**
+   * Restart, right before it quits: could the exit step run? Same checks as prepareExit (brake, re-hash, the
+   * staged copy) but nothing is started. WHY (code review F6): the person is told NOW, in the popup, when the
+   * install cannot be prepared; before, the app quit and silently reopened the old version. It also warms the
+   * brake answer and the hash memory so the real prepare during the quit is instant.
+   */
+  async function confirmInstallReady(): Promise<void> {
+    const p = pending;
+    if (!p || !pendingFileOk) throw new UpdateInstallError('spawn-failed', 'the downloaded update is no longer there');
+    const kind = exitInstallKind(p);
+    if (!kind) return; // the interactive installer verifies for itself
+    const verdict = await runBrake(p);
+    if (verdict === 'pulled') throw new UpdateInstallError('signature-invalid', 'this release was withdrawn');
+    if (verdict !== 'ok') throw new UpdateInstallError('network-failed', 'could not confirm this release is still current');
+    if (!(await buildPlan(p, kind, false))) throw new UpdateInstallError('spawn-failed', 'the update could not be prepared for installing');
   }
 
   // ---- Restart to update: the pieces update-restart.ts calls ----
@@ -1078,6 +1145,8 @@ function createUpdateService() {
     // system clears. Asking for a password and quitting, only to find nothing to install, is the worst
     // outcome; so re-stage it now, or fall back to today's interactive path (the disk image) with no password asked.
     else if (!(await ensureStaged(p))) return { kind: 'interactive' };
+    // (the AppImage's staged copy is hashed here too, so the quit-time prepare finds it already checked)
+    if (exitKind === 'appimage' && !(await rehash(p, stagedPathOf(p)!))) return { kind: 'interactive' };
     return { kind: 'exit-install', macPassword: exitKind === 'mac-root' };
   }
 
@@ -1109,14 +1178,12 @@ function createUpdateService() {
     return launch({ jobId: dl.jobId, filePath: dl.filePath }, false);
   }
 
-  /** Is anything downloaded and verified that Restart can use? */
-  function hasPending(): boolean { return !!pending && pendingFileOk; }
 
   startInit();
 
-  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, refreshAutoInstall, autoInstallEnabled, download, ensureDownloaded, cancel, launch, getCachedDownload, onFirstWindowReady, onStatusChange, fetchUrlToBuffer, afterCheckDone: () => afterCheck,
+  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, refreshAutoInstall, autoInstallEnabled, download, cancel, launch, getCachedDownload, onFirstWindowReady, onStatusChange, fetchUrlToBuffer, afterCheckDone: () => afterCheck,
     forTests: { rehash: (target: string) => (pending ? rehash(pending, target) : Promise.resolve(false)) },
-    quitInstallEligible, prepareExit, runExitInstall, refreshBrake, planRestart, startMacRootHelper, openDiskImage, launchInteractive, hasPending };
+    quitInstallEligible, prepareExit, confirmInstallReady, releaseLaunch, runExitInstall, refreshBrake, planRestart, startMacRootHelper, openDiskImage, launchInteractive };
 }
 
 export type UpdateService = ReturnType<typeof createUpdateService>;

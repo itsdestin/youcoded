@@ -595,7 +595,7 @@ function applyStallSwitch(impls: Record<string, Record<string, unknown>>): void 
  *  password (a Linux package, or a Mac account that is not an administrator). */
 function updateStatusSwitch(): {
   current: string; latest: string; update_available: true; download_url: string;
-  downloaded?: boolean; needs_password?: boolean;
+  downloaded?: boolean; needs_password?: boolean; installs_on_quit?: boolean;
 } | null {
   const mode = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('update');
   if (mode === 'ready' || mode === 'ready-password') return {
@@ -605,6 +605,7 @@ function updateStatusSwitch(): {
     download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.4.0',
     downloaded: true,
     needs_password: mode === 'ready-password',
+    installs_on_quit: mode === 'ready',
   };
   if (mode !== 'available') return null;
   return {

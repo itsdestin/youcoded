@@ -11,6 +11,8 @@ function setup(o: { plan?: Plan; sessions?: string[]; answer?: { close: boolean;
     launchInteractive: vi.fn(async () => (o.launch ?? { success: true, quitPending: true }) as never),
     startMacRootHelper: vi.fn(async () => o.macPassword ?? 'started'),
     openDiskImage: vi.fn(async () => {}),
+    confirmInstallReady: vi.fn(async () => {}),
+    releaseLaunch: vi.fn(),
   };
   const deps = {
     service: () => svc,
@@ -96,6 +98,21 @@ describe('Restart to update', () => {
   it('hands a command to run by hand back to the popup instead of quitting', async () => {
     const t = setup({ plan: { kind: 'interactive' }, launch: { success: true, quitPending: false, fallback: 'manual', command: 'sudo x', filePath: '/f' } });
     expect(await t.restart()).toEqual({ restarting: false, fallback: { kind: 'manual', command: 'sudo x', filePath: '/f' } });
+    expect(t.deps.quitForUpdate).not.toHaveBeenCalled();
+  });
+
+  it('tells the person now when the install cannot be prepared, instead of quitting and reopening the old version (review F6)', async () => {
+    const t = setup();
+    t.svc.confirmInstallReady.mockRejectedValue(Object.assign(new Error('network-failed: could not confirm this release is still current'), { code: 'network-failed' }));
+    await expect(t.restart()).rejects.toMatchObject({ code: 'network-failed' });
+    expect(t.deps.quitForUpdate).not.toHaveBeenCalled();
+  });
+
+  it('frees the launch lock when a shutdown takes over after the installer ran (review F11)', async () => {
+    const t = setup({ plan: { kind: 'interactive' } });
+    t.svc.launchInteractive.mockImplementation(async () => { t.state.shutdown = true; return { success: true, quitPending: true } as never; });
+    expect(await t.restart()).toEqual({ restarting: false });
+    expect(t.svc.releaseLaunch).toHaveBeenCalledTimes(1);
     expect(t.deps.quitForUpdate).not.toHaveBeenCalled();
   });
 

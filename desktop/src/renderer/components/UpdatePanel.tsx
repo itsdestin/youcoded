@@ -64,7 +64,7 @@ function updateErrorMessage(code: string): string {
 
 /** The one sentence a failed update shows in its notice: the code's own words when it has
  *  some, else which step stopped — never a guessed cause. */
-function updateFailureSentence(code: string, stage: 'download' | 'launch'): string {
+function updateFailureSentence(code: string, stage: 'download' | 'launch' | 'restart'): string {
   const own = updateErrorMessage(code);
   if (own !== 'Launch failed') return own;
   if (stage === 'launch' && code === 'busy') return 'Another update installation is already running.';
@@ -81,6 +81,8 @@ interface UpdateStatus {
   /** #183: installing asks for a password (Linux package, non-administrator Mac), so
    *  quitting does not install it — only Restart to update does. */
   needs_password?: boolean;
+  /** #183 F5: a quit really would install it (staged, not refused, under the failure limit); the switch is separate. */
+  installs_on_quit?: boolean;
 }
 
 // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
@@ -142,7 +144,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // Linux system package with no way to ask for a password: the download is
     // on disk and `command` finishes it (2026-09-20).
     | { kind: 'manual'; command: string; filePath: string }
-    | { kind: 'error'; code: string; stage: 'download' | 'launch'; command?: string; output?: string };
+    | { kind: 'error'; code: string; stage: 'download' | 'launch' | 'restart'; command?: string; output?: string };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
   const [reportMode, setReportMode] = useState<'report' | 'diagnose' | null>(null);
@@ -356,7 +358,14 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       if (result.fallback?.kind === 'browser') { setInstallState({ kind: 'idle' }); onClose(); return; }
       if (!result.restarting) setInstallState({ kind: 'idle' });
     } catch (e: unknown) {
-      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'launch' });
+      // WHY not "The installer didn't start." (code review F7, error-message-standards): Restart can fail before
+      // any installer exists (the release could not be confirmed, a helper failed to start). A code that has
+      // its own sentence keeps it; anything else is the general error with the real text in Details.
+      const code = downloadErrorCode(e);
+      const known = updateErrorMessage(code) !== 'Launch failed' || code === 'busy';
+      setInstallState(known
+        ? { kind: 'error', code, stage: 'launch' }
+        : { kind: 'error', code: 'restart-failed', stage: 'restart', output: plainMessage(e) });
     }
   }, [onClose]);
 
@@ -379,11 +388,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       // WHY (#183 T3): "Update now" is still ONE press. With the popup open, the finished download goes
       // straight into Restart to update. Closed meanwhile, nothing restarts behind the person's back: the
       // popup is simply Ready (Restart to update) the next time they open it.
-      if (openRef.current) await handleRestart();
+      // (Design note from the code review: also not where a password box would come next. Contract R8: on a
+      // password computer the person presses Restart to update themselves.)
+      if (openRef.current && !updateStatus.needs_password) await handleRestart();
     } catch (e: unknown) {
       setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
-  }, [installState, runLaunch, handleRestart]);
+  }, [installState, runLaunch, handleRestart, updateStatus.needs_password]);
 
   const readyToRestart = !!updateStatus.downloaded && (installState.kind === 'idle' || installState.kind === 'ready');
 
@@ -475,9 +486,12 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         subtitle={updateStatus.update_available && updateStatus.downloaded
           ? (updateStatus.needs_password
             ? 'Downloaded. Restarting asks for your password, then installs it.'
-            : autoInstall === false
-              ? 'Downloaded. Restart when you are ready.'
-              : 'Downloaded. Installs by itself the next time you quit YouCoded.')
+            // WHY all three (code review F5): "installs by itself" is only true when the switch is ON (and known),
+            // the copy is staged, the install is not refused here and it has not failed twice. Otherwise the
+            // approved "Restart when you are ready." line, never a promise a quit will not keep.
+            : autoInstall === true && updateStatus.installs_on_quit === true
+              ? 'Downloaded. Installs by itself the next time you quit YouCoded.'
+              : 'Downloaded. Restart when you are ready.')
           : undefined}
         // WHY the shared body + footer (close-session-friction proposal 1): it scrolled its own
         // notes with no fade and drew a full-width line above its footer (guide: no full-width
@@ -526,6 +540,15 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                   </span>
                 </Button>
               </div>
+            ) : installState.kind === 'error' && installState.stage === 'restart' ? (
+              <ErrorState
+                title="Couldn't restart to update."
+                explainer="Your current version is still running."
+                onDiagnose={() => setReportMode('diagnose')}
+                onReportBug={() => setReportMode('report')}
+                onRetry={handleRestart}
+                details={installState.output}
+              />
             ) : installState.kind === 'error' && installState.code !== 'signature-invalid' ? (
               <ErrorState
                 {...(unknownOutcome ? {

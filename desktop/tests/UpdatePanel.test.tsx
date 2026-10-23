@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import UpdatePanel from '../src/renderer/components/UpdatePanel';
+import { resetAutoInstallStoreForTests } from '../src/renderer/components/BetaChannelToggle';
 
 // The StatusBar version pill popup.
 //
@@ -528,5 +529,72 @@ describe('UpdatePanel — the update button after a failure', () => {
       expect(await screen.findByText("The installer didn't start.")).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /run in terminal/i })).toBeNull();
     });
+  });
+});
+
+// Code review F5 / F7 / design note (#183).
+describe('UpdatePanel — what it promises and how a failed Restart is worded', () => {
+  const READY = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x', downloaded: true } as Record<string, unknown> as never;
+  const INSTALLS = 'Downloaded. Installs by itself the next time you quit YouCoded.';
+  const MANUAL = 'Downloaded. Restart when you are ready.';
+  function mountApi(switchState: unknown, extra: Record<string, unknown> = {}) {
+    resetAutoInstallStoreForTests();
+    (window as any).claude = { update: {
+      changelog: vi.fn().mockResolvedValue({ markdown: '# x', entries: [{ version: '1.1.2', body: 'b' }], fromCache: false }),
+      onProgress: vi.fn(() => () => {}), onInstallProgress: vi.fn(() => () => {}),
+      getCachedDownload: vi.fn().mockResolvedValue(null), download: vi.fn().mockResolvedValue({ jobId: 'j', filePath: '/tmp/x', bytesTotal: 0 }),
+      cancel: vi.fn(), launch: vi.fn(), restartToUpdate: vi.fn().mockResolvedValue({ restarting: false }),
+      getAutoInstall: vi.fn().mockResolvedValue(switchState), setAutoInstall: vi.fn(), ...extra,
+    }, shell: { openExternal: vi.fn(), openChangelog: vi.fn() } };
+  }
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('says "installs by itself" only when the switch is on AND a quit really will install', async () => {
+    mountApi({ supported: true, enabled: true });
+    render(<UpdatePanel open onClose={() => {}} updateStatus={{ ...(READY as object), installs_on_quit: true } as never} />);
+    expect(await screen.findByText(INSTALLS)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['the install is refused or not staged here, or failed twice', { supported: true, enabled: true }, { installs_on_quit: false }],
+    ['the status does not say a quit will install', { supported: true, enabled: true }, {}],
+    ['the switch is off', { supported: true, enabled: false }, { installs_on_quit: true }],
+    ['the switch state is not known yet', { supported: false }, { installs_on_quit: true }],
+  ])('says "Restart when you are ready" when %s', async (_why, sw, status) => {
+    mountApi(sw);
+    render(<UpdatePanel open onClose={() => {}} updateStatus={{ ...(READY as object), ...status } as never} />);
+    expect(await screen.findByText(MANUAL)).toBeInTheDocument();
+    expect(screen.queryByText(INSTALLS)).not.toBeInTheDocument();
+  });
+
+  it('a Restart that fails for no installer reason is not called an installer failure; it shows the general error with the real text', async () => {
+    mountApi({ supported: true, enabled: true }, { restartToUpdate: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'update:restart-to-update': Error: network-failed: could not confirm this release is still current")) });
+    render(<UpdatePanel open onClose={() => {}} updateStatus={READY} />);
+    fireEvent.click(await screen.findByRole('button', { name: /restart to update/i }));
+    expect(await screen.findByText("Couldn't restart to update.")).toBeInTheDocument();
+    expect(screen.queryByText(/installer didn't start/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/update didn't download/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /diagnose/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    fireEvent.click(screen.getByText('Details'));
+    expect(screen.getByText(/could not confirm this release is still current/)).toBeInTheDocument();
+  });
+
+  it('a Restart that fails with a code that has its own sentence keeps that sentence', async () => {
+    mountApi({ supported: true, enabled: true }, { restartToUpdate: vi.fn().mockRejectedValue(new Error('install-cancelled: authentication cancelled')) });
+    render(<UpdatePanel open onClose={() => {}} updateStatus={READY} />);
+    fireEvent.click(await screen.findByRole('button', { name: /restart to update/i }));
+    expect(await screen.findByText('The password prompt was closed, so nothing was installed.')).toBeInTheDocument();
+  });
+
+  it('Update now does not run on into the password step: on a password computer the person presses Restart themselves', async () => {
+    mountApi({ supported: true, enabled: true });
+    const status = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x', needs_password: true } as never;
+    render(<UpdatePanel open onClose={() => {}} updateStatus={status} />);
+    fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+    await waitFor(() => expect((window as any).claude.update.download).toHaveBeenCalled());
+    await screen.findByRole('button', { name: /launch installer|restart to update/i });
+    expect((window as any).claude.update.restartToUpdate).not.toHaveBeenCalled();
   });
 });

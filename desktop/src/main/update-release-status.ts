@@ -41,6 +41,8 @@ export interface UpdateStatus {
   needs_password?: boolean;
   /** #183: no in-app install here (unpackaged; Mac bundle misnamed/translocated; AppImage folder read-only). */
   install_refused?: boolean;
+  /** #183: a person's quit WOULD install it (everything but the switch): staged, not refused, under the failure limit. */
+  installs_on_quit?: boolean;
 }
 
 /** The file a Linux install of each kind can actually apply to itself. */

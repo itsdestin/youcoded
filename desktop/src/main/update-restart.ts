@@ -11,7 +11,7 @@ import type { UpdateService } from './update-service';
 export type RestartResult = UpdateRestartResult;
 
 export interface RestartDeps {
-  service: () => Pick<UpdateService, 'planRestart' | 'launchInteractive' | 'startMacRootHelper' | 'openDiskImage'>;
+  service: () => Pick<UpdateService, 'planRestart' | 'launchInteractive' | 'startMacRootHelper' | 'openDiskImage' | 'confirmInstallReady' | 'releaseLaunch'>;
   /** Every session in every window (the prompt counts them all). */
   allSessionIds: () => string[];
   /** Ask the MAIN window, under the update's OWN request key (not any window's close slot). */
@@ -29,7 +29,8 @@ export function createRestartToUpdate(deps: RestartDeps): () => Promise<RestartR
     if (!result.success) throw new UpdateInstallError(result.error, result.output);
     if ('fallback' in result && result.fallback === 'manual') return { restarting: false, fallback: { kind: 'manual', command: result.command, filePath: result.filePath } };
     if ('fallback' in result && result.fallback === 'browser') return { restarting: false, fallback: { kind: 'browser' } };
-    if (deps.shuttingDown()) return { restarting: false };
+    // A shutdown began after the installer ran: nothing will quit for us, so free the launch lock (review F11).
+    if (deps.shuttingDown()) { deps.service().releaseLaunch(); return { restarting: false }; }
     // The installer already ran (and, on Linux, already armed the relaunch): nothing to install at exit.
     deps.quitForUpdate(untrack(), false);
     return { restarting: true };
@@ -68,6 +69,10 @@ export function createRestartToUpdate(deps: RestartDeps): () => Promise<RestartR
       }
       if (deps.shuttingDown()) return { restarting: false }; // the root helper waits for the go file that never comes
     }
+    // WHY here (code review F6): tell the person now if the install cannot be prepared, instead of quitting and
+    // reopening the old version with no word. Throws; the popup shows it.
+    await svc.confirmInstallReady();
+    if (deps.shuttingDown()) return { restarting: false };
     deps.quitForUpdate(untrack(), true);
     return { restarting: true };
   }
