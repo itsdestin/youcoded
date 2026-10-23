@@ -698,3 +698,21 @@ describe('AskpassServer: no test file constructs one without isolating its socke
     expect(offenders).toEqual([]);
   });
 });
+
+// 2026-10-22: every native session's Bash env carries one askpass socket path for
+// the whole run; a deleted file is re-created as sessions start (socket-repair.ts).
+describe.skipIf(NOT_LINUX)('AskpassServer.ensureListening', () => {
+  it('re-creates a deleted socket file that clients can reach again', async () => {
+    const { server } = await startTestServer();
+    const p = server.socketPath!;
+    fs.unlinkSync(p);
+    await server.ensureListening();
+    expect(fs.statSync(p).mode & 0o777).toBe(0o600);
+    await new Promise<void>((resolve, reject) => {
+      const c = net.createConnection(p, () => { c.end(); resolve(); });
+      c.on('error', reject);
+    });
+    await server.stop();
+    expect(fs.existsSync(p)).toBe(false);
+  });
+});
