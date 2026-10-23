@@ -232,6 +232,13 @@ export type TranscriptEventType =
   // Unlike session-error this IS persisted: a barrier that vanished on resume
   // would silently resurrect the context the user deliberately dropped.
   | 'context-clear'
+  // BOTH runtimes: the conversation moved to another model, drawn as the thin
+  // "Model switched to …" divider (Destin, 2026-10-22: one look for both). Claude
+  // Code's comes from its "Set model to …" reply line (transcript-watcher.ts
+  // modelSwitchFromStdout), so a declined switch ("Kept model as …") draws none;
+  // a native session's is persisted by HarnessSession.setBinding. Read from the
+  // record on every screen and on reopen; never enters model history.
+  | 'model-switch'
   // Native-runtime only: a user-invoked skill (/skill-name, M3 item 1). Persisted
   // because the skill's instructions ARE part of the model's history — a resume
   // that dropped them would replay a conversation whose first move makes no sense.

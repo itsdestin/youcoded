@@ -29,7 +29,7 @@ import { MATRIX, MATRIX_TYPES } from './helpers/transcript-event-matrix';
 const ALL_TYPES: Record<TranscriptEventType, true> = {
   'user-message': true, 'user-interrupt': true, 'assistant-text': true, 'tool-use': true,
   'tool-result': true, 'replay-complete': true, 'turn-complete': true, 'assistant-thinking': true,
-  'session-error': true, 'skill-invoked': true, 'context-clear': true, 'compact-summary': true,
+  'session-error': true, 'skill-invoked': true, 'context-clear': true, 'model-switch': true, 'compact-summary': true,
   'subagent-usage': true, 'background-task': true,
 };
 

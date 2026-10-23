@@ -1163,6 +1163,11 @@ export class HarnessSession extends EventEmitter {
     // model had, so `null` is a real value here and only `undefined` skips.
     if (pricing !== undefined) this.opts.pricing = pricing;
     if (free !== undefined) this.opts.free = free;
+    // WHY (2026-10-22): a native switch used to leave no trace in the chat, while Claude Code's
+    // showed as a stray "/model …" bubble. Both now record a `model-switch` line, drawn as the same
+    // "Model switched to …" divider. Emitted, so the host persists it and every screen sees it live;
+    // a same-binding refresh (pricing, context window) is not a switch and writes nothing.
+    if (changed) this.emitEvent('model-switch', { model: binding.modelId });
   }
 
   private stripOpenAIContinuation(): void {

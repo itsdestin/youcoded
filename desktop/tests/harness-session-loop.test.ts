@@ -2828,6 +2828,16 @@ describe('ModelSearch attachment mirrors Task\'s gate', () => {
     expect(toolNames(s)).not.toContain('ModelSearch');
   });
 
+  it('a model swap records one model-switch line; re-applying the same model records none', () => {
+    const s = new HarnessSession(makeOpts({}), async () => ({} as any));
+    const events = collect(s);
+    const current = s.binding;
+    s.setBinding({ ...current }, 8_192);                                  // a pricing or window refresh
+    expect(events.filter((e) => e.type === 'model-switch')).toEqual([]);
+    s.setBinding({ providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash' });
+    expect(events.filter((e) => e.type === 'model-switch').map((e) => e.data)).toEqual([{ model: 'deepseek/deepseek-v4-flash' }]);
+  });
+
   it('a model swap re-gates ModelSearch exactly like Task', () => {
     const s = new HarnessSession(
       makeOpts({ profile: { ...CLOUD_DEFAULT, canDelegate: true } }),

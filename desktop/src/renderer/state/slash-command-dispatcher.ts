@@ -18,7 +18,7 @@
 import type { ChatAction, TimelineEntry, UsageSnapshot, SessionChatState } from './chat-types';
 import { buildCopyPayload } from '../utils/extract-copy-blocks';
 import { copyText } from '../components/context-menu/clipboard';
-import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
+import { claudeAliasForModelId, type ClaudeAlias } from '../../shared/model-ids';
 import { getCapabilities } from '../platform';
 
 /** The host keeps a record and draws the shared lines itself (one-core R5-4a): this screen must not draw them as well. */
@@ -237,19 +237,9 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         // nothing honest to show as a confirmation.
         if (alias && input.callbacks.onModelSwitchCommand) {
           const result = input.callbacks.onModelSwitchCommand(alias);
-          if (result === 'sent') {
-            // The divider is drawn from the computer's record (the typed command carries `notice`), so it shows on every screen exactly once.
-            if (input.sessionId && !hostDraws()) {
-              input.dispatch({
-                type: 'MODEL_SWITCH_MARKER',
-                sessionId: input.sessionId,
-                markerId: `model-switch-${Date.now()}`,
-                timestamp: Date.now(),
-                label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}`,
-              });
-            }
-            return { handled: true };
-          }
+          // WHY no divider drawn here (2026-10-22): Claude Code's "Set model to" reply in the transcript
+          // (the `model-switch` event) draws it on every screen and on reopen, and only if it switched.
+          if (result === 'sent') return { handled: true };
           if (result === 'blocked') {
             // App.tsx already toasted ("Claude is waiting for your response").
             // Swallow rather than let "/model opus" leak into Claude Code's

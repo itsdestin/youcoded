@@ -3483,14 +3483,25 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // Same divider shape as CLEAR_TIMELINE, just for a typed `/model <alias>`
-    // command — see slash-command-dispatcher.ts for why this never touches
-    // isThinking (the command is Claude-Code-local and never produces a turn
-    // to end one with).
+    // Same divider shape as CLEAR_TIMELINE, for a recorded model switch (the
+    // `model-switch` transcript event, both runtimes). Never touches isThinking:
+    // a switch produces no turn to end one with.
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
       if (hasMarker(session, action.markerId)) return state; // see CLEAR_TIMELINE
+      // WHY: Shift+Space steps through every model to reach one, so three quick presses wrote three
+      // lines in a row. Back-to-back switches with nothing said between them keep only where the
+      // user landed: the newest line replaces the one directly above it.
+      let last = session.timeline.length - 1;
+      let prev = session.timeline[last];
+      while (prev?.kind === 'user' && prev.pending === true) prev = session.timeline[--last];
+      if (!session.currentTurnId && prev?.kind === 'system-marker' && prev.marker.variant === 'model') {
+        const timeline = [...session.timeline];
+        timeline[last] = { kind: 'system-marker', marker: { id: action.markerId, timestamp: action.timestamp, label: action.label, variant: 'model' } };
+        next.set(action.sessionId, { ...session, timeline });
+        return next;
+      }
       next.set(action.sessionId, {
         ...session,
         ...appendSystemMarker(session, {
