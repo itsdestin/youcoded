@@ -212,7 +212,14 @@ async function readArchivedRecords(root: string): Promise<ArtifactRecord[]> {
   catch { return []; }
   const byId = new Map<string, ArtifactRecord>();
   for (const n of names) {
-    const text = (await gunzip(await fs.promises.readFile(path.join(archiveDir(root), n)))).toString('utf8');
+    // WHY (2026-10-22 review): one truncated or corrupt archive used to make the whole restore throw, so every
+    // good archive beside it was unreachable too. Skip the unreadable file, name it, restore from the rest.
+    let text: string;
+    try { text = (await gunzip(await fs.promises.readFile(path.join(archiveDir(root), n)))).toString('utf8'); }
+    catch (e) {
+      log('WARN', 'ArtifactCleanup', 'skipping an unreadable archive file during restore', { root, file: n, error: String((e as Error)?.message ?? e) });
+      continue;
+    }
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       try { const rec = JSON.parse(line) as ArtifactRecord; if (rec && typeof rec.id === 'string') byId.set(rec.id, rec); } catch { /* skip a damaged line */ }

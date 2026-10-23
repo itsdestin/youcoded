@@ -27,7 +27,10 @@ if (!fs.existsSync(archiveDir)) { console.log('nothing archived for this project
 
 const byId = new Map();
 for (const name of fs.readdirSync(archiveDir).filter((n) => n.endsWith('.jsonl.gz')).sort()) {
-  const text = zlib.gunzipSync(fs.readFileSync(path.join(archiveDir, name))).toString('utf8');
+  // WHY (2026-10-22 review): one corrupt archive used to abort the whole restore; skip it, name it, use the rest.
+  let text;
+  try { text = zlib.gunzipSync(fs.readFileSync(path.join(archiveDir, name))).toString('utf8'); }
+  catch (e) { console.warn(`warning: skipping unreadable archive file ${name}: ${e.message}`); continue; }
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try { const r = JSON.parse(line); if (r && typeof r.id === 'string') byId.set(r.id, r); } catch { /* damaged line: skip */ }
@@ -53,7 +56,10 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 fs.copyFileSync(sidecarPath, `${sidecarPath}.pre-restore-${stamp}.bak`, fs.constants.COPYFILE_EXCL);
 sidecar.artifacts.push(...add);
 // updatedAt is the app's compare-and-swap token: it must move forward.
-sidecar.updatedAt = new Date(Math.max(Date.now(), Date.parse(sidecar.updatedAt) + 1)).toISOString();
+// WHY the fallback (2026-10-22 review): a missing or invalid updatedAt made Date.parse() NaN, so Math.max gave NaN and
+// toISOString() threw a RangeError AFTER the .bak was written. NaN now counts as "no earlier stamp".
+const prevStamp = Date.parse(sidecar.updatedAt);
+sidecar.updatedAt = new Date(Math.max(Date.now(), Number.isNaN(prevStamp) ? 0 : prevStamp + 1)).toISOString();
 const tmp = `${sidecarPath}.restore.${process.pid}.tmp`;
 fs.writeFileSync(tmp, JSON.stringify(sidecar));
 fs.renameSync(tmp, sidecarPath);
