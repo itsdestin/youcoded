@@ -141,6 +141,10 @@ export function parseDesignatedRequirement(output: string): string | null {
 export async function stageMacApp(input: MacStageInput): Promise<string> {
   assertSafeVersion(input.version);
   const tmpDir = input.tmpDir ?? os.tmpdir();
+  // WHY beside the bundle whenever the user can write there (review): then the helper's two moves are renames
+  // on one volume and the gap where the bundle path is missing is microseconds. Only the password case stages
+  // in $TMPDIR (the bundle's folder is not ours to write), where the move can be a copy; update-exit.ts's helper
+  // restores a lone `.bak` on its next run if that copy is ever interrupted.
   const stagedName = input.needsPassword ? `youcoded-update-${input.version}` : `.YouCoded-update-${input.version}.app`;
   const stagedApp = stagedPathFor(stagedName, { platform: 'darwin', runningBundle: input.runningBundle, tmpDir })!;
   const mountPoint = await fs.promises.mkdtemp(path.join(tmpDir, 'youcoded-mount-'));

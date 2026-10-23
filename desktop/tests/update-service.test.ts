@@ -791,6 +791,49 @@ describe('update service installing', () => {
     });
   });
 
+  describe('guards inside prepare', () => {
+    it('a brake that cannot be answered in time blocks the install even though an older answer is still cached', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      await s.prepareExit('install'); s.runExitInstall(false, vi.fn()); // fetches and caches an ok answer; spent
+      mocks.spawn.mockClear();
+      const realNow = Date.now(); const spy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 11 * 60_000); // the cache is now stale
+      try {
+        mocks.httpHang = true;
+        const done = s.prepareExit('install');
+        await vi.advanceTimersByTimeAsync(3_000);
+        await done;
+        s.runExitInstall(false, vi.fn());
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      } finally { spy.mockRestore(); }
+    });
+
+    it('a re-hash without the brake\'s signed file never passes (it does not quietly fetch its own)', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      expect(await s.forTests.rehash(installerPath())).toBe(false); // no brake answer yet
+      await s.prepareExit('install');
+      expect(await s.forTests.rehash(installerPath())).toBe(true);  // same file, once the brake has fetched
+    });
+
+    it('a system shutdown vetoes the install, whether it starts before prepare or during teardown, and also Restart', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      await s.prepareExit('install', () => true);
+      s.runExitInstall(false, vi.fn());
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      let down = false;
+      await s.prepareExit('install-relaunch', () => down);   // prepared fine...
+      down = true;                                            // ...then the OS starts shutting down
+      const relaunch = vi.fn();
+      s.runExitInstall(true, relaunch, true);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(relaunch).not.toHaveBeenCalled();
+      let late = false;                                       // shutdown begins while prepare is still working
+      mocks.verify.mockImplementationOnce(async () => { late = true; return { assets: [] }; });
+      await s.prepareExit('install', () => late);
+      s.runExitInstall(false, vi.fn());
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the step at exit, per platform', () => {
     it('Windows: re-hashes the exact installer, then spawns it detached with /S --updated (--force-run for Restart) and writes the attempt', async () => {
       setup('win32'); const s = await load(); await ready(s);

@@ -190,6 +190,21 @@ describe('the exit hook (update-exit.ts)', () => {
     expect(fs.readFileSync(goFile, 'utf8')).toBe('install\n');
   });
 
+  it('Restart never just vanishes: a failed installer start reopens the app (thrown, or an error event), but a plain quit does not', () => {
+    const relaunch = vi.fn();
+    const plan = { kind: 'win-nsis' as const, version: '2.0.0', installer: 'C:\\Setup.exe' };
+    const throwing = vi.fn(() => { throw new Error('ENOENT'); });
+    expect(runExitPlan(plan, true, { spawn: throwing as never, attemptPath: attemptPath(), failures: 0, relaunch })).toBe(false);
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    runExitPlan(plan, false, { spawn: throwing as never, attemptPath: attemptPath(), failures: 0, relaunch });
+    expect(relaunch).toHaveBeenCalledTimes(1); // a quit install that failed does not reopen anything
+    const f = fakeSpawn();
+    runExitPlan(plan, true, { spawn: f.spawn as never, attemptPath: attemptPath(), failures: 0, relaunch });
+    const onError = f.child.on.mock.calls.find((c) => c[0] === 'error')![1] as (e: Error) => void;
+    onError(new Error('spawn failed'));
+    expect(relaunch).toHaveBeenCalledTimes(2);
+  });
+
   it('is synchronous and awaits nothing (the process is about to end)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'update-exit.ts'), 'utf8');
     const body = src.slice(src.indexOf('export function runExitPlan'), src.indexOf('// ─── Attempt record'));
@@ -236,6 +251,7 @@ describe('the Mac helper arguments', () => {
 // codesign/open/launchctl, so the YC_* seams stand in for them).
 describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () => {
   let bin: string; let log: string;
+  const me = process.getuid?.() ?? 0; // the root helper insists the private folder belongs to the user who started it
   const dead = () => { const r = spawnSync('true'); return String(spawnSync('sh', ['-c', 'true & echo $!']).stdout).trim() || String(r.pid); };
   beforeEach(() => {
     bin = path.join(root, 'bin'); fs.mkdirSync(bin); log = path.join(root, 'log.txt'); fs.writeFileSync(log, '');
@@ -315,13 +331,14 @@ describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () =
     const old = path.join(parent, 'YouCoded.app'); fs.mkdirSync(old); fs.writeFileSync(path.join(old, 'v'), 'old');
     const staged = path.join(folder, 'YouCoded.app'); fs.mkdirSync(staged); fs.writeFileSync(path.join(staged, 'v'), 'new');
     fs.writeFileSync(path.join(folder, 'go'), 'relaunch\n');
-    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: old, staged, mode: 'root', requirement: 'identifier "x"', uid: 501 }), { env: env(), encoding: 'utf8' });
+    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: old, staged, mode: 'root', requirement: 'identifier "x"', uid: me }), { env: env(), encoding: 'utf8' });
     expect(r.status).toBe(0);
     const calls = fs.readFileSync(log, 'utf8');
-    expect(calls.indexOf('chown -R root:wheel')).toBeGreaterThanOrEqual(0);
+    expect(calls).toContain('chown -h root:wheel'); // the folder, and links are never followed
+    expect(calls).toContain('chown -R -h root:wheel');
     expect(calls).toContain(`codesign --verify --deep --strict -R=identifier "x" ${staged}`);
-    expect(calls).toMatch(/chown -R \d+:\d+ /); // the original owner restored after the swap
-    expect(calls).toContain(`launchctl asuser 501 ${path.join(bin, 'open')} ${old}`);
+    expect(calls).toMatch(/chown -R -h \d+:\d+ /); // the original owner restored after the swap
+    expect(calls).toContain(`launchctl asuser ${me} ${path.join(bin, 'open')} ${old}`);
     expect(fs.readFileSync(path.join(old, 'v'), 'utf8')).toBe('new');
   });
 
@@ -330,9 +347,51 @@ describe.skipIf(process.platform === 'win32')('the Mac swap helper script', () =
     const old = path.join(parent, 'YouCoded.app'); fs.mkdirSync(old); fs.writeFileSync(path.join(old, 'v'), 'old');
     const staged = path.join(folder, 'YouCoded.app'); fs.mkdirSync(staged); fs.writeFileSync(path.join(staged, 'v'), 'evil');
     fs.writeFileSync(path.join(folder, 'go'), 'install\n');
-    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: old, staged, mode: 'root', requirement: 'req', uid: 501 }), { env: env({ YC_CODESIGN: path.join(bin, 'codesign-bad') }), encoding: 'utf8' });
+    const r = spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: old, staged, mode: 'root', requirement: 'req', uid: me }), { env: env({ YC_CODESIGN: path.join(bin, 'codesign-bad') }), encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(fs.readFileSync(path.join(old, 'v'), 'utf8')).toBe('old');
     expect(fs.existsSync(folder)).toBe(false);
+  });
+
+  // A root-mode layout whose folder/staged app can be swapped for links by the test.
+  function rootLayout(name: string) {
+    const parent = path.join(root, name); const folder = path.join(parent, 'youcoded-update-2.0.0'); fs.mkdirSync(folder, { recursive: true });
+    const old = path.join(parent, 'YouCoded.app'); fs.mkdirSync(old); fs.writeFileSync(path.join(old, 'v'), 'old');
+    const staged = path.join(folder, 'YouCoded.app'); fs.mkdirSync(staged); fs.writeFileSync(path.join(staged, 'v'), 'new');
+    fs.writeFileSync(path.join(folder, 'go'), 'install\n');
+    return { parent, folder, old, staged };
+  }
+  const runRoot = (l: { old: string; staged: string }, uid = me) =>
+    spawnSync('/bin/sh', macHelperArgv({ pid: Number(dead()), oldBundle: l.old, staged: l.staged, mode: 'root', requirement: 'req', uid }), { env: env(), encoding: 'utf8' });
+
+  it('root mode: refuses a staged app that is a symlink, before changing any owner', () => {
+    const l = rootLayout('r3'); const real = path.join(root, 'elsewhere'); fs.mkdirSync(real); fs.writeFileSync(path.join(real, 'v'), 'evil');
+    fs.rmSync(l.staged, { recursive: true }); fs.symlinkSync(real, l.staged);
+    expect(runRoot(l).status).toBe(1);
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
+    expect(fs.readFileSync(log, 'utf8')).not.toContain('chown');
+  });
+
+  it('root mode: refuses a private folder that is a symlink', () => {
+    const l = rootLayout('r4'); const real = path.join(root, 'elsewhere2'); fs.renameSync(l.folder, real);
+    fs.symlinkSync(real, l.folder);
+    expect(runRoot({ old: l.old, staged: l.staged }).status).toBe(1);
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
+    expect(fs.readFileSync(log, 'utf8')).not.toContain('chown');
+  });
+
+  it('root mode: refuses a private folder that does not belong to the user who started it', () => {
+    const l = rootLayout('r5');
+    expect(runRoot(l, me + 1).status).toBe(1);
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
+    expect(fs.readFileSync(log, 'utf8')).not.toContain('chown');
+  });
+
+  it('puts back a lone backup when the bundle path is missing (a helper killed mid-swap), before anything else', () => {
+    const l = layout('f');
+    fs.renameSync(l.old, l.old + '.bak'); // the state a killed swap leaves
+    run(l); // no go file: it also removes the staging
+    expect(fs.readFileSync(path.join(l.old, 'v'), 'utf8')).toBe('old');
+    expect(fs.existsSync(l.old + '.bak')).toBe(false);
   });
 });

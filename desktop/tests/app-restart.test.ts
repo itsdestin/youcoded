@@ -256,4 +256,14 @@ describe('quit install and Restart to update', () => {
     onWillQuit(vi.fn());
     expect(install).not.toHaveBeenCalled();
   });
+
+  it('a second quit while a restart is already under way does not downgrade it to a plain install', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, []);
+    await gatedQuit(deps(true).d);                 // Restart passed the gate: install-relaunch
+    await personQuit(deps(true));                   // the person quits again during teardown
+    expect(currentExitAction()).toBe('install-relaunch');
+    onWillQuit(vi.fn());
+    expect(install).toHaveBeenCalledWith(true, expect.any(Function));
+  });
 });

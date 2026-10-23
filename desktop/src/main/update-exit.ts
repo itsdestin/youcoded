@@ -48,7 +48,9 @@ export function runExitPlan(plan: ExitPlan, relaunch: boolean, deps: ExitDeps): 
   try {
     if (plan.kind === 'win-nsis') {
       const child = (deps.spawn ?? nodeSpawn)(plan.installer, nsisArgs(relaunch), { detached: true, stdio: 'ignore', windowsHide: false });
-      child.on?.('error', (e: Error) => warn('installer did not start', e));
+      // WHY relaunch on a failed start (review): Restart was pressed, so the app must not just vanish when
+      // the installer never ran; the old version reopens and the attempt record counts the failure.
+      child.on?.('error', (e: Error) => { warn('installer did not start', e); if (relaunch) deps.relaunch(); });
       child.unref();
       return true;
     }
@@ -65,6 +67,8 @@ export function runExitPlan(plan: ExitPlan, relaunch: boolean, deps: ExitDeps): 
     return true;
   } catch (e) {
     warn('exit install step failed', e);
+    // Same reasoning: a spawn that threw, a rename or go-file write that failed. Nothing was installed.
+    if (relaunch) { try { deps.relaunch(); } catch { /* the process is exiting anyway */ } }
     return false;
   }
 }
@@ -97,12 +101,23 @@ export async function readAttempt(attemptPath: string): Promise<AttemptRecord | 
  * It waits for the app to EXIT, then looks for the go file (rev 4 F2): present = swap, absent = delete the
  * staging and stop. So a held Restart, a crash, a SIGTERM or a plain quit with the switch off never swaps.
  * It gives up after 24 h. Any failed step puts the old bundle back.
+ *
+ * Interrupted swap (review): between `mv old → old.bak` and `mv staged → old` the bundle path briefly does
+ * not exist. A helper that is killed there leaves only `old.bak`; the next helper's first act is to put it
+ * back. The writable case stages BESIDE the bundle (same volume), so both moves are renames and the gap is
+ * microseconds. The password case stages in $TMPDIR, which may be another volume, so `mv staged → old` can be
+ * a copy and the gap longer: that case relies on this recovery and on the rollback below.
+ *
+ * Root mode trusts nothing a user could have swapped: it refuses symlinks at the folder and the staged app,
+ * insists the private folder is owned by the user who started it ($8), and uses `chown -h` so a link is
+ * never followed to a file outside the staging folder.
  * The YC_* variables are test seams only (a Linux runner has no codesign/open); osascript's root shell
  * starts with a clean environment, so they cannot reach the real run.
  */
 export const MAC_HELPER_SCRIPT = `
 pid="$1"; old="$2"; staged="$3"; go="$4"; cleanup="$5"; mode="$6"; req="$7"; uid="$8"
 tick="\${YC_SLEEP:-1}"; limit="\${YC_MAX_WAIT:-86400}"
+if [ ! -e "$old" ] && [ -d "$old.bak" ]; then mv "$old.bak" "$old"; fi
 n=0
 while kill -0 "$pid" 2>/dev/null; do
   n=$((n + 1))
@@ -116,16 +131,18 @@ bak="$old.bak"
 fail() { rm -rf "$cleanup"; exit 1; }
 [ -d "$staged" ] && [ -d "$old" ] || fail
 if [ "$mode" = root ]; then
+  if [ -L "$cleanup" ] || [ -L "$staged" ]; then exit 1; fi
+  [ "$(ls -dn "$cleanup" | awk '{print $3}')" = "$uid" ] || exit 1
   owner=$(ls -dn "$old" | awk '{print $3":"$4}')
-  \${YC_CHOWN:-chown} root:wheel "$cleanup" || fail
+  \${YC_CHOWN:-chown} -h root:wheel "$cleanup" || fail
   chmod 700 "$cleanup" || fail
-  \${YC_CHOWN:-chown} -R root:wheel "$staged" || fail
+  \${YC_CHOWN:-chown} -R -h root:wheel "$staged" || fail
   \${YC_CODESIGN:-codesign} --verify --deep --strict -R="$req" "$staged" || fail
 fi
 rm -rf "$bak"
 \${YC_MV:-mv} "$old" "$bak" || fail
 if \${YC_MV:-mv} "$staged" "$old"; then
-  if [ "$mode" = root ]; then \${YC_CHOWN:-chown} -R "$owner" "$old" || true; fi
+  if [ "$mode" = root ]; then \${YC_CHOWN:-chown} -R -h "$owner" "$old" || true; fi
   rm -rf "$bak"
 else
   rm -rf "$old"

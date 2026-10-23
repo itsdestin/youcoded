@@ -1962,7 +1962,7 @@ async function runShutdown(): Promise<void> {
   // The install's prepare step (brake + re-hash) runs in parallel with the rest of teardown (#183 T3).
   const action = currentExitAction();
   const updatePrepared = action === 'install' || action === 'install-relaunch'
-    ? shutdownStep('update-install', () => peekUpdateService()?.prepareExit(action))
+    ? shutdownStep('update-install', () => peekUpdateService()?.prepareExit(action, () => systemShutdown))
     : Promise.resolve();
   // Welcome back (design §1): flush the in-flight write BEFORE any other
   // teardown starts. runShutdown is the ONE function every exit route passes
@@ -2053,7 +2053,7 @@ app.on('before-quit', (e) => {
     quitInstallAllowed: () => !systemShutdown && !!peekUpdateService()?.quitInstallEligible(),
   }).catch(() => {});
 });
-registerInstallExit((relaunch, appRelaunch) => peekUpdateService()?.runExitInstall(relaunch, appRelaunch));
+registerInstallExit((relaunch, appRelaunch) => peekUpdateService()?.runExitInstall(relaunch, appRelaunch, systemShutdown));
 app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These

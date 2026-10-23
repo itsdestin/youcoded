@@ -992,10 +992,12 @@ function createUpdateService() {
    * runShutdown's prepare step (in parallel with teardown): brake + re-hash, leaving a ready-to-spawn plan in
    * memory — or nothing. The quit waits at most 3 s for the brake; no answer => no install this quit.
    */
-  async function prepareExit(action: 'install' | 'install-relaunch'): Promise<void> {
+  async function prepareExit(action: 'install' | 'install-relaunch', systemShutdown: () => boolean = () => false): Promise<void> {
     preparedPlan = null;
     const p = pending;
-    if (!p || !pendingFileOk || devFakeUpdate) return;
+    // WHY the shutdown veto here AND at the exit hook (review): an installer racing an OS shutdown is the
+    // half-written-app risk, and the shutdown can begin at any point during teardown. Restart is vetoed too.
+    if (!p || !pendingFileOk || devFakeUpdate || systemShutdown()) return;
     if (action === 'install' && !quitInstallEligible()) return;
     const kind = exitInstallKind(p);
     if (!kind) return;
@@ -1006,13 +1008,14 @@ function createUpdateService() {
     ]).finally(() => { if (timer) clearTimeout(timer); });
     if (verdict !== 'ok' || pending !== p) return;
     const plan = await buildPlan(p, kind);
-    if (plan && pending === p) preparedPlan = plan;
+    if (plan && pending === p && !systemShutdown()) preparedPlan = plan;
   }
 
   /** The exit hook (will-quit AND the watchdog's exit): instant, synchronous, nothing awaited. */
-  function runExitInstall(relaunch: boolean, appRelaunch: () => void): void {
+  function runExitInstall(relaunch: boolean, appRelaunch: () => void, systemShutdown = false): void {
     const plan = preparedPlan;
     preparedPlan = null;
+    if (systemShutdown) return; // the OS is shutting down: install nothing and reopen nothing
     // WHY relaunch even with no plan: Restart was pressed and the install could not be prepared in time
     // (the brake could not be confirmed); reopening the old version beats an app that just vanishes.
     if (!plan) { if (relaunch) appRelaunch(); return; }
@@ -1086,6 +1089,7 @@ function createUpdateService() {
   startInit();
 
   return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, refreshAutoInstall, autoInstallEnabled, download, ensureDownloaded, cancel, launch, getCachedDownload, onFirstWindowReady, onStatusChange, fetchUrlToBuffer, afterCheckDone: () => afterCheck,
+    forTests: { rehash: (target: string) => (pending ? rehash(pending, target) : Promise.resolve(false)) },
     quitInstallEligible, prepareExit, runExitInstall, refreshBrake, planRestart, startMacRootHelper, openDiskImage, launchInteractive, hasPending };
 }
 

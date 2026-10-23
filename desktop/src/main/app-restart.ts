@@ -143,7 +143,9 @@ export async function gatedQuit(deps: GatedQuitDeps): Promise<void> {
   else if (restart) exitAction = 'relaunch';
   // Decided AFTER the gate: the person may have spent a while on the unsaved list. SIGTERM/SIGINT never
   // come through here at all, so they can never install.
-  else if (!internal && d.quitInstallAllowed()) exitAction = 'install';
+  // WHY only from 'none' (review): a second quit while an earlier one already set 'relaunch' or
+  // 'install-relaunch' must not downgrade it into a plain install.
+  else if (!internal && exitAction === 'none' && d.quitInstallAllowed()) exitAction = 'install';
   await d.shutdown().finally(() => d.quit());
 }
 
