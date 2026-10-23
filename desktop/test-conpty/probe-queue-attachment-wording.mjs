@@ -8,7 +8,7 @@ import fs from 'node:fs';import path from 'node:path';import {fileURLToPath} fro
 import {startFakeApi} from './fake-anthropic.mjs';
 const self=fileURLToPath(import.meta.url),desktop=path.resolve(path.dirname(self),'..'),args=process.argv.slice(2),option=k=>args[args.indexOf(k)+1];
 const out=path.resolve(option('--out'));
-const cli=process.env.CLAUDE_CLI||(()=>{const d='/home/destin/.local/share/claude/versions';return path.join(d,fs.readdirSync(d).filter(n=>/^\d+(\.\d+)*$/.test(n)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})).at(-1));})();
+const cli=process.env.CLAUDE_CLI||(()=>{const d=path.join(process.env.HOME||'','.local/share/claude/versions');return path.join(d,fs.readdirSync(d).filter(n=>/^\d+(\.\d+)*$/.test(n)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})).at(-1));})();
 if(!args.includes('--no-auth'))throw Error('Explicit --no-auth required');
 if(!args.includes('--inside')){
  fs.mkdirSync(out,{recursive:false});fs.mkdirSync(out+'/tmp');
