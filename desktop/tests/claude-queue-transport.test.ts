@@ -21,6 +21,29 @@ async function stage(f: Awaited<ReturnType<typeof fixture>>) {
   return op.lease!;
 }
 describe('Claude queue transport', () => {
+  it('answers a wake that arrived during a failed attempt as soon as that attempt ends', async () => {
+    const f = await fixture(); await f.add();
+    const pending = f.transport.offer('app','incarnation',f.offer()); const op = await f.transport.poll('app','incarnation'); expect(op.kind).toBe('stage');
+    f.transport.requestIdle('app'); // the screen became safe mid-attempt
+    await f.transport.event('app','incarnation',{kind:'revoked',attemptId:op.lease!.attemptId,wireHash:op.lease!.wireHash,beforeAdmission:true,composerSafe:true}); await pending;
+    expect(f.queue.snapshot(f.id).items[0].status).toBe('waiting');
+    // Asked again at once, not after the backstop poll (3 s here, 20 s before).
+    expect(await Promise.race([f.transport.poll('app','incarnation'), new Promise(r => setTimeout(() => r('late'), 1000))])).toEqual({ kind: 'idle' });
+    await f.transport.close();
+  });
+  it('polls back quickly while a message is waiting and slowly when nothing is', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const f = await fixture(); let answered = false;
+      void f.transport.poll('app','incarnation').then(() => { answered = true; });
+      await vi.advanceTimersByTimeAsync(3500); expect(answered).toBe(false);
+      await vi.advanceTimersByTimeAsync(17000); expect(answered).toBe(true);
+      await f.add(); answered = false;
+      void f.transport.poll('app','incarnation').then(() => { answered = true; });
+      await vi.advanceTimersByTimeAsync(3500); expect(answered).toBe(true);
+      await f.transport.close();
+    } finally { vi.useRealTimers(); }
+  });
   it('dismisses unknown without replay, ignores late evidence, then drains fresh idle and batch cycles', async () => {
     const f = await fixture(); const original = await f.add();
     const pending = f.transport.offer('app','incarnation',f.offer()); const old = await stage(f);
@@ -194,7 +217,7 @@ describe('Claude queue transport', () => {
     const f = await fixture(); await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
     const original = f.worker.getMockImplementation()!;
     f.worker.mockImplementationOnce(async (_id, op) => op.type === 'queue-release' ? { status: 'unknown' } : original(_id, op));
-    await expect(f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash })).rejects.toThrow(/ownership release/);
+    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); // accepted is journaled; the release stays fenced (workerBlocked) for a later retry, never reported as unconfirmed
     await pending; expect(f.transport.canControl('app')).toBe(false);
     await f.transport.retryWorkerRelease('app', lease.attemptId); expect(f.transport.canControl('app')).toBe(true);
     expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-enter')).toHaveLength(1); await f.transport.close();
@@ -217,7 +240,7 @@ describe('Claude queue transport', () => {
     let safe = true; const f = await fixture(() => safe); await f.add();
     const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
     safe = false;
-    await expect(f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash })).rejects.toThrow('Input is still blocked');
+    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); // accepted is journaled; the release stays fenced (workerBlocked) for a later retry, never reported as unconfirmed
     await pending;
     await f.transport.event('app', 'incarnation', { kind: 'transcript', attemptId: lease.attemptId, wireHash: lease.wireHash, uuid: 'kept-row' });
     await f.transport.offer('app', 'incarnation', f.offer(2, 'idle'));
@@ -230,7 +253,7 @@ describe('Claude queue transport', () => {
   it('does not flush buffered ordinary writers into a popup even after our own native input was accepted', async () => {
     let safe = true; const f = await fixture(() => safe); await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
     safe = false;
-    await expect(f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash })).rejects.toThrow(/Input is still blocked/);
+    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); // accepted is journaled; the release stays fenced (workerBlocked) for a later retry, never reported as unconfirmed
     await pending; expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(0);
     expect(f.transport.canControl('app')).toBe(false); safe = true;
     await f.transport.retryWorkerRelease('app', lease.attemptId); expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(1);

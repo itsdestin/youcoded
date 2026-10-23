@@ -96,12 +96,14 @@ interface PerSession {
   screenCache: { gen: number; text: string } | null;
   /** The screen text the keyboard verdict was last worked out from (the same text gives the same verdict). */
   focusScreen: string | null;
+  /** An ask or permission card held queue input at the last refresh (its closing edge wakes the queue). */
+  queueHeldByRecord: boolean;
 }
 
 const fresh = (): PerSession => ({
   term: null, pending: 0, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
   stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false, inputKey: '',
-  screenGen: 0, screenCache: null, focusScreen: null,
+  screenGen: 0, screenCache: null, focusScreen: null, queueHeldByRecord: false,
 });
 
 export class SessionScreens {
@@ -283,6 +285,11 @@ export class SessionScreens {
     if (gate && s.tickTimer === null) this.startTicks(sessionId, s);
     else if (!gate && s.tickTimer !== null) this.stopTicks(sessionId, s);
     else if (!gate && s.stuckShown) this.clearStuck(sessionId, s);
+    // WHY (2026-10-22): a card or ask closing can make input safe with no new terminal output, and only output used to
+    // wake the queue, so waiting messages sat until the next idle poll. Checked only on that closing edge (a screen read).
+    const held = need.asking || !!need.permissionCard;
+    if (s.queueHeldByRecord && !held && this.queueInputSafe(sessionId)) this.deps.onQueueInputReady?.(sessionId);
+    s.queueHeldByRecord = held;
   }
 
   // ------------------------------------------------------------------------------------------------------------------------------------

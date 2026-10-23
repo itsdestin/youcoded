@@ -40,7 +40,7 @@ interface Flow {
   resolve(): void;
   done: Promise<void>;
 }
-interface BindingState { composerBusy?: boolean; declinedAt?: Map<string, number>; binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
+interface BindingState { composerBusy?: boolean; wakePending?: boolean; declinedAt?: Map<string, number>; binding: QueueBinding; commands: QueueNativeCommand[]; poll?: { resolve: (op: QueueNativeCommand) => void; timer: ReturnType<typeof setTimeout> }; flow?: Flow; attempts: Map<string, QueueLease>; accepted: Set<string>; confirmed: Set<string>; workerBlocked: Set<string> }
 const released = { released: true as const };
 
 /** Authenticated bridge delegate, intentionally not wired into IPC/UI. No delivery wait holds the queue's journal lock. */
@@ -97,14 +97,23 @@ export class ClaudeQueueTransport {
     else { if (s.commands.length >= 4) throw Error('Queue native command lane full'); s.commands.push(op); }
   }
   requestIdle(sessionId: string): void {
-    const s = this.bindings.get(sessionId);
-    if (s && !s.flow && !s.commands.some(c => c.kind === 'idle')) this.command(s, { kind: 'idle' });
+    const s = this.bindings.get(sessionId); if (!s) return;
+    // WHY latch (2026-10-22, terminal-view stall): a wake that arrives while an attempt is in flight used to be dropped.
+    // When that attempt then failed, an idle Claude Code drew nothing more, so nothing asked again for ~20 s per message.
+    if (s.flow) { s.wakePending = true; return; }
+    // An authorized worker release left blocked by a busy screen is retried here too, so typing held behind it is let go.
+    if (s.workerBlocked.size && this.options.inputSafe(sessionId)) for (const attemptId of [...s.workerBlocked]) void this.retryWorkerRelease(sessionId, attemptId).catch(() => {});
+    if (!s.commands.some(c => c.kind === 'idle')) this.command(s, { kind: 'idle' });
   }
   poll(sessionId: string, incarnation: string): Promise<QueueNativeCommand> {
     const s = this.state(sessionId, incarnation); if (!s) return Promise.resolve({ kind: 'wait' });
     if (s.poll) throw Error('Duplicate queue poll');
     if (s.commands.length) return Promise.resolve(s.commands.shift()!);
-    return new Promise(resolve => { const timer = setTimeout(() => { if (s.poll?.resolve === resolve) delete s.poll; resolve({ kind: 'idle' }); }, 20000); s.poll = { resolve, timer }; });
+    // WHY shorter with work waiting (2026-10-22): the idle answer is the backstop for any missed wake; 20 s per message
+    // read as "the queue stopped". A queue with nothing runnable keeps the long, quiet poll.
+    let runnable = false;
+    try { const r = this.options.queue.snapshot(s.binding.queueId); runnable = r.items.some(i => i.status === 'waiting' && (!r.paused || i.pauseBypass)); } catch { /* unknown queue: long poll */ }
+    return new Promise(resolve => { const timer = setTimeout(() => { if (s.poll?.resolve === resolve) delete s.poll; resolve({ kind: 'idle' }); }, runnable ? 3000 : 20000); s.poll = { resolve, timer }; });
   }
   /** Deliberate recovery queries/revokes the SAME native attempt; never resends body or Enter. */
   async reconcile(sessionId: string, attemptId: string): Promise<boolean> {
@@ -269,6 +278,19 @@ export class ClaudeQueueTransport {
   }
   private finish(s: BindingState, f: Flow): void {
     if (f.finished) return; f.finished = true; clearTimeout(f.timer); if (s.flow === f) delete s.flow; f.resolve();
+    // A wake latched during the attempt (requestIdle) is answered now that the session is free again.
+    if (s.wakePending && !s.flow && !this.closed) {
+      s.wakePending = false;
+      if (!s.commands.some(c => c.kind === 'idle')) { try { this.command(s, { kind: 'idle' }); } catch { /* lane full: the short poll answers */ } }
+    }
+  }
+  /** Release the worker after a definite outcome, waiting briefly for a busy screen. WHY (2026-10-22): throwing here when
+   *  the screen was mid-redraw at that instant turned an accepted message into "Unconfirmed". The release stays
+   *  authorized in workerBlocked and is retried on the next wake or offer; the outcome itself is already journaled. */
+  private async settleWorker(sessionId: string, s: BindingState, lease: QueueLease): Promise<void> {
+    if (!this.options.inputSafe(sessionId) && this.options.waitInputSafe) await this.options.waitInputSafe(sessionId, this.now() + 2000);
+    try { await this.releaseWorker(sessionId, s, lease); }
+    catch (error) { log('INFO', 'ClaudeQueue', 'Worker release deferred until input is safe', { sessionId, attemptId: lease.attemptId, error: String(error) }); }
   }
   private async quarantine(s: BindingState, f: Flow): Promise<void> {
     if (f.lease) await this.options.queue.uncertain(s.binding.queueId, f.lease);
@@ -351,10 +373,9 @@ export class ClaudeQueueTransport {
         catch (error) { log('WARN', 'ClaudeQueue', 'Native acceptance journal failed', { attemptId: lease.attemptId, error: String(error) }); throw error; }
         if (this.dismissals.has(lease.attemptId) || this.options.queue.snapshot(s.binding.queueId).tombstones.some(t => t.reason === 'dismissed' && t.attempt?.attemptId === lease.attemptId)) return;
         s.accepted.add(lease.attemptId);
-        try { await this.releaseWorker(sessionId, s, lease); }
-        catch (error) { log('WARN', 'ClaudeQueue', 'Native acceptance worker release failed', { attemptId: lease.attemptId, error: String(error) }); throw error; }
+        try { await this.settleWorker(sessionId, s, lease); }
         finally { if (f) this.finish(s, f); }
-        if (s.confirmed.has(lease.attemptId)) this.forget(s, lease.attemptId);
+        if (s.confirmed.has(lease.attemptId) && !s.workerBlocked.has(lease.attemptId)) this.forget(s, lease.attemptId);
         return;
       }
       case 'transcript': {
@@ -368,10 +389,11 @@ export class ClaudeQueueTransport {
       case 'revoked': {
         if ((event.beforeAdmission === true || event.beforeInvocation === true) && event.composerSafe === true) {
           if (event.detail === 'box-not-empty') this.setComposerBusy(sessionId, s, true);
-          await this.releaseWorker(sessionId, s, lease);
+          await this.settleWorker(sessionId, s, lease);
           if (event.beforeInvocation === true) await this.options.queue.resolveNotInvoked(s.binding.queueId,lease,{notInvokedId:lease.attemptId,composerEmpty:true});
           else await this.options.queue.revokeBeforeAdmission(s.binding.queueId, lease, { revocationId: lease.attemptId, composerEmpty: true });
-          this.forget(s, lease.attemptId);
+          // A deferred release keeps its lease so the retry can still name it (retryWorkerRelease forgets it afterwards).
+          if (!s.workerBlocked.has(lease.attemptId)) this.forget(s, lease.attemptId);
         } else await this.options.queue.uncertain(s.binding.queueId, lease);
         if (f) this.finish(s, f); return;
       }
