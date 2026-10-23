@@ -234,6 +234,16 @@ describe('restoreArchive — the undo path', () => {
     expect(r.restored).toBe(0);
   });
 
+  it('one corrupt archive file is skipped; the records in the good archives still come back', async () => {
+    const { dead } = seed();
+    await twoStrikes();
+    // Sorts first and cannot be gunzipped: before the fix this made the whole restore throw.
+    fs.writeFileSync(path.join(archiveDir(root), '0000-corrupt.jsonl.gz'), 'this is not gzip');
+    const r = await restoreArchive(root);
+    expect(r).toMatchObject({ status: 'restored', restored: dead.length });
+    expect(onDisk().artifacts.filter((a) => a.id.startsWith('D'))).toHaveLength(dead.length);
+  });
+
   it('with no archive it restores nothing and says so', async () => {
     seed();
     expect(await restoreArchive(root)).toMatchObject({ status: 'restored', restored: 0 });
