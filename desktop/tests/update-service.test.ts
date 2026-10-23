@@ -202,6 +202,7 @@ describe('update service auto-install', () => {
 
 // Background download and the one download owner (#183): what is fetched, when, and what is kept.
 describe('update service downloads', () => {
+  const realPlatformDl = process.platform;
   let userData: string;
   let cacheDir: string;
   let started: ReturnType<typeof vi.fn>;
@@ -214,6 +215,9 @@ describe('update service downloads', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     userData = fs.mkdtempSync(path.join(os.tmpdir(), 'update-service-dl-'));
     cacheDir = path.join(userData, 'update-cache');
+    // WHY (CI on macOS and Windows): these tests use .deb assets and a mocked Linux install kind, so they are
+    // Linux tests on any host; the real platform changes which file names are even allowed.
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
     mocks.kind = 'deb'; mocks.stageAppImage.mockResolvedValue('.YouCoded-update-2.0.0.AppImage');
     mocks.userData = userData; mocks.packaged = true; mocks.savedAutoInstall = true; mocks.readGate = null; mocks.httpStatus = 200;
     mocks.release = release('2.0.0');
@@ -232,6 +236,7 @@ describe('update service downloads', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    Object.defineProperty(process, 'platform', { value: realPlatformDl, configurable: true });
     delete process.env.YOUCODED_DEV_FAKE_UPDATE;
     fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
@@ -843,8 +848,10 @@ describe('update service installing', () => {
     });
   });
 
+  // The Mac swap and the AppImage rename only ever run on POSIX, whose paths the code reads with path.posix
+  // (macBundleOf); a Windows host's C:\\ temp folders are not those paths, so those cases are skipped there.
   describe('Restart when the staged copy has gone missing (code review F1)', () => {
-    it('re-stages it before any password is asked for', async () => {
+    it.skipIf(process.platform === 'win32')('re-stages it before any password is asked for', async () => {
       setup('darwin'); const s = await load(); await ready(s);
       fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
       mocks.stageMacApp.mockClear();
@@ -852,13 +859,13 @@ describe('update service installing', () => {
       expect(mocks.stageMacApp).toHaveBeenCalledTimes(1);
       expect(fs.existsSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'))).toBe(true);
     });
-    it('falls back to the disk image (the interactive path) when it cannot be re-staged, instead of asking for a password', async () => {
+    it.skipIf(process.platform === 'win32')('falls back to the disk image (the interactive path) when it cannot be re-staged, instead of asking for a password', async () => {
       setup('darwin'); const s = await load(); await ready(s);
       fs.rmSync(path.join(appsDir, '.YouCoded-update-2.0.0.app'), { recursive: true });
       mocks.stageMacApp.mockRejectedValue(new Error('disk full'));
       expect(await s.planRestart()).toEqual({ kind: 'interactive' });
     });
-    it('a stale go file left by a dead helper is removed at startup, before any helper can read it', async () => {
+    it.skipIf(process.platform === 'win32')('a stale go file left by a dead helper is removed at startup, before any helper can read it', async () => {
       setup('darwin');
       fs.writeFileSync(path.join(appsDir, '.YouCoded-update-2.0.0.app.go'), 'install\n');
       await load(); // no release check yet: the later sweep (which also removes it) has not run
@@ -968,7 +975,7 @@ describe('update service installing', () => {
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(fs.existsSync(installerPath())).toBe(false);
     });
-    it('Linux AppImage: re-hashes the staged copy (not the download), then renames it over the running image', async () => {
+    it.skipIf(process.platform === 'win32')('Linux AppImage: re-hashes the staged copy (not the download), then renames it over the running image', async () => {
       setup('linux'); mocks.verify.mockResolvedValue({ assets: [{ name: asset, sha256: 'abc' }] }); // staging needs the signed hash
       const s = await load(); await ready(s);
       const staged = path.join(appsDir, '.YouCoded-update-2.0.0.AppImage');
@@ -980,7 +987,7 @@ describe('update service installing', () => {
       expect(fs.readFileSync(process.env.APPIMAGE!, 'utf8')).toBe('new');
       expect(relaunch).not.toHaveBeenCalled();
     });
-    it('Mac, bundle writable: the helper is started at prepare time with positional arguments, and the exit writes the go file', async () => {
+    it.skipIf(process.platform === 'win32')('Mac, bundle writable: the helper is started at prepare time with positional arguments, and the exit writes the go file', async () => {
       setup('darwin'); const s = await load(); await ready(s);
       await s.prepareExit('install');
       const staged = path.join(appsDir, '.YouCoded-update-2.0.0.app');
@@ -994,8 +1001,9 @@ describe('update service installing', () => {
       s.runExitInstall(true, vi.fn());
       expect(fs.readFileSync(staged + '.go', 'utf8')).toBe('relaunch\n');
     });
-    it('Mac, password needed: a quit never installs (only Restart asks for the password)', async () => {
+    it.skipIf(process.platform === 'win32')('Mac, password needed: a quit never installs (only Restart asks for the password)', async () => {
       setup('darwin'); fs.chmodSync(appsDir, 0o555);
+      mocks.stageMacApp.mockResolvedValue('.YouCoded-update-2.0.0.app'); // the (fake) staging must not try to write into the read-only folder
       try {
         const s = await load(); await ready(s);
         expect(s.getUpdateStatus().needs_password).toBe(true);

@@ -177,11 +177,12 @@ export interface MacHelperInput {
 }
 
 /** Where the go file lives and what the helper deletes, by where the staged app sits. */
+// WHY path.posix (CI on Windows): these are macOS paths wherever the function runs, so they are read as POSIX paths.
 export function macGoPaths(staged: string): { goFile: string; cleanup: string; mode: 'user' | 'root' } {
   // Password case: `<tmp>/youcoded-update-<v>/YouCoded.app` in a mode-700 folder that holds the go file too.
-  if (path.basename(staged) === 'YouCoded.app' && path.basename(path.dirname(staged)).startsWith('youcoded-update-')) {
-    const folder = path.dirname(staged);
-    return { goFile: path.join(folder, 'go'), cleanup: folder, mode: 'root' };
+  if (path.posix.basename(staged) === 'YouCoded.app' && path.posix.basename(path.posix.dirname(staged)).startsWith('youcoded-update-')) {
+    const folder = path.posix.dirname(staged);
+    return { goFile: path.posix.join(folder, 'go'), cleanup: folder, mode: 'root' };
   }
   // Writable case: the hidden `.YouCoded-update-<v>.app` beside the bundle; its go file is a sibling (the
   // startup sweep removes both, and nothing is ever written INSIDE the staged bundle: that breaks its seal).
