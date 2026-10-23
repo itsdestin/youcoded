@@ -1,0 +1,252 @@
+{
+ "cli": "2.1.309",
+ "cols": 120,
+ "rows": 40,
+ "done": true,
+ "marks": [
+  {
+   "name": "family ZWJ",
+   "offset": 1671
+  },
+  {
+   "name": "couple ZWJ",
+   "offset": 1847
+  },
+  {
+   "name": "rainbow flag",
+   "offset": 2021
+  },
+  {
+   "name": "heart VS16",
+   "offset": 2191
+  },
+  {
+   "name": "heart plain",
+   "offset": 2355
+  },
+  {
+   "name": "skin tone",
+   "offset": 2522
+  },
+  {
+   "name": "flag JP",
+   "offset": 2721
+  },
+  {
+   "name": "lone regional indicator",
+   "offset": 2871
+  },
+  {
+   "name": "keycap",
+   "offset": 3027
+  },
+  {
+   "name": "plain emoji",
+   "offset": 3177
+  },
+  {
+   "name": "CJK",
+   "offset": 3329
+  },
+  {
+   "name": "Persian ZWNJ",
+   "offset": 3487
+  },
+  {
+   "name": "Hindi",
+   "offset": 3639
+  },
+  {
+   "name": "combining accent",
+   "offset": 3788
+  },
+  {
+   "name": "checklist prompt",
+   "offset": 4010
+  },
+  {
+   "name": "sent and answered",
+   "offset": 4879
+  },
+  {
+   "name": "next message after reply",
+   "offset": 4945
+  }
+ ],
+ "results": [
+  {
+   "name": "family ZWJ",
+   "text": "x 👨‍👩‍👧 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 👨‍👩‍👧 y",
+    "cursor": 12
+   },
+   "out": "x 👨‍👩‍👧 y"
+  },
+  {
+   "name": "couple ZWJ",
+   "text": "x 👩‍❤️‍👨 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 👩‍❤️‍👨 y",
+    "cursor": 12
+   },
+   "out": "x 👩‍❤️‍👨 y"
+  },
+  {
+   "name": "rainbow flag",
+   "text": "x 🏳️‍🌈 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🏳️‍🌈 y",
+    "cursor": 10
+   },
+   "out": "x 🏳️‍🌈 y"
+  },
+  {
+   "name": "heart VS16",
+   "text": "x ❤️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ❤️ y",
+    "cursor": 6
+   },
+   "out": "x ❤️ y"
+  },
+  {
+   "name": "heart plain",
+   "text": "x ❤ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ❤ y",
+    "cursor": 5
+   },
+   "out": "x ❤ y"
+  },
+  {
+   "name": "skin tone",
+   "text": "x 👍🏽 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 👍🏽 y",
+    "cursor": 8
+   },
+   "out": "x 👍🏽 y"
+  },
+  {
+   "name": "flag JP",
+   "text": "x 🇯🇵 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🇯🇵 y",
+    "cursor": 8
+   },
+   "out": "x 🇯🇵 y"
+  },
+  {
+   "name": "lone regional indicator",
+   "text": "x 🇯 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🇯 y",
+    "cursor": 6
+   },
+   "out": "x 🇯 y"
+  },
+  {
+   "name": "keycap",
+   "text": "x 1️⃣ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 1️⃣ y",
+    "cursor": 7
+   },
+   "out": "x 1️⃣ y"
+  },
+  {
+   "name": "plain emoji",
+   "text": "x 🙂 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🙂 y",
+    "cursor": 6
+   },
+   "out": "x 🙂 y"
+  },
+  {
+   "name": "CJK",
+   "text": "x 漢字 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 漢字 y",
+    "cursor": 6
+   },
+   "out": "x 漢字 y"
+  },
+  {
+   "name": "Persian ZWNJ",
+   "text": "x می‌خواهم y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x می‌خواهم y",
+    "cursor": 12
+   },
+   "out": "x می‌خواهم y"
+  },
+  {
+   "name": "Hindi",
+   "text": "x क्‍ष y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x क्‍ष y",
+    "cursor": 8
+   },
+   "out": "x क्‍ष y"
+  },
+  {
+   "name": "combining accent",
+   "text": "x é y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x é y",
+    "cursor": 6
+   },
+   "out": "x é y"
+  },
+  {
+   "name": "checklist prompt",
+   "text": "Repeat back exactly, nothing else: 👨‍👩‍👧 می‌خواهم a‌b",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "Repeat back exactly, nothing else: 👨‍👩‍👧 می‌خواهم ab",
+    "cursor": 55
+   },
+   "out": "Repeat back exactly, nothing else: 👨‍👩‍👧 می‌خواهم ab"
+  },
+  {
+   "name": "sent and answered",
+   "text": ""
+  },
+  {
+   "name": "next message after reply",
+   "text": "next message"
+  }
+ ],
+ "about": "Real Claude Code 2.1.309 output (offline fake API) from test-conpty/probe-terminal-widths.mjs: each mark is the terminal byte offset after a probe text was put in the message box; the last two are after sending the emoji message and getting the same text back."
+}

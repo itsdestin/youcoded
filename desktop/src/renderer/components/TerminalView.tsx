@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { useClaudeCodeWidths } from '../../shared/terminal-widths';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
@@ -181,10 +181,10 @@ function TerminalView({ sessionId, visible }: Props) {
     });
 
     const fitAddon = new FitAddon();
-    const unicode11 = new Unicode11Addon();
     terminal.loadAddon(fitAddon);
-    terminal.loadAddon(unicode11);
-    terminal.unicode.activeVersion = '11';
+    // Claude Code's emoji widths, the same table as the computer's hidden copy (session-screens.ts): with Unicode 11
+    // alone a joined emoji (👨‍👩‍👧, 👍🏽, ❤️) shifted every later redraw and garbled the line.
+    useClaudeCodeWidths(terminal);
     terminal.open(containerRef.current);
 
     // WHY: a session mounted in the background (chat view, or not the active

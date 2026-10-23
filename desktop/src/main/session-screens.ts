@@ -23,7 +23,7 @@
 //
 // Electron-free and injected, like session-live.ts: tests drive it with a real record and a fake terminal or the real @xterm/headless.
 import { Terminal } from '@xterm/headless';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { useClaudeCodeWidths } from '../shared/terminal-widths';
 import type { SessionRecords } from './session-record';
 import type { SessionLiveFacts } from './session-live';
 import { screenTextOf, visibleScreenTextOf, type ScreenBuffer } from '../shared/terminal-screen-text';
@@ -388,11 +388,11 @@ export class SessionScreens {
   }
 }
 
-/** The real thing: @xterm/headless, with the same width table the window's terminal uses (so a wrapped line breaks in the same place). */
+/** The real thing: @xterm/headless, with the same width table the window's terminal uses (so a wrapped line breaks in the same place).
+ *  Claude Code's own emoji widths (shared/terminal-widths.ts): with Unicode 11 alone, one joined emoji left this copy garbled and
+ *  the message box unreadable, so the app said a question was open and the queue held every message. */
 function realTerminal(cols: number, rows: number): ScreenTerminal {
   const term = new Terminal({ cols, rows, scrollback: SCREEN_SCROLLBACK_ROWS, allowProposedApi: true });
-  const unicode11 = new Unicode11Addon();
-  term.loadAddon(unicode11 as never);
-  term.unicode.activeVersion = '11';
+  useClaudeCodeWidths(term);
   return term as unknown as ScreenTerminal;
 }
