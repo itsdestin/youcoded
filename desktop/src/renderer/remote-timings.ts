@@ -12,6 +12,8 @@ type Marks = Record<string, number>;
 const pageMarks: Marks = {};
 let pageReported = false;
 let conn: { start: number; marks: Marks; reported: boolean } | null = null;
+/** When the page was last shown again (or the network came back), until a connection starts or it goes stale. */
+let wokeAt: number | null = null;
 
 const now = () => Math.round(performance.now());
 
@@ -20,9 +22,19 @@ export function markPage(name: string): void {
   if (!(name in pageMarks)) pageMarks[name] = now();
 }
 
+/** The page was shown again or came back online: the next connection reports how long after that it began. WHY
+ *  (2026-10-22): what a person waits for on resume is mostly the time BEFORE the new connection starts (the wake
+ *  check deciding the old one is dead), which the per-connection marks alone never showed. */
+export function markWake(): void {
+  wokeAt = now();
+}
+
 /** A new socket is being opened. */
 export function startConnection(): void {
-  conn = { start: now(), marks: {}, reported: false };
+  const start = now();
+  conn = { start, marks: {}, reported: false };
+  if (wokeAt !== null && start - wokeAt < 15_000) conn.marks.waited = start - wokeAt;   // the longest wake check, with room
+  wokeAt = null;
   markPage('connecting');
 }
 

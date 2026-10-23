@@ -43,5 +43,15 @@ describe('the phone\'s report', () => {
     t = 5400; timings.markConnection('open');
     t = 6000;
     expect(timings.takeReport()).toEqual({ kind: 'reconnect', marks: { open: 400, drawn: 1000 } });
+
+    // Shown again: the next connection says how long after that it began (the wake check's wait), and only that one.
+    t = 9000; timings.markWake();
+    t = 11500; timings.startConnection();
+    t = 12500;
+    expect(timings.takeReport()).toEqual({ kind: 'reconnect', marks: { waited: 2500, drawn: 1000 } });
+    t = 13000; timings.startConnection();
+    t = 13500;
+    expect(timings.takeReport()).toEqual({ kind: 'reconnect', marks: { drawn: 500 } });
+    expect(describePhoneTimings({ kind: 'reconnect', marks: { waited: 2500, drawn: 1000 } })).toBe('timings (reconnect), ms: waited after waking 2500 · drawn 1000');
   });
 });

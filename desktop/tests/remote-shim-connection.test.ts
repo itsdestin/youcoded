@@ -738,13 +738,38 @@ describe('remote-shim — heartbeat', () => {
       expect(FakeWebSocket.instances).toHaveLength(2);
     });
 
-    it('a short absence still asks rather than dropping a good connection', async () => {
+    it('a short absence still asks rather than dropping a good connection, and waits the full check', async () => {
       const ws = await signedIn();
       hide();
       await vi.advanceTimersByTimeAsync(5_000);
       show();
       expect(ws.sentOf('remote:ping')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('after minutes away a connection that does not answer is replaced within a few seconds, not ten', async () => {
+      // Destin: "very slow reconnects after leaving phone for a while and resuming" — the computer had long since dropped it.
+      const ws = await signedIn();
+      hide();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      show();
+      expect(ws.sentOf('remote:ping')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it('after minutes away an attempt that was still connecting is started over instead of waiting for its timeout', async () => {
+      const ws = await signedIn();
+      ws.close(1006);                                    // dropped; the retry starts and then the page is hidden
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(FakeWebSocket.instances).toHaveLength(2);   // still connecting
+      hide();
+      vi.setSystemTime(Date.now() + 5 * 60_000);         // the browser froze the page: the clock moved, its timers did not
+      show();
+      expect(FakeWebSocket.instances).toHaveLength(3);
     });
 
     it('does not run on the Android app’s own bridge', async () => {

@@ -15,8 +15,9 @@ import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT }
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 import { firstFrameProtocols, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
-import { markPage, startConnection, markConnection, takeReport } from './remote-timings';
+import { markPage, startConnection, markConnection, markWake, takeReport } from './remote-timings';
 import { readRemotePlace, remotePlaceStorages, remotePlaceHost } from './state/remote-place';
+import { markScreensReady } from './state/screens-ready';
 import { setConnectionMode } from './platform';
 markPage('connection-code'); // this module's code has arrived and run (remote-timings.ts)
 import { announce } from './utils/announce';
@@ -298,6 +299,8 @@ function reportFill(report: { round?: number; failed?: number } | undefined): vo
   // One frame on, the conversations are on screen: the computer logs how long this connection took (remote-timings.ts).
   const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 0);
   if (!isAndroidLocal()) frame(() => { const r = takeReport(); if (r) send({ type: 'remote:timings', payload: r }); });
+  // The conversation is on screen: the screens the app loads on demand may now come down behind it (state/screens-ready.ts).
+  frame(markScreensReady);
 }
 
 // Where each session stands on this page, as the host's own numbers: the epoch (which record) and the last event number applied.
@@ -1773,6 +1776,16 @@ export function stopSavedKeySignIn(): void {
  *  dead. 10 s, not 5: right after waking a phone's radio and tunnel can take several seconds to
  *  come back, and a reply can queue behind a catch-up already on its way (review finding 3). */
 const WAKE_CHECK_TIMEOUT_MS = 10_000;
+/** Away at least this long, the computer has usually already given up on this connection: it closes one whose
+ *  pings go unanswered for ~60 s (remote-server MAX_MISSED_PINGS), and a phone's browser freezes a hidden page. */
+const LONG_AWAY_MS = 45_000;
+/** The wake check's deadline after a long absence.
+ *  WHY (2026-10-22 phone speed; Destin: "very slow reconnects after leaving phone for a while and resuming"): after
+ *  minutes away the old connection was usually dead, and the full 10 s question was spent before reconnecting — most
+ *  of the wait he saw. A live connection answers within a couple of round trips (~1 s on his phone); a dead one is
+ *  now replaced 2.5 s after waking. A good connection that answers late is replaced too, which costs a ~1 s
+ *  reconnect that fetches only what it missed. */
+const QUICK_WAKE_CHECK_MS = 2_500;
 /** How often the page looks at whether the computer is still talking, while it is in front. */
 const HEARTBEAT_INTERVAL_MS = 10_000;
 /** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
@@ -1802,17 +1815,22 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
  * 30 s, and the screens that asked stayed empty. Down: reconnect now. Up: one quick question,
  * and a connection that cannot answer it is replaced at once rather than waited on.
  */
-export function checkConnectionAfterWake(): void {
+export function checkConnectionAfterWake(awayMs = 0): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
   if (isAndroidLocal() || takenOver) return;
+  markWake();
   if (!hasConnectedBefore) {
     // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
     // try again, not the end of a backoff of up to a minute (finding 6).
     if (savedKeyListener && !savedKeyStopped && connectionState === 'disconnected') retrySavedKeyNow();
     return;
   }
-  if (connectionState === 'connecting' || connectionState === 'authenticating') return;
   const token = localStorage.getItem('youcoded-remote-token');
+  if (connectionState === 'connecting' || connectionState === 'authenticating') {
+    // An attempt started before a long absence was frozen with the page and may hang until its 15 s timeout: start over.
+    if (awayMs >= LONG_AWAY_MS && token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
   if (connectionState === 'disconnected') {
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
@@ -1822,7 +1840,7 @@ export function checkConnectionAfterWake(): void {
   // up on it — but a backgrounded phone's browser keeps answering the computer's pings, so the
   // connection was usually still good, and every unlock cost a reconnect, a refill and a blocked Send.
   // A connection that really is dead fails this question within WAKE_CHECK_TIMEOUT_MS.
-  probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
+  probeConnection(awayMs >= LONG_AWAY_MS ? QUICK_WAKE_CHECK_MS : WAKE_CHECK_TIMEOUT_MS, 'after waking');
 }
 
 /**
@@ -2129,8 +2147,13 @@ export function installShim(): void {
   setAndroidHostEventSink((type, payload) => dispatchEvent(type, payload));
   // Wake checks (2026-09-11): see checkConnectionAfterWake. Guarded for pages without a DOM.
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    // How long the page was hidden decides how long the wake check waits (LONG_AWAY_MS).
+    let hiddenAt: number | null = null;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') checkConnectionAfterWake();
+      if (document.visibilityState !== 'visible') { hiddenAt ??= Date.now(); return; }
+      const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+      hiddenAt = null;
+      checkConnectionAfterWake(away);
     });
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {

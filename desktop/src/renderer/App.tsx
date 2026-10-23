@@ -34,7 +34,6 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import BrowserPanel from './components/browser/BrowserPanel';
 import { useBrowserRightPane } from './hooks/use-browser-right-pane';
-import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink } from './state/transcript-batch';
@@ -94,9 +93,7 @@ import TrustGate, { useTrustGateActive, usePendingPromptActive } from './compone
 import { InitializingCover } from './components/InitializingCover';
 import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
-import SettingsPanel from './components/SettingsPanel';
 import { readBuddyStyle } from './components/BuddyStyleRow';
-import ResumeBrowser from './components/ResumeBrowser';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
 import { fetchReopenList, forgetReopenList, resolveNativeBinding } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
@@ -108,14 +105,9 @@ import type { ModelBinding } from '../shared/provider-types';
 import OpenTasksPopup from './components/OpenTasksPopup';
 import { SPECIALIST_SETTINGS_EVENT } from './components/SpecialistModelUnavailable';
 import { useSessionTasks } from './hooks/useSessionTasks';
-import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
-import LibraryScreen from './components/library/LibraryScreen';
 import { MarketplaceProvider } from './state/marketplace-context';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import ShareSheet from './components/ShareSheet';
-import { ProjectView } from './components/project-view/ProjectView';
-import { PagesView } from './components/pages/PagesView';
-import { PageHost } from './components/pages/PageHost';
 import { PageCreateDialog, usePageCreate } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
@@ -127,6 +119,8 @@ import { createRefillRetry } from './state/refill-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { deferredScreen } from './components/deferred-screen';
+import { markScreensReady, useScreensReady } from './state/screens-ready';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 import { reconcilePending, confirmPending } from './state/pending-action';
 import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
@@ -271,6 +265,20 @@ function seedNativeMode(sessionId: string, set: SetNativeModes): void {
   });
 }
 
+// WHY deferred (2026-10-22 phone speed, Destin chose it): these screens were in the code a phone downloads and runs before
+// it shows anything. Each now loads when opened, or ahead of that once `screensReady` (state/screens-ready.ts): on a phone
+// after its conversation is drawn, on the computer at once. components/deferred-screen.tsx says why not React.lazy.
+const SettingsPanel = deferredScreen(() => import('./components/SettingsPanel').then((m) => m.default));
+const ResumeBrowser = deferredScreen(() => import('./components/ResumeBrowser').then((m) => m.default));
+const ProjectView = deferredScreen(() => import('./components/project-view/ProjectView').then((m) => m.ProjectView));
+const PagesView = deferredScreen(() => import('./components/pages/PagesView').then((m) => m.PagesView));
+const PageHost = deferredScreen(() => import('./components/pages/PageHost').then((m) => m.PageHost));
+const GamePanel = deferredScreen(() => import('./components/game/GamePanel').then((m) => m.default));
+const MarketplaceScreen = deferredScreen(() => import('./components/marketplace/MarketplaceScreen').then((m) => m.default));
+const LibraryScreen = deferredScreen(() => import('./components/library/LibraryScreen').then((m) => m.default));
+/** Screens rendered only while open: fetched ahead once screens may load, so the first open is not a download. */
+const OPENED_ON_DEMAND = [GamePanel, MarketplaceScreen, LibraryScreen];
+
 function AppInner() {
   // Dev-only: count AppInner's OWN re-renders (the tranche-1 metric — see
   // AppInnerProfiler). No-dep effect → runs once per AppInner commit; when
@@ -383,6 +391,15 @@ function AppInner() {
   const headerRef = useRef<HTMLDivElement>(null);
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const screensReady = useScreensReady();
+  useEffect(() => {
+    // The computer and the Android app read these screens from disk: at once. A phone browser waits for its conversation
+    // to be drawn (remote-shim reportFill), or 10 s if that never reports.
+    if (!isRemoteMode()) { markScreensReady(); return; }
+    const t = setTimeout(markScreensReady, 10_000);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => { if (screensReady) for (const screen of OPENED_ON_DEMAND) screen.preload(); }, [screensReady]);
   const [settingsBadge, setSettingsBadge] = useState(false);
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
@@ -3452,7 +3469,7 @@ function AppInner() {
   // is a cheap view remount, not a reconnect.
   const activeGamePane = gameState.panelOpen ? (
     <ErrorBoundary name="Game">
-      <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
+      <GamePanel load connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
   ) : null;
   // Browser panel when open, else the games pane — one element, placed by ChatView or TerminalRightSlot.
@@ -4046,6 +4063,7 @@ function AppInner() {
           from inside it (rename, a first-time warning) shows on top. This said
           z-[8000] long after ProjectView.tsx moved it down (see its header). */}
       <ProjectView
+        load={screensReady || artifactState.projectViewOpen}
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
         onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
@@ -4065,6 +4083,7 @@ function AppInner() {
           creator skill that turns that conversation into a page is Phase 1's
           next task, not part of this shell. */}
       <PagesView
+        load={screensReady || artifactState.pagesViewOpen}
         // Make a page / Edit open the new-session dialog (folder, model, the
         // rest) with the creator skill waiting in the composer — not sent, so
         // the person adds what the page should do and presses Enter. Edit
@@ -4078,6 +4097,7 @@ function AppInner() {
         })}
       />
       <PageHost
+        load={screensReady || artifactState.pageViewOpen}
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen(prev => !prev)}
         settingsBadge={settingsBadge}
@@ -4100,6 +4120,7 @@ function AppInner() {
           right slot (passed as ChatView's gamePane prop above), so it shares the
           artifact drawer's framed chrome instead of being a separate slide-out. */}
       <SettingsPanel
+        load={screensReady || settingsOpen}
         open={settingsOpen}
         onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); setSpecialistsAutoOpen(false); }}
         onSendInput={(text) => {
@@ -4175,6 +4196,7 @@ function AppInner() {
           its search/filter state and open/close behaviour untouched. */}
       {welcomeBackMode && (
         <ResumeBrowser
+          load
           open
           onClose={welcomeBackDone}
           onResume={handleResumeSession}
@@ -4184,6 +4206,7 @@ function AppInner() {
         />
       )}
       <ResumeBrowser
+        load={screensReady || resumeRequested}
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}
         onResume={handleResumeSession}
@@ -4305,6 +4328,7 @@ function AppInner() {
       {(activeView === 'marketplace' || activeView === 'library') && (
         activeView === 'marketplace' ? (
           <MarketplaceScreen
+            load
             onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); setMarketplaceInitialDetailId(undefined); }}
             settingsOpen={settingsOpen}
             onToggleSettings={() => setSettingsOpen((v) => !v)}
@@ -4319,6 +4343,7 @@ function AppInner() {
           />
         ) : (
           <LibraryScreen
+            load
             onExit={() => setActiveView('chat')}
             settingsOpen={settingsOpen}
             onToggleSettings={() => setSettingsOpen((v) => !v)}

@@ -151,11 +151,14 @@ describe('setting row adoption', () => {
     'App.tsx': { count: 1, why: 'welcome screen new-session form — a form, not a settings list' },
     'SessionStrip.tsx': { count: 2, why: 'new-session form in the session dropdown, same as App.tsx' },
     'SettingsPanel.tsx': {
-      count: 2,
-      why: "the local Toggle wrapper's own definition, and Sound's category switch — "
+      count: 1,
+      why: "Sound's category switch — "
         + 'the only row in the family whose label lives OUTSIDE it (in the tab above), '
         + 'so it has no title for the description to sit under',
     },
+    // The Settings Toggle wrapper's definition moved here from SettingsPanel.tsx (2026-10-22 phone speed), so popups
+    // that use it no longer pull all of Settings into the startup download.
+    'settings-toggle.tsx': { count: 1, why: "the Settings Toggle wrapper's own definition" },
     // WHY count dropped 2 -> 1 (fix batch 1, 2026-09-24): the "Additional
     // backups" master toggle moved into a SettingRow's control slot when that
     // section was flattened out of its old border-dashed card (design guide

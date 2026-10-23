@@ -6,7 +6,7 @@
 
 /** Steps in the order a connection goes through them; anything else the phone sends is ignored. */
 const STEPS: Array<[string, string]> = [
-  ['page', 'page'], ['code', 'code ran'], ['first-frame', 'first frame'], ['connection-code', 'connection code'],
+  ['waited', 'waited after waking'], ['page', 'page'], ['code', 'code ran'], ['first-frame', 'first frame'], ['connection-code', 'connection code'],
   ['connecting', 'connecting'], ['open', 'connected'], ['signed-in', 'signed in'], ['list', 'list'],
   ['terminal', 'terminal'], ['conversation', 'conversation'], ['drawn', 'drawn'],
 ];

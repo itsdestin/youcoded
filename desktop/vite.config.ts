@@ -26,6 +26,30 @@ const preloadConnectionCode = {
   },
 };
 
+// WHY one startup file (2026-10-22 phone speed): once the big screens loaded on demand (App.tsx deferredScreen), the
+// bundler split the code they share with startup into ~20 small files, all fetched before anything shows. A browser asks
+// a computer for about six files at a time, and every round of asking costs a phone a round trip (~470 ms); the connection
+// code ended up queued behind them (measured: 25 requests, the last connection file arriving ~0.4 s after the app code).
+// So everything the page runs at startup — the app's static imports, and the connection code it fetches straight after —
+// goes in one file. What only the on-demand screens use stays in their own files.
+const STARTUP_ROOTS = [/[\\/]src[\\/]renderer[\\/]index\.tsx$/, /[\\/]src[\\/]renderer[\\/]remote-shim\.ts$/, /[\\/]src[\\/]renderer[\\/]last-computer\.ts$/];
+type ModuleGraph = { getModuleInfo(id: string): { importers: readonly string[] } | null };
+const startupMemo = new WeakMap<ModuleGraph, Map<string, boolean>>();
+/** Whether `id` is a root, or is statically imported (at any depth) by one. Walks importers upward, memoised per build. */
+function atStartup(id: string, graph: ModuleGraph): boolean {
+  let memo = startupMemo.get(graph);
+  if (!memo) startupMemo.set(graph, (memo = new Map()));
+  const walk = (mid: string): boolean => {
+    const known = memo!.get(mid);
+    if (known !== undefined) return known;
+    memo!.set(mid, false);   // a cycle answers "not through here"; a real path is found from another importer
+    const yes = STARTUP_ROOTS.some((r) => r.test(mid)) || (graph.getModuleInfo(mid)?.importers ?? []).some(walk);
+    memo!.set(mid, yes);
+    return yes;
+  };
+  return walk(id);
+}
+
 export default defineConfig({
   plugins: [react(), preloadConnectionCode],
   // WHY: Vite resolves --outDir from this root, not the shell directory. build:site
@@ -51,6 +75,13 @@ export default defineConfig({
   base: './',
   build: {
     outDir: '../../dist/renderer',
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [{ name: (id: string, ctx: ModuleGraph) => (atStartup(id, ctx) ? 'startup' : null) }],
+        },
+      },
+    },
   },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

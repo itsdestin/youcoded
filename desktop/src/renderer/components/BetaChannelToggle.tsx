@@ -15,7 +15,7 @@
 // popup beside the changelog — and a second copy is how the Development list
 // ended up with two versions of itself, only one of which users ever saw.
 import React, { useEffect, useState } from 'react';
-import { Toggle } from './SettingsPanel';
+import { Toggle } from './settings-toggle';
 import { CARD_LEVEL_1, SectionLabel, SettingRow } from './ui';
 
 /** Shared state hook, so the two surfaces cannot drift in what they report. */
