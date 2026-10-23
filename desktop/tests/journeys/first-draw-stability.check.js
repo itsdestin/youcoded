@@ -66,7 +66,22 @@
   const box = s.getBoundingClientRect();
   rep.scrollSteps = steps; rep.worstDriftPx = r1(worstDrift); rep.framesWithSpacerInWindow = spacerFrames;
   rep.spacersNearWindowAtTop = entriesOf(s).filter((e) => { const b = e.getBoundingClientRect(); return isSpacer(e) && b.bottom > box.top - 1000 && b.top < box.bottom + 1000; }).length;
+  // PLACEHOLDER  a code block the browser has not drawn yet (content-visibility: auto) holds a placeholder height;
+  //              it must equal the height the block has once drawn, or drawing it later pushes the reader's text
+  //              (a 43-line block held at 128 px grew by 756 px and the whole entry below jumped - found under CPU
+  //              throttling, 2026-10-23). Blocks whose lines run wider than the box carry a horizontal scrollbar the
+  //              line count cannot know about, so they are left out.
+  const blocks = [...s.querySelectorAll('.yc-code-block')].filter((b) => { const pre = b.querySelector('pre'); return pre && pre.scrollWidth <= pre.clientWidth; });
+  let worstPlaceholder = 0;
+  for (const b of blocks) {
+    const held = parseFloat(getComputedStyle(b).containIntrinsicBlockSize.replace('auto', ''));
+    const drawn = b.querySelector('pre').getBoundingClientRect().height;
+    if (Number.isFinite(held)) worstPlaceholder = Math.max(worstPlaceholder, Math.abs(held - drawn));
+  }
+  rep.codeBlocksChecked = blocks.length; rep.worstPlaceholderErrorPx = r1(worstPlaceholder);
   const why = [];
+  if (!blocks.length) why.push('no code block was in the page to check the placeholder height against (is the seed conversation missing its code?)');
+  if (worstPlaceholder > 1) why.push(`a code block holds a placeholder ${r1(worstPlaceholder)}px different from its drawn height`);
   if (rep.drawnAtFirstFrame >= rep.entries * 0.5) why.push(`drew ${rep.drawnAtFirstFrame} of ${rep.entries} entries at the first frame (expected only the newest screens)`);
   if (rep.bottomMovePx > 1) why.push(`the bottom moved ${rep.bottomMovePx}px after opening`);
   if (rep.flickFramesWithSpacerInWindow > 0) why.push(`${rep.flickFramesWithSpacerInWindow} flick frames showed a blank spacer in the window`);

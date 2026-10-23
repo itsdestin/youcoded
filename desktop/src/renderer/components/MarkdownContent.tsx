@@ -145,6 +145,14 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
  * highlighter failed to tokenise. Reading the hast node instead is immune to
  * whatever the highlighter did to the element tree.
  */
+/** How many lines a <pre> shows for this text: a final newline does not start another line. Always at least 1. */
+export function codeLineCount(text: string): number {
+  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+  let n = 1;
+  for (let i = body.indexOf('\n'); i !== -1; i = body.indexOf('\n', i + 1)) n++;
+  return n;
+}
+
 function hastText(node: unknown): string {
   if (!node || typeof node !== 'object') return '';
   const n = node as { type?: string; value?: string; children?: unknown[] };
@@ -390,7 +398,12 @@ const mdComponents = {
       // itself would fade its border and fill along with the code. The wrapper frames;
       // the <pre> scrolls sideways and only the code fades, on a side with more. It is
       // CSS-only (no listener per block), so a long chat of code blocks costs nothing.
-      <div className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden">
+      <div
+        className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden"
+        // WHY: the line count lets globals.css hold the block's real height while the browser skips
+        // drawing it, so drawing it later cannot push the reader's text down (see `.yc-code-block`).
+        style={{ '--yc-lines': codeLineCount(codeText) } as React.CSSProperties}
+      >
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}
