@@ -51,9 +51,16 @@ vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
   observe(el: Element) { this.cb([{ isIntersecting: true, target: el }]); }
   unobserve() {} disconnect() {} takeRecords() { return []; }
 };
+// Every ResizeObserver the view builds, so a test can deliver "the layout changed" itself.
+const resizeObservers = new Set<{ cb: () => void }>();
 (globalThis as any).ResizeObserver = class {
-  observe() {} unobserve() {} disconnect() {}
+  cb: () => void;
+  constructor(cb: () => void) { this.cb = cb; }
+  observe() { resizeObservers.add(this); }
+  unobserve() {}
+  disconnect() { resizeObservers.delete(this); }
 };
+const fireResize = () => { for (const ro of [...resizeObservers]) ro.cb(); };
 
 // The unmemoised view: this harness delivers new state by re-rendering with the
 // SAME props, which the memoised default export skips by design (see ChatView.tsx).
@@ -77,7 +84,7 @@ beforeEach(() => {
   mocks.scrollToBottom = vi.fn();
   (window as any).claude = { detach: { requestTranscriptPage: vi.fn().mockResolvedValue(null) } };
 });
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); resizeObservers.clear(); });
 
 describe('prepending older history does not disturb the reader', () => {
   it('does NOT re-arm auto-scroll when the newest entry is unchanged', () => {
@@ -145,5 +152,77 @@ describe('prepending older history does not disturb the reader', () => {
     rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
 
     expect(mocks.stickToBottom).toHaveBeenCalled();
+  });
+
+  // --- the reader's own scrolling is never undone (freeze hunt 2026-10-23, item 1) ----------------
+  // A real-layout stand-in: each entry has a fixed place in the DOCUMENT (docY), and its place on
+  // screen is docY - scrollTop, exactly as a browser lays it out. So a test can scroll the way a
+  // scrollbar drag, touch fling or script does (assign scrollTop, no wheel/touch/key event) and
+  // change the layout above an entry, then let the view's resize callback run.
+  async function prependHarness() {
+    const docY = new Map<string, number>([['older-visible', 450], ['newest', 550]]);
+    let scroller!: HTMLElement;
+    const realRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function () {
+      const el = this as HTMLElement;
+      let top = 0;
+      if (String(el.className ?? '').includes('chat-scroll')) top = 0;
+      else {
+        const hit = [...docY].find(([k]) => (el.textContent ?? '').includes(k) && el.classList?.contains('timeline-entry'));
+        top = hit ? hit[1] - (scroller?.scrollTop ?? 0) : 0;
+      }
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40, x: 0, y: top, toJSON() {} } as DOMRect;
+    };
+    const tail = [userEntry('older-visible'), userEntry('newest')];
+    const page = { events: [], cursor: null, hasMore: false };
+    (window as any).claude.detach.requestTranscriptPage = vi.fn().mockResolvedValue(page);
+    mocks.state = baseState(tail, { cursor: { path: 'p', offset: 10, sizeAtRead: 99 }, hasMore: true, loading: false });
+    const view = render(<ChatView sessionId="s1" visible={true} sessionActive={true} />);
+    scroller = view.container.querySelector('.chat-scroll') as HTMLElement;
+    scroller.scrollTop = 400;
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // The page arrives: the anchor entry is pushed 200px further down the document.
+    docY.set('older-visible', 650); docY.set('newest', 750);
+    mocks.state = baseState([userEntry('page-1'), ...tail], { cursor: null, hasMore: false, loading: false });
+    await act(async () => { view.rerender(<ChatView sessionId="s1" visible={true} sessionActive={true} />); });
+    return { scroller, docY, restore: () => { Element.prototype.getBoundingClientRect = realRect; } };
+  }
+
+  it('does not pull the reader back when they scroll after the page arrives (any input, no wheel event)', async () => {
+    const h = await prependHarness();
+    try {
+      expect(h.scroller.scrollTop).toBe(600);   // the prepend itself was undone
+      h.scroller.scrollTop = 100;               // a scrollbar drag: no wheel, touch or key event
+      await act(async () => { fireResize(); });
+      expect(h.scroller.scrollTop).toBe(100);   // the old code dragged this back to ~600
+      h.scroller.scrollTop = 950;               // and downwards too
+      await act(async () => { fireResize(); });
+      expect(h.scroller.scrollTop).toBe(950);
+    } finally { h.restore(); }
+  });
+
+  it('still corrects content that changes ABOVE the entry, measured from where the reader now is', async () => {
+    const h = await prependHarness();
+    try {
+      h.scroller.scrollTop = 100;               // the reader moved on...
+      h.docY.set('older-visible', 700);         // ...then a code block above the anchor finished laying out: +50px
+      await act(async () => { fireResize(); });
+      expect(h.scroller.scrollTop).toBe(150);   // the entry stays where the reader's own scroll put it on screen
+    } finally { h.restore(); }
+  });
+
+  it('leaves the browser scroll anchoring off only while it corrects, and puts the previous setting back', async () => {
+    vi.useFakeTimers();
+    const h = await prependHarness();
+    try {
+      expect(h.scroller.style.overflowAnchor).toBe('none');
+      await act(async () => { vi.advanceTimersByTime(800); });
+      expect(h.scroller.style.overflowAnchor).toBe('');
+      // after the window the view is no longer touched
+      h.docY.set('older-visible', 900);
+      h.scroller.scrollTop = 300;
+      await act(async () => { fireResize(); });
+      expect(h.scroller.scrollTop).toBe(300);
+    } finally { h.restore(); vi.useRealTimers(); }
   });
 });

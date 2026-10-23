@@ -2,7 +2,7 @@
 // Freeze hunt 2026-10-22, item 2: a code fence over the size limit is not coloured.
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
 import { HIGHLIGHT_MAX_LINES, HIGHLIGHT_MAX_CHARS } from './markdown-blocks';
@@ -90,5 +90,26 @@ describe('code fences over the colour limit', () => {
     expect(has(typing.container)).toBe(coloured);
     const whole = render(<MarkdownContent content={'```js\n' + body + '\n```'} />);
     expect(has(whole.container)).toBe(coloured);
+  });
+});
+
+// Freeze hunt item 3: redrawing every earlier coloured chunk plain in ONE commit at the crossing was a 66-72 ms
+// burst mid-stream (typing lagged 140-220 ms there; master never redraws). They now go plain a few per frame.
+describe('a streaming fence passing the limit does not redraw every earlier chunk at once', () => {
+  const lineAt = (i: number) => `const v${i} = ${i};`;
+  const text = (n: number) => '```js\n' + Array.from({ length: n }, (_, i) => lineAt(i)).join('\n') + '\n';
+  it('keeps most earlier chunks coloured in the crossing commit, then all go plain', async () => {
+    // A streaming message grows into chunked drawing (a fresh mount draws whole), so start small.
+    const r = render(<MarkdownContent content={text(100)} incremental live />);
+    r.rerender(<MarkdownContent content={text(HIGHLIGHT_MAX_LINES - 20)} incremental live />);
+    expect(r.container.querySelectorAll('.yc-fence-chunk .hljs-keyword').length).toBeGreaterThan(50);
+    const coloured = () => r.container.querySelectorAll('.yc-fence-chunk .hljs-keyword').length;
+    const before = coloured();
+    r.rerender(<MarkdownContent content={text(HIGHLIGHT_MAX_LINES + 20)} incremental live />);
+    // Not all at once: the crossing commit leaves the bulk of the old chunks as they were.
+    expect(coloured()).toBeGreaterThan(before / 2);
+    // ...and the end state is the same as the all-at-once version: nothing coloured.
+    await vi.waitFor(() => expect(r.container.querySelector('.hljs-keyword')).toBeNull(), { timeout: 5000 });
+    expect(r.container.textContent).toContain(`const v${HIGHLIGHT_MAX_LINES + 19} = ${HIGHLIGHT_MAX_LINES + 19};`);
   });
 });
