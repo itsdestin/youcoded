@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import pkg from './package.json';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 // Keep Vite's port in sync with the main process via YOUCODED_PORT_OFFSET.
 // Duplicated (not imported from src/shared/ports.ts) because vite.config runs
@@ -23,6 +25,34 @@ const preloadConnectionCode = {
       if (!shim) return [];
       return [shim.fileName, ...(shim.imports ?? [])].filter((file) => !html.includes(file)).map((file) => ({ tag: 'link', attrs: { rel: 'modulepreload', crossorigin: true, href: `./${file}` }, injectTo: 'head' as const }));
     },
+  },
+};
+
+// WHY the buddy's picture is shared (2026-10-22 phone speed, Destin approved): each YouCoded theme has five pose drawings
+// (themes/builtin/assets/*-mascot-*.svg, written by scripts/brand/glass-buddy.py) and every one embeds the SAME glass
+// picture — 103 KB in the day theme, 186 KB at night, so ~1.15 MB of the startup code was four extra copies. A phone browser
+// on the plain-http remote address is only offered gzip, which cannot match repeats that far apart (it remembers 32 KB), so
+// a phone downloaded all of them: 1.9 MB measured on Destin's phone. Each drawing is now built from its own few KB plus ONE
+// shared copy of its picture, joined back into the identical text at runtime, so nothing on screen changes. The files on
+// disk stay whole, so regenerating them needs no change here.
+const MASCOT_SVG = /[\\/]themes[\\/]builtin[\\/]assets[\\/][^\\/]*mascot[^\\/]*\.svg\?raw$/;
+const EMBEDDED_PICTURE = /data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]{4096,}/;
+const sharedPictures = new Map<string, string>();
+const shareMascotPictures = {
+  name: 'youcoded-share-mascot-pictures',
+  enforce: 'pre' as const,
+  resolveId(id: string) { return id.startsWith('\0mascot-picture:') ? id : null; },
+  load(id: string) {
+    if (id.startsWith('\0mascot-picture:')) return `export default ${JSON.stringify(sharedPictures.get(id.slice('\0mascot-picture:'.length)) ?? '')};`;
+    if (!MASCOT_SVG.test(id)) return null;
+    const svg = readFileSync(id.replace(/\?raw$/, ''), 'utf8');
+    const match = EMBEDDED_PICTURE.exec(svg);
+    if (!match) return `export default ${JSON.stringify(svg)};`;
+    const key = createHash('sha256').update(match[0]).digest('hex').slice(0, 16);
+    sharedPictures.set(key, match[0]);
+    const before = svg.slice(0, match.index);
+    const after = svg.slice(match.index + match[0].length);
+    return `import picture from ${JSON.stringify('\0mascot-picture:' + key)};\nexport default ${JSON.stringify(before)} + picture + ${JSON.stringify(after)};`;
   },
 };
 
@@ -51,7 +81,7 @@ function atStartup(id: string, graph: ModuleGraph): boolean {
 }
 
 export default defineConfig({
-  plugins: [react(), preloadConnectionCode],
+  plugins: [shareMascotPictures, react(), preloadConnectionCode],
   // WHY: Vite resolves --outDir from this root, not the shell directory. build:site
   // therefore needs ../../../docs/site; ../docs/site silently left the public embed stale.
   root: 'src/renderer',
