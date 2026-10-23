@@ -298,7 +298,7 @@ describe('dev, update and account: every channel is in the table, and phones are
   it('every dev:*, update:* and account:* name in the contract has a table entry (pushes excepted)', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => /^(dev|update|account):/.test(v) && !PUSHES.has(v));
-    expect(names.length).toBe(28); // 9 dev + 9 update + 10 account; a new one must be decided here
+    expect(names.length).toBe(29); // 9 dev + 10 update + 10 account; a new one must be decided here
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
   it('exactly these are open to a phone; everything else answers "not available over remote access"', () => {

@@ -80,6 +80,13 @@ export interface UpdateBetaChannelState { betaChannel: boolean | null; effective
 /** "Install updates automatically" (#183). `supported:false` = no in-app updater here (Android's
  *  headless backend; an unpackaged build without YOUCODED_DEV_FAKE_UPDATE=1): the row is hidden. */
 export type UpdateAutoInstallState = { supported: true; enabled: boolean } | { supported: false };
+/** Restart to update (#183 T3). `restarting:false` = nothing happened (cancelled, pulled, a shutdown began);
+ *  `fallback` = today's interactive installer ended in something the popup must show (a command to run by
+ *  hand, or the browser). A real failure rejects instead, carrying its code like a launch failure. */
+export interface UpdateRestartResult {
+  restarting: boolean;
+  fallback?: { kind: 'browser' } | { kind: 'manual'; command: string; filePath: string };
+}
 export interface UpdateChangelogResult {
   markdown: string | null;
   entries: Array<{ version: string; date?: string; body: string }>;

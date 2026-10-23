@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   // Download tests (#183): a private userData folder, a scriptable download engine and release answer.
   userData: '/unused', installer: {} as Record<string, unknown>, httpStatus: 200, setBeta: vi.fn(),
   release: null as null | Record<string, unknown>,
-  kind: 'deb' as string, stageAppImage: vi.fn(),
+  kind: 'deb' as string, stageAppImage: vi.fn(), stageMacApp: vi.fn(), spawn: vi.fn(), httpHang: false,
 }));
 const DEFAULT_RELEASE = { manifest_url: 'https://github.com/manifest', signature_url: 'https://github.com/signature', tag: 'v2.0.0' };
 vi.mock('electron', () => ({
@@ -44,13 +44,15 @@ vi.mock('../src/main/native-home', () => ({ NativeHome: class {} }));
 vi.mock('../src/main/linux-install-kind', () => ({ linuxInstallKind: () => mocks.kind, primeLinuxInstallKind: async () => {} }));
 vi.mock('../src/main/update-staging', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/update-staging')>();
-  return { ...actual, stageAppImage: mocks.stageAppImage };
+  return { ...actual, stageAppImage: mocks.stageAppImage, stageMacApp: mocks.stageMacApp };
 });
 vi.mock('../src/main/update-release-status', () => ({
   readReleaseStatus: () => mocks.release ?? DEFAULT_RELEASE,
 }));
+vi.mock('child_process', async (importOriginal) => ({ ...(await importOriginal<typeof import('child_process')>()), spawn: mocks.spawn }));
 vi.mock('https', () => ({ default: { get: (_url: string, _opts: unknown, callback: (response: unknown) => void) => {
   const request = new EventEmitter();
+  if (mocks.httpHang) return request; // never answers: a network that went away
   const response = Object.assign(new EventEmitter(), { statusCode: mocks.httpStatus, resume: () => {} });
   queueMicrotask(() => { callback(response); response.emit('data', Buffer.from('{}')); response.emit('end'); });
   return request;
@@ -82,6 +84,8 @@ describe('update service launch ownership', () => {
     expect(mocks.launch).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(500);
     expect(mocks.quit).toHaveBeenCalledTimes(1);
+    // The quit launch() schedules is marked internal, so it can never quit-install (design rev 4 F3).
+    expect((await import('../src/main/internal-quit')).takeInternalQuit()).toBe(true);
   });
 
   it('broadcasts progress locally and handles late success after an unknown timeout', async () => {
@@ -616,5 +620,239 @@ describe('update service downloads', () => {
     await armed(s);
     await vi.waitFor(() => expect(fs.existsSync(path.join(cacheDir, asset('2.0.0')))).toBe(false));
     expect(s.getUpdateStatus().downloaded).toBe(false);
+  });
+});
+
+
+// #183 T3 — installing at exit: who may, the brake, the re-hash, the attempt record and the per-platform step.
+describe('update service installing', () => {
+  let userData: string; let cacheDir: string; let appsDir: string;
+  let gate: Promise<void> | null;
+  const realPlatform = process.platform; const realExec = process.execPath;
+  const setPlatform = (p: NodeJS.Platform) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+  const ext = { win32: 'exe', linux: 'AppImage', darwin: 'dmg' } as const;
+  let asset: string;
+  const release = (v: string) => ({ manifest_url: 'https://github.com/manifest', signature_url: 'https://github.com/signature', tag: `v${v}`, latest: v, update_available: true, download_url: `https://github.com/itsdestin/youcoded/releases/download/v${v}/YouCoded-${v}.${ext[process.platform as keyof typeof ext] ?? 'exe'}` });
+
+  function setup(platform: 'win32' | 'linux' | 'darwin') {
+    setPlatform(platform);
+    asset = `YouCoded-2.0.0.${ext[platform]}`;
+    mocks.release = release('2.0.0');
+    if (platform === 'linux') { process.env.APPIMAGE = path.join(appsDir, 'YouCoded.AppImage'); fs.writeFileSync(process.env.APPIMAGE, 'old'); mocks.kind = 'appimage'; }
+    if (platform === 'darwin') {
+      const bundle = path.join(appsDir, 'YouCoded.app'); fs.mkdirSync(path.join(bundle, 'Contents', 'MacOS'), { recursive: true });
+      Object.defineProperty(process, 'execPath', { value: path.join(bundle, 'Contents', 'MacOS', 'YouCoded'), configurable: true });
+    }
+  }
+
+  beforeEach(() => {
+    vi.resetModules(); vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'update-service-inst-'));
+    cacheDir = path.join(userData, 'update-cache'); appsDir = path.join(userData, 'apps'); fs.mkdirSync(appsDir);
+    mocks.userData = userData; mocks.packaged = true; mocks.savedAutoInstall = true; mocks.readGate = null; mocks.httpStatus = 200; mocks.httpHang = false;
+    mocks.verify.mockResolvedValue({ assets: [] });
+    mocks.spawn.mockImplementation(() => ({ on: vi.fn(), unref: vi.fn() }));
+    gate = null;
+    const started = vi.fn(async (url: string) => {
+      if (gate) await gate;
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const filePath = path.join(cacheDir, url.split('/').pop()!);
+      fs.writeFileSync(filePath, 'installer');
+      return { jobId: 'job', filePath, bytesTotal: 9 };
+    });
+    mocks.installer = { startDownload: started, cancelDownload: vi.fn(), getActiveProgress: () => null };
+    mocks.stageAppImage.mockImplementation(async () => { fs.writeFileSync(path.join(appsDir, '.YouCoded-update-2.0.0.AppImage'), 'new'); return '.YouCoded-update-2.0.0.AppImage'; });
+    mocks.stageMacApp.mockImplementation(async () => { fs.mkdirSync(path.join(appsDir, '.YouCoded-update-2.0.0.app')); return '.YouCoded-update-2.0.0.app'; });
+  });
+  afterEach(() => {
+    vi.useRealTimers(); setPlatform(realPlatform);
+    Object.defineProperty(process, 'execPath', { value: realExec, configurable: true });
+    delete process.env.APPIMAGE; delete process.env.ProgramFiles; mocks.kind = 'deb';
+    fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  const load = async () => (await import('../src/main/update-service')).getUpdateService();
+  /** Downloaded and ready: a check, the 60 s clock, the background download. */
+  async function ready(s: Awaited<ReturnType<typeof load>>) {
+    s.onFirstWindowReady(); await vi.advanceTimersByTimeAsync(60_000);
+    await s.fetchLatestRelease(); await s.afterCheckDone();
+    await vi.waitFor(() => expect(s.getUpdateStatus().downloaded).toBe(true));
+  }
+  const installerPath = () => path.join(cacheDir, asset);
+
+  describe('who may install on a quit', () => {
+    it('a downloaded, signed, latest release with the switch on', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      expect(s.quitInstallEligible()).toBe(true);
+    });
+    it('not with the switch off', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      await s.setAutoInstall(false);
+      expect(s.quitInstallEligible()).toBe(false);
+    });
+    it('not when installing needs a password (Windows per-machine)', async () => {
+      setup('win32'); process.env.ProgramFiles = path.dirname(process.execPath);
+      const s = await load(); await ready(s);
+      expect(s.getUpdateStatus().needs_password).toBe(true);
+      expect(s.quitInstallEligible()).toBe(false);
+    });
+    it('not when what is downloaded is no longer the latest release', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      let open!: () => void; gate = new Promise<void>((r) => { open = r; }); // hold the newer download
+      mocks.release = release('2.1.0');
+      await s.fetchLatestRelease();
+      expect(s.quitInstallEligible()).toBe(false);
+      open();
+    });
+    it('not after two failed attempts for this version; Restart is not blocked by them', async () => {
+      setup('win32');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'attempt.json'), JSON.stringify({ version: '2.0.0', at: 1, failures: 1 }));
+      const s = await load(); await ready(s);
+      // the launch after a failed attempt counted it: 1 recorded + this one = 2
+      expect(s.quitInstallEligible()).toBe(false);
+      expect(await s.planRestart()).toEqual({ kind: 'exit-install', macPassword: false });
+    });
+    it('not in an unpackaged build', async () => {
+      setup('win32'); mocks.packaged = false;
+      const s = await load(); await s.fetchLatestRelease();
+      expect(s.quitInstallEligible()).toBe(false);
+    });
+  });
+
+  describe('the attempt record on the next launch', () => {
+    it('a version at or past the attempted one means it worked: the record and the leftover file go', async () => {
+      setup('win32'); fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'attempt.json'), JSON.stringify({ version: '1.0.0', at: 1, failures: 0 }));
+      fs.writeFileSync(path.join(cacheDir, 'YouCoded-1.0.0.exe'), 'x');
+      const s = await load(); await s.fetchLatestRelease();
+      await vi.waitFor(() => expect(fs.existsSync(path.join(cacheDir, 'attempt.json'))).toBe(false));
+      expect(fs.existsSync(path.join(cacheDir, 'YouCoded-1.0.0.exe'))).toBe(false);
+    });
+    it('still older: counts one failure, keeps the download, and does not count it again on the launch after', async () => {
+      setup('win32'); fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'attempt.json'), JSON.stringify({ version: '2.0.0', at: 1, failures: 0 }));
+      const s = await load(); await ready(s);
+      expect(JSON.parse(fs.readFileSync(path.join(cacheDir, 'attempt.json'), 'utf8'))).toMatchObject({ version: '2.0.0', failures: 1, seen: true });
+      expect(s.getUpdateStatus().downloaded).toBe(true); // the popup is simply Ready again
+      expect(s.quitInstallEligible()).toBe(true);        // one failure: quits still try
+      vi.resetModules();
+      const again = await load(); await ready(again);
+      expect(JSON.parse(fs.readFileSync(path.join(cacheDir, 'attempt.json'), 'utf8')).failures).toBe(1);
+    });
+  });
+
+  describe('the brake before an install', () => {
+    const prepared = async (status: number, hang = false) => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.httpStatus = status; mocks.httpHang = hang;
+      const done = s.prepareExit('install');
+      if (hang) await vi.advanceTimersByTimeAsync(3_000);
+      await done;
+      return s;
+    };
+    const installs = (s: Awaited<ReturnType<typeof load>>) => { s.runExitInstall(false, vi.fn()); return mocks.spawn.mock.calls.length; };
+
+    it('a 404 on the signed file means the release was pulled: file and record are deleted, nothing installs', async () => {
+      const s = await prepared(404);
+      expect(installs(s)).toBe(0);
+      expect(fs.existsSync(installerPath())).toBe(false);
+      expect(s.getUpdateStatus().downloaded).toBe(false);
+    });
+    it.each([403, 500])('a %i is not proof of anything: no install this time, the file is kept', async (status) => {
+      const s = await prepared(status);
+      expect(installs(s)).toBe(0);
+      expect(fs.existsSync(installerPath())).toBe(true);
+      expect(s.getUpdateStatus().downloaded).toBe(true);
+    });
+    it('a network that never answers holds the quit for 3 s at most, then no install, file kept', async () => {
+      const s = await prepared(200, true);
+      expect(installs(s)).toBe(0);
+      expect(fs.existsSync(installerPath())).toBe(true);
+    });
+    it('an answer fetched within the last 10 minutes is reused (no second fetch at the quit)', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      await s.prepareExit('install'); // fetches and caches
+      mocks.httpStatus = 500;         // the network is gone now
+      await s.prepareExit('install');
+      expect(installs(s)).toBe(1);
+    });
+    it('a Restart on a pulled release installs nothing and the file is deleted', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.httpStatus = 404;
+      expect(await s.planRestart()).toEqual({ kind: 'none' });
+      expect(fs.existsSync(installerPath())).toBe(false);
+    });
+    it('a Restart that cannot confirm the release fails visibly instead of quitting', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.httpStatus = 500;
+      await expect(s.planRestart()).rejects.toMatchObject({ code: 'network-failed' });
+    });
+  });
+
+  describe('the step at exit, per platform', () => {
+    it('Windows: re-hashes the exact installer, then spawns it detached with /S --updated (--force-run for Restart) and writes the attempt', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      mocks.verify.mockClear();
+      await s.prepareExit('install-relaunch');
+      expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ filePath: installerPath(), fileName: asset }));
+      s.runExitInstall(true, vi.fn());
+      expect(mocks.spawn).toHaveBeenCalledWith(installerPath(), ['/S', '--updated', '--force-run'], expect.objectContaining({ detached: true }));
+      expect(JSON.parse(fs.readFileSync(path.join(cacheDir, 'attempt.json'), 'utf8'))).toMatchObject({ version: '2.0.0', failures: 0 });
+    });
+    it('a file that fails the re-hash is not run, and is deleted', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      const { UpdateInstallError } = await import('../src/main/update-installer');
+      mocks.verify.mockRejectedValue(new UpdateInstallError('verify-failed', 'sha256 mismatch'));
+      await s.prepareExit('install');
+      s.runExitInstall(false, vi.fn());
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(installerPath())).toBe(false);
+    });
+    it('Linux AppImage: re-hashes the staged copy (not the download), then renames it over the running image', async () => {
+      setup('linux'); mocks.verify.mockResolvedValue({ assets: [{ name: asset, sha256: 'abc' }] }); // staging needs the signed hash
+      const s = await load(); await ready(s);
+      const staged = path.join(appsDir, '.YouCoded-update-2.0.0.AppImage');
+      mocks.verify.mockClear();
+      await s.prepareExit('install');
+      expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ filePath: staged, fileName: asset }));
+      const relaunch = vi.fn();
+      s.runExitInstall(false, relaunch);
+      expect(fs.readFileSync(process.env.APPIMAGE!, 'utf8')).toBe('new');
+      expect(relaunch).not.toHaveBeenCalled();
+    });
+    it('Mac, bundle writable: the helper is started at prepare time with positional arguments, and the exit writes the go file', async () => {
+      setup('darwin'); const s = await load(); await ready(s);
+      await s.prepareExit('install');
+      const staged = path.join(appsDir, '.YouCoded-update-2.0.0.app');
+      expect(mocks.spawn).toHaveBeenCalledTimes(1);
+      const [cmd, argv, opts] = mocks.spawn.mock.calls[0];
+      expect(cmd).toBe('/bin/sh');
+      expect(argv.slice(0, 3)).toEqual(['-c', expect.stringContaining('kill -0'), 'sh']);
+      expect(argv.slice(3)).toEqual([String(process.pid), path.join(appsDir, 'YouCoded.app'), staged, staged + '.go', staged, 'user', 'none', String(process.getuid?.() ?? 0)]);
+      expect(opts).toMatchObject({ detached: true, stdio: 'ignore' });
+      expect(fs.existsSync(staged + '.go')).toBe(false); // nothing swaps until the exit hook says go
+      s.runExitInstall(true, vi.fn());
+      expect(fs.readFileSync(staged + '.go', 'utf8')).toBe('relaunch\n');
+    });
+    it('Mac, password needed: a quit never installs (only Restart asks for the password)', async () => {
+      setup('darwin'); fs.chmodSync(appsDir, 0o555);
+      try {
+        const s = await load(); await ready(s);
+        expect(s.getUpdateStatus().needs_password).toBe(true);
+        expect(s.quitInstallEligible()).toBe(false);
+        await s.prepareExit('install');
+        s.runExitInstall(false, vi.fn());
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      } finally { fs.chmodSync(appsDir, 0o755); }
+    });
+    it('nothing prepared means nothing is run, and a Restart with no plan still reopens the app', async () => {
+      setup('win32'); const s = await load(); await ready(s);
+      const relaunch = vi.fn();
+      s.runExitInstall(true, relaunch); // prepare never ran
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(relaunch).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -9,12 +9,15 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import https from 'https';
+import { spawn } from 'child_process';
 import { app, BrowserWindow, shell } from 'electron';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost, deriveDownloadFilename, cleanupStaleDownloads, RESERVED_CACHE_FILES } from './update-installer';
-import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState, UpdateDownloadResult, UpdateCachedDownloadResult } from '../shared/update-install-types';
+import type { UpdateProgressEvent, UpdateInstallErrorCode, UpdateBetaChannelState, UpdateAutoInstallState, UpdateDownloadResult, UpdateCachedDownloadResult, UpdateLaunchResult } from '../shared/update-install-types';
 import { verifyDownloadedUpdate, compareVersions, hashFileSha256 } from './update-manifest-verify';
 import { computeInstallFacts, macBundleOf, type InstallFacts } from './update-install-facts';
-import { isValidStagedName, stagedPathFor, stageAppImage, stageMacApp, removeStagedByName, sweepStaging, runCommand, type StagedPathContext } from './update-staging';
+import { isValidStagedName, stagedPathFor, stageAppImage, stageMacApp, removeStagedByName, sweepStaging, runCommand, runWithTimeout, parseDesignatedRequirement, type StagedPathContext } from './update-staging';
+import { runExitPlan, readAttempt, macGoPaths, macHelperArgv, macRootStartArgs, type ExitPlan } from './update-exit';
+import { internalAppQuit } from './internal-quit';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
 import { linuxInstallKind, primeLinuxInstallKind } from './linux-install-kind';
 import { UpdateSettings } from './update-settings';
@@ -178,7 +181,9 @@ function createUpdateService() {
     if (quitScheduled) return;
     quitScheduled = true;
     // Keep launch ownership during the grace period too: a new launch cannot race quit.
-    setTimeout(() => app.quit(), 500);
+    // WHY internal (design rev 4 F3): this quit follows an interactive install the person asked for; it must
+    // never be mistaken for a plain quit that installs a downloaded update.
+    setTimeout(() => internalAppQuit(() => app.quit()), 500);
   }
 
   const launchInstaller = makeLaunchInstaller({
@@ -250,33 +255,42 @@ function createUpdateService() {
   // ('signature-invalid') rather than run unverified. `transient` marks a failure to FETCH the signed
   // file: the download itself may be fine, so callers keep it instead of deleting 150 MB.
   interface VerifyTarget { tag: string | null | undefined; manifestUrl: string | null | undefined; signatureUrl: string | null | undefined }
-  async function verifyAgainstRelease(filePath: string, target: VerifyTarget): Promise<{ code: UpdateInstallErrorCode | null; transient?: boolean; sha256?: string }> {
+  interface SignedBytes { manifestBytes: Buffer; signatureBytes: Buffer }
+  /** Fetch a release's signed file + signature. `pulled` = either answered 404 on its final hop (the file
+   *  was deleted: the brake, design §5); any other failure is just "could not fetch". */
+  async function fetchSigned(target: VerifyTarget): Promise<({ ok: true } & SignedBytes) | { ok: false; pulled: boolean }> {
+    const [m, g] = await Promise.allSettled([
+      fetchUrlToBuffer(target.manifestUrl!, 1024 * 1024),
+      fetchUrlToBuffer(target.signatureUrl!, 8 * 1024),
+    ]);
+    if (m.status === 'fulfilled' && g.status === 'fulfilled') return { ok: true, manifestBytes: m.value, signatureBytes: g.value };
+    const is404 = (r: PromiseSettledResult<Buffer>) => r.status === 'rejected' && (r.reason as { httpStatus?: number } | null)?.httpStatus === 404;
+    console.error('[update] could not fetch the signed release file:', m.status === 'rejected' ? m.reason : (g as PromiseRejectedResult).reason);
+    return { ok: false, pulled: is404(m) || is404(g) };
+  }
+  async function verifyAgainstRelease(filePath: string, target: VerifyTarget, opts: { signed?: { ok: true } & SignedBytes; fileName?: string } = {}): Promise<{ code: UpdateInstallErrorCode | null; transient?: boolean; sha256?: string; pulled?: boolean }> {
     const { manifestUrl, signatureUrl, tag } = target;
     if (!manifestUrl || !signatureUrl || !tag) {
       console.error('[update] refusing: this release has no signed manifest to verify against');
       return { code: 'signature-invalid' };
     }
-    let manifestBytes: Buffer, signatureBytes: Buffer;
-    try {
-      [manifestBytes, signatureBytes] = await Promise.all([
-        fetchUrlToBuffer(manifestUrl, 1024 * 1024),
-        fetchUrlToBuffer(signatureUrl, 8 * 1024),
-      ]);
-    } catch (err) {
-      console.error('[update] could not fetch the signed release file:', err);
-      return { code: 'verify-failed', transient: true }; // a transient fetch failure is retriable
-    }
+    // WHY `signed` and `fileName` (T3): the quit-time re-hash reuses the brake's bytes (no second fetch) and
+    // may hash a staged copy whose name differs from the signed asset's.
+    const signed = opts.signed ?? await fetchSigned(target);
+    if (!signed.ok) return { code: 'verify-failed', transient: true, pulled: signed.pulled }; // a transient fetch failure is retriable
+    const { manifestBytes, signatureBytes } = signed;
+    const fileName = opts.fileName ?? path.basename(filePath);
     try {
       const manifest = await verifyDownloadedUpdate({
         filePath,
-        fileName: path.basename(filePath),
+        fileName,
         manifestBytes,
         signatureBytes,
         tag,
         currentVersion: app.getVersion(),
         publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
       });
-      const entry = manifest?.assets?.find((a: { name: string }) => a.name === path.basename(filePath));
+      const entry = manifest?.assets?.find((a: { name: string }) => a.name === fileName);
       return { code: null, sha256: entry?.sha256 };
     } catch (err) {
       if (err instanceof UpdateInstallError) return { code: err.code };
@@ -387,12 +401,12 @@ function createUpdateService() {
     return { success: true };
   }
 
-  async function launch(payload: { jobId: string; filePath: string }) {
+  async function launch(payload: { jobId: string; filePath: string }, scheduleTheQuit = true) {
     // WHY acquire before the first await: verification itself can overlap across windows.
     if (launchActive) return { success: false as const, error: 'busy' as const };
     launchActive = true;
     try {
-      const result = await launchVerified(payload);
+      const result = await launchVerified(payload, scheduleTheQuit);
       if (!(result.success ? result.quitPending : result.error === 'install-timeout')) launchActive = false;
       return result;
     } catch (error) {
@@ -401,7 +415,8 @@ function createUpdateService() {
     }
   }
 
-  async function launchVerified(payload: { jobId: string; filePath: string }) {
+  // `scheduleTheQuit` false = Restart to update quits through its own path (so it can untrack after the gate).
+  async function launchVerified(payload: { jobId: string; filePath: string }, scheduleTheQuit = true) {
     if (devFakeUpdate) {
       // Never actually launch anything in dev — just surface the cached file in
       // the OS file manager so Destin can confirm it exists.
@@ -419,7 +434,7 @@ function createUpdateService() {
       return { success: false as const, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
-    if (result.success && result.quitPending) {
+    if (result.success && result.quitPending && scheduleTheQuit) {
       scheduleQuit();
     }
     return result;
@@ -598,6 +613,7 @@ function createUpdateService() {
         });
       } catch (e) { console.warn('[update] could not work out install facts:', e); }
       await loadPending().catch(() => {});
+      await processAttempt().catch(() => {});
       notifyStatusChanged(); // `needs_password` / `install_refused` just became known
     })();
   }
@@ -832,18 +848,251 @@ function createUpdateService() {
     await initDone;
     if (pending && pendingFileOk && pending.version === version) {
       const filePath = pendingFilePath(pending);
-      if (await fileExists(filePath)) return { filePath, version };
+      if (await fileExists(filePath)) {
+        refreshBrake(); // the popup is showing Ready: have a fresh "not pulled" answer waiting for the click or the quit
+        return { filePath, version };
+      }
     }
     return findCachedDownload(updateCacheDir, version, process.platform);
   }
 
+  // ===========================================================================
+  // #183 T3 — installing: attempt record, brake, prepare, restart pieces (design §4, §5, rev 4)
+  // ===========================================================================
+
+  const attemptPath = path.join(updateCacheDir, 'attempt.json');
+  /** The last install attempt, as of this launch: how many times THIS version failed to install. */
+  let attempt: { version: string; failures: number } | null = null;
+  const BRAKE_TTL_MS = 10 * 60_000;     // rev 4 F8: a "not pulled" answer is good for 10 minutes
+  const BRAKE_FETCH_CAP_MS = 5_000;     // one fetch never waits longer than this
+  const QUIT_BRAKE_WAIT_MS = 3_000;     // a quit waits at most this for the brake
+  const MAX_FAILED_ATTEMPTS = 2;        // E8: after two, quits stop installing that version (Restart still tries)
+  type BrakeResult = 'ok' | 'pulled' | 'unconfirmed';
+  let brakeCache: { key: string; at: number; signed: { ok: true } & SignedBytes } | null = null;
+  let brakeFlight: { key: string; promise: Promise<BrakeResult> } | null = null;
+  let preparedPlan: ExitPlan | null = null;
+  /** Staged name for which a root Mac helper is already waiting (so a second Restart does not ask again). */
+  let rootHelperFor: string | null = null;
+  let userHelperFor: string | null = null;
+
+  function failuresFor(version: string): number { return attempt?.version === version ? attempt.failures : 0; }
+
+  /** Startup: did the last install attempt work? Running version >= attempted => yes (clean up). Else count a failure. */
+  async function processAttempt(): Promise<void> {
+    const a = await readAttempt(attemptPath);
+    if (!a) return;
+    if (compareVersions(app.getVersion(), a.version) >= 0) {
+      await fs.promises.rm(attemptPath, { force: true }).catch(() => {});
+      const left = await findCachedDownload(updateCacheDir, a.version, process.platform);
+      if (left) await fs.promises.rm(left.filePath, { force: true }).catch(() => {});
+      return;
+    }
+    // WHY `seen`: this launch is the first since the attempt, so it is the one that counts the failure; a
+    // later launch that finds the same record must not count it again.
+    const failures = a.seen ? a.failures : a.failures + 1;
+    if (!a.seen) {
+      console.warn(`[update] install of ${a.version} did not complete (failure ${failures})`);
+      await fs.promises.writeFile(attemptPath, JSON.stringify({ version: a.version, at: a.at, failures, seen: true })).catch(() => {});
+    }
+    attempt = { version: a.version, failures };
+  }
+
+  /** Which instant exit step this machine uses for the pending update, or null when none fits. */
+  function exitInstallKind(p: Pending): 'win' | 'appimage' | 'mac-user' | 'mac-root' | null {
+    if (!facts || facts.installRefused || !app.isPackaged) return null;
+    if (process.platform === 'win32') return facts.needsPassword ? null : 'win'; // per-machine = interactive installer
+    if (process.platform === 'darwin') return p.stagedName ? (facts.needsPassword ? 'mac-root' : 'mac-user') : null;
+    if (process.platform === 'linux') return process.env.APPIMAGE && p.stagedName ? 'appimage' : null;
+    return null;
+  }
+
+  /** Sync and memory-only (the quit path never reads a file): may a person's plain quit install the update? */
+  function quitInstallEligible(): boolean {
+    if (!autoInstallEnabled() || devFakeUpdate) return false;
+    const p = pending;
+    if (!p || !pendingFileOk || cachedUpdateStatus?.latest !== p.version) return false;
+    if (failuresFor(p.version) >= MAX_FAILED_ATTEMPTS) return false;
+    const kind = exitInstallKind(p);
+    return kind === 'win' || kind === 'appimage' || kind === 'mac-user'; // a password is only ever asked for by Restart
+  }
+
+  function brakeKey(p: Pending): string { return [p.tag, p.manifestUrl, p.signatureUrl, p.assetName].join('|'); }
+
+  /** The brake (design §5): is the pending release's own signed file still published? Cached 10 min. */
+  function runBrake(p: Pending): Promise<BrakeResult> {
+    const key = brakeKey(p);
+    if (brakeCache && brakeCache.key === key && Date.now() - brakeCache.at <= BRAKE_TTL_MS) return Promise.resolve('ok');
+    if (brakeFlight && brakeFlight.key === key) return brakeFlight.promise;
+    const promise = (async (): Promise<BrakeResult> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const capped = new Promise<{ ok: false; pulled: false }>((resolve) => { timer = setTimeout(() => resolve({ ok: false, pulled: false }), BRAKE_FETCH_CAP_MS); });
+      const got = await Promise.race([fetchSigned(p), capped]).finally(() => { if (timer) clearTimeout(timer); });
+      if (got.ok) { brakeCache = { key, at: Date.now(), signed: got }; return 'ok'; }
+      if (got.pulled) {
+        // 404 on the final hop: the release was pulled. Delete what we hold; never install it.
+        brakeCache = null;
+        if (pending === p) await setPending(null);
+        await removePendingFiles(p);
+        return 'pulled';
+      }
+      return 'unconfirmed'; // 403 / 500 / timeout / offline: no install this time, keep the file
+    })();
+    const entry = { key, promise };
+    brakeFlight = entry;
+    void promise.then(() => {}, () => {}).then(() => { if (brakeFlight === entry) brakeFlight = null; });
+    return promise;
+  }
+
+  /** Background refresh of the brake answer: when the popup shows Ready and when a quit begins (rev 4 F8). */
+  function refreshBrake(): void {
+    const p = pending;
+    if (!p || !pendingFileOk || devFakeUpdate || !app.isPackaged) return;
+    void runBrake(p).catch(() => {});
+  }
+
+  /** Re-hash the EXACT file the exit step will use against the signed file the brake just fetched (D12). */
+  async function rehash(p: Pending, target: string): Promise<boolean> {
+    const signed = brakeCache && brakeCache.key === brakeKey(p) ? brakeCache.signed : null;
+    if (!signed) return false;
+    const res = await verifyAgainstRelease(target, p, { signed, fileName: p.assetName });
+    if (res.code === null) return true;
+    if (!res.transient && pending === p) { await setPending(null); await removePendingFiles(p); } // a file that fails its check is never kept
+    return false;
+  }
+
+  function startMacUserHelper(p: Pending): void {
+    const staged = stagedPathOf(p)!;
+    if (userHelperFor === p.stagedName) return;
+    userHelperFor = p.stagedName ?? null;
+    // Detached + unref: it outlives us, waits for our pid to go, then looks for the go file.
+    const child = spawn('/bin/sh', macHelperArgv({ pid: process.pid, oldBundle: macBundleOf(process.execPath), staged, mode: 'user', uid: process.getuid?.() ?? 0 }), { detached: true, stdio: 'ignore' });
+    child.on('error', (e) => console.warn('[update] could not start the swap helper:', e));
+    child.unref();
+  }
+
+  async function buildPlan(p: Pending, kind: NonNullable<ReturnType<typeof exitInstallKind>>): Promise<ExitPlan | null> {
+    if (kind === 'win') {
+      const installer = pendingFilePath(p);
+      return await rehash(p, installer) ? { kind: 'win-nsis', version: p.version, installer } : null;
+    }
+    const staged = stagedPathOf(p);
+    if (!staged || !(await fileExists(staged))) return null;
+    if (kind === 'appimage') {
+      const target = process.env.APPIMAGE;
+      return target && await rehash(p, staged) ? { kind: 'appimage', version: p.version, staged, target } : null;
+    }
+    // Mac: the signed disk image is re-hashed (the staged bundle was signature-checked when it was staged).
+    if (!(await rehash(p, pendingFilePath(p)))) return null;
+    if (kind === 'mac-root' && rootHelperFor !== p.stagedName) return null; // the password box was never answered
+    if (kind === 'mac-user') startMacUserHelper(p);
+    return { kind: 'mac-go', version: p.version, goFile: macGoPaths(staged).goFile };
+  }
+
+  /**
+   * runShutdown's prepare step (in parallel with teardown): brake + re-hash, leaving a ready-to-spawn plan in
+   * memory — or nothing. The quit waits at most 3 s for the brake; no answer => no install this quit.
+   */
+  async function prepareExit(action: 'install' | 'install-relaunch'): Promise<void> {
+    preparedPlan = null;
+    const p = pending;
+    if (!p || !pendingFileOk || devFakeUpdate) return;
+    if (action === 'install' && !quitInstallEligible()) return;
+    const kind = exitInstallKind(p);
+    if (!kind) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const verdict = await Promise.race([
+      runBrake(p),
+      new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), QUIT_BRAKE_WAIT_MS); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+    if (verdict !== 'ok' || pending !== p) return;
+    const plan = await buildPlan(p, kind);
+    if (plan && pending === p) preparedPlan = plan;
+  }
+
+  /** The exit hook (will-quit AND the watchdog's exit): instant, synchronous, nothing awaited. */
+  function runExitInstall(relaunch: boolean, appRelaunch: () => void): void {
+    const plan = preparedPlan;
+    preparedPlan = null;
+    // WHY relaunch even with no plan: Restart was pressed and the install could not be prepared in time
+    // (the brake could not be confirmed); reopening the old version beats an app that just vanishes.
+    if (!plan) { if (relaunch) appRelaunch(); return; }
+    runExitPlan(plan, relaunch, { attemptPath, failures: failuresFor(plan.version), relaunch: appRelaunch, warn: (m, d) => console.warn('[update]', m, d) });
+  }
+
+  // ---- Restart to update: the pieces update-restart.ts calls ----
+
+  type RestartKind =
+    | { kind: 'none' }                               // the release was pulled / superseded: the popup refreshes
+    | { kind: 'interactive' }                        // today's installer path (Windows per-machine, refused, nothing staged)
+    | { kind: 'linux-package' }                      // pkexec, then relaunch
+    | { kind: 'exit-install'; macPassword: boolean }; // quit, install at exit, reopen
+
+  async function planRestart(): Promise<RestartKind> {
+    await initDone;
+    const p = pending;
+    if (devFakeUpdate || !p || !pendingFileOk || !app.isPackaged) return { kind: 'interactive' };
+    // Restart also asks the API for a fresh answer; if the newest release changed the popup refreshes to
+    // it instead of installing an older one. A failed or slow API check does not block (the brake below does).
+    lastReleaseCheck = 0;
+    await Promise.race([fetchLatestRelease(), new Promise<void>((r) => { const t = setTimeout(r, 4_000); t.unref?.(); })]);
+    if (cachedUpdateStatus && cachedUpdateStatus.latest !== p.version && compareVersions(cachedUpdateStatus.latest, p.version) > 0) {
+      notifyStatusChanged();
+      return { kind: 'none' };
+    }
+    if (pending !== p) return { kind: 'none' };
+    const verdict = await runBrake(p);
+    if (verdict === 'pulled') return { kind: 'none' };
+    if (verdict === 'unconfirmed') throw new UpdateInstallError('network-failed', 'could not confirm this release is still current');
+    if (facts?.installRefused) return { kind: 'interactive' };
+    if (process.platform === 'linux' && facts?.needsPassword) return { kind: 'linux-package' };
+    const exitKind = exitInstallKind(p);
+    if (!exitKind) return { kind: 'interactive' };
+    // The disk image / installer must still match its signed hash before a password is asked for.
+    if (!(await rehash(p, pendingFilePath(p)))) return { kind: 'none' };
+    return { kind: 'exit-install', macPassword: exitKind === 'mac-root' };
+  }
+
+  /** The one Mac password box: starts the root helper (waits for our exit + the go file). */
+  async function startMacRootHelper(): Promise<'started' | 'cancelled' | 'failed'> {
+    const p = pending;
+    if (!p || !p.stagedName) return 'failed';
+    if (rootHelperFor === p.stagedName) return 'started'; // a held Restart already did this
+    const staged = stagedPathOf(p)!;
+    const bundle = macBundleOf(process.execPath);
+    const req = await runCommand('codesign', ['-d', '-r-', bundle]);
+    const requirement = parseDesignatedRequirement(req.stdout + '\n' + req.stderr);
+    if (!requirement) return 'failed';
+    // Ten minutes: this waits on a person typing a password.
+    const res = await runWithTimeout('osascript', macRootStartArgs({ pid: process.pid, oldBundle: bundle, staged, mode: 'root', requirement, uid: process.getuid?.() ?? 0 }), 10 * 60_000);
+    if (res.code === 0) { rootHelperFor = p.stagedName; return 'started'; }
+    return /-128|cancel/i.test(res.stderr) ? 'cancelled' : 'failed';
+  }
+
+  /** Password cancelled or failed: open the disk image as today (the app keeps running). */
+  async function openDiskImage(): Promise<void> {
+    const p = pending;
+    if (p) await runCommand('open', [pendingFilePath(p)]).catch(() => {});
+  }
+
+  /** Today's interactive installer for the pending (or freshly downloaded) file. Never schedules the quit. */
+  async function launchInteractive(): Promise<UpdateLaunchResult> {
+    const dl = await ensureDownloaded('popup');
+    return launch({ jobId: dl.jobId, filePath: dl.filePath }, false);
+  }
+
+  /** Is anything downloaded and verified that Restart can use? */
+  function hasPending(): boolean { return !!pending && pendingFileOk; }
+
   startInit();
 
-  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, refreshAutoInstall, autoInstallEnabled, download, ensureDownloaded, cancel, launch, getCachedDownload, onFirstWindowReady, onStatusChange, fetchUrlToBuffer, afterCheckDone: () => afterCheck };
+  return { getUpdateStatus, fetchLatestRelease, betaChannelState, setBetaChannel, getAutoInstall, setAutoInstall, loadAutoInstall, refreshAutoInstall, autoInstallEnabled, download, ensureDownloaded, cancel, launch, getCachedDownload, onFirstWindowReady, onStatusChange, fetchUrlToBuffer, afterCheckDone: () => afterCheck,
+    quitInstallEligible, prepareExit, runExitInstall, refreshBrake, planRestart, startMacRootHelper, openDiskImage, launchInteractive, hasPending };
 }
 
 export type UpdateService = ReturnType<typeof createUpdateService>;
 let service: UpdateService | null = null;
+/** The service if something already built it (the quit path must not construct one just to ask). */
+export function peekUpdateService(): UpdateService | null { return service; }
 /** The one update service, built on first use. */
 export function getUpdateService(): UpdateService {
   if (!service) service = createUpdateService();

@@ -2482,6 +2482,9 @@ export function installShim(): void {
         invoke('update:get-auto-install'),
       setAutoInstall: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateAutoInstallState> =>
         invoke('update:set-auto-install', { enabled }),
+      // 'update:restart-to-update' installs and reopens THIS computer: never from a phone or a browser
+      // (desktopOnly in the channel table), so this is a stub like launch.
+      restartToUpdate: async () => ({ restarting: false }),
       // WHY no socket listener: update:install-progress is desktop-only, just like launch.
       onInstallProgress: (_handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => () => {},
       onProgress: (_handler: (ev: any) => void) => {

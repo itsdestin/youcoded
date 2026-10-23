@@ -15,6 +15,7 @@ const CHANNELS = [
   'update:set-beta-channel',
   'update:get-auto-install',
   'update:set-auto-install',
+  'update:restart-to-update',
 ];
 
 const ROOT = path.join(__dirname, '..');

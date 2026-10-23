@@ -277,8 +277,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel', 'update.onInstallProgress',
-  // Automatic updates (#183): the two settings channels are real (T1); restartToUpdate is
-  // designed ahead of main — registered in mock-only.ts.
+  // Automatic updates (#183): the two settings channels (T1) and restartToUpdate (T3) are real channels.
   'update.getAutoInstall', 'update.setAutoInstall', 'update.restartToUpdate',
   // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
   // hand-written so the workbench serves the seeded comment fixtures instead

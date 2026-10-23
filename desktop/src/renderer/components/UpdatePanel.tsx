@@ -342,6 +342,24 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       phase: progress?.phase === 'restarting' ? 'restarting' : 'handoff', output: progress?.output ?? '' });
   }, [onClose]);
 
+  // #183 Restart to update. Main asks through the close-window prompt when chats are open
+  // (Q-busy: "just show the standard closeout prompt"); closing that prompt resolves
+  // `restarting: false` and the button comes back, so nothing restarts behind the user's back.
+  const handleRestart = useCallback(async () => {
+    setInstallState({ kind: 'restarting' });
+    try {
+      const api = window.claude.update as unknown as { restartToUpdate: () => Promise<{ restarting: boolean; fallback?: { kind: 'browser' } | { kind: 'manual'; command: string; filePath: string } }> };
+      const result = await api.restartToUpdate();
+      // WHY (T3): when today's interactive installer could not simply run, main hands back what it always
+      // showed here: a command to run by hand, or the browser.
+      if (result.fallback?.kind === 'manual') { setInstallState({ kind: 'manual', command: result.fallback.command, filePath: result.fallback.filePath }); return; }
+      if (result.fallback?.kind === 'browser') { setInstallState({ kind: 'idle' }); onClose(); return; }
+      if (!result.restarting) setInstallState({ kind: 'idle' });
+    } catch (e: unknown) {
+      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'launch' });
+    }
+  }, [onClose]);
+
   const handleUpdate = useCallback(async () => {
     // If we already have a ready job, skip straight to launch.
     if (installState.kind === 'ready') {
@@ -358,24 +376,15 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       // closed should leave the popup Ready for the next open, not idle.
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
+      // WHY (#183 T3): "Update now" is still ONE press. With the popup open, the finished download goes
+      // straight into Restart to update. Closed meanwhile, nothing restarts behind the person's back: the
+      // popup is simply Ready (Restart to update) the next time they open it.
+      if (openRef.current) await handleRestart();
     } catch (e: unknown) {
       setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
-  }, [installState, runLaunch]);
+  }, [installState, runLaunch, handleRestart]);
 
-  // #183 Restart to update. Main asks through the close-window prompt when chats are open
-  // (Q-busy: "just show the standard closeout prompt"); closing that prompt resolves
-  // `restarting: false` and the button comes back, so nothing restarts behind the user's back.
-  const handleRestart = useCallback(async () => {
-    setInstallState({ kind: 'restarting' });
-    try {
-      const api = window.claude.update as unknown as { restartToUpdate: () => Promise<{ restarting: boolean }> };
-      const result = await api.restartToUpdate();
-      if (!result.restarting) setInstallState({ kind: 'idle' });
-    } catch (e: unknown) {
-      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'launch' });
-    }
-  }, []);
   const readyToRestart = !!updateStatus.downloaded && (installState.kind === 'idle' || installState.kind === 'ready');
 
   const handleFallbackBrowser = useCallback(async () => {
