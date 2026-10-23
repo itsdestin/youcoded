@@ -106,9 +106,10 @@ export default function MarketplaceScreen({
   }, Object.keys(SHOOT_DETAIL_IDS).filter(Boolean));
   useScreenOpen('marketplace/theme-detail', (sub) => {
     setDetailScreen(sub ? `marketplace/theme-detail/${sub}` : undefined);
-    setDetail({ kind: 'theme', slug: sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
+    // `builtin`: a theme that ships in the app — Apply only, no Uninstall / like / share.
+    setDetail({ kind: 'theme', slug: sub === 'builtin' ? 'youcoded-night' : sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
     if (sub === 'install') mp.installTheme('cotton-candy-sky').catch(() => undefined);
-  }, ['not-installed', 'install']);
+  }, ['not-installed', 'install', 'builtin']);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't

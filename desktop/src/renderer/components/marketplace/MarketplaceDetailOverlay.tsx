@@ -176,8 +176,11 @@ export function ShareIcon() {
 /** Favourite + share — the card's quick actions, top right (guide "Cards": quick actions
  *  on a card sit at its top right). Shared buttons now, not a hand-made bordered square:
  *  a favourite is an on/off toggle, share a plain icon button. */
-function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNeedsInstall }: {
+function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNeedsInstall, noShare }: {
   installed: boolean; favorited: boolean; onToggleFavorite(): void; onShare?(): void; shareNeedsInstall: boolean;
+  /** No share button at all — a built-in theme has no link to share, and a greyed
+   *  "Install to share" would be false on something already installed. */
+  noShare?: boolean;
 }) {
   const favTitle = !installed ? "Install to favorite" : favorited ? "Unfavorite" : "Favorite";
   const canShare = !!onShare && (installed || !shareNeedsInstall);
@@ -197,16 +200,18 @@ function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNe
       >
         <StarIcon filled={favorited} />
       </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={canShare ? "Share link · QR" : "Install to share"}
-        title={canShare ? "Share link · QR" : "Install to share"}
-        disabled={!canShare}
-        onClick={onShare}
-      >
-        <ShareIcon />
-      </Button>
+      {!noShare && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={canShare ? "Share link · QR" : "Install to share"}
+          title={canShare ? "Share link · QR" : "Install to share"}
+          disabled={!canShare}
+          onClick={onShare}
+        >
+          <ShareIcon />
+        </Button>
+      )}
     </>
   );
 }
@@ -594,7 +599,7 @@ function ThemeDetail({
               is the "N likes" fact (marketplace-detail-3#M3-1). */}
           {!builtin && <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />}
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
-          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={builtin ? undefined : onShare} shareNeedsInstall={false} />
+          <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} noShare={builtin} />
         </>
       }
       quickActionsOnTitle
