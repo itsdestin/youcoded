@@ -49,6 +49,9 @@ export const RESTICK_THRESHOLD_PX = 32;
  */
 export const REARM_IDLE_MS = 90;
 
+/** Length of the Jump-to-bottom glide. */
+export const JUMP_GLIDE_MS = 260;
+
 export function distanceFromBottom(m: ScrollMetrics): number {
   return m.scrollHeight - m.scrollTop - m.clientHeight;
 }
@@ -103,15 +106,57 @@ export function useStickToBottom(
     scrollToBottom();
   }, [setStick, scrollToBottom]);
 
-  const releaseStick = useCallback(() => {
-    if (stickRef.current) setStick(false);
-  }, [setStick]);
+  // rAF id of an in-flight Jump-to-bottom glide (0 = none).
+  const jumpRafRef = useRef(0);
+  const cancelJump = useCallback(() => {
+    if (jumpRafRef.current) cancelAnimationFrame(jumpRafRef.current);
+    jumpRafRef.current = 0;
+  }, []);
 
+  const releaseStick = useCallback(() => {
+    // The user took the wheel back: stop the glide so it can't fight their scroll.
+    cancelJump();
+    if (stickRef.current) setStick(false);
+  }, [setStick, cancelJump]);
+
+  // WHY a hand-rolled glide instead of scrollTo({behavior:'smooth'}): the native
+  // smooth scroll aims at the scrollHeight read at click time. While a turn is
+  // streaming (or an entry unfolds and re-measures) that target goes stale, and
+  // the growth pin (scrollTop = scrollHeight) then cancels the animation mid-way
+  // — a lurch — or the glide ends short with the button already hidden and no
+  // way to retry. Here the target is re-read every frame, so it lands on the
+  // bottom as it is NOW. Only ~15 frames, so the per-frame layout read is cheap.
   const jumpToBottom = useCallback(() => {
     setStick(true);
+    cancelJump();
     const c = containerRef.current;
-    if (c) c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' });
-  }, [containerRef, setStick]);
+    if (!c) return;
+    const reduce =
+      document.documentElement.hasAttribute('data-reduced-effects') ||
+      (typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    if (reduce || typeof requestAnimationFrame !== 'function') {
+      c.scrollTop = c.scrollHeight;
+      return;
+    }
+    const startTop = c.scrollTop;
+    const startAt = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startAt) / JUMP_GLIDE_MS);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const target = c.scrollHeight - c.clientHeight;
+      c.scrollTop = startTop + (target - startTop) * eased;
+      if (t < 1) {
+        jumpRafRef.current = requestAnimationFrame(step);
+      } else {
+        jumpRafRef.current = 0;
+        c.scrollTop = c.scrollHeight; // exact landing on the real bottom
+      }
+    };
+    jumpRafRef.current = requestAnimationFrame(step);
+  }, [containerRef, setStick, cancelJump]);
+
+  useEffect(() => cancelJump, [cancelJump]);
 
   useEffect(() => {
     const c = containerRef.current;
@@ -147,8 +192,19 @@ export function useStickToBottom(
     // its "left ENTIRELY to the browser engine" note). Downward wheel deliberately does NOT unstick: when already
     // pinned, scrolling down cannot move the container, so no scroll event would
     // fire to re-arm and we'd be left permanently unstuck at the bottom.
+    //
+    // WHY it also schedules a re-check: an upward wheel over a short chat, or
+    // over a code block / tool card that scrolls on its own, releases the stick
+    // but never moves THIS container — so no scroll event follows and the
+    // Jump-to-bottom button stayed up while you were already at the bottom. The
+    // idle re-check re-arms in that case; after a real scroll away it measures
+    // >32px and changes nothing.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) releaseStick();
+      if (e.deltaY < 0) {
+        releaseStick();
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
+      }
     };
 
     // Touch (Android / phone over remote): a finger moving DOWN scrolls the
@@ -159,7 +215,11 @@ export function useStickToBottom(
     };
     const onTouchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY ?? 0;
-      if (y > lastTouchY + 2) releaseStick();
+      if (y > lastTouchY + 2) {
+        releaseStick();
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
+      }
       lastTouchY = y;
     };
 

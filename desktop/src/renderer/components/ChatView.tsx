@@ -34,6 +34,9 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
+
+// Matches the .jump-to-bottom exit transition in globals.css.
+const JUMP_FADE_MS = 180;
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
@@ -190,12 +193,24 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [cwd, sessionId, artifactDispatch]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Keeps the Jump-to-bottom button mounted for its fade-out after atBottom flips
+  // true (it unmounts instantly otherwise, which reads as a pop). WHY "mounted"
+  // rather than an "exiting" flag set on the flip: that flag only lands in the
+  // render AFTER atBottom changes, so for one render the button was unmounted and
+  // came back already faded — the exit looked instant.
+  const [jumpMounted, setJumpMounted] = useState(false);
+
   // Auto-scroll ("stick to bottom"). See use-stick-to-bottom.ts for why this is
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
     atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
   } = useStickToBottom(scrollContainerRef);
+  useEffect(() => {
+    if (!atBottom) { setJumpMounted(true); return; }
+    const t = setTimeout(() => setJumpMounted(false), JUMP_FADE_MS);
+    return () => clearTimeout(t);
+  }, [atBottom]);
   // Task 12 review fix: refs for the --queued-strip-height measurement effect
   // below (chatRootRef = this component's OUTER root; queuedStripRef = the
   // strip's own rendered element).
@@ -311,11 +326,19 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // session. The bottom bar is the one whose height varies with drafts/multi-line.
     const chrome = document.querySelector('.chrome-wrapper--bottom');
     if (!chrome) return;
+    // WHY the rAF: useChromeMeasurements publishes --bottom-chrome-height from
+    // its OWN ResizeObserver on this same element, and observers run in
+    // registration order. When ours ran first we pinned against the OLD padding,
+    // then the padding grew and nothing re-pinned — a theme with a taller input
+    // bar opened 16-24px short of the bottom, the last message under the bar.
+    // One frame later every observer has run and the padding is current.
+    let raf = 0;
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     });
     observer.observe(chrome);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(raf); };
   }, [visible, scrollToBottom, stickRef]);
 
   // Auto-scroll when new content arrives and the view is still stuck to the
@@ -799,7 +822,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // hardcodes an offset — so once .chat-scroll's padding-bottom grows by
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
-  const QUEUED_STRIP_GAP = '0.5rem'; // visual breathing room above the strip's top edge (Destin's ask)
+  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap — see :root in globals.css
   // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
   const queuePreview = workbenchQueuePreview();
   const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
@@ -823,6 +846,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // read a single number instead of remembering to add the gap itself.
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--queued-strip-height', `calc(${h}px + ${QUEUED_STRIP_GAP})`);
+      // The var grows .chat-scroll's padding, which no content observer sees —
+      // re-pin so the last message moves up above the cards instead of under them.
+      if (stickRef.current) scrollToBottom();
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -850,7 +876,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // modelStatusRef.current directly after each render: null means the component
   // rendered nothing this pass, so the effect zeroes the var instead of
   // guessing from a re-derived boolean.
-  const MODEL_STATUS_GAP = '0.75rem'; // matches .jump-to-bottom's own gap so the two bands stack evenly
+  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap, so every band stacks evenly
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;
@@ -862,6 +888,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     const update = () => {
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--model-status-height', `calc(${h}px + ${MODEL_STATUS_GAP})`);
+      if (stickRef.current) scrollToBottom(); // same reason as the queued strip's
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -1278,10 +1305,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
          framed-shell (chat + drawer) without being clipped by chat-pane. */}
-      {!atBottom && (
+      {(!atBottom || jumpMounted) && (
         <button
           onClick={jumpToBottom}
-          className="jump-to-bottom absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 rounded-full shadow-lg transition-colors z-10"
+          // data-state drives the fade/slide in globals.css. panel-glass gives the
+          // frosted look on wallpaper themes (solid themes keep a plain surface).
+          data-state={atBottom ? 'out' : 'in'}
+          tabIndex={atBottom ? -1 : undefined}
+          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
         </button>

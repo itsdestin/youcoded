@@ -11,6 +11,9 @@ export const CHAT: readonly ScreenEntry[] = [
     ...chat(`chat#queue-${q}`, 'view'), session: 'wb-1', params: { queuePreview: q },
     ...(q === 'idle-after' ? { sameAs: { name: 'chat', why: 'Immediate delivery intentionally has no extra chrome.' } } : {}),
   })),
+  // Spacing review: two stacked queued cards over the chat, wide and phone.
+  { ...chat('chat#queue-stack', 'view'), session: 'wb-1', params: { queuePreview: 'stack' } },
+  { ...chat('chat#queue-stack-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'stack' }, viewport: { width: 390, height: 844 } },
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
   // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
   // before master the same state reads the old words and has no button.
