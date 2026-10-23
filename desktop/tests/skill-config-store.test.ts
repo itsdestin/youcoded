@@ -76,11 +76,16 @@ describe('SkillConfigStore dead-favourite cleanup', () => {
 });
 
 describe('SkillConfigStore theme favorites', () => {
-  it('seeds the built-in theme slugs on first read when missing', async () => {
+  // Read from the built-in theme files themselves, so a new built-in that is not added
+  // to DEFAULT_THEME_FAVORITES fails here — otherwise it is never starred for anyone and
+  // the favorites-only Appearance panel never shows it.
+  it('seeds every built-in theme the app ships on first read when missing', async () => {
+    const dir = path.join(__dirname, '../src/renderer/themes/builtin');
+    const shipped = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
+      .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).slug as string);
     const { SkillConfigStore } = await import('../src/main/skill-config-store');
-    const store = new SkillConfigStore();
-    const favs = store.getThemeFavorites();
-    expect(favs.sort()).toEqual(['creme', 'dark', 'light', 'midnight', 'youcoded', 'youcoded-night']);
+    const favs = new SkillConfigStore().getThemeFavorites();
+    expect([...favs].sort()).toEqual(shipped.sort());
   });
 
   it('persists setThemeFavorite across reload', async () => {
