@@ -6,71 +6,123 @@
  "marks": [
   {
    "name": "family ZWJ",
-   "offset": 1671
+   "offset": 1051
   },
   {
    "name": "couple ZWJ",
-   "offset": 1847
+   "offset": 1227
   },
   {
    "name": "rainbow flag",
-   "offset": 2021
+   "offset": 1401
   },
   {
    "name": "heart VS16",
-   "offset": 2191
+   "offset": 1571
   },
   {
    "name": "heart plain",
-   "offset": 2355
+   "offset": 1735
   },
   {
    "name": "skin tone",
-   "offset": 2522
+   "offset": 1902
   },
   {
    "name": "flag JP",
-   "offset": 2721
+   "offset": 2101
   },
   {
    "name": "lone regional indicator",
-   "offset": 2871
+   "offset": 2251
   },
   {
    "name": "keycap",
-   "offset": 3027
+   "offset": 2407
   },
   {
    "name": "plain emoji",
-   "offset": 3177
+   "offset": 2557
   },
   {
    "name": "CJK",
-   "offset": 3329
+   "offset": 2709
   },
   {
    "name": "Persian ZWNJ",
-   "offset": 3487
+   "offset": 2867
   },
   {
    "name": "Hindi",
-   "offset": 3639
+   "offset": 3019
   },
   {
    "name": "combining accent",
+   "offset": 3168
+  },
+  {
+   "name": "copyright VS16",
+   "offset": 3323
+  },
+  {
+   "name": "check VS16",
+   "offset": 3478
+  },
+  {
+   "name": "record VS16",
+   "offset": 3633
+  },
+  {
+   "name": "sparkle VS16",
    "offset": 3788
   },
   {
+   "name": "arrow VS16",
+   "offset": 3943
+  },
+  {
+   "name": "copyright plain",
+   "offset": 4092
+  },
+  {
+   "name": "check plain",
+   "offset": 4241
+  },
+  {
+   "name": "finger skin tone",
+   "offset": 4392
+  },
+  {
+   "name": "smile ZWJ check",
+   "offset": 4544
+  },
+  {
+   "name": "heart ZWJ heart",
+   "offset": 4695
+  },
+  {
+   "name": "digit VS16 no keycap",
+   "offset": 4844
+  },
+  {
+   "name": "emoji then accent",
+   "offset": 4995
+  },
+  {
+   "name": "letter then skin tone",
+   "offset": 5147
+  },
+  {
    "name": "checklist prompt",
-   "offset": 4010
+   "offset": 5369
   },
   {
    "name": "sent and answered",
-   "offset": 4879
+   "offset": 6243
   },
   {
    "name": "next message after reply",
-   "offset": 4945
+   "offset": 6309
   }
  ],
  "results": [
@@ -227,6 +279,149 @@
     "cursor": 6
    },
    "out": "x é y"
+  },
+  {
+   "name": "copyright VS16",
+   "text": "x ©️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ©️ y",
+    "cursor": 6
+   },
+   "out": "x ©️ y"
+  },
+  {
+   "name": "check VS16",
+   "text": "x ✔️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ✔️ y",
+    "cursor": 6
+   },
+   "out": "x ✔️ y"
+  },
+  {
+   "name": "record VS16",
+   "text": "x ⏺️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ⏺️ y",
+    "cursor": 6
+   },
+   "out": "x ⏺️ y"
+  },
+  {
+   "name": "sparkle VS16",
+   "text": "x ✳️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ✳️ y",
+    "cursor": 6
+   },
+   "out": "x ✳️ y"
+  },
+  {
+   "name": "arrow VS16",
+   "text": "x ↔️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ↔️ y",
+    "cursor": 6
+   },
+   "out": "x ↔️ y"
+  },
+  {
+   "name": "copyright plain",
+   "text": "x © y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x © y",
+    "cursor": 5
+   },
+   "out": "x © y"
+  },
+  {
+   "name": "check plain",
+   "text": "x ✔ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ✔ y",
+    "cursor": 5
+   },
+   "out": "x ✔ y"
+  },
+  {
+   "name": "finger skin tone",
+   "text": "x ☝🏽 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ☝🏽 y",
+    "cursor": 7
+   },
+   "out": "x ☝🏽 y"
+  },
+  {
+   "name": "smile ZWJ check",
+   "text": "x 🙂‍✔ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🙂‍✔ y",
+    "cursor": 8
+   },
+   "out": "x 🙂‍✔ y"
+  },
+  {
+   "name": "heart ZWJ heart",
+   "text": "x ❤‍❤ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x ❤‍❤ y",
+    "cursor": 7
+   },
+   "out": "x ❤‍❤ y"
+  },
+  {
+   "name": "digit VS16 no keycap",
+   "text": "x 1️ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 1 y",
+    "cursor": 5
+   },
+   "out": "x 1 y"
+  },
+  {
+   "name": "emoji then accent",
+   "text": "x 🙂́ y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x 🙂́ y",
+    "cursor": 7
+   },
+   "out": "x 🙂́ y"
+  },
+  {
+   "name": "letter then skin tone",
+   "text": "x a🏽 y",
+   "before": "",
+   "fill": {
+    "isFilled": true,
+    "text": "x a🏽 y",
+    "cursor": 7
+   },
+   "out": "x a🏽 y"
   },
   {
    "name": "checklist prompt",

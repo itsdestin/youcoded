@@ -3,12 +3,12 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Terminal } from '@xterm/headless';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
-import { useClaudeCodeWidths } from '../src/shared/terminal-widths';
+import { applyClaudeCodeWidths } from '../src/shared/terminal-widths';
 import { readInputFocus } from '../src/shared/cc-input-focus';
 
 const make = (cols = 80, rows = 4, claude = true) => {
   const t = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
-  if (claude) useClaudeCodeWidths(t); else { t.loadAddon(new Unicode11Addon() as never); t.unicode.activeVersion = '11'; }
+  if (claude) applyClaudeCodeWidths(t); else { t.loadAddon(new Unicode11Addon() as never); t.unicode.activeVersion = '11'; }
   return t;
 };
 const write = (t: Terminal, d: string) => new Promise<void>(r => t.write(d, r));
@@ -19,7 +19,7 @@ async function columns(text: string, claude = true): Promise<number> {
 describe('terminal widths match how Claude Code draws', () => {
   it('falls back to Unicode 11 instead of breaking the terminal when the table cannot be set up', () => {
     const loaded: unknown[] = []; const unicode = { activeVersion: 'x', register: () => { throw Error('unsupported'); } };
-    useClaudeCodeWidths({ unicode, loadAddon: (a: unknown) => { loaded.push(a); } } as never);
+    applyClaudeCodeWidths({ unicode, loadAddon: (a: unknown) => { loaded.push(a); } } as never);
     expect(loaded).toHaveLength(1); expect(unicode.activeVersion).toBe('11');
   });
   it('counts an emoji cluster as one 2-column character', async () => {

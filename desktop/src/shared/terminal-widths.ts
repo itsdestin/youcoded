@@ -56,7 +56,7 @@ function unicode11(): Provider {
   return captured;
 }
 
-export function claudeCodeWidths(base: Provider = unicode11()): Provider {
+function claudeCodeWidths(base: Provider = unicode11()): Provider {
   return {
     version: 'claude-code',
     wcwidth: (cp) => base.wcwidth(cp),
@@ -78,7 +78,7 @@ export function claudeCodeWidths(base: Provider = unicode11()): Provider {
 
 /** Use Claude Code's widths in this terminal (the visible one, or the computer's hidden copy). Never breaks the terminal:
  *  if the table cannot be set up it falls back to plain Unicode 11 widths, exactly what the app used before. */
-export function useClaudeCodeWidths(term: Pick<XTerm | HeadlessTerminal, 'unicode' | 'loadAddon'>): void {
+export function applyClaudeCodeWidths(term: Pick<XTerm | HeadlessTerminal, 'unicode' | 'loadAddon'>): void {
   try {
     term.unicode.register(claudeCodeWidths());
     term.unicode.activeVersion = 'claude-code';

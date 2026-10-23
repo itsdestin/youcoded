@@ -23,7 +23,10 @@ if(!args.includes('--inside')){
   ['family ZWJ','x 👨\u200D👩\u200D👧 y'],['couple ZWJ','x 👩\u200D❤\uFE0F\u200D👨 y'],['rainbow flag','x 🏳\uFE0F\u200D🌈 y'],
   ['heart VS16','x ❤\uFE0F y'],['heart plain','x ❤ y'],['skin tone','x 👍🏽 y'],['flag JP','x 🇯🇵 y'],['lone regional indicator','x 🇯 y'],
   ['keycap','x 1\uFE0F\u20E3 y'],['plain emoji','x 🙂 y'],['CJK','x 漢字 y'],['Persian ZWNJ','x می\u200Cخواهم y'],
-  ['Hindi','x क्\u200Dष y'],['combining accent','x e\u0301 y'],['checklist prompt','Repeat back exactly, nothing else: 👨\u200D👩\u200D👧 می\u200Cخواهم a\u200Cb'],
+  ['Hindi','x क्\u200Dष y'],['combining accent','x e\u0301 y'],
+  ['copyright VS16','x ©\uFE0F y'],['check VS16','x ✔\uFE0F y'],['record VS16','x ⏺\uFE0F y'],['sparkle VS16','x ✳\uFE0F y'],['arrow VS16','x ↔\uFE0F y'],
+  ['copyright plain','x © y'],['check plain','x ✔ y'],['finger skin tone','x ☝🏽 y'],['smile ZWJ check','x 🙂\u200D✔ y'],['heart ZWJ heart','x ❤\u200D❤ y'],
+  ['digit VS16 no keycap','x 1\uFE0F y'],['emoji then accent','x 🙂\u0301 y'],['letter then skin tone','x a🏽 y'],['checklist prompt','Repeat back exactly, nothing else: 👨\u200D👩\u200D👧 می\u200Cخواهم a\u200Cb'],
  ];
  const results=[];const marks=[];let rawLength=0;let worker;
  const srv=http.createServer((req,res)=>{let b='';req.on('data',c=>b+=c);req.on('end',()=>{const m=JSON.parse(b);if(m.mark)marks.push({name:m.mark,offset:rawLength});if(m.submit)worker.send({type:'input',data:'\r'});if(m.result)results.push(m.result);if(m.done)results.done=true;res.end('{"ok":true}');});});

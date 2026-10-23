@@ -23,7 +23,7 @@
 //
 // Electron-free and injected, like session-live.ts: tests drive it with a real record and a fake terminal or the real @xterm/headless.
 import { Terminal } from '@xterm/headless';
-import { useClaudeCodeWidths } from '../shared/terminal-widths';
+import { applyClaudeCodeWidths } from '../shared/terminal-widths';
 import type { SessionRecords } from './session-record';
 import type { SessionLiveFacts } from './session-live';
 import { screenTextOf, visibleScreenTextOf, type ScreenBuffer } from '../shared/terminal-screen-text';
@@ -393,6 +393,6 @@ export class SessionScreens {
  *  the message box unreadable, so the app said a question was open and the queue held every message. */
 function realTerminal(cols: number, rows: number): ScreenTerminal {
   const term = new Terminal({ cols, rows, scrollback: SCREEN_SCROLLBACK_ROWS, allowProposedApi: true });
-  useClaudeCodeWidths(term);
+  applyClaudeCodeWidths(term);
   return term as unknown as ScreenTerminal;
 }

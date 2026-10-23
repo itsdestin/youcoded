@@ -14,7 +14,7 @@ let bad=0;
 for(const mark of m.marks){
  const t=new Terminal({cols:m.cols,rows:m.rows,allowProposedApi:true,scrollback:0});
  t.loadAddon(new Unicode11Addon());t.unicode.activeVersion='11';
- if(!plain){const {useClaudeCodeWidths}=require(desktop+'/dist/shared/terminal-widths.js');useClaudeCodeWidths(t);}
+ if(!plain){const {applyClaudeCodeWidths}=require(desktop+'/dist/shared/terminal-widths.js');applyClaudeCodeWidths(t);}
  await write(t,raw.slice(0,mark.offset));
  const b=t.buffer.active;const rows=[];for(let i=0;i<t.rows;i++)rows.push(b.getLine(b.viewportY+i)?.translateToString(true)??'');
  const text=m.results.find(r=>r.name===mark.name)?.text??'';

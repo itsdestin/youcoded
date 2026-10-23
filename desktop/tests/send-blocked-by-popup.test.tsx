@@ -9,7 +9,7 @@ import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-libra
 import fs from 'node:fs';
 import path from 'node:path';
 import { Terminal } from '@xterm/headless';
-import { useClaudeCodeWidths } from '../src/shared/terminal-widths';
+import { applyClaudeCodeWidths } from '../src/shared/terminal-widths';
 import { visibleScreenTextOf } from '../src/shared/terminal-screen-text';
 import { readInputFocus, inputIsBlocked, type InputBlock } from '../src/shared/cc-input-focus';
 
@@ -87,7 +87,7 @@ describe('InputBar while Claude Code shows a pop-up', () => {
   it('Send anyway resumes after Escape returns to the real Windows message box', async () => {
     const fx = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/popup-corpus/win-idle-typing.json'), 'utf8')) as { cols: number; rows: number; chunks: { b64: string }[] };
     const term = new Terminal({ cols: fx.cols, rows: fx.rows, allowProposedApi: true });
-    useClaudeCodeWidths(term); // the same widths the window's terminal uses
+    applyClaudeCodeWidths(term); // the same widths the window's terminal uses
     let windowsScreen: string;
     try {
       for (const chunk of fx.chunks) await new Promise<void>(resolve => term.write(Buffer.from(chunk.b64, 'base64').toString('utf8'), resolve));
