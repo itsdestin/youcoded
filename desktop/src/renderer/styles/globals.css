@@ -843,6 +843,36 @@ body[data-mode="buddy-chat"] #theme-bg {
   /* Includes --vvp-offset so the button stays above the soft keyboard
      when it's open (same treatment as .bottom-float). */
   bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + 0.75rem + var(--vvp-offset, 0px));
+  /* Fade + rise in, fade + drop out. The horizontal centering lives here (not in a
+     Tailwind -translate-x-1/2) because that utility and this animation both write
+     `transform` and would overwrite each other. Colors keep Tailwind's hover fade. */
+  transition: opacity 180ms ease-out, transform 180ms ease-out, background-color 150ms;
+}
+.jump-to-bottom[data-state='in'] {
+  opacity: 1;
+  transform: translateX(-50%);
+  animation: jump-to-bottom-in 180ms ease-out;
+}
+.jump-to-bottom[data-state='out'] {
+  opacity: 0;
+  transform: translateX(-50%) translateY(0.5rem);
+  pointer-events: none;
+}
+@keyframes jump-to-bottom-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+[data-reduced-effects] .jump-to-bottom,
+[data-reduced-effects] .jump-to-bottom[data-state='in'] {
+  transition-duration: 0ms;
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-to-bottom,
+  .jump-to-bottom[data-state='in'] {
+    transition-duration: 0ms;
+    animation: none;
+  }
 }
 
 /* Native local-model loading / unloaded strip — floats centered just above the

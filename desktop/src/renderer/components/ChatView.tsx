@@ -34,6 +34,9 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
+
+// Matches the .jump-to-bottom exit transition in globals.css.
+const JUMP_FADE_MS = 180;
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
@@ -190,12 +193,26 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [cwd, sessionId, artifactDispatch]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Keeps the Jump-to-bottom button mounted for its fade-out after atBottom flips
+  // true (it unmounts instantly otherwise, which reads as a pop).
+  const [jumpExiting, setJumpExiting] = useState(false);
+  const prevAtBottomRef = useRef(true);
+
   // Auto-scroll ("stick to bottom"). See use-stick-to-bottom.ts for why this is
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
     atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
   } = useStickToBottom(scrollContainerRef);
+  useEffect(() => {
+    const wasAtBottom = prevAtBottomRef.current;
+    prevAtBottomRef.current = atBottom;
+    if (!atBottom) { setJumpExiting(false); return; }
+    if (wasAtBottom) return; // never showed; nothing to fade out
+    setJumpExiting(true);
+    const t = setTimeout(() => setJumpExiting(false), JUMP_FADE_MS);
+    return () => clearTimeout(t);
+  }, [atBottom]);
   // Task 12 review fix: refs for the --queued-strip-height measurement effect
   // below (chatRootRef = this component's OUTER root; queuedStripRef = the
   // strip's own rendered element).
@@ -1278,10 +1295,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
          framed-shell (chat + drawer) without being clipped by chat-pane. */}
-      {!atBottom && (
+      {(!atBottom || jumpExiting) && (
         <button
           onClick={jumpToBottom}
-          className="jump-to-bottom absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 rounded-full shadow-lg transition-colors z-10"
+          // data-state drives the fade/slide in globals.css. panel-glass gives the
+          // frosted look on wallpaper themes (solid themes keep a plain surface).
+          data-state={atBottom ? 'out' : 'in'}
+          tabIndex={atBottom ? -1 : undefined}
+          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
         </button>
