@@ -74,7 +74,11 @@ export interface CreateRuntimeDeps {
   chatgptAuth?: ChatGptAuth | null;
   /** The session list, read for names only (title checks). Structural so this file needs
    *  no import of session-manager (which pulls in Electron). */
-  sessionManager: { getSession(id: string): Pick<SessionInfo, 'name'> | undefined | null };
+  sessionManager: {
+    getSession(id: string): Pick<SessionInfo, 'name'> | undefined | null;
+    /** Optional so test fakes need not provide it; the askpass socket repair hooks in here. */
+    on?(event: 'session-created', cb: () => void): unknown;
+  };
   /** The Browser (2026-10-13): runs Browser tools in its worker process. Injected by main.ts
    *  (the client is Electron-bound); absent in tests and wherever there is no Browser. */
   browser?: ToolServices['browser'];
@@ -455,7 +459,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // admin-password: the password card's app-start wiring and its quit teardown
   // (harness/admin-password-startup.ts). Always settles this machine's capability,
   // which session creation below awaits.
-  const stopAdminPassword = startAdminPassword(nativeHost, platform.resolveAskpassPaths);
+  const stopAdminPassword = startAdminPassword(nativeHost, platform.resolveAskpassPaths,
+    (cb) => { sessionManager.on?.('session-created', cb); });
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
   // noteModelUsed persists — thin async wrapper around bindingToPortableModel

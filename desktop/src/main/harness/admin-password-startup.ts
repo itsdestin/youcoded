@@ -20,6 +20,8 @@ export function startAdminPassword(
   // Passed in rather than imported: it lives in ipc-handlers.ts (tests import
   // it from there), and importing it here would make the two files a cycle.
   resolveAskpassPaths: () => Promise<AskpassPaths | null>,
+  // Re-create the socket file if deleted mid-run, as each session starts (socket-repair.ts).
+  onSessionCreated?: (cb: () => void) => void,
 ): () => void {
   let askpassServer: AskpassServer | null = null;
   if (process.platform === 'linux') {
@@ -40,6 +42,8 @@ export function startAdminPassword(
         runningCalls: nativeHost.runningCallsForAskpass(),
       });
       await askpassServer.start();
+      const server = askpassServer;
+      onSessionCreated?.(() => { void server.ensureListening(); });
       // The sudo-flavour probe is handed THIS self-test's outcome rather than
       // building a second server to ask the same question.
       const capability = await detectAdminCapability({ askpassSelfTestPassed: askpassServer.available });
