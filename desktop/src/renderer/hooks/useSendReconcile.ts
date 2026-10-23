@@ -23,7 +23,8 @@ export function useSendReconcile(): void {
       try {
         do {
           again.current = false;
-          // Queue sends draw no bubble, so the check below cannot see them: settle them against the queue itself (cause 4).
+          // A queue send's saved request is settled against the queue itself (cause 4); its instant bubble, when drawn, is
+          // confirmed by the queue's sendId binding (queue-bubbles.ts), not by this check.
           await settleSavedQueueSends();
           await reconcileSends({
             unconfirmed: () => {

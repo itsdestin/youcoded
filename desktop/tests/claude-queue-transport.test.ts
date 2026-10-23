@@ -3,13 +3,13 @@ import { ClaudeQueue } from '../src/main/claude-queue';
 import { ClaudeQueueTransport } from '../src/main/claude-queue-transport';
 import type { QueueJournal, QueueStorage } from '../src/shared/conversation-queue-types';
 
-async function fixture(inputSafe: () => boolean = () => true) {
+async function fixture(inputSafe: () => boolean = () => true, extra: { waitInputSafe?: (id: string, deadline: number) => Promise<boolean> } = {}) {
   const records = new Map<string, QueueJournal>();
   const storage: QueueStorage = { load: async () => [], save: async r => { records.set(r.queueId, structuredClone(r)); }, retire: async id => { records.delete(id); } };
   const queue = new ClaudeQueue({ storage, ready: () => true }); await queue.restore();
   const alias = { provider: 'claude' as const, conversationId: 'conversation' }; const id = await queue.bind(alias, 'incarnation');
   const worker = vi.fn(async (_session: string, op: { type: string }) => ({ status: op.type === 'queue-acquire' ? 'owned' : op.type === 'queue-enter' ? 'entered' : ['queue-release','queue-abandon'].includes(op.type) ? 'released' : 'revoked' }));
-  const transport = new ClaudeQueueTransport({ queue, worker, inputSafe, prepare: async p => ({ wireText: p.originalText, files: [] }) });
+  const transport = new ClaudeQueueTransport({ queue, worker, inputSafe, prepare: async p => ({ wireText: p.originalText, files: [] }), ...extra });
   transport.bind('app', { queueId: id, incarnation: 'incarnation', alias, cwd: '/tmp' });
   const add = (sendId = 's', text = 'head') => queue.enqueue(id, { sendEpoch: queue.snapshot(id).sendEpoch, sendId, originalText: text, displayContent: text, attachments: [] });
   const offer = (seq = 1, kind: 'batch' | 'idle' = 'batch', extra = {}) => ({ boundaryId: 'boundary-' + seq, boundarySeq: seq, conversationId: 'conversation', turnId: kind === 'batch' ? 'turn' : null, kind, expiresAt: Date.now() + 10000, ...extra });
@@ -236,28 +236,26 @@ describe('Claude queue transport', () => {
       await f.transport.event('app','incarnation',{kind:'accepted',attemptId:lease.attemptId,wireHash:lease.wireHash}); await next;
     } finally { await f.transport.close(); await pending; }
   });
-  it('uses a fresh native idle offer to finish only an accepted input safe release', async () => {
-    let safe = true; const f = await fixture(() => safe); await f.add();
-    const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
-    safe = false;
-    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); // accepted is journaled; the release stays fenced (workerBlocked) for a later retry, never reported as unconfirmed
-    await pending;
-    await f.transport.event('app', 'incarnation', { kind: 'transcript', attemptId: lease.attemptId, wireHash: lease.wireHash, uuid: 'kept-row' });
-    await f.transport.offer('app', 'incarnation', f.offer(2, 'idle'));
-    expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(0);
-    safe = true; await f.transport.offer('app', 'incarnation', f.offer(3, 'idle'));
+  it('releases held input once a briefly busy screen settles after delivery', async () => {
+    let safe = true; const f = await fixture(() => safe, { waitInputSafe: async () => { safe = true; return true; } });
+    await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
+    safe = false; // mid-redraw at the instant of acceptance
+    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); await pending;
     expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(1);
+    expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-abandon')).toHaveLength(0);
     expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-enter')).toHaveLength(1);
     expect(f.transport.canControl('app')).toBe(true); await f.transport.close();
   });
-  it('does not flush buffered ordinary writers into a popup even after our own native input was accepted', async () => {
-    let safe = true; const f = await fixture(() => safe); await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
-    safe = false;
-    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); // accepted is journaled; the release stays fenced (workerBlocked) for a later retry, never reported as unconfirmed
-    await pending; expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(0);
-    expect(f.transport.canControl('app')).toBe(false); safe = true;
-    await f.transport.retryWorkerRelease('app', lease.attemptId); expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(1);
-    await f.transport.close();
+  it('frees held input without flushing it into a prompt that owns the terminal after delivery', async () => {
+    // Flushing could press a stale Enter on the card; holding would also hold the person's answer to it, forever.
+    const safe = { now: true }; const f = await fixture(() => safe.now, { waitInputSafe: async () => false });
+    await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer()); const lease = await stage(f);
+    safe.now = false;
+    await f.transport.event('app', 'incarnation', { kind: 'accepted', attemptId: lease.attemptId, wireHash: lease.wireHash }); await pending;
+    expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-release')).toHaveLength(0);
+    expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-abandon')).toHaveLength(1);
+    expect(f.worker.mock.calls.filter(c => c[1].type === 'queue-enter')).toHaveLength(1);
+    expect(f.transport.canControl('app')).toBe(true); await f.transport.close();
   });
   it('keeps lost/ambiguous receipts uncertain without automatic replay and blocks commands', async () => {
     const f = await fixture(); await f.add(); const pending = f.transport.offer('app', 'incarnation', f.offer());

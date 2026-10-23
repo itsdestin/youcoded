@@ -17,7 +17,7 @@ export function localUserMessage(session: SessionChatState, action: LocalUserAct
   }
   // WHY sendId dedup (2026-10-22): a queue send draws its bubble at once; if it then falls back to the terminal path, that
   // path announces the same send again. Same id = same send, never a second bubble.
-  if (action.sendId && session.timeline.some(e => e.kind === 'user' && e.sendId === action.sendId)) return session;
+  if (action.sendId && session.timeline.some(e => e.kind === 'user' && e.sendId === action.sendId && !e.sendRefused)) return session;
   // WHY no content dedup: two identical explicit submissions are two messages.
   // Recorded echoes confirm submitted pending bubbles; directly refused retained text cannot be confirmed by older identical history.
   return {

@@ -86,7 +86,8 @@ export class ClaudeQueueRuntime {
   // WHY the IMMEDIATE_HIDE_MS cap (2026-10-22): the chat now draws an idle send's bubble at once, so a hidden item that
   // stalls would look sent while nothing happens. After the cap it shows in the strip, which takes its bubble's place.
   const hidden = (i: QueueJournal['items'][number]) => {
-   if (!i.immediate || !(i.status === 'delivering' || (i.status === 'waiting' && !this.options.working(id) && this.options.inputSafe(id)))) return false;
+   // A send waiting on text in the terminal's box shows at once, with its note, rather than as a bubble that looks sent.
+   if (!i.immediate || this.composerBusy.has(id) || !(i.status === 'delivering' || (i.status === 'waiting' && !this.options.working(id) && this.options.inputSafe(id)))) return false;
    const left = i.timestamp + IMMEDIATE_HIDE_MS - now;
    if (left <= 0) return false;
    nextReveal = Math.min(nextReveal, left); return true;
@@ -208,6 +209,9 @@ export class ClaudeQueueRuntime {
  }
  async forget(id: string): Promise<void> {
   const b = this.bindings.get(id); if (!b) return;
+  // Per-session notes and timers end with the session, so a reopened conversation never inherits a stale "waiting" note.
+  this.issues.delete(id); this.composerBusy.delete(id);
+  const timer = this.republishTimers.get(id); if (timer) { clearTimeout(timer); this.republishTimers.delete(id); }
   if (this.service) { const s = await this.service; await s.transport.unbind(id); if (b.queueId) {
     const r=s.queue.snapshot(b.queueId);
     // Closing a fully resolved queue can retire its old namespace; stale queueId/epoch requests cannot recreate it.

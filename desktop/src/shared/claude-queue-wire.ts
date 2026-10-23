@@ -30,6 +30,7 @@ function quotedPath(text: string): string | null {
  * with no files, so an ordinary message that merely mentions "Attached:" is never altered.
  */
 export function parseQueueWire(text: string): { text: string; attached: string[] } {
+  if (!text.includes(ATTACHED + '"') && !text.startsWith(READ_PREFIX)) return { text, attached: [] }; // the common case, no splitting
   let body = text;
   if (body.startsWith(READ_PREFIX)) {
     const footerAt = body.indexOf('\n' + READ_FOOTER + '\n\n');

@@ -80,6 +80,7 @@ export class ClaudeQueueTransport {
     const r = this.options.queue.snapshot(binding.queueId);
     if (r.live?.incarnation !== binding.incarnation || r.alias.provider !== binding.alias.provider || r.alias.conversationId !== binding.alias.conversationId) throw Error('Queue transport identity mismatch');
     this.bindings.set(sessionId, { binding: structuredClone(binding), commands: [], attempts: new Map(), accepted: new Set(), confirmed: new Set(), workerBlocked: new Set() });
+    try { this.options.onComposerBusy?.(sessionId, false); } catch { /* display only: a new binding starts with no busy note */ }
   }
   /** After the queue's durable observed-result rebind, retain OLD attempt evidence for late receipts. */
   rebind(sessionId: string, binding: QueueBinding): void {
@@ -206,12 +207,12 @@ export class ClaudeQueueTransport {
     const s = this.state(sessionId, incarnation); const parsed = offerSchema.safeParse(value);
     if (!s || !parsed.success || s.flow) return released;
     const offer = parsed.data;
-    // Native read Claude Code's box BEFORE offering: text the person left there is not ours to replace. Wait, visibly,
-    // until a later offer finds it empty (the next idle poll, or a terminal change waking the queue).
-    if (offer.composerBusy) { if (!offer.agentId) this.setComposerBusy(sessionId, s, true); return released; }
-    if (!offer.agentId) this.setComposerBusy(sessionId, s, false);
     if (offer.agentId || offer.conversationId !== s.binding.alias.conversationId || offer.expiresAt <= this.now() || offer.expiresAt - this.now() > 15000
       || (offer.kind === 'idle' && offer.turnId !== null) || (offer.kind === 'batch' && offer.turnId === null)) return released;
+    // Native read Claude Code's box BEFORE offering: text the person left there is not ours to replace. Wait, visibly,
+    // until a later offer finds it empty (the next idle poll, or a terminal change waking the queue).
+    this.setComposerBusy(sessionId, s, !!offer.composerBusy);
+    if (offer.composerBusy) return released;
     // WHY: input safety may briefly disappear after a proven clean handoff. This set
     // contains only already-authorized releases, never permission to stage/Enter or guess an outcome.
     if (this.options.inputSafe(sessionId)) for (const attemptId of s.workerBlocked) {
@@ -289,8 +290,20 @@ export class ClaudeQueueTransport {
    *  authorized in workerBlocked and is retried on the next wake or offer; the outcome itself is already journaled. */
   private async settleWorker(sessionId: string, s: BindingState, lease: QueueLease): Promise<void> {
     if (!this.options.inputSafe(sessionId) && this.options.waitInputSafe) await this.options.waitInputSafe(sessionId, this.now() + 2000);
-    try { await this.releaseWorker(sessionId, s, lease); }
+    try { await this.releaseWorker(sessionId, s, lease); return; }
     catch (error) { log('INFO', 'ClaudeQueue', 'Worker release deferred until input is safe', { sessionId, attemptId: lease.attemptId, error: String(error) }); }
+    if (this.options.inputSafe(sessionId)) return; // released by the next wake or offer
+    // WHY (2026-10-22 regression review): the outcome is already definite, but a card or menu now owns input, and the worker
+    // still holds every ordinary write behind this lease, INCLUDING the person's answer to that card: input would never
+    // become safe again and the session would freeze. Free the lane and DISCARD whatever was held (keys typed during the
+    // instant of delivery), because flushing it could press a stale Enter on the card. Never an Enter, never a resend.
+    try {
+      const result = await this.options.worker(sessionId, this.workerCommand(lease, 'queue-abandon'));
+      if (['released', 'stale'].includes(result.status)) {
+        s.workerBlocked.delete(lease.attemptId);
+        log('WARN', 'ClaudeQueue', 'Freed held input while a prompt owned the terminal; keys held during delivery were dropped', { sessionId, attemptId: lease.attemptId });
+      }
+    } catch { /* stays blocked; the next wake or offer retries the release */ }
   }
   private async quarantine(s: BindingState, f: Flow): Promise<void> {
     if (f.lease) await this.options.queue.uncertain(s.binding.queueId, f.lease);
