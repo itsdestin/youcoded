@@ -23,6 +23,13 @@ export interface PlainCell {
   nf?: string;         // cell.numFmt
   al?: any; fo?: any; fi?: any; bo?: any; // alignment, font, fill, border
 }
+/** The five style fields the viewer reads. */
+export interface PlainStyle { nf?: string; al?: any; fo?: any; fi?: any; bo?: any }
+function pickStyle(st: any): PlainStyle | undefined {
+  if (!st) return undefined;
+  const out: PlainStyle = { nf: st.numFmt, al: st.alignment, fo: st.font, fi: st.fill, bo: st.border };
+  return out.nf || out.al || out.fo || out.fi || out.bo ? out : undefined;
+}
 export interface PlainSheetData {
   name: string;
   rowCount: number;     // the file's real size (can be 200,000); the viewer clamps it itself
@@ -30,6 +37,9 @@ export interface PlainSheetData {
   merges: string[] | undefined;
   /** column widths for columns 1..min(columnCount, MAX_COLS) */
   colWidths: Array<number | undefined>;
+  /** whole-column / whole-row looks (index = column or row number), only where one is set; see `missingCell` */
+  colStyles?: Array<PlainStyle | undefined>;
+  rowStyles?: Array<PlainStyle | undefined>;
   /** sparse: index = row number (1-based) for rows 1..MAX_ROWS that hold any cell */
   rows: Array<PlainCell[] | undefined>;
 }
@@ -45,23 +55,36 @@ export function extractSheets(wb: any): PlainSheetData[] {
     const usedRows = Math.min(rowCount, MAX_ROWS);
     const usedCols = Math.min(columnCount, MAX_COLS);
     const rows: Array<PlainCell[] | undefined> = [];
+    // WHY column and row looks (independent review, 2026-10-24): ExcelJS's getCell() builds a cell the file never
+    // stored by inheriting the row's look, then the column's (Cell constructor -> _mergeStyle). The old in-page viewer
+    // read every position through getCell, so a whole-column fill or number format showed on the gaps too; carrying
+    // these lets PlainSheet hand back the same look for a missing cell.
+    const colStyles: Array<PlainStyle | undefined> = [];
+    for (let c = 1; c <= usedCols; c++) { const st = pickStyle(ws.getColumn(c)?.style); if (st) colStyles[c] = st; }
+    const rowStyles: Array<PlainStyle | undefined> = [];
     for (let r = 1; r <= usedRows; r++) {
       const row = ws.findRow(r);
       if (!row) continue;
+      const rst = pickStyle(row.style);
+      if (rst) rowStyles[r] = rst;
       const cells: PlainCell[] = [];
       row.eachCell({ includeEmpty: true }, (cell: any, c: number) => {
         if (c > usedCols) return;
         const ne = cell.type !== 0 /* ValueType.Null */;
         const al = cell.alignment, fo = cell.font, fi = cell.fill, bo = cell.border, nf = cell.numFmt;
-        // A blank cell with no look at all is exactly what getCell() returns for a missing one: leave it out.
-        if (!ne && !al && !fo && !fi && !bo && !nf) return;
+        // A blank cell with no look at all is exactly what getCell() returns for a missing one - but only when neither
+        // its row nor its column has a look to inherit; otherwise keep it, so it stays look-less as in the file.
+        if (!ne && !al && !fo && !fi && !bo && !nf && !rst && !colStyles[c]) return;
         cells.push({ c, ne, v: ne ? cell.value : null, f: cell.formula || undefined, nf, al, fo, fi, bo });
       });
       if (cells.length) rows[r] = cells;
     }
     const colWidths: Array<number | undefined> = [];
     for (let c = 1; c <= usedCols; c++) colWidths.push(ws.getColumn(c)?.width);
-    return { name: ws.name || 'Sheet', rowCount, columnCount, merges: ws.model?.merges, colWidths, rows };
+    return {
+      name: ws.name || 'Sheet', rowCount, columnCount, merges: ws.model?.merges, colWidths, rows,
+      ...(colStyles.length ? { colStyles } : {}), ...(rowStyles.length ? { rowStyles } : {}),
+    };
   });
 }
 
@@ -101,7 +124,19 @@ export class PlainSheet {
   }
   getCell(r: number, c: number): any {
     const p = this.data.rows[r]?.find((x) => x.c === c);
-    return p ? this.cellFor(r, p) : BLANK;
+    return p ? this.cellFor(r, p) : this.missingCell(r, c);
+  }
+  /** What ExcelJS's getCell builds for a position the file never stored: row look first, then column (_mergeStyle). */
+  private missingCell(r: number, c: number): any {
+    const rs = this.data.rowStyles?.[r], cs = this.data.colStyles?.[c];
+    if (!rs && !cs) return BLANK;
+    const key = -(r * 4096 + c);
+    let cell = this.cells.get(key);
+    if (!cell) {
+      cell = { ...BLANK, numFmt: rs?.nf || cs?.nf, font: rs?.fo || cs?.fo, alignment: rs?.al || cs?.al, border: rs?.bo || cs?.bo, fill: rs?.fi || cs?.fi };
+      this.cells.set(key, cell);
+    }
+    return cell;
   }
   getColumn(c: number): { width: number | undefined } | undefined {
     return { width: this.data.colWidths[c - 1] };

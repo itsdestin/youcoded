@@ -106,6 +106,15 @@ const FIXTURES: Record<string, (wb: Workbook) => void> = {
     wb.addWorksheet('Data').addRow(['a', 'b']);
     wb.addWorksheet('Second').addRow([1, 2]);
   },
+  'a whole-column and a whole-row look show on the gaps the file never stored': (wb) => {
+    const ws = wb.addWorksheet('Looks');
+    ws.getColumn(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF0000' } };
+    ws.getColumn(2).numFmt = '0.00';
+    ws.getCell('A1').value = 'a'; ws.getCell('D1').value = 1;
+    ws.getCell('B3').value = 2.5;
+    ws.getRow(5).font = { italic: true };
+    ws.getCell('A5').value = 'row look'; ws.getCell('D6').value = 'end';
+  },
   'more rows and columns than the viewer shows': (wb) => {
     const ws = wb.addWorksheet('Big');
     for (let r = 1; r <= 2300; r++) ws.addRow(Array.from({ length: 105 }, (_, c) => (r + c) % 7 === 0 ? `t${r}-${c}` : r * c));
