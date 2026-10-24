@@ -6,6 +6,17 @@ const chat = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['
 
 export const CHAT: readonly ScreenEntry[] = [
   chat('chat', 'view'),
+  { ...chat('chat/attach-menu', 'menu'), params: { googleFiles: '1' } },
+  { ...chat('chat/google-attached', 'view'), params: { googleFiles: '1', googleState: 'attached' } },
+  { ...chat('chat/google-attach', 'dialog'), params: { googleFiles: '1' } },
+  ...['empty', 'error', 'reconnect', 'stress', 'disconnected'].map((state) => ({ ...chat(`chat/google-attach#${state}`, 'dialog'), params: { googleFiles: '1', googleState: state } })),
+  { ...chat('chat/google-attach#waiting', 'dialog'), params: { googleFiles: '1', googleState: 'waiting' }, open: ['Add from Google Drive'] },
+  { ...chat('chat/google-attach#studio', 'dialog'), params: { googleFiles: '1' }, open: [{ do: 'click', target: { role: 'button', label: 'Google account' } }, { do: 'click', target: { role: 'option', label: 'alex@studio.example' } }] },
+  { ...chat('chat/google-attach#phone', 'dialog', 'narrow'), params: { googleFiles: '1' }, viewport: { width: 390, height: 844 } },
+  { ...chat('chat/google-save', 'dialog'), params: { googleFiles: '1' } },
+  { ...chat('chat/google-save#copy', 'dialog'), params: { googleFiles: '1' }, open: [{ do: 'click', target: { role: 'button', label: 'Save as' } }, { do: 'click', target: { role: 'option', label: 'New copy' } }] },
+  { ...chat('chat/google-save#saved', 'dialog'), params: { googleFiles: '1' }, open: ['Save'] },
+  { ...chat('chat/google-save#error', 'dialog'), params: { googleFiles: '1', googleState: 'error' }, open: ['Save'] },
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),

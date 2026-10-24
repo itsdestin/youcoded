@@ -27,7 +27,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
  * the trigger is the caller's own button: give it `onClick={() => onOpenChange(!open)}`.
  */
 
-const MENU = 'layer-surface absolute top-full mt-1 rounded-md p-1.5 text-xs shadow-md';
+const MENU = 'layer-surface absolute rounded-md p-1.5 text-xs shadow-md';
 const ITEM = 'w-full text-left px-2 py-1.5 rounded text-fg-2 hover:text-fg hover:bg-inset focus:outline-none focus-visible:text-fg focus-visible:bg-inset disabled:opacity-40 transition-colors';
 const ITEMS = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
 
@@ -41,6 +41,8 @@ interface MenuProps {
   trigger: ReactNode;
   /** Which edge of the trigger the menu lines up with. */
   align?: 'left' | 'right';
+  /** Bottom-edge controls such as the composer open upward into available space. */
+  side?: 'top' | 'bottom';
   /** The menu's name for a screen reader, e.g. "Your status". */
   label: string;
   /** Extra classes for the menu panel — a minimum width (`min-w-60`). */
@@ -48,7 +50,7 @@ interface MenuProps {
   children: ReactNode;
 }
 
-export function Menu({ open, onOpenChange, trigger, align = 'left', label, className = '', children }: MenuProps) {
+export function Menu({ open, onOpenChange, trigger, align = 'left', side = 'bottom', label, className = '', children }: MenuProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const items = () => [...(menuRef.current?.querySelectorAll<HTMLElement>(ITEMS) ?? [])];
@@ -116,7 +118,8 @@ export function Menu({ open, onOpenChange, trigger, align = 'left', label, class
           ref={menuRef}
           role="menu"
           aria-label={label}
-          className={`${MENU} ${align === 'right' ? 'right-0' : 'left-0'} ${className}`.trim()}
+          // WHY: keep the composer's choices above its bottom-edge trigger; existing menus stay below.
+          className={`${MENU} ${side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'} ${align === 'right' ? 'right-0' : 'left-0'} ${className}`.trim()}
           style={{ zIndex: 62 }}
         >
           <ChooseContext.Provider value={choose}>{children}</ChooseContext.Provider>

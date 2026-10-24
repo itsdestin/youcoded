@@ -168,6 +168,8 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     { tool: 'TodoWrite', action: 'allow' },
     { tool: 'WebFetch', action: 'allow' },
     { tool: 'WebSearch', action: 'allow' },
+    // WHY: limited to user-attached reads and local proposals; no approval/write operation exists in the tool.
+    { tool: 'GoogleFiles', action: 'allow' },
     // Skill is a READ, and a narrower one than Read itself: it opens exactly one
     // file, in a directory the app discovered, chosen from a list the app itself
     // advertised. Returning that text has no side effect — every action a skill

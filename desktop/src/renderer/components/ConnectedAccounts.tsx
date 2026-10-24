@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, SectionLabel } from './ui';
 import ConnectGithubModal from './ConnectGithubModal';
+import { GoogleAccountRow } from './google-files/GoogleFiles';
 import { SavedPageKeys } from './pages/SavedPageKeys';
 
 // Connected-accounts sub-page INSIDE the Account popup (Destin feedback,
@@ -139,6 +140,7 @@ export function ConnectedAccountsBody({ status, refresh }: {
 
             {error && <FieldError as="p" size="2xs">{error}</FieldError>}
           </div>
+          <GoogleAccountRow />
         </div>
       </section>
 

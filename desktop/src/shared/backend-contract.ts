@@ -26,6 +26,7 @@
 // at runtime. They are the reason a few members are still typed against a
 // non-shared file — R3 moves each type into shared/ as it tightens that family.
 
+import type { GoogleFilesBridge, GoogleFilesChannelTypes } from './google-files-channels';
 import type { VoiceBridge, VoiceVocabularyBridge } from './voice-types';
 import type { PagesBridge } from './pages-types';
 import type { OfficeBridge } from './office-types';
@@ -113,6 +114,19 @@ export const IPC = {
   // by the detail overlay's Connect button when state is installed-but-not-
   // connected (e.g. OAuth expired).
   INTEGRATIONS_CONNECT: 'integrations:connect',
+  GOOGLE_FILES_STATUS: 'googleFiles:status',
+  GOOGLE_FILES_AUTH_START: 'googleFiles:auth-start',
+  GOOGLE_FILES_AUTH_STATE: 'googleFiles:auth-state',
+  GOOGLE_FILES_AUTH_CANCEL: 'googleFiles:auth-cancel',
+  GOOGLE_FILES_LIST: 'googleFiles:files',
+  GOOGLE_FILES_ATTACH: 'googleFiles:attach',
+  GOOGLE_FILES_ATTACHED: 'googleFiles:attached',
+  GOOGLE_FILES_DETACH: 'googleFiles:detach',
+  GOOGLE_FILES_DISCONNECT: 'googleFiles:disconnect',
+  GOOGLE_FILES_READ: 'googleFiles:read',
+  GOOGLE_FILES_PROPOSALS: 'googleFiles:proposals',
+  GOOGLE_FILES_APPROVE: 'googleFiles:approve',
+  GOOGLE_FILES_REJECT: 'googleFiles:reject',
   // Static-per-session lookup — returns 'darwin' | 'win32' | 'linux' | 'android'.
   // Used by the integration cards to gate UI by platform before the user
   // clicks (backend integration-installer.ts also re-checks).
@@ -947,7 +961,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends BrowserChannelTypes, MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
+export interface ChannelTypes extends GoogleFilesChannelTypes, BrowserChannelTypes, MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };
@@ -1144,6 +1158,7 @@ export type RemoteBridge = Omit<SharedBridge, 'session' | 'on'> & {
 // one family at a time, together with the channel-table entries that own them.
 // `session` and `on` come from the checked bridge types above.
 interface ClaudeApi {
+  googleFiles: GoogleFilesBridge;
   /** See SharedBridge (platform.ts's getCapabilities() reads it, with conservative defaults when it is missing). */
   capabilities: Capabilities;
   protocolVersion: number;

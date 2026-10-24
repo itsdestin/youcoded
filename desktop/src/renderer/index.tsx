@@ -6,6 +6,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
+import { GoogleFilesLiveProvider } from './components/google-files/GoogleFilesLiveProvider';
 import { RemoteGate } from './remote-gate';
 import { defaultThemeFor, guessThemeDefault } from '../shared/theme-default';
 import { installChipCopy } from './components/context-menu/chip-copy';
@@ -113,8 +114,8 @@ const isAndroid = location.protocol === 'file:';
  * including when the password box is shown at all (remote-gate.tsx says why).
  */
 function Root() {
-  if (isElectron) return <App />;
-  return <RemoteGate isAndroid={isAndroid} loadShim={() => import('./remote-shim')} renderApp={() => <App />} />;
+  if (isElectron) return <GoogleFilesLiveProvider><App /></GoogleFilesLiveProvider>;
+  return <RemoteGate isAndroid={isAndroid} loadShim={() => import('./remote-shim')} renderApp={() => <GoogleFilesLiveProvider><App /></GoogleFilesLiveProvider>} />;
 }
 
 // Workbench boot. `import.meta.env.DEV` is statically replaced with `false` in
@@ -177,6 +178,11 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         document.head.prepend(style);
       }
     }
+    // WHY: the Google design fixtures wrap the REAL app, opt-in only inside the
+    // workbench boot. Baseline and production have no adapter and no new controls.
+    const GoogleWorkbench = new URLSearchParams(location.search).get('googleFiles') === '1'
+      ? (await import('./dev/workbench/fixtures/google-files')).GoogleFilesWorkbench
+      : React.Fragment;
     if (isChild) {
       // The tool gallery is a separate surface, not part of the app shell, so it
       // renders in place of <App/> rather than inside it. It DOES get a real
@@ -276,15 +282,15 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
           import('./dev/workbench/OpenTasksPractice'),
         ]);
         installScreenDriver(SCREENS);
-        __mount.render(<><App /><IconSheet /><PillSheet /><OpenTasksPractice /></>);
+        __mount.render(<GoogleWorkbench><App /><IconSheet /><PillSheet /><OpenTasksPractice /></GoogleWorkbench>);
         return;
       }
       // App is already statically imported above (Root renders it).
-      __mount.render(<App />);
+      __mount.render(<GoogleWorkbench><App /></GoogleWorkbench>);
       return;
     }
     const { WorkbenchFrame } = await import('./dev/workbench/WorkbenchFrame');
-    __mount.render(<WorkbenchFrame />);
+    __mount.render(<GoogleWorkbench><WorkbenchFrame /></GoogleWorkbench>);
   });
 } else {
   // Perf lab: last renderer-side mark before the root component tree renders.

@@ -4,6 +4,7 @@ import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
 import TerminalToolbar from './TerminalToolbar';
 import { Button } from './ui';
+import { useGoogleComposer } from './google-files/GoogleComposer';
 import { AttachmentChip } from './AttachmentChip';
 // Round 2 (Destin): reference tokens ride INSIDE the draft as invisible
 // markers, with a real pill drawn over each by the mirror layer below — see
@@ -177,6 +178,7 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const googleComposer = useGoogleComposer(sessionId);
   // Read by window-event listeners that must not re-subscribe on every change.
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -851,7 +853,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // composer holds display-sized tokens so its caret lines up (see
       // compose-ref.ts "Draft tokens"). A refused send restores
       // effectiveMessage, which still holds the display tokens.
-      const outgoing = buildOutgoingMessage(expandDraftTokens(effectiveMessage), files.map((f) => f.path));
+      // WHY: cloud grants are not local paths; tell the native assistant which tool can access them.
+      const outgoing = buildOutgoingMessage(expandDraftTokens(effectiveMessage) + (provider === 'native' && effectiveMessage.trim() ? googleComposer.messageHint : ''), files.map((f) => f.path));
       if (!outgoing) return true; // nothing to send — treat as consumed
       if (disabled) return false;
 
@@ -891,7 +894,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       sendToClaudeCode({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
       return true;
     },
-    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],
+    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, googleComposer.messageHint],
   );
 
   // Auto-resize textarea to fit content, up to 3 lines then scroll
@@ -1096,6 +1099,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         </div>
       )}
 
+      {googleComposer.content}
+
       {/* A model chosen at setup that is still downloading (first-run local
           models, Q-4/Q-7): the same thin band, above the box. */}
       {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
@@ -1112,14 +1117,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       )}
       <div className="px-2 sm:px-3 pb-1 sm:pb-1.5">
         <form onSubmit={handleSubmit} className="flex items-center gap-1.5 sm:gap-2 bg-inset rounded-xl px-2 sm:px-3 py-2">
-          <BrailleBurst
+          {googleComposer.renderAttachMenu(disabled, handleAttachClick) ?? <BrailleBurst
             onTrigger={handleAttachClick}
             disabled={disabled}
             className="shrink-0 text-fg-dim hover:text-fg disabled:opacity-30 transition-colors"
             title="Attach file"
           >
             <AttachIcon className="w-5 h-5" />
-          </BrailleBurst>
+          </BrailleBurst>}
           {!minimal && (
             <BrailleBurst
               onTrigger={() => onOpenDrawer?.(false)}

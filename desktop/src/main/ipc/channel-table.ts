@@ -65,6 +65,7 @@ import { windowChannels } from './window';
 import { detachChannels } from './detach';
 import { buddyChannels } from './buddy';
 import { integrationsChannels } from './integrations';
+import { googleFilesChannels } from './google-files';
 import { remoteAdminChannels } from './remote-admin';
 import { voiceChannels } from './voice';
 import { socialChannels } from './social';
@@ -120,6 +121,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...detachChannels,
   ...buddyChannels,
   ...integrationsChannels,
+  ...googleFilesChannels,
   ...remoteAdminChannels,
   ...voiceChannels,
   ...socialChannels,

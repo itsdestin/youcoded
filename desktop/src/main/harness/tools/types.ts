@@ -11,6 +11,7 @@ import type { RunningCalls } from '../askpass/running-calls';
 import type { AdminPasswordServiceLike } from '../admin-password-service';
 import type { ImageLimits } from '../capability-profile';
 import type { ImagePreparerLike } from '../image-prepare';
+import type { GoogleFilesToolAccess } from '../../../shared/google-files-channels';
 
 /** Task 6 — what the Task tool's execute() hands the host to actually run a
  *  specialist. Structural, mirroring the rest of ToolServices: the tool never
@@ -100,6 +101,8 @@ export type SpecialistResumeOutcome =
 // Structural (not the concrete class) so tests inject fakes and the tool never
 // imports the service implementation.
 export interface ToolServices {
+  /** Reading and drafting only: final cloud saves are user-approved through the UI. */
+  googleFiles?: GoogleFilesToolAccess;
   search?: { search(query: string, signal: AbortSignal): Promise<{ results: Array<{ title: string; url: string; snippet?: string }>; source: string }> };
   /** Picture preparation (image-prepare.ts): Read calls prepare() before it
    *  promises an over-limit image. Absent in tests and one-off contexts — the

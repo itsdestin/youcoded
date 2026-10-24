@@ -33,6 +33,13 @@ function Harness({ onPick = () => {}, initial = false }: { onPick?: (v: string) 
 const esc = () => act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
 
 describe('Menu', () => {
+  it('can open above a bottom-edge trigger without changing the default direction', () => {
+    const { getByRole, rerender } = render(<Menu open side="top" label="Attachments" onOpenChange={() => {}} trigger={<button>Attach</button>}><MenuItem onSelect={() => {}}>File</MenuItem></Menu>);
+    expect(getByRole('menu').className).toContain('bottom-full');
+    expect(getByRole('menu').className).not.toContain('top-full');
+    rerender(<Menu open label="Attachments" onOpenChange={() => {}} trigger={<button>Attach</button>}><MenuItem onSelect={() => {}}>File</MenuItem></Menu>);
+    expect(getByRole('menu').className).toContain('top-full');
+  });
   it('is a named menu of menuitemradio / menuitem choices, shown only while open', () => {
     const { getByRole, queryByRole, getAllByRole } = render(<Harness />);
     expect(queryByRole('menu')).toBeNull();

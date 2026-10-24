@@ -57,6 +57,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // missed the card sweep — Destin found it bare in the live app.
   { ...settings('settings/account#signed-in', 'dialog'), params: { signedIn: '1' } },
   settings('settings/account/connections', 'dialog'),
+  { ...settings('settings/account/connections#google-disconnected', 'dialog'), params: { googleFiles: '1', googleState: 'disconnected' } },
+  { ...settings('settings/account/connections#google-connected', 'dialog'), params: { googleFiles: '1' } },
+  { ...settings('settings/account/connections#google-waiting', 'dialog'), params: { googleFiles: '1', googleState: 'waiting' }, open: ['Add account'] },
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
   settings('settings/assistant/cloud', 'dialog'),

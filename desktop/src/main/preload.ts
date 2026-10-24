@@ -76,6 +76,19 @@ const IPC = {
   INTEGRATIONS_STATUS: 'integrations:status',
   INTEGRATIONS_CONFIGURE: 'integrations:configure',
   INTEGRATIONS_CONNECT: 'integrations:connect',
+  GOOGLE_FILES_STATUS: 'googleFiles:status',
+  GOOGLE_FILES_AUTH_START: 'googleFiles:auth-start',
+  GOOGLE_FILES_AUTH_STATE: 'googleFiles:auth-state',
+  GOOGLE_FILES_AUTH_CANCEL: 'googleFiles:auth-cancel',
+  GOOGLE_FILES_LIST: 'googleFiles:files',
+  GOOGLE_FILES_ATTACH: 'googleFiles:attach',
+  GOOGLE_FILES_ATTACHED: 'googleFiles:attached',
+  GOOGLE_FILES_DETACH: 'googleFiles:detach',
+  GOOGLE_FILES_DISCONNECT: 'googleFiles:disconnect',
+  GOOGLE_FILES_READ: 'googleFiles:read',
+  GOOGLE_FILES_PROPOSALS: 'googleFiles:proposals',
+  GOOGLE_FILES_APPROVE: 'googleFiles:approve',
+  GOOGLE_FILES_REJECT: 'googleFiles:reject',
   PLATFORM_GET: 'platform:get',
   SKILLS_GET_INTEGRATION_INFO: 'skills:get-integration-info',
   SKILLS_INSTALL_MANY: 'skills:install-many',
@@ -590,6 +603,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  googleFiles: true,
 } as const;
 // <<< GENERATED-CAPABILITIES
 
@@ -1361,6 +1375,21 @@ contextBridge.exposeInMainWorld('claude', {
   // Marketplace redesign Phase 3 — integrations as a first-class content kind.
   // Scaffold only: list/status return real data from integrations.json, but
   // install/uninstall/configure are stubbed pending Google OAuth work.
+  googleFiles: {
+    status: () => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_STATUS)),
+    beginAuth: (accountId?: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_AUTH_START, { accountId })),
+    authState: (flowId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_AUTH_STATE, { flowId })),
+    cancelAuth: (flowId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_AUTH_CANCEL, { flowId })),
+    files: (accountId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_LIST, { accountId })),
+    attach: (sessionId: string, accountId: string, fileIds: string[]) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_ATTACH, { sessionId, accountId, fileIds })),
+    attached: (sessionId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_ATTACHED, { sessionId })),
+    detach: (sessionId: string, accountId: string, fileId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_DETACH, { sessionId, accountId, fileId })),
+    disconnect: (accountId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_DISCONNECT, { accountId })),
+    read: (sessionId: string, accountId: string, fileId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_READ, { sessionId, accountId, fileId })),
+    proposals: (sessionId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_PROPOSALS, { sessionId })),
+    approve: (sessionId: string, proposalId: string, mode?: 'original' | 'copy') => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_APPROVE, { sessionId, proposalId, mode })),
+    reject: (sessionId: string, proposalId: string) => unwrapInvokeError(ipcRenderer.invoke(IPC.GOOGLE_FILES_REJECT, { sessionId, proposalId })),
+  },
   integrations: {
     list: (): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_LIST),
     install: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_INSTALL, { slug }),

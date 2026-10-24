@@ -2247,6 +2247,21 @@ export function installShim(): void {
       list: () => invoke('commands:list'),
     },
     // Marketplace redesign Phase 3 — integrations namespace.
+    googleFiles: {
+      status: () => invoke('googleFiles:status'),
+      beginAuth: (accountId?: string) => invoke('googleFiles:auth-start', { accountId }),
+      authState: (flowId: string) => invoke('googleFiles:auth-state', { flowId }),
+      cancelAuth: (flowId: string) => invoke('googleFiles:auth-cancel', { flowId }),
+      files: (accountId: string) => invoke('googleFiles:files', { accountId }),
+      attach: (sessionId: string, accountId: string, fileIds: string[]) => invoke('googleFiles:attach', { sessionId, accountId, fileIds }),
+      attached: (sessionId: string) => invoke('googleFiles:attached', { sessionId }),
+      detach: (sessionId: string, accountId: string, fileId: string) => invoke('googleFiles:detach', { sessionId, accountId, fileId }),
+      disconnect: (accountId: string) => invoke('googleFiles:disconnect', { accountId }),
+      read: (sessionId: string, accountId: string, fileId: string) => invoke('googleFiles:read', { sessionId, accountId, fileId }),
+      proposals: (sessionId: string) => invoke('googleFiles:proposals', { sessionId }),
+      approve: (sessionId: string, proposalId: string, mode?: 'original' | 'copy') => invoke('googleFiles:approve', { sessionId, proposalId, mode }),
+      reject: (sessionId: string, proposalId: string) => invoke('googleFiles:reject', { sessionId, proposalId }),
+    },
     integrations: {
       list: () => invoke('integrations:list'),
       install: (slug: string) => invoke('integrations:install', { slug }),

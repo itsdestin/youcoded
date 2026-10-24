@@ -135,9 +135,11 @@ interface Props {
   /** Override for the image source (tests, and the mock-up page in a browser
    *  tab where file:// can't load). Shipping callers leave it unset. */
   imageSrc?: string;
+  /** A remote file supplies its own preview; never read a cloud identity as a local path. */
+  preview?: React.ReactNode;
 }
 
-export function AttachmentChip({ path, name, onRemove, imageSrc }: Props) {
+export function AttachmentChip({ path, name, onRemove, imageSrc, preview }: Props) {
   const label = name ?? fileNameOf(path);
   const kind = fileKind(path);
   return (
@@ -147,7 +149,7 @@ export function AttachmentChip({ path, name, onRemove, imageSrc }: Props) {
       className="relative shrink-0 w-32 h-24 rounded-md border border-edge bg-panel overflow-hidden flex flex-col"
     >
       <div className="flex-1 min-h-0 bg-inset overflow-hidden">
-        <Preview path={path} imageSrc={imageSrc} />
+        {preview ?? <Preview path={path} imageSrc={imageSrc} />}
       </div>
       <div className="flex items-center gap-1 px-1.5 h-5 border-t border-edge bg-panel text-fg text-xs shrink-0">
         <span className="text-fg-dim shrink-0"><FileKindIcon kind={kind} size={12} /></span>

@@ -62,6 +62,7 @@ export const NATIVE_TOOL_NAMES = [
  *  delegation, so a session that cannot delegate has nothing for it to do. */
 export const CONDITIONAL_TOOL_NAMES = [
   'Skill', 'Task', 'ModelSearch',
+  'GoogleFiles', // Session-bound read/draft access; cloud writes require separate UI approval.
   // The Browser (2026-10-13): attached only when the desktop host injects the
   // browser service, for root sessions, on profiles that aren't a small
   // model's simplified presentation (harness-session.ts syncBrowserTools).

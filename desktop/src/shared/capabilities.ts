@@ -59,6 +59,8 @@ export interface Capabilities {
    *  computer's own window — the browser runs there, and its live picture and controls are not sent to phones in this
    *  release (spec docs/active/specs/2026-10-13-assistant-browser-design.md §3). */
   assistantBrowser: boolean;
+  /** Selected Google files. Initial loopback OAuth client is desktop-only. */
+  googleFiles: boolean;
 }
 
 /** What the computer's own window can do. The preload copies this and overrides `nativeSessions` from the
@@ -79,6 +81,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  googleFiles: true,
 };
 
 /** What a screen watching a computer over the network can do (a phone's browser, or the Android app paired to a
@@ -105,6 +108,7 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   // lines itself. A host WITH a record says true explicitly in its handshake (remote-server.ts), never by this default (review fix, R5-4a F3).
   sessionRecord: false,
   assistantBrowser: false,
+  googleFiles: false,
 };
 
 /** What the Android app's own page can do on the phone's own backend (not paired to a computer).
@@ -128,6 +132,7 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: false,
+  googleFiles: false,
 };
 
 const KEYS = Object.keys(REMOTE_SCREEN_CAPABILITIES) as Array<keyof Capabilities>;

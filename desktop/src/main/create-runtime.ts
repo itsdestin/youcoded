@@ -18,6 +18,7 @@ import type { ModelBinding } from '../shared/provider-types';
 import { ENGINE_PORT } from '../shared/ports';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
+import { GoogleFilesService } from './google-files/google-files-service';
 import { ProviderRegistry } from './providers/provider-registry';
 import { OpenRouterHealth } from './providers/openrouter-health';
 import { OpenRouterSignIn } from './providers/openrouter-oauth';
@@ -91,7 +92,7 @@ export type RemoteNativeRuntime = Pick<NativeRuntime,
   | 'records' | 'fills'
   // WHY imagePreparer: native:send runs for both doors, and a phone's picture attachment needs the
   // same shrink-before-send as the computer's.
-  | 'imagePreparer'>;
+  | 'imagePreparer' | 'googleFiles'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 
@@ -101,6 +102,7 @@ export interface NativeRuntime {
   stepGuardSettings: StepGuardSettings;
   contextSettings: ContextSettingsStore;
   secretsStore: SecretsStore;
+  googleFiles: GoogleFilesService;
   engineManager: EngineManager;
   /** ChatGPT account with the YOUCODED_CHATGPT=0 kill switch applied (null = feature off). */
   chatgptAuth: ChatGptAuth | null;
@@ -166,6 +168,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   const stepGuardSettings = new StepGuardSettings(nativeHome);
   const contextSettings = new ContextSettingsStore(nativeHome);
   const secretsStore = new SecretsStore(userDataDir, platform.secretStorage);
+  // WHY: one account/grant store for the UI and assistant; OAuth secrets remain in this profile.
+  const googleFiles = new GoogleFilesService({ userDataDir, secrets: secretsStore,
+    clientFile: process.env.YOUCODED_GOOGLE_CLIENT_FILE,
+    openExternal: (url) => platform.openExternal(url) });
   // Plan B: the local engine. EngineManager owns acquisition + supervision; its
   // hook makes the 'local' provider real and its listModels feeds the model
   // picker. ENGINE_PORT rides the shifted-port scheme so the dev instance and
@@ -394,6 +400,15 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     // reads services.search (the chain-walking SearchService).
     {
       search: searchService,
+      // Only read/draft methods cross into tool execution; approval is never a model action.
+      googleFiles: {
+        accounts: async () => (await googleFiles.status()).accounts,
+        attached: (id) => googleFiles.attached(id),
+        read: (id, account, file) => googleFiles.read(id, account, file),
+        propose: (id, account, file, edits, summary, mode) => googleFiles.propose(id, account, file, edits, summary, mode),
+        proposeCreate: (id, account, kind, name, content) => googleFiles.proposeCreate(id, account, kind, name, content),
+        proposals: (id) => googleFiles.proposals(id),
+      },
       // The Browser (2026-10-13): its presence attaches the Browser tools (syncBrowserTools).
       ...(deps.browser ? { browser: deps.browser } : {}),
       // The Read tool shrinks an over-limit picture before it promises it to the model.
@@ -638,7 +653,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     : null));
 
   return {
-    nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,
+    nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, googleFiles, engineManager,
     chatgptAuth: chatgptForUi, providerRegistry, openRouterSignIn, modelCatalog, claudeAccount,
     searchKeyStore, searchService, imagePreparer, specialistCatalog, nativeHost, modelManager, namingSettings,
     sessionNamer, applyAutomaticTitle, queueTitle, publishNamingMode, resolvePortableModel,
@@ -646,6 +661,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     onTitleApplied: (listener) => { titleListeners.push(listener); },
     cleanup: () => {
       openRouterSignIn.dispose();
+      void Promise.resolve(googleFiles.dispose()).catch(() => {});
       // Flush + tear down every live native session on quit (best-effort, bounded
       // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()
       // is synchronous and callers don't await it, so this mirrors the async
