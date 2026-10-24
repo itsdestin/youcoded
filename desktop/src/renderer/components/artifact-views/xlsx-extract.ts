@@ -24,7 +24,7 @@ export interface PlainCell {
   al?: any; fo?: any; fi?: any; bo?: any; // alignment, font, fill, border
 }
 /** The five style fields the viewer reads. */
-export interface PlainStyle { nf?: string; al?: any; fo?: any; fi?: any; bo?: any }
+interface PlainStyle { nf?: string; al?: any; fo?: any; fi?: any; bo?: any }
 function pickStyle(st: any): PlainStyle | undefined {
   if (!st) return undefined;
   const out: PlainStyle = { nf: st.numFmt, al: st.alignment, fo: st.font, fi: st.fill, bo: st.border };
