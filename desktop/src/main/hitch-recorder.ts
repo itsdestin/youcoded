@@ -56,6 +56,7 @@ import { join } from 'node:path';
 import { monitorEventLoopDelay, createHistogram, type Histogram, type RecordableHistogram } from 'node:perf_hooks';
 import { RotatingJsonlWriter } from './hitch-log-writer';
 import { validateBatch, appName, type CleanBatch } from './hitch-validate';
+import { startStallProfiler, STALL_PROFILE_MIN_MS } from './stall-profiler';
 
 export const HITCH_CHANNEL = 'perf:hitch-batch';
 /** A main-process stall is written at or above this many ms. */
@@ -133,6 +134,8 @@ export interface RecorderDeps {
   /** Tests drive ticks by hand; production passes true to start the 1 s timer. */
   startTimer?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Saves a CPU profile when a stall of STALL_PROFILE_MIN_MS or more ends (stall-profiler.ts). */
+  stallProfiler?: { onStall: (endedAtMs: number, ms: number) => Promise<void>; stop: () => Promise<void> } | null;
 }
 
 interface WindowState { id: string; minStart: number; minCount: number; severeCount: number; batchStart: number; batchCount: number; swStart: number; swCount: number }
@@ -315,6 +318,8 @@ export class HitchRecorder {
           ms: Math.round(maxMs), resMs: this.res, sessions: this.d.getSessionCount(), windows: this.d.getWindowCount(),
           ...(last ? { lastIpc: last.channel, lastIpcAgoMs: Math.round(last.agoMs) } : {}),
         });
+        // A long stall also saves the CPU profile that covers it, named with the SAME timestamp as the line above.
+        if (maxMs >= STALL_PROFILE_MIN_MS) void this.d.stallProfiler?.onStall(nowMs, maxMs).catch(() => {});
       }
       if (++this.tick % 60 === 0) this.onMinute();
     } catch { /* ignore */ }
@@ -362,11 +367,15 @@ export class HitchRecorder {
     if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
     if (this.startupFallback) { clearTimeout(this.startupFallback); this.startupFallback = undefined; }
     this.hist.disable?.();
+    await this.d.stallProfiler?.stop().catch(() => {});
     await this.writer.flush();
   }
 }
 
 export function startHitchRecorder(deps: RecorderDeps): HitchRecorder | null {
   if (hitchLogDisabled(deps.env)) return null;
-  try { return new HitchRecorder({ startTimer: true, ...deps }); } catch { return null; }
+  // The stall profiler (stall-profiler.ts) rides along with the recorder: same off-switch family, same perf/ folder.
+  const stallProfiler = deps.stallProfiler !== undefined ? deps.stallProfiler
+    : startStallProfiler({ dir: join(deps.userDataDir, 'perf', 'stall-profiles') }, deps.env);
+  try { return new HitchRecorder({ startTimer: true, ...deps, stallProfiler }); } catch { void stallProfiler?.stop(); return null; }
 }

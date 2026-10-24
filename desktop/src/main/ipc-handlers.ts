@@ -707,7 +707,7 @@ export function registerIpcHandlers(
             // device (the SAME resolver the materialize sweep + Resume Browser use).
             const rec = await getConversationStore()?.get('native', opts.resumeSessionId);
             if (rec) {
-              const folder = buildLocalProjectResolver()(rec);
+              const folder = await buildLocalProjectResolver()(rec);
               if (folder && nativeTranscriptExists(folder, opts.resumeSessionId)) {
                 resolvedCwd = folder;                       // located locally under a resolved folder
               } else if (folder) {

@@ -22,6 +22,8 @@ import { looksBinary, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES
 import { decideOverCapRead } from '../../shared/artifacts/over-cap-read';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { readSidecarShared, runSidecarMigration } from './artifact-store';
+import { createExistsProbe } from './exists-probe';
+import { mapLimit } from '../map-limit';
 import { discoveredFileRecord } from './project-file-discovery';
 import { listProjects } from './central-index';
 import { countArtifacts, projectAllFiles, isGatedRoot } from './projects-index';
@@ -586,9 +588,16 @@ export async function checkArtifactExistence(projectRoot: string, artifactIds: s
   }
   const sidecar = await readSidecarShared(projectRoot);
   if (!sidecar || 'corrupted' in sidecar) return { ok: true, missingIds: [] as string[] };
-  const byId = new Map(sidecar.artifacts.map((a) => [a.id, a]));
-  const results = await Promise.all(
-    artifactIds.map(async (id) => {
+  // Only the requested ids are indexed (the old Map over every record built ~24k entry arrays per call).
+  const wanted = new Set(artifactIds);
+  const byId = new Map<string, (typeof sidecar.artifacts)[number]>();
+  for (const a of sidecar.artifacts) if (wanted.has(a.id)) byId.set(a.id, a);
+  // WHY a probe + bounded concurrency (2026-10-22 freeze hunt): see exists-probe.ts.
+  const probe = createExistsProbe();
+  const results = await mapLimit(
+    artifactIds,
+    32,
+    async (id) => {
       const a = byId.get(id);
       if (!a) return id; // unknown id treated as missing
       // A corrupt record (relative absolutePath) resolves against the PROCESS
@@ -606,13 +615,8 @@ export async function checkArtifactExistence(projectRoot: string, artifactIds: s
         const verdict = await judgeRelativeRecord(projectRoot, fullPath, savedProjectRoots());
         return !verdict.ok && verdict.reason === 'missing' ? id : null;
       }
-      try {
-        await fs.promises.access(fullPath);
-        return null;
-      } catch {
-        return id;
-      }
-    })
+      return (await probe.exists(fullPath)) ? null : id;
+    }
   );
   return { ok: true, missingIds: results.filter((x): x is string => x !== null) };
 }

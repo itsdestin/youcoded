@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSessionPreClearToolIds, useSessionToolCalls } from '../state/chat-context';
-import { buildTasksById, TaskState } from '../state/task-state';
+import { buildTasksByIdShared, TaskState } from '../state/task-state';
 
 export const INACTIVE_STORAGE_KEY = 'youcoded-tasks-inactive-v1';
 
@@ -57,7 +57,7 @@ export function useSessionTasks(sessionId: string) {
   );
 
   // Derive tasks from the session's toolCalls (memoized on the Map ref).
-  const derived = useMemo(() => buildTasksById(toolCalls, beforeClear), [toolCalls, beforeClear]);
+  const derived = useMemo(() => buildTasksByIdShared(toolCalls, beforeClear), [toolCalls, beforeClear]);
 
   // Overlay markedInactive and sort by orderIndex ascending.
   const tasks = useMemo<TaskState[]>(() => {

@@ -70,17 +70,23 @@ function parseSettings(raw: string): Settings | null {
  * The returned object is shared with the memo — treat it as READ-ONLY and
  * mutate through mutateSettings/setField.
  */
-export function readSettings(): Settings {
+export async function readSettings(): Promise<Settings> {
+  // WHY async (2026-10-22 freeze hunt): the Preferences popup reads six fields per open and remote
+  // clients read too; a sync stat+read here froze the main thread whenever the disk stalled. The
+  // memo below still answers repeat reads after one (async) stat.
   const p = settingsPath();
   let st: fs.Stats;
   try {
-    st = fs.statSync(p);
+    st = await fs.promises.stat(p);
   } catch {
     memo = null;
     return {};
   }
   if (memo && memo.path === p && memo.mtimeMs === st.mtimeMs && memo.size === st.size) return memo.parsed;
-  const parsed = parseSettings(fs.readFileSync(p, 'utf8')) ?? {};
+  let raw: string;
+  try { raw = await fs.promises.readFile(p, 'utf8'); }
+  catch { memo = null; return {}; } // vanished between stat and read: same as missing
+  const parsed = parseSettings(raw) ?? {};
   memo = { path: p, mtimeMs: st.mtimeMs, size: st.size, parsed };
   return parsed;
 }
@@ -113,7 +119,7 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
   const p = settingsPath();
   let repaired: MutateSettingsResult['repaired'];
   let written = false;
-  const locked = await mutateFileUnderLock(p, (onDisk) => {
+  const locked = await mutateFileUnderLock(p, async (onDisk) => {
     let settings: Settings = {};
     if (onDisk !== null) {
       const parsed = parseSettings(onDisk);
@@ -121,7 +127,9 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
         // Inside the lock, so no other writer can race the rename; the write
         // below then lands on a path that no longer exists, as a creation.
         const backupPath = backupPathFor(p);
-        fs.renameSync(p, backupPath);
+        // WHY awaited: mutateFileUnderLock accepts an async mutator now, so this rename no longer
+        // blocks the main thread; it still runs inside the lock, before the fresh write.
+        await fs.promises.rename(p, backupPath);
         repaired = { backupPath };
       } else {
         settings = parsed;
@@ -150,8 +158,8 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
 
 /** One dot-path field, read through the shared memo. Throws on an unsafe
  *  segment (`__proto__` …), exactly as getJsonPath does. */
-export function getField(field: string): unknown {
-  return getJsonPath(readSettings(), field);
+export async function getField(field: string): Promise<unknown> {
+  return getJsonPath(await readSettings(), field);
 }
 
 /** Set (or, with null/undefined, delete) one dot-path field under the lock.

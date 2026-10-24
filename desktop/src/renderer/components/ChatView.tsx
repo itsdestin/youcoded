@@ -2,7 +2,7 @@ import { KeepGoingRow } from './KeepGoingRow';
 import { useModelProviderType } from '../hooks/use-provider-type';
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
+import { shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
 import { workbenchQueuePreview } from '../workbench-mode';
 import ToolCard from './ToolCard';
@@ -18,6 +18,7 @@ import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
+import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -44,9 +45,12 @@ import { useBrowserExpanded } from '../state/browser-store';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
- *  short enough that it can never feel like the view is fighting you. Any user
- *  input releases it immediately. */
+ *  short enough that it can never feel like the view is fighting you. It only ever
+ *  corrects the entry's movement within the document, never the reader's own scrolling. */
 const ANCHOR_SETTLE_MS = 700;
+
+/** The entry held in place while an older page is prepended: where it sits in the scrolled document. */
+interface PrependAnchor { el: Element; key: string | null; docTop: number }
 
 /** Retry budget for a page main could not LOCATE (`unresolved`) — as opposed to
  *  a page that genuinely does not exist. The usual cause is a just-resumed
@@ -410,18 +414,21 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // measures the drift that ACTUALLY happened and can be re-applied as late
   // content settles, because "put this element back where it was" stays true no
   // matter what else moved.
-  const prependAnchorRef = useRef<{ el: Element; topOffset: number } | null>(null);
+  const prependAnchorRef = useRef<PrependAnchor | null>(null);
+  /** Ends the correction window of the last prepend (see the layout effect below). */
+  const endAnchorWindowRef = useRef<(() => void) | null>(null);
 
-  /** The topmost entry still on screen, and how far below the viewport's top edge
-   *  it sits. Null when nothing is rendered yet. */
-  const captureScrollAnchor = useCallback(() => {
+  /** The topmost entry still on screen, and where it sits in the SCROLLED DOCUMENT (its distance from the
+   *  top of the scrollable content, which scrolling by the reader does not change). Null when nothing is
+   *  rendered yet. */
+  const captureScrollAnchor = useCallback((): PrependAnchor | null => {
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
     if (!scroller || !content) return null;
     const scrollerTop = scroller.getBoundingClientRect().top;
     for (const el of Array.from(content.querySelectorAll('.timeline-entry'))) {
       const r = el.getBoundingClientRect();
-      if (r.bottom > scrollerTop) return { el, topOffset: r.top - scrollerTop };
+      if (r.bottom > scrollerTop) return { el, key: el.getAttribute('data-entry-key'), docTop: r.top - scrollerTop + scroller.scrollTop };
     }
     return null;
   }, []);
@@ -517,42 +524,67 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => io.disconnect();
   }, [history.hasMore, history.loading, history.cursor, loadOlderPage]);
 
-  // Put the anchored entry back where it was. Runs BEFORE paint
-  // (useLayoutEffect), so the prepended turns are never SEEN to push the view
-  // down, and keeps correcting for a short window afterwards because a code block
-  // or an image inside the new page finishes laying out a frame or two later.
+  // Hold the reader's place across a prepended page. Runs BEFORE paint (useLayoutEffect), so the prepended
+  // turns are never SEEN to push the view down, and keeps correcting for a short window afterwards because
+  // a code block or an image inside the new page finishes laying out a frame or two later.
+  //
+  // WHY it follows the entry's place in the DOCUMENT and never its place on screen (2026-10-23): the first
+  // version put the entry back at the screen position it had when the page arrived. Every layout callback
+  // for the next 700 ms then dragged the view back to that spot, undoing whatever the reader had scrolled
+  // meanwhile (scrollbar drag, touch fling, keys, a scripted scroll; only a wheel/touch/key EVENT let go),
+  // and a page arriving right after a release moved the view ~1,600 px. Now the only thing corrected is
+  // the entry moving within the document (content ABOVE it changing height): its document position is
+  // unchanged by any scrolling, so nothing the reader does is ever undone, whatever the input.
+  //
+  // WHY the browser's own scroll anchoring is off for the window: it would also move scrollTop for the very
+  // same insertion, and with two correctors the shift is applied twice. Off here, this effect is the only
+  // one; the previous inline value is restored when the window ends.
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current;
     if (!anchor) return;
     prependAnchorRef.current = null;
     const scroller = scrollContainerRef.current;
     const content = contentRef.current;
-    if (!scroller || !content || !anchor.el.isConnected) return;
+    if (!scroller || !content) return;
+    // A newer page replaces the previous page's window.
+    endAnchorWindowRef.current?.();
+    let el: Element | null = anchor.el;
+    let lastDocTop = anchor.docTop;
+    const priorAnchoring = scroller.style.overflowAnchor;
+    scroller.style.overflowAnchor = 'none';
 
     let live = true;
     const restore = () => {
-      if (!live || !anchor.el.isConnected) return;
-      const drift = (anchor.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - anchor.topOffset;
-      // Sub-pixel drift is not worth a write — and writing would restart the
-      // ResizeObserver for nothing.
-      if (Math.abs(drift) > 0.5) scroller.scrollTop += drift;
+      if (!live) return;
+      // The entry's wrapper can be re-created by a re-render; find it again by key.
+      if (!el || !el.isConnected) {
+        el = anchor.key ? content.querySelector(`[data-entry-key="${CSS.escape(anchor.key)}"]`) : null;
+        if (!el) return;
+      }
+      const docTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const shift = docTop - lastDocTop;
+      lastDocTop = docTop;
+      // Sub-pixel shift is not worth a write - and writing would restart the ResizeObserver for nothing.
+      if (Math.abs(shift) > 0.5) scroller.scrollTop += shift;
     };
     restore();
 
-    // Stop the moment the user takes over. Deliberately NOT the 'scroll' event:
-    // restore() scrolls, so that would cancel the correction with its own effect.
-    const release = () => { live = false; cleanup(); };
     const ro = new ResizeObserver(restore);
     ro.observe(content);
-    for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller.addEventListener(ev, release, { passive: true });
-    const stop = setTimeout(() => { live = false; cleanup(); }, ANCHOR_SETTLE_MS);
-    function cleanup() {
+    const stop = setTimeout(end, ANCHOR_SETTLE_MS);
+    function end() {
+      if (!live) return;
+      live = false;
       clearTimeout(stop);
       ro.disconnect();
-      for (const ev of ['wheel', 'touchstart', 'keydown'] as const) scroller!.removeEventListener(ev, release);
+      scroller!.style.overflowAnchor = priorAnchoring;
+      if (endAnchorWindowRef.current === end) endAnchorWindowRef.current = null;
     }
-    return cleanup;
+    endAnchorWindowRef.current = end;
   }, [state.timeline]);
+  // WHY separate: the window must outlive later timeline changes (a streamed delta must not cut the
+  // correction short), so the layout effect above has no cleanup of its own; only leaving the chat ends it.
+  useEffect(() => () => { endAnchorWindowRef.current?.(); }, []);
 
   useEffect(() => {
     const node = contentRef.current;
@@ -615,7 +647,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
+  // WHY a first-draw plan (freeze hunt 2026-10-22, item 3): opening a long conversation drew all of its
+  // ~30-turn page at once, for every open session, shown or not. Now only the newest screens are drawn;
+  // older entries start as spacers and are drawn as the reader scrolls near them. Decided ONCE, on mount
+  // (useState initialiser): later entries and pages follow the ordinary folding rules. Why it cannot
+  // jump: state/first-draw-plan.ts header.
+  const [firstDraw] = useState(() => planFirstDraw(presentation.timeline, presentation.assistantTurns, streamingTurnId));
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive, firstDraw);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -722,6 +760,20 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [visible]);
+
+  // A click on a "quoted words" chip (jump-to-ref, chat-ref-highlight.ts) scrolls to a message that may still be a
+  // first-draw spacer. WHY release the stick here (2026-10-22 review): that scroll alone does not un-pin the chat
+  // (only wheel/touch/keys do), so when the spacer was replaced by its real body the content height changed and the
+  // ResizeObserver above re-pinned to the bottom, undoing the jump (measured: the words ended ~42,000 px away).
+  // Chat Find already does the same through its beforeReveal. Only the visible chat answers, as with Ctrl+F.
+  useEffect(() => {
+    if (!visible) return;
+    const onJump = (e: Event) => {
+      if ((e as CustomEvent<{ ref?: { kind?: string } }>).detail?.ref?.kind === 'chat') releaseStick();
+    };
+    window.addEventListener('youcoded:jump-to-ref', onJump);
+    return () => window.removeEventListener('youcoded:jump-to-ref', onJump);
+  }, [visible, releaseStick]);
 
   // The find row changes the scroll container's height (it takes its own row
   // above the messages). Shrinking a container does not fire a scroll event
@@ -1051,44 +1103,28 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 // Only the key and the "render nothing" gates live here; the
                 // row itself is ChatTimelineRow, memoised so a streamed word
                 // re-renders only the entry that changed (see its header).
-                let key: string;
                 let turn: AssistantTurn | undefined;
-                switch (entry.kind) {
-                  case 'user': key = entry.message.id; break;
-                  case 'assistant-turn':
-                    turn = presentation.assistantTurns.get(entry.turnId);
-                    // Shared gate (chat-types.ts): a segment-less turn renders
-                    // only when its abnormal stopReason gives the footer row
-                    // something to say — the empty_response fix.
-                    if (!shouldRenderAssistantTurn(turn)) return null;
-                    key = entry.turnId;
-                    break;
-                  case 'prompt':
-                    // Perf cycle 2: the "See previous messages" marker is retired —
-                    // older turns now stream in as the top of the list scrolls into
-                    // view. A timeline persisted by an OLDER build can still carry
-                    // one, so it is skipped rather than rendered as a dead prompt.
-                    if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
-                    key = entry.prompt.promptId;
-                    break;
-                  // /cost and /usage snapshot — entryId is the stable key since the
-                  // same snapshot object is kept in state across re-renders.
-                  case 'usage-card': key = entry.snapshot.entryId; break;
-                  case 'system-marker': key = entry.marker.id; break;
-                  case 'skill-invocation':
-                  case 'compacting':
-                  case 'copy-picker':
-                    key = entry.id; break;
+                // The key switch lives in first-draw-plan.ts so the plan and this list cannot disagree.
+                // null = a retired "See previous messages" marker (an older build can still persist one).
+                const entryKey = timelineEntryKey(entry);
+                if (entryKey === null) return null;
+                if (entry.kind === 'assistant-turn') {
+                  turn = presentation.assistantTurns.get(entry.turnId);
+                  // Shared gate (chat-types.ts): a segment-less turn renders
+                  // only when its abnormal stopReason gives the footer row
+                  // something to say — the empty_response fix.
+                  if (!shouldRenderAssistantTurn(turn)) return null;
                 }
+                const key = entryKey;
                 // Folded rows pass their held height; an unfolded row passes
                 // undefined — a primitive either way, so the memo holds.
-                const foldHeight = folding.isFolded(key!) ? folding.heightOf(key!) : undefined;
+                const foldHeight = folding.isFolded(key) ? folding.heightOf(key) : undefined;
                 const isAssistant = entry.kind === 'assistant-turn';
                 return (
                   <ChatTimelineRow
-                    key={key!}
+                    key={key}
                     entry={entry}
-                    entryKey={key!}
+                    entryKey={key}
                     turn={turn}
                     // Assistant rows only: a new toolCalls Map (any tool event)
                     // must not re-render marker and card rows.

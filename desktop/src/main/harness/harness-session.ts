@@ -184,7 +184,7 @@ import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls, 
 import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageData, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
-import { adaptForWire } from './wire-adapter';
+import { adaptForWire, encodeImagesForWire } from './wire-adapter';
 import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
@@ -2374,7 +2374,7 @@ export class HarnessSession extends EventEmitter {
       abortSignal: this.abort!.signal,
     };
     if (Object.keys(aiTools).length > 0) streamArgs.tools = aiTools;
-    const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText(streamArgs));
+    const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText({ ...streamArgs, messages: encodeImagesForWire(streamArgs.messages as ModelMessage[]) }));  // WHY: same once-per-image base64 as the chat request
 
     // Read fullStream so reasoning counts as activity and the final output is
     // accepted only when the provider reports a normal stop. Race every read
@@ -3504,7 +3504,7 @@ export class HarnessSession extends EventEmitter {
       ? { history: [...this.history], revision: this.capture.revision,
           identity: this.requestSizingIdentity(), fixedCost: this.requestFixedCost() }
       : undefined;
-    const result = streamText(streamArgs);
+    const result = streamText({ ...streamArgs, messages: encodeImagesForWire(streamArgs.messages) });  // WHY: base64 once per image, not per step in the SDK; streamArgs.messages stays Buffers for the anchor/token checks
 
     let assistantText = '';
     let outputChars = 0;

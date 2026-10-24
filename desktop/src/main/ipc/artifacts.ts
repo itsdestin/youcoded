@@ -36,6 +36,7 @@ import { sweepStaleTmp } from '../artifacts/cas-write';
 import { watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { importFile } from '../artifacts/import-file';
+import { noteProjectActive } from '../artifacts/sidecar-cleanup';
 import {
   listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
   searchArtifactContent, checkArtifactExistence, resolveArtifactPath, judgeRecordLocation, isKnownRoot,
@@ -295,6 +296,10 @@ export const artifactsChannels: MainChannelDef[] = [
     handler: async ({ projectRoot, sessionId, args }, ctx) => {
       const { project } = await ensureProjectCoalesced(CLAUDE_DIR, projectRoot, sessionId);
       await applyGitTreatmentCoalesced(projectRoot);
+      // WHY (sidecar cleanup, 2026-10-22): a project in use gets one idle-time pass a day that ARCHIVES records of
+      // files long gone (sidecar-cleanup.ts). After a pass the watcher's path-to-id map is stale. No change event is sent:
+      // only records of files that are already missing (hidden everywhere) are removed, so no list changes.
+      noteProjectActive(projectRoot, () => invalidateSidecarIdCache(projectRoot));
       const result = await appendVersion(projectRoot, project.id, project.name, {
         path: args.path,
         kind: args.kind,

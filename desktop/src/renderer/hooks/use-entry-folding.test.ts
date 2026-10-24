@@ -41,6 +41,64 @@ function entry(key: string, height: number) {
 }
 
 describe('useEntryFolding', () => {
+  // Freeze hunt 2026-10-22, item 3: a long conversation opens with its older entries already folded.
+  it('starts seeded entries folded at their estimated height, and draws them when they come near', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old-1', 300], ['old-2', 500]]));
+    expect(result.current.isFolded('old-1')).toBe(true);
+    expect(result.current.heightOf('old-2')).toBe(500);
+    expect(result.current.isFolded('new-1')).toBe(false);
+    const a = entry('old-1', 300), b = entry('old-2', 500);
+    // The observer reports old-1 near the viewport and old-2 far away: only old-1 is drawn.
+    act(() => { result.current.registerEntry(a); result.current.registerEntry(b); fire([
+      { target: a, isIntersecting: true }, { target: b, isIntersecting: false },
+    ]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+    expect(result.current.isFolded('old-1')).toBe(false);
+    expect(result.current.isFolded('old-2')).toBe(true);
+  });
+
+  // Review 2026-10-22: a guessed-height spacer above the reader turning into its real body must not move the view,
+  // even in a browser with no scroll anchoring of its own (nothing here compensates: jsdom has none).
+  it('puts the entry the reader is looking at back in place when an unfolded body is taller than its spacer', () => {
+    const root = document.createElement('div');
+    rootRef = { current: root };
+    let scrollTop = 500;
+    Object.defineProperty(root, 'scrollTop', { get: () => scrollTop, set: (v) => { scrollTop = v; }, configurable: true });
+    root.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    let api!: EntryFolding;
+    function Rows() {
+      api = useEntryFolding(true, rootRef, true, [['a', 100]]);
+      return React.createElement(React.Fragment, null,
+        React.createElement('div', { 'data-entry-key': 'a', ref: api.registerEntry }, api.isFolded('a') ? null : React.createElement('span', null, 'body')),
+        React.createElement('div', { 'data-entry-key': 'b', ref: api.registerEntry }, React.createElement('span', null, 'b')));
+    }
+    document.body.appendChild(root);
+    const view = render(React.createElement(Rows), { container: root });
+    const [a, b] = Array.from(root.children) as HTMLElement[];
+    // 'a' is above the window (spacer 100 px); 'b' is on screen at 120. Drawing a's real body adds 80 px
+    // above b, which the browser would otherwise show as b jumping down.
+    a.getBoundingClientRect = () => ({ top: -100, bottom: 0, height: 100, toJSON() {} }) as DOMRect;
+    b.getBoundingClientRect = () => { const t = 120 + (a.childElementCount > 0 ? 80 : 0); return ({ top: t, bottom: t + 200, height: 200, toJSON() {} }) as DOMRect; };
+    Object.defineProperty(a, 'offsetHeight', { get: () => (a.childElementCount > 0 ? 180 : 100), configurable: true });
+    act(() => { fire([{ target: a, isIntersecting: true }, { target: b, isIntersecting: true }]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+    expect(a.childElementCount).toBe(1);
+    // b is back at 120 on screen: the scroll position took up the 80 px.
+    expect(scrollTop).toBe(580);
+    // And the real height (180) replaced the guess (100) for any later fold.
+    expect(api.heightOf('a')).toBe(100);
+    act(() => { fire([{ target: a, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(api.isFolded('a')).toBe(true);
+    expect(api.heightOf('a')).toBe(180);
+    view.unmount();
+    root.remove();
+  });
+
+  it('ignores a later change of the seed (it is read once, on mount)', () => {
+    const { result, rerender } = renderHook(({ seed }) => useEntryFolding(true, rootRef, true, seed), { initialProps: { seed: [['a', 100]] as Array<[string, number]> } });
+    rerender({ seed: [['b', 100]] });
+    expect(result.current.isFolded('a')).toBe(true);
+    expect(result.current.isFolded('b')).toBe(false);
+  });
+
   it('reveals just the requested row and pins it until release, then folds normally', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     const a = entry('a', 90), b = entry('b', 100);
@@ -376,6 +434,27 @@ describe('useEntryFolding', () => {
     expect(result.current.isFolded('far')).toBe(true);
   });
 
+  // Freeze hunt 2026-10-22: a fast flick on a loaded renderer showed a blank spacer because unfolding waited
+  // 100 ms after the observer's report. Neither of these may wait for a timer.
+  it('draws an entry the observer reports as near the moment it reports, with no timer wait', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old', 300]]));
+    const el = entry('old', 300);
+    act(() => { result.current.registerEntry(el); fire([{ target: el, isIntersecting: true }]); });
+    expect(result.current.isFolded('old')).toBe(false);
+  });
+
+  it('draws a spacer that a scroll has brought into the band on the scroll event itself', () => {
+    const { result } = renderHook(() => useEntryFolding(true, rootRef, true, [['old', 300]]));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    const el = entry('old', 300);
+    el.getBoundingClientRect = () => ({ top: -900, bottom: -600 } as DOMRect); // inside the 1,500 px lead
+    rootRef.current!.append(el);
+    act(() => { result.current.registerEntry(el); });
+    expect(result.current.isFolded('old')).toBe(true);
+    act(() => { rootRef.current!.dispatchEvent(new Event('scroll')); });
+    expect(result.current.isFolded('old')).toBe(false);
+  });
+
   it('a search jump to the middle inspects a viewport band, not every newer spacer', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
@@ -419,7 +498,7 @@ describe('useEntryFolding', () => {
     reads = 0;
     act(() => { result.current.unfoldNearViewport(); });
     expect(result.current.isFolded('near')).toBe(false);
-    expect(reads).toBeLessThan(20); // binary seek + band, never every older entry
+    expect(reads).toBeLessThan(40); // two binary seeks (the unfold and the scroll anchor) + band, never every older entry
   });
 
   it('returns a cleanup even with no element or no observer', () => {

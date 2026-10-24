@@ -266,7 +266,8 @@ describe('host-owned Claude queue', () => {
     expect(q.snapshot(id).cancelledCheckouts).toHaveLength(16);
     await expect(q.checkout(id, next.item.queueItemId, { checkoutId: 'overflow', sessionId: 'screen', draftRevision: 2000, sendEpoch: epoch })).rejects.toThrow(/history full/);
     await q.cancelCheckout(id, owner); expect(q.snapshot(id).items[0].checkout).toBeUndefined(); // old terminal ack still works at cap
-  });
+    // WHY 120s: ~2000 sequential persisted writes take 5s idle but passed 30s on a loaded machine (load 36 on 32 threads), so the default timeout made it fail only under load.
+  }, 120_000);
   it('prioritizes selected waiting work and requests interrupt only from active readiness', async () => {
     const { q, id } = await fixture(); await enqueue(q, id, payload()); const b = await enqueue(q, id, payload('two'));
     expect(await q.prioritize(id, b.item.queueItemId, 'live-one', true)).toEqual({ interrupt: true });

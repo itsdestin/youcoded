@@ -18,7 +18,7 @@ describe('mergeProjectEntries — description', () => {
   // THE regression this whole design exists to prevent: with a shared clock,
   // device B's description write would carry B's stale displayName and revert
   // device A's rename.
-  it('keeps a rename and a description written on different devices', () => {
+  it('keeps a rename and a description written on different devices', async () => {
     const a = { ...base, displayName: 'Renamed', updatedAt: 200 };
     const b = { ...base, description: 'my notes', descriptionUpdatedAt: 300 };
     const m = mergeProjectEntries(a, b);
@@ -26,20 +26,20 @@ describe('mergeProjectEntries — description', () => {
     expect(m.description).toBe('my notes');
   });
 
-  it('is commutative', () => {
+  it('is commutative', async () => {
     const a = { ...base, displayName: 'Renamed', updatedAt: 200 };
     const b = { ...base, description: 'my notes', descriptionUpdatedAt: 300 };
     expect(mergeProjectEntries(a, b)).toEqual(mergeProjectEntries(b, a));
   });
 
-  it('takes the newer description by its own clock', () => {
+  it('takes the newer description by its own clock', async () => {
     const a = { ...base, description: 'old', descriptionUpdatedAt: 100 };
     const b = { ...base, description: 'new', descriptionUpdatedAt: 200 };
     expect(mergeProjectEntries(a, b).description).toBe('new');
   });
 
   // stopped-dominance is unchanged and must stay unchanged.
-  it('still lets stopped dominate regardless of description clocks', () => {
+  it('still lets stopped dominate regardless of description clocks', async () => {
     const a = { ...base, state: 'stopped' as const, updatedAt: 1 };
     const b = { ...base, description: 'x', descriptionUpdatedAt: 999 };
     expect(mergeProjectEntries(a, b).state).toBe('stopped');
@@ -58,7 +58,7 @@ describe('mergeProjectEntries — description', () => {
   // fold (b,c) first and the accumulator carries 'Zzz', so the SAME tiebreak
   // reads 'Zzz' vs 'Zeta' and flips. Measured against the unwrapped version:
   // (a∘b)∘c = 'from A' while (b∘c)∘a = 'from B'.
-  it('converges on the same record for every fold order, including an exact description-clock tie', () => {
+  it('converges on the same record for every fold order, including an exact description-clock tie', async () => {
     const a = { ...base, displayName: 'Zeta',  updatedAt: 300, description: 'from A', descriptionUpdatedAt: 500 };
     const b = { ...base, displayName: 'Alpha', updatedAt: 100, description: 'from B', descriptionUpdatedAt: 500 };
     const c = { ...base, displayName: 'Zzz',   updatedAt: 200, description: 'from C', descriptionUpdatedAt: 400 };
@@ -80,7 +80,7 @@ describe('mergeProjectEntries — description', () => {
 // readProjectRegistry against a real temp dir — which is also the honest test,
 // since fail-soft-skip happens at the read layer.
 describe('readProjectRegistry — records written by an older build', () => {
-  it('reads a record that has no description instead of skipping it', () => {
+  it('reads a record that has no description instead of skipping it', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reg-'));
     const projectSync = path.join(dir, 'ProjectSync');
     fs.mkdirSync(projectSync, { recursive: true });
@@ -89,14 +89,14 @@ describe('readProjectRegistry — records written by an older build', () => {
       schemaVersion: 1, name: 'proj', repoName: 'proj-abc123',
       displayName: 'Proj', state: 'active', updatedAt: 5,
     }));
-    const out = readProjectRegistry(dir);
+    const out = (await readProjectRegistry(dir));
     expect(out).toHaveLength(1);           // NOT skipped
     expect(out[0].displayName).toBe('Proj');
     expect(out[0].description).toBeNull();
     expect(out[0].descriptionUpdatedAt).toBe(0);
   });
 
-  it('caps an over-long description at read time', () => {
+  it('caps an over-long description at read time', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reg-'));
     const projectSync = path.join(dir, 'ProjectSync');
     fs.mkdirSync(projectSync, { recursive: true });
@@ -105,6 +105,6 @@ describe('readProjectRegistry — records written by an older build', () => {
       displayName: 'Proj', state: 'active', updatedAt: 5,
       description: 'x'.repeat(500), descriptionUpdatedAt: 9,
     }));
-    expect(readProjectRegistry(dir)[0].description).toHaveLength(200);
+    expect((await readProjectRegistry(dir))[0].description).toHaveLength(200);
   });
 });

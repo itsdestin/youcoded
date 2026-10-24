@@ -61,3 +61,36 @@ describe('recoverable safeStorage', () => {
     expect(h.fallback).not.toHaveBeenCalled();
   });
 });
+
+// WHY (task 93, 2026-10-24): Electron's synchronous keychain probe froze the whole app for 4 s (8 s once) at launch whenever the
+// KDE wallet daemons were not running yet, because the probe itself had to wait for them to start. Waking them first, off the
+// main thread, means the probe finds them already running.
+describe('keychain warm-up before the first native probe', () => {
+  it('waits for the warm-up before touching native safeStorage, and only once', async () => {
+    const order: string[] = [];
+    const native = {
+      isEncryptionAvailable: vi.fn(() => { order.push('native'); return true; }),
+      encryptString: vi.fn((v: string) => Buffer.from(v)),
+      decryptString: vi.fn((v: Buffer) => v.toString()),
+    };
+    let release!: () => void;
+    const warmUp = vi.fn(() => new Promise<void>((r) => { release = () => { order.push('warm'); r(); }; }));
+    const storage = new RecoverableSafeStorage(native, 'linux', () => ({ request: vi.fn() }), warmUp);
+    const pending = storage.isEncryptionAvailable();
+    await Promise.resolve();
+    expect(native.isEncryptionAvailable).not.toHaveBeenCalled();
+    release();
+    await pending;
+    await storage.isEncryptionAvailable();
+    expect(order[0]).toBe('warm');
+    expect(warmUp).toHaveBeenCalledTimes(1);
+  });
+  it('carries on if the warm-up fails, and never runs it off Linux', async () => {
+    const native = { isEncryptionAvailable: vi.fn(() => true), encryptString: vi.fn(), decryptString: vi.fn() };
+    const bad = vi.fn(async () => { throw new Error('no busctl'); });
+    expect(await new RecoverableSafeStorage(native as any, 'linux', () => ({ request: vi.fn() }), bad).isEncryptionAvailable()).toBe(true);
+    const skipped = vi.fn(async () => undefined);
+    await new RecoverableSafeStorage(native as any, 'win32', () => ({ request: vi.fn() }), skipped).isEncryptionAvailable();
+    expect(skipped).not.toHaveBeenCalled();
+  });
+});

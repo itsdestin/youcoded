@@ -1595,7 +1595,19 @@ pre.yc-code code {
    .yc-code-block there or this stops matching. */
 .yc-code-block {
   content-visibility: auto;
-  contain-intrinsic-size: auto 8rem;
+  /* WHY the height is computed, not a flat 8rem (first-draw-stability journey under CPU load,
+     2026-10-23): a block off the edge of the screen holds this guessed height, and the moment a
+     flick brings it near the view it is drawn at its REAL height. A 43-line block guessed at
+     128 px grew by 756 px inside the entry the reader was looking at, and everything below it
+     jumped by that much (native scroll anchoring does not compensate growth INSIDE its anchor).
+     MarkdownContent (CodeBlockFrame) sets contain-intrinsic-height INLINE from the block's line count;
+     a line is 1.25rem (text-sm) and the <pre> pads 0.75rem top and bottom, so that is the real height
+     to the pixel (the border sits outside the content box). It is inline, not a custom property here,
+     because a custom property is inherited and restyled every coloured span inside a block that is
+     still streaming in. The 8rem below is only the fallback for a block that carries no inline height.
+     Width keeps the old guess: the block is a stretching block, so its width never comes from this. */
+  contain-intrinsic-width: auto 8rem;
+  contain-intrinsic-height: auto 8rem;
 }
 
 /* Frozen chunk of a still-open code fence (FrozenFenceChunk): layout containment stops each

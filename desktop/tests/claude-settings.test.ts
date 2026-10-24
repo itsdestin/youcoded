@@ -34,25 +34,25 @@ function write(content: string) {
 }
 
 describe('readSettings', () => {
-  it('reads the file once and serves later reads from the memo until it changes', () => {
+  it('reads the file once and serves later reads from the memo until it changes', async () => {
     write(JSON.stringify({ a: 1 }));
-    const readSpy = vi.spyOn(fs, 'readFileSync');
-    expect(readSettings()).toEqual({ a: 1 });
-    expect(readSettings()).toEqual({ a: 1 });
-    expect(readSettings()).toEqual({ a: 1 });
+    const readSpy = vi.spyOn(fs.promises, 'readFile');
+    expect(await readSettings()).toEqual({ a: 1 });
+    expect(await readSettings()).toEqual({ a: 1 });
+    expect(await readSettings()).toEqual({ a: 1 });
     expect(readSpy).toHaveBeenCalledTimes(1);
     // A change on disk (different size) is seen on the next read.
     write(JSON.stringify({ a: 1, b: 22 }));
-    expect(readSettings()).toEqual({ a: 1, b: 22 });
+    expect(await readSettings()).toEqual({ a: 1, b: 22 });
     expect(readSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('answers {} for a missing file and for one that does not parse', () => {
-    expect(readSettings()).toEqual({});
+  it('answers {} for a missing file and for one that does not parse', async () => {
+    expect(await readSettings()).toEqual({});
     write('{ nope');
-    expect(readSettings()).toEqual({});
+    expect(await readSettings()).toEqual({});
     write('[1, 2]');
-    expect(readSettings()).toEqual({});
+    expect(await readSettings()).toEqual({});
   });
 });
 
@@ -80,7 +80,7 @@ describe('mutateSettings', () => {
     const leftovers = fs.readdirSync(path.dirname(settingsPath())).filter((n) => n !== 'settings.json');
     expect(leftovers).toEqual([]);
     // The read memo saw the write.
-    expect(readSettings()).toEqual({ keep: true, added: 'yes' });
+    expect(await readSettings()).toEqual({ keep: true, added: 'yes' });
   });
 
   // THE RULE (Destin, 2026-09-17): a corrupt file is moved aside, never lost,
@@ -106,9 +106,9 @@ describe('mutateSettings', () => {
     expect(backups).toHaveLength(1);
   });
 
-  it('a READ of a corrupt file answers {} and leaves the file in place — the next write repairs it', () => {
+  it('a READ of a corrupt file answers {} and leaves the file in place — the next write repairs it', async () => {
     write('{ nope');
-    expect(readSettings()).toEqual({});
+    expect(await readSettings()).toEqual({});
     expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ nope');
     expect(fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'))).toEqual([]);
   });
@@ -163,23 +163,23 @@ describe('mutateSettings', () => {
 
 describe('getField / setField', () => {
   it('reads and writes a dot-path field', async () => {
-    expect(getField('permissions.defaultMode')).toBeUndefined();
+    expect(await getField('permissions.defaultMode')).toBeUndefined();
     expect(await setField('permissions.defaultMode', 'plan')).toBe(true);
-    expect(getField('permissions.defaultMode')).toBe('plan');
+    expect(await getField('permissions.defaultMode')).toBe('plan');
     expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))).toEqual({ permissions: { defaultMode: 'plan' } });
   });
 
   it('deletes the leaf on null and reports true when nothing had to change', async () => {
     await setField('editorMode', 'vim');
     expect(await setField('editorMode', null)).toBe(true);
-    expect(getField('editorMode')).toBeUndefined();
+    expect(await getField('editorMode')).toBeUndefined();
     expect(await setField('editorMode', null)).toBe(true);
   });
 
   it('walks INTO an array setting instead of clobbering it', async () => {
     write(JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }));
     expect(await setField('permissions.allow.1', 'Bash(pwd)')).toBe(true);
-    expect(getField('permissions.allow')).toEqual(['Bash(ls)', 'Bash(pwd)']);
+    expect(await getField('permissions.allow')).toEqual(['Bash(ls)', 'Bash(pwd)']);
   });
 
   it('refuses a prototype-polluting path without touching the file or Object.prototype', async () => {
@@ -188,13 +188,13 @@ describe('getField / setField', () => {
     expect(await setField('constructor.prototype.polluted', true)).toBe(false);
     expect(({} as any).polluted).toBeUndefined();
     expect(fs.readFileSync(settingsPath(), 'utf8')).toBe(JSON.stringify({ a: 1 }));
-    expect(() => getField('__proto__')).toThrow();
+    await expect(getField('__proto__')).rejects.toThrow();
   });
 
   it('repairs a corrupt file on the way through, keeping the original beside it', async () => {
     write('{ nope');
     expect(await setField('theme', 'dark')).toBe(true);
-    expect(getField('theme')).toBe('dark');
+    expect(await getField('theme')).toBe('dark');
     const backups = fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'));
     expect(backups).toHaveLength(1);
     expect(fs.readFileSync(path.join(path.dirname(settingsPath()), backups[0]), 'utf8')).toBe('{ nope');
@@ -227,7 +227,7 @@ describe('settings.json has one reader and one writer', () => {
     return out;
   }
 
-  it('every code mention of settings.json under src/main is claude-settings.ts or an allowed path-only use', () => {
+  it('every code mention of settings.json under src/main is claude-settings.ts or an allowed path-only use', async () => {
     assertPatternMatches(PATTERN, "path.join(os.homedir(), '.claude', 'settings.json')", 'the settings path');
     expect(PATTERN.test("path.join(userData, 'office-editor-settings.json')")).toBe(false);
     const files = walk(MAIN);

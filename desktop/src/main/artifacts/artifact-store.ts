@@ -1,6 +1,6 @@
 import { promises as fs, constants as fsConstants } from 'fs';
 import { join, dirname, extname, basename, relative, isAbsolute } from 'path';
-import { ProjectSidecar } from '../../shared/artifacts/types';
+import { ProjectSidecar, ArtifactRecord } from '../../shared/artifacts/types';
 import { newArtifactId, newVersionId } from '../../shared/artifacts/ulid';
 import { SIDECAR_SCHEMA_VERSION } from '../../shared/artifacts/types';
 import { casWrite, CAS_REPLACE_ANY, type CasExpectation } from './cas-write';
@@ -8,7 +8,7 @@ import { migrateRelativeExternals } from '../../shared/artifacts/migrate-relativ
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { isAbsoluteRecorded, judgeRelativeRecord } from './write-authorization';
 import { readFolders } from '../saved-folders';
-import { pruneSidecarVersions } from '../../shared/artifacts/version-retention';
+import { pruneVersions } from '../../shared/artifacts/version-retention';
 
 const SIDECAR_RELATIVE = '.youcoded/artifacts.json';
 
@@ -66,6 +66,10 @@ export async function readSidecar(projectRoot: string): Promise<ReadResult> {
 export const SIDECAR_CACHE_IDLE_MS = 60_000;
 
 interface SharedSidecar {
+  // WHY ino + ctime in the key too (review 2026-10-22): an atomic replace by another process changes the inode and
+  // ctime even when size and mtime happen to match, so such a write can no longer pass for our own.
+  ino: number;
+  ctimeMs: number;
   mtimeMs: number;
   size: number;
   value: ReadResult;
@@ -78,7 +82,10 @@ function sidecarPath(projectRoot: string): string {
   return join(projectRoot, SIDECAR_RELATIVE);
 }
 
-function retain(path: string, stat: { mtimeMs: number; size: number }, value: ReadResult): void {
+type StatKey = { mtimeMs: number; size: number; ino: number; ctimeMs: number };
+const sameStat = (a: StatKey, b: StatKey) => a.mtimeMs === b.mtimeMs && a.size === b.size && a.ino === b.ino && a.ctimeMs === b.ctimeMs;
+
+function retain(path: string, stat: StatKey, value: ReadResult): void {
   const prev = sharedSidecars.get(path);
   if (prev) clearTimeout(prev.idleTimer);
   const idleTimer = setTimeout(() => {
@@ -86,7 +93,7 @@ function retain(path: string, stat: { mtimeMs: number; size: number }, value: Re
     if (sharedSidecars.get(path)?.idleTimer === idleTimer) sharedSidecars.delete(path);
   }, SIDECAR_CACHE_IDLE_MS);
   idleTimer.unref?.();
-  sharedSidecars.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, value, idleTimer });
+  sharedSidecars.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, ctimeMs: stat.ctimeMs, value, idleTimer });
 }
 
 function touch(entry: SharedSidecar): void {
@@ -100,7 +107,7 @@ function touch(entry: SharedSidecar): void {
  */
 export async function readSidecarShared(projectRoot: string): Promise<ReadResult> {
   const path = sidecarPath(projectRoot);
-  let stat: { mtimeMs: number; size: number };
+  let stat: StatKey;
   try {
     stat = await fs.stat(path);
   } catch (e: any) {
@@ -112,7 +119,7 @@ export async function readSidecarShared(projectRoot: string): Promise<ReadResult
     throw e;
   }
   const cached = sharedSidecars.get(path);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (cached && sameStat(cached, stat)) {
     touch(cached);
     return cached.value;
   }
@@ -134,14 +141,40 @@ export async function readSidecarShared(projectRoot: string): Promise<ReadResult
   }
 }
 
+/** How much of the file's head is read to confirm whose write is on disk (updatedAt is a top-level key written early). */
+const HEAD_PROBE_BYTES = 4096;
+
 async function seedSharedSidecar(projectRoot: string, value: ProjectSidecar): Promise<void> {
   const path = sidecarPath(projectRoot);
   try {
-    const stat = await fs.stat(path);
-    retain(path, stat, value);
+    // WHY verify before seeding (review 2026-10-22): the file is stat'ed AFTER our write. If another process replaced
+    // it in that gap, keying our object by THEIR stat would show our content as theirs, and the next appends would
+    // retry against stale data. So the file's own updatedAt (it sits in the first bytes of what we write) must still
+    // be ours, and the stat must not move while we look; otherwise nothing is cached and the next reader parses.
+    const before = await fs.stat(path);
+    const fh = await fs.open(path, 'r');
+    let head = '';
+    try {
+      // 4 KB normally holds updatedAt (a top-level key written early); a long project name can push it further.
+      for (const size of [HEAD_PROBE_BYTES, 64 * 1024]) {
+        const buf = Buffer.alloc(size);
+        const { bytesRead } = await fh.read(buf, 0, size, 0);
+        head = buf.subarray(0, bytesRead).toString('utf8');
+        if (extractUpdatedAt(head) !== undefined || bytesRead < size) break;
+      }
+    } finally { await fh.close(); }
+    const after = await fs.stat(path);
+    if (extractUpdatedAt(head) === value.updatedAt && sameStat(before, after)) retain(path, after, value);
+    else evictShared(path);
   } catch {
     // Not fatal — the next reader parses from disk.
   }
+}
+
+function evictShared(path: string): void {
+  const prev = sharedSidecars.get(path);
+  if (prev) { clearTimeout(prev.idleTimer); sharedSidecars.delete(path); }
+  sharedInFlight.delete(path);
 }
 
 /** Tests only: drop every shared copy and timer. */
@@ -213,7 +246,11 @@ export async function writeSidecar(
   // retrying rather than reusing the object, so nothing observes that; a future
   // caller that retries with the same object must re-read too.
   next.updatedAt = bumpPastExpected(next.updatedAt, expectedUpdatedAt);
-  const json = JSON.stringify(next, null, 2);
+  // WHY compact (2026-10-22 freeze hunt): indented output made the 27 MB sidecar's stringify slower and
+  // the file ~40% bigger. Checked that nothing needs the indentation: `.youcoded/` is gitignored and
+  // excluded from sync (so no line-based merge or diff), Android never reads this file, and every reader
+  // is JSON.parse plus extractUpdatedAt's whitespace-tolerant regex. Schema and content are unchanged.
+  const json = JSON.stringify(next);
   const result = await casWrite(
     path,
     expectedUpdatedAt,
@@ -232,6 +269,8 @@ export async function writeSidecar(
   // The object we just wrote IS the on-disk state — hand it to every reader
   // that follows (LIST_SESSION fires after every tracked write) for free.
   if (result.committed) await seedSharedSidecar(projectRoot, next);
+  // A refused write means the file is not what we last read: whatever we hold for it is stale.
+  else evictShared(path);
   return { committed: result.committed };
 }
 
@@ -295,6 +334,8 @@ interface ProjectQueue {
   projectId: string;
   projectName: string;
   pending: PendingAppend[];
+  /** Maintenance jobs (sidecar cleanup) run between append batches, never beside one. */
+  jobs: Array<() => Promise<void>>;
   draining: boolean;
 }
 const appendQueues = new Map<string, ProjectQueue>();
@@ -308,7 +349,7 @@ export function appendVersion(
   return new Promise<AppendVersionResult>((resolve, reject) => {
     let q = appendQueues.get(projectRoot);
     if (!q) {
-      q = { projectId, projectName, pending: [], draining: false };
+      q = { projectId, projectName, pending: [], jobs: [], draining: false };
       appendQueues.set(projectRoot, q);
     }
     // Same root ⇒ same project; the latest caller's identity is as good as any.
@@ -319,12 +360,38 @@ export function appendVersion(
   });
 }
 
+/**
+ * Run `job` on this project's append queue: it never overlaps an append cycle, and appends wait their
+ * turn behind it only if they arrive while it runs. The job must NOT call appendVersion (it would wait
+ * on itself); it may use readSidecarShared and writeSidecar. WHY (sidecar cleanup, 2026-10-22): the
+ * cleanup's one write has to be ordered with the append path so the two can never interleave.
+ */
+export function enqueueMaintenance<T>(projectRoot: string, job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let q = appendQueues.get(projectRoot);
+    if (!q) {
+      q = { projectId: '', projectName: '', pending: [], jobs: [], draining: false };
+      appendQueues.set(projectRoot, q);
+    }
+    q.jobs.push(async () => { try { resolve(await job()); } catch (e) { reject(e); } });
+    if (!q.draining) void drainAppendQueue(projectRoot, q);
+  });
+}
+
+/** True when no append is waiting or being written for this project (cleanup runs only then). */
+export function isAppendQueueIdle(projectRoot: string): boolean {
+  return !appendQueues.has(projectRoot);
+}
+
 async function drainAppendQueue(projectRoot: string, q: ProjectQueue): Promise<void> {
   q.draining = true;
   try {
     // Anything pushed while a batch is being written is picked up by the next
     // iteration — appendVersion only starts a drainer when none is running.
-    while (q.pending.length > 0) {
+    while (q.pending.length > 0 || q.jobs.length > 0) {
+      // Appends first; a maintenance job runs only when no append is waiting, and appends that arrive
+      // during it are picked up by the next iteration.
+      if (q.pending.length === 0) { await q.jobs.shift()!(); continue; }
       const batch = q.pending.splice(0);
       let results: AppendVersionResult[];
       try {
@@ -341,7 +408,7 @@ async function drainAppendQueue(projectRoot: string, q: ProjectQueue): Promise<v
     q.draining = false;
     // The loop only exits with an empty queue and nothing async runs between
     // that check and here, so the map entry can go; the next call makes a new one.
-    if (q.pending.length === 0) appendQueues.delete(projectRoot);
+    if (q.pending.length === 0 && q.jobs.length === 0) appendQueues.delete(projectRoot);
   }
 }
 
@@ -359,7 +426,12 @@ export async function appendVersionsDirect(
 ): Promise<AppendVersionResult[]> {
   if (inputs.length === 0) return [];
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const current = await readSidecar(projectRoot);
+    // WHY the shared copy, not a fresh read (2026-10-22 freeze hunt): every append cycle used to
+    // read + parse the whole sidecar (27 MB: 90-190 ms and ~200 MB of garbage). The shared copy is
+    // validated against the file's stat, so an external writer is still picked up, and a CAS conflict
+    // retry changes the stat and so re-parses. The shared object is READ-ONLY, so the edits below are
+    // made copy-on-write on `sidecar` (a shallow copy), never on `current`.
+    const current = await readSidecarShared(projectRoot);
     let sidecar: ProjectSidecar;
     let expectedUpdatedAt: CasExpectation;
     if (current === null || 'corrupted' in current) {
@@ -382,16 +454,30 @@ export async function appendVersionsDirect(
       // so it says so explicitly instead of borrowing the create path's null.
       expectedUpdatedAt = current === null ? null : CAS_REPLACE_ANY;
     } else {
-      sidecar = current;
+      sidecar = { ...current, artifacts: current.artifacts.slice() };
       expectedUpdatedAt = sidecar.updatedAt;
     }
+
+    // Path+kind -> position, built once per cycle (the old per-input `find` scanned ~24k records each
+    // time). The FIRST match wins, exactly as `find` did.
+    const slotOf = new Map<string, number>();
+    sidecar.artifacts.forEach((a, i) => { const k = `${a.kind}\0${a.path}`; if (!slotOf.has(k)) slotOf.set(k, i); });
+    // Records this cycle has already copied; only those may be edited in place.
+    const owned = new Set<ArtifactRecord>();
+    const own = (rec: ArtifactRecord, slot: number): ArtifactRecord => {
+      if (owned.has(rec) || current === null || 'corrupted' in current) return rec;
+      const copy = { ...rec, versions: rec.versions.slice() };
+      sidecar.artifacts[slot] = copy;
+      owned.add(copy);
+      return copy;
+    };
 
     const results: AppendVersionResult[] = [];
     let changed = false;
     for (const input of inputs) {
-      const existing = sidecar.artifacts.find(
-        (a) => a.path === input.path && a.kind === input.kind
-      );
+      const key = `${input.kind}\0${input.path}`;
+      const slot = slotOf.get(key);
+      let existing = slot === undefined ? undefined : sidecar.artifacts[slot];
       // Replay dedupe: the same tool call recorded once already ⇒ nothing to
       // add. Same sessionId AND same toolUseId — never toolUseId alone.
       if (
@@ -416,6 +502,7 @@ export async function appendVersionsDirect(
       };
       let artifactId: string;
       if (existing) {
+        existing = own(existing, slot!);
         existing.versions.push(versionEvent);
         // A 'read' is not a modification — bumping lastModified for a view
         // reordered "recently modified" sorting every time a pill was clicked.
@@ -427,7 +514,7 @@ export async function appendVersionsDirect(
         artifactId = existing.id;
       } else {
         artifactId = newArtifactId();
-        sidecar.artifacts.push({
+        const fresh: ArtifactRecord = {
           id: artifactId,
           path: input.path,
           kind: input.kind,
@@ -437,7 +524,10 @@ export async function appendVersionsDirect(
           versions: [versionEvent],
           comments: [],
           tags: [],
-        });
+        };
+        slotOf.set(key, sidecar.artifacts.length);
+        sidecar.artifacts.push(fresh);
+        owned.add(fresh);
       }
       changed = true;
       results.push({ committed: true, artifactId });
@@ -468,7 +558,13 @@ export async function appendVersionsDirect(
     // byte-identical" invariant is untouched.
     //
     // Policy and safety floor: shared/artifacts/version-retention.ts.
-    pruneSidecarVersions(sidecar);
+    // Copy-on-write form of pruneSidecarVersions: same policy, but a pruned record is replaced by a
+    // copy so the shared (read-only) parsed object is never edited.
+    const nowMs = Date.now();
+    sidecar.artifacts.forEach((rec, i) => {
+      const pruned = pruneVersions(rec.versions, nowMs);
+      if (pruned !== rec.versions) sidecar.artifacts[i] = { ...rec, versions: pruned };
+    });
 
     sidecar.updatedAt = new Date().toISOString();
     const result = await writeSidecar(projectRoot, expectedUpdatedAt, sidecar);
