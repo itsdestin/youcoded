@@ -145,6 +145,11 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
  * highlighter failed to tokenise. Reading the hast node instead is immune to
  * whatever the highlighter did to the element tree.
  */
+/** Height in rem a skipped code block holds: 1.25rem per line plus the 1.5rem the <pre> pads. */
+export function placeholderRem(lines: number): number {
+  return lines * 1.25 + 1.5;
+}
+
 /** How many lines a <pre> shows for this text: a final newline does not start another line. Always at least 1. */
 export function codeLineCount(text: string): number {
   const body = text.endsWith('\n') ? text.slice(0, -1) : text;
@@ -512,7 +517,12 @@ function CodeBlockFrame({ codeText, line, children }: { codeText: string; line: 
   return (
     <div
       className="yc-code-block relative group my-3 rounded-md bg-canvas border border-edge overflow-hidden"
-      style={{ '--yc-lines': codeLineCount(text) } as React.CSSProperties}
+      // WHY an inline height, not a custom property (desktop quiet-machine run 2026-10-23): this used to set `--yc-lines` here and
+      // let globals.css do the arithmetic. A custom property is INHERITED, so every change to the line count of a block still
+      // streaming in made the browser re-check the style of every coloured span inside it: 3.3 s of style recalculation per 6 s
+      // on a 2,000-line fence, typing 61 ms vs 12 ms without it. The longhand below is read by this one element only, and is the
+      // same number the stylesheet computed (1.25rem per line + 0.75rem top and bottom padding of the <pre>).
+      style={{ containIntrinsicHeight: `auto ${placeholderRem(codeLineCount(text))}rem` }}
     >
       {children}
     </div>
