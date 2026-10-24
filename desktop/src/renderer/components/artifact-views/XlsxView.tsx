@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
-import { Workbook } from 'exceljs';
 import type { ArtifactViewProps } from './types';
 import { BinaryContent, CenterLoading } from './BinaryContent';
 import {
   colLetter, formatCellNumber, cellRawValue, cellStyleToCss, colWidthToPx, parseMerges,
 } from './exceljs-cell';
 import { evalFormula, type CellValue } from './xlsx-formula';
+import { MAX_ROWS, MAX_COLS } from './xlsx-extract';
+import { parseXlsx } from './xlsx-parse-jobs';
 // Theme-tinted "paper" constants shared with CsvView — see sheet-theme.ts.
 // Doc comments (Destin, chat follow-up: Excel comments same as Word): cell
 // comments share the markdown/Word comment layout; each <td> carries its
@@ -21,8 +22,7 @@ import { registerSheetFind, requestFindRewalk } from './artifact-find-bridge';
 
 // Safety caps — agent sheets are small, but guard against a pathological file
 // producing a million-cell DOM. Truncation is surfaced to the user.
-const MAX_ROWS = 2000;
-const MAX_COLS = 100;
+// (MAX_ROWS / MAX_COLS live in xlsx-extract.ts: the parse worker keeps only this many rows/columns.)
 // Pad the rendered grid with empty rows/cols past the used range so it reads like
 // a real (effectively infinite) spreadsheet rather than a bare table floating in
 // whitespace. Empty cells are still gridlined + selectable.
@@ -346,25 +346,21 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const wb = new Workbook();
-        await wb.xlsx.load(bytes.buffer as any);
-        if (cancelled) return;
-        // Skip hidden/veryHidden worksheets like real Excel does (openpyxl
-        // scratch sheets etc.). If EVERY sheet is hidden, fall back to showing
-        // them all rather than an empty viewer.
-        const visible = wb.worksheets.filter((ws: any) => ws.state !== 'hidden' && ws.state !== 'veryHidden');
-        const built = (visible.length ? visible : wb.worksheets).map((ws: any) => ({ name: ws.name || 'Sheet', ws }));
-        setSheets(built.length ? built : null);
-        setActive(0);
-        setSel(null);
-        setParseError(built.length ? null : 'empty');
-      } catch (e: any) {
-        if (!cancelled) setParseError(String(e?.message ?? e));
-      }
-    })();
-    return () => { cancelled = true; };
+    // WHY a worker (freeze hunt, 2026-10-24): ExcelJS's parse froze the page ~1.8 s on a 200,000-row sheet. It now runs
+    // off the page (xlsx-parse-jobs.ts) and returns only the rows/columns this viewer can draw; "Loading spreadsheet"
+    // shows meanwhile. Cancelling (file switched, viewer closed) stops the worker.
+    const job = parseXlsx(bytes);
+    job.promise.then((all) => {
+      if (cancelled) return;
+      const built = all.map((ws) => ({ name: ws.name || 'Sheet', ws }));
+      setSheets(built.length ? built : null);
+      setActive(0);
+      setSel(null);
+      setParseError(built.length ? null : 'empty');
+    }, (e: any) => {
+      if (!cancelled) setParseError(String(e?.message ?? e));
+    });
+    return () => { cancelled = true; job.cancel(); };
   }, [bytes]);
 
   // A comment on another tab (its card clicked, or its chip) asks for that
