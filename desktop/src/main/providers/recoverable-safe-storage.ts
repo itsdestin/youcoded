@@ -20,7 +20,18 @@ export class RecoverableSafeStorage implements SecretStorage {
     private readonly native: NativeStorage,
     private readonly platform: NodeJS.Platform,
     private readonly helper: () => Pick<KeychainClient, 'request'>,
+    // Linux only: wakes the wallet daemons without blocking, BEFORE the first synchronous native probe (see keychain-warmup.ts).
+    private readonly warmUp?: () => Promise<void>,
   ) {}
+
+  private warming: Promise<void> | null = null;
+
+  private async warm(): Promise<void> {
+    if (this.platform !== 'linux' || !this.warmUp) return;
+    // One shared attempt, so concurrent first calls all wait on the same wake-up instead of each starting their own.
+    this.warming ??= this.warmUp().catch(() => { /* best effort: without it we behave as before */ });
+    await this.warming;
+  }
 
   private needsHelper(): boolean {
     return this.platform === 'linux' && !this.native.isEncryptionAvailable();
@@ -28,6 +39,7 @@ export class RecoverableSafeStorage implements SecretStorage {
 
   async isEncryptionAvailable(): Promise<boolean> {
     return timeSessionSetup('keychain-available', async () => {
+      await this.warm();
       if (!this.needsHelper()) return this.native.isEncryptionAvailable();
       return await this.helper().request({ operation: 'available' }) === true;
     });
@@ -35,6 +47,7 @@ export class RecoverableSafeStorage implements SecretStorage {
 
   async encryptString(value: string): Promise<Buffer> {
     return timeSessionSetup('keychain-encrypt', async () => {
+      await this.warm();
       if (!this.needsHelper()) return this.native.encryptString(value);
       const encoded = await this.helper().request({ operation: 'encrypt', value });
       return Buffer.from(encoded as string, 'base64');
@@ -45,6 +58,7 @@ export class RecoverableSafeStorage implements SecretStorage {
     // WHY: async syntax does not move native crypto off-thread. Attribute a
     // slow keychain call without recording its input/output or changing storage.
     return timeSessionSetup('keychain-decrypt', async () => {
+      await this.warm();
       if (!this.needsHelper()) return this.native.decryptString(value);
       return await this.helper().request({ operation: 'decrypt', value: value.toString('base64') }) as string;
     });

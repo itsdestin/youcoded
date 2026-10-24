@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { KeychainClient } from './keychain-client';
 import { keychainLaunchOptions } from './keychain-launch';
 import { RecoverableSafeStorage, type SecretStorage } from './recoverable-safe-storage';
+import { createKeychainWarmup } from './keychain-warmup';
 
 let storage: SecretStorage | undefined;
 
@@ -43,6 +44,6 @@ export function getSecretStorage(): SecretStorage {
     app.on('will-quit', () => client?.dispose());
     process.once('exit', () => client?.dispose());
     return client;
-  });
+  }, createKeychainWarmup());
   return storage;
 }
