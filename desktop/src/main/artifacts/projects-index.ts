@@ -101,7 +101,7 @@ export function isGatedRoot(projectRoot: string): boolean {
   return /^[a-z]:?$/.test(canon) || canon === '/' || /^[a-z]:\/$/.test(canon);
 }
 
-export async function countAllFiles(projectRoot: string): Promise<{ count: number; truncated: boolean } | null> {
+async function countAllFiles(projectRoot: string): Promise<{ count: number; truncated: boolean } | null> {
   if (isGatedRoot(projectRoot)) return null; // gated — no scan, no fake number
   try {
     const r = await projectAllFiles(projectRoot);

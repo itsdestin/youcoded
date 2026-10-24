@@ -712,6 +712,7 @@ describe('SubagentWatcher: nothing is delivered after stop()', () => {
     await vi.waitFor(() => expect(got.length).toBeGreaterThan(0), { timeout: SETTLE_MS });
     w.stop();
     const atStop = got.length;
+    // settle: a NEGATIVE check (nothing more arrives after stop), so a fixed wait is the right shape here.
     await wait(300);
     expect(got.length).toBe(atStop);
     fs.rmSync(tmp, { recursive: true, force: true });
