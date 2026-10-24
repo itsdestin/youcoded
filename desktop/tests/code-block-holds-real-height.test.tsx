@@ -11,7 +11,7 @@ import { render, cleanup } from '@testing-library/react';
 import { join } from 'path';
 import { RENDERER, readSource } from './helpers/guard-scope';
 import React from 'react';
-import MarkdownContent, { codeLineCount } from '../src/renderer/components/MarkdownContent';
+import MarkdownContent, { codeLineCount, placeholderRem } from '../src/renderer/components/MarkdownContent';
 
 afterEach(cleanup);
 
@@ -26,24 +26,34 @@ describe('codeLineCount', () => {
   });
 });
 
-describe('a code block carries the line count its placeholder height comes from', () => {
-  it('sets --yc-lines to the number of lines in the fence', () => {
-    const fence = '```ts\n' + Array.from({ length: 43 }, (_, i) => `const v${i} = ${i};`).join('\n') + '\n```';
+describe('a code block carries the height its placeholder comes from', () => {
+  const fence = '```ts\n' + Array.from({ length: 43 }, (_, i) => `const v${i} = ${i};`).join('\n') + '\n```';
+  it('sets contain-intrinsic-height inline: 1.25rem per line plus the 1.5rem the <pre> pads', () => {
     const { container } = render(<MarkdownContent content={fence} />);
     const block = container.querySelector('.yc-code-block') as HTMLElement;
     expect(block).not.toBeNull();
-    expect(block.style.getPropertyValue('--yc-lines')).toBe('43');
+    // 43 * 1.25 + 1.5 = 55.25rem
+    expect(placeholderRem(43)).toBe(55.25);
+    expect(block.getAttribute('style') ?? '').toMatch(/contain-intrinsic-height:\s*auto 55\.25rem/);
+  });
+  it('sets NO custom property on the block (an inherited one restyles every coloured span inside it on each change)', () => {
+    // WHY: --yc-lines was set here and changed with every streamed line; being inherited, it made the browser re-check the
+    // style of every descendant (3.3 s of style recalculation per 6 s on a 2,000-line fence; typing 61 ms vs 12 ms).
+    const { container } = render(<MarkdownContent content={fence} />);
+    const block = container.querySelector('.yc-code-block') as HTMLElement;
+    expect(block.getAttribute('style') ?? '').not.toMatch(/--/);
+    expect(block.style.getPropertyValue('--yc-lines')).toBe('');
   });
 });
 
-describe('the stylesheet holds the block at its drawn height while it is skipped', () => {
+describe('the stylesheet no longer computes the height from an inherited custom property', () => {
   const css = readSource(join(RENDERER, 'styles', 'globals.css'));
   const rule = css.match(/\.yc-code-block \{[^}]*\}/s)?.[0] ?? '';
-  it('derives the height from --yc-lines: 1.25rem per line plus the 1.5rem the <pre> pads', () => {
+  it('keeps content-visibility and never reads --yc-lines', () => {
     expect(rule).toContain('content-visibility: auto');
-    expect(rule).toMatch(/contain-intrinsic-height:\s*auto calc\(var\(--yc-lines,\s*\d+\) \* 1\.25rem \+ 1\.5rem\)/);
+    expect(css).not.toMatch(/var\(--yc-lines/);
   });
-  it('no longer guesses one flat height for every block', () => {
+  it('no longer guesses one flat height for every block (the inline height overrides the fallback)', () => {
     expect(rule).not.toMatch(/contain-intrinsic-size:\s*auto 8rem/);
   });
 });
