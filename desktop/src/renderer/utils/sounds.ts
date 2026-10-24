@@ -57,9 +57,13 @@ function sharedContext(): AudioContext {
   return sharedCtx;
 }
 /** Put the context back to sleep once the last chime in flight has finished (so no audio stream stays open). */
+// WHY the deadline only moves later (independent review, 2026-10-24): a stock chime asks for sleep after 1.5 s while a longer custom
+// file may still be playing; the old "restart the timer" let the shorter request replace the longer one and cut the file off.
+let sleepAt = 0;
 function sleepSoon(afterMs: number) {
+  sleepAt = Math.max(sleepAt, Date.now() + afterMs);
   if (sleepTimer) clearTimeout(sleepTimer);
-  sleepTimer = setTimeout(() => { sleepTimer = undefined; void sharedCtx?.suspend().catch(() => {}); }, afterMs);
+  sleepTimer = setTimeout(() => { sleepTimer = undefined; void sharedCtx?.suspend().catch(() => {}); }, Math.max(0, sleepAt - Date.now()));
 }
 /** Wake the context. A suspended context's clock is stopped, so notes scheduled before this starts at the same moment they would have. */
 function wake(ctx: AudioContext) {
