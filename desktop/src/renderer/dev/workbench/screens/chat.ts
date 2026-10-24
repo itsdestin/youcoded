@@ -11,7 +11,23 @@ export const CHAT: readonly ScreenEntry[] = [
     ...chat(`chat#queue-${q}`, 'view'), session: 'wb-1', params: { queuePreview: q },
     ...(q === 'idle-after' ? { sameAs: { name: 'chat', why: 'Immediate delivery intentionally has no extra chrome.' } } : {}),
   })),
+  // Spacing review: two stacked queued cards over the chat, wide and phone.
+  { ...chat('chat#queue-stack', 'view'), session: 'wb-1', params: { queuePreview: 'stack' } },
+  { ...chat('chat#queue-stack-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'stack' }, viewport: { width: 390, height: 844 } },
   { ...chat('chat#queue-uncertain-phone', 'view', 'narrow'), session: 'wb-1', params: { queuePreview: 'uncertain-after' }, viewport: { width: 390, height: 844 } },
+  // Phone connection strips (phone-reliability review deck, 2026-10-22). The Android app, since "Use this phone only" is its button;
+  // before master the same state reads the old words and has no button.
+  { ...chat('chat#phone-reconnecting', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', platform: 'android', conversation: 'reconnecting' } },
+  { ...chat('chat#phone-slow', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', slow: '1' }, newIn: 'after' as const },
+  // The other connection bands (connection notices above the message box, 2026-10-22), and one on a computer-width browser.
+  { ...chat('chat#phone-catching-up', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'restoring' } },
+  { ...chat('chat#phone-out-of-date', 'view', 'narrow'), session: 'wb-1', viewport: { width: 390, height: 844 }, params: { connection: 'remote', conversation: 'incomplete' } },
+  { ...chat('chat#remote-reconnecting-wide', 'view'), session: 'wb-1', params: { connection: 'remote', conversation: 'reconnecting' } },
+  // Model switch in the chat (2026-10-22 review): the same conversation as each runtime drew a switch before (a "/model …" bubble on
+  // Claude Code, nothing on native) and after (the "Model switched to …" divider). Both sides come from this checkout's fixtures.
+  ...(['cc', 'native'] as const).flatMap(rt => (['before-', ''] as const).map(when => ({
+    ...chat(`chat#model-switch-${when}${rt}`, 'view'), session: rt === 'cc' ? 'wb-1' : 'wb-2', params: { seed: `bubbles-model-switch-${when}${rt}` },
+  }))),
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
@@ -67,6 +83,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
+  // Restart to update with chats open (#183 Q-busy): the same prompt, in restart words.
+  { ...chat('chat/quit-sessions#update', 'dialog'), params: { quitReason: 'update' } },
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh
   // photo-only tab, so every kind is still un-acknowledged).
   ...['skip-permissions', 'full-auto', 'small-model'].map((k) => chat(`chat/first-time-warning/${k}`, 'dialog')),
@@ -196,7 +214,27 @@ export const CHAT: readonly ScreenEntry[] = [
   // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
+  // Background work (2026-10-22 status audit): a Claude Code and a native conversation that
+  // left commands, a watcher and helpers running — the cards' wording, the Subagents chip's
+  // real state and the Background chip and its popup (fixtures/bubbles/background-*.jsonl).
+  { ...chat('chat#background-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat#background-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-background-native' } },
+  { ...chat('chat#background-native-phone', 'view', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-background-native' }, viewport: { width: 390, height: 844 } },
+  { ...chat('chat/specialists#cc', 'dialog'), session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat/background#cc', 'dialog'), newIn: 'after', session: 'wb-1', params: { seed: 'bubbles-background-cc' } },
+  { ...chat('chat/background#native', 'dialog'), newIn: 'after', session: 'wb-2', params: { seed: 'bubbles-background-native' } },
+  // One card per management call (a note, a status check, a stop…), so each card's own words show.
+  { ...chat('chat#manage-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-manage-cc' } },
+  { ...chat('chat#manage-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-manage-native' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
+  // Automatic updates (#183): the update already downloaded in the background — the chip, the
+  // popup's Restart to update, the password variant, and the close-window prompt it raises
+  // when chats are open (closing it cancels the restart).
+  { ...chat('chat#update-ready', 'view'), params: { update: 'ready' } },
+  { ...chat('chat/update#ready', 'dialog'), params: { update: 'ready' } },
+  { ...chat('chat/update#ready-password', 'dialog'), params: { update: 'ready-password' } },
+  { ...chat('chat/update#ready-manual', 'dialog'), params: { update: 'ready', autoInstall: 'off' } },
+
   // Actual panel driven through its launch callback; only the backend is faked.
   ...['authorizing', 'installing', 'restarting', 'failed', 'timeout'].map(phase => ({
     ...chat(`chat/update#${phase}`, 'dialog', 'update-install'),

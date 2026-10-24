@@ -1,0 +1,10 @@
+# youcoded.ai — every crawler, search engine and AI assistant is welcome.
+# Cloudflare adds its own notice above this file; these rules still apply.
+#
+# /site/ is the live demo the homepage frames. It is not a page of its own:
+# indexed alone it would show up in results as a blank "YouCoded" app window.
+User-agent: *
+Allow: /
+Disallow: /site/
+
+Sitemap: https://youcoded.ai/sitemap.xml

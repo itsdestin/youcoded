@@ -141,6 +141,8 @@ export async function sessionProviderFor(resolved: string): Promise<SessionProvi
   catch { return 'claude'; }
 }
 
+/** `<audience key>:<session id>` for each phone just sent a session's terminal alone, so its ordinary open leaves it out (session:open). */
+const ptyCutServed = new Set<string>();
 const SAVE_REFUSED = 'Could not save — conversation storage is not available on this device.';
 
 /** After a meta write: tell the owning window and every phone, and refresh the search index. */
@@ -176,7 +178,7 @@ function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive |
   return {
     askEvents: () => host.pendingAskEventsFor(sessionId),
     specialistRuns: () => host.specialistRunsFor(sessionId),
-    shellRuns: () => host.shellRunsFor(sessionId),
+    shellRuns: () => host.shellRunsForAsync(sessionId),
     usageProgress: () => host.currentUsageProgressFor(sessionId),
     sessionContext: () => host.sessionContextFor(sessionId),
     idle: () => host.isIdle(sessionId),
@@ -271,14 +273,15 @@ const sessionEntries: MainChannelDef[] = [
   // ── Terminal traffic (fire-and-forget) ───────────────────────────────────────
   // WHY these two call straight through: they run at typing speed. The table lookup is one Map read and
   // the desktop door calls the handler directly (no promise hop), so they carry no overhead they lacked.
-  // `notice` is optional: a typed chat command says so, so the host knows which kind of write drew a divider (one-core R5-4a).
+  // `notice` (a typed chat command, one-core R5-4a) is still accepted from older screens but no longer read: the model-switch divider
+  // comes from the transcript's own record of the switch (2026-10-22).
   defineChannel({
     name: IPC.SESSION_INPUT, kind: 'on',
-    handler: ({ sessionId, text, notice, sendId }, ctx) => {
+    handler: ({ sessionId, text, sendId }, ctx) => {
       const o = ops();
       // Only a write that reached the terminal is a fact worth announcing (a refused one changed nothing).
       if (o.sessionManager.sendInput(sessionId, text)) {
-        o.liveFacts?.noteInput(sessionId, text, notice);
+        o.liveFacts?.noteInput(sessionId, text);
         o.screens?.noteInput(sessionId, text);
         // The write was accepted, so the computer "received" this send: a phone that lost its connection right after can learn that (R5-4b).
         if (sendId !== undefined) ctx.runtime?.records.noteSend(sessionId, sendId);
@@ -403,9 +406,19 @@ const sessionEntries: MainChannelDef[] = [
       // so the frames that follow continue exactly from the answer. No hold, no chat subscription: the ordinary open still follows and fills the chat.
       if (req?.ptyOnly === true && audience?.socket && sessionId) {
         const reply = openPtyOnly({ knows: (id) => !!o.sessionManager.getSession(id), records: rt.records }, req);
-        if (reply.ok) o.windowRegistry?.subscribePty(sessionId, audience.id);
+        if (reply.ok) {
+          o.windowRegistry?.subscribePty(sessionId, audience.id);
+          ptyCutServed.add(`${audience.key}:${sessionId}`);
+          // Bounded (branch review F8): an entry is removed by the ordinary open that follows, which a dropped connection never sends.
+          if (ptyCutServed.size > 256) ptyCutServed.delete(ptyCutServed.values().next().value as string);
+        }
         return reply as unknown as Awaited<ReturnType<typeof openSession>>;   // same channel, its own small shape (PtyOnlyReply)
       }
+      // WHY (2026-10-22 phone reliability): a phone asks for the terminal alone and then the ordinary open, both carrying its terminal
+      // position — and both answers carried the terminal, up to 4 M characters, the second only to be thrown away. Over the slow relay a
+      // phone used, that doubled a conversation's first load. The terminal answer just went out first on this same socket, so the
+      // ordinary one leaves it out. A phone that never asks for the terminal alone (an older page) still gets it here.
+      if (audience?.socket && sessionId && ptyCutServed.delete(`${audience.key}:${sessionId}`) && req?.pty) req = { ...req, pty: undefined };
       if (audience && sessionId) {
         rt.fills.begin(audience.key, sessionId, { reset: true });
         // A phone gets a session's pushes once it has opened it: the same "this audience member wants this session" fact a
@@ -419,6 +432,10 @@ const sessionEntries: MainChannelDef[] = [
           knows: (id) => !!o.sessionManager.getSession(id),
           page: (r) => o.transcriptPage({ sessionId: r.sessionId, beforeCursor: null, claudeSessionId: r.claudeSessionId, projectSlug: r.projectSlug, toEnd: true }),
           native: (id) => nativeLiveFor(rt.nativeHost as NativeSessionHost, id),
+          persistedShellRuns: async (id) => {
+            const info = o.sessionManager.getSession(id);
+            return info?.provider === 'native' && info.cwd ? (rt.nativeHost as NativeSessionHost | undefined)?.persistedShellRunsFor(id, info.cwd) ?? [] : [];
+          },
         }, req, { remote: ctx.door === 'remote' });
       } catch (err) {
         if (audience && sessionId) rt.fills.release(audience.key, sessionId);
@@ -567,7 +584,7 @@ const sessionEntries: MainChannelDef[] = [
       const store = ops().welcomeBackStore;
       if (!store) return [];
       await store.ready;
-      return store.offerIds();
+      return store.offerEntries();
     },
   }),
   defineChannel({

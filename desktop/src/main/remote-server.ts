@@ -1,5 +1,4 @@
 import http from 'http';
-import zlib from 'zlib';
 // A phone's project watcher is dropped when its socket closes (the file channels themselves are table entries).
 import { dropSubscriber } from './artifacts/project-watcher';
 import { RemoteDownloads } from './remote-download';
@@ -7,14 +6,17 @@ import { RemoteDownloads } from './remote-download';
 // its stale-board cache (main/arcade-handlers.ts).
 import { dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import { staticAssetPolicy } from './remote-static-policy';
+import { CompressedAssets } from './remote-asset-compression';
 import fs from 'fs';
 import path from 'path';
 import { sweepOldUploads } from './upload-store';
 import { randomUUID } from 'crypto';
 import { proxyHttpToVite, proxyUpgradesToVite } from './remote-dev-proxy';
+import { describePhoneTimings, describeAnswer } from './remote-timings';
 import { localTokenMatches, ownerDesktopServices, type LocalModeOptions } from './remote-local';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
+import { readFirstFrames, TOOK_FRAMES_PROTOCOL } from '../shared/first-frames';
 import type { SessionManager } from './session-manager';
 import type { createHandoffTransport } from './conversations/handoff-transport';
 import type { HookRelay } from './hook-relay';
@@ -50,6 +52,8 @@ import { BrowserWindow, app } from 'electron';
 import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { log } from './logger';
+import { CLOSE_REPLACED } from '../shared/remote-close-codes';
 
 const AUTH_TIMEOUT_MS = 5000;
 // The most an unauthenticated socket may buffer before it signs in. The auth
@@ -94,6 +98,14 @@ const MAX_MISSED_PINGS = 3;
 // reconnecting. (The pause-and-poll gate the restore sequence used is gone with the restore: nothing sends in bulk now.)
 const BACKPRESSURE_CLOSE_BYTES = 32 * 1024 * 1024;
 const CLOSE_TOO_SLOW = 4009;
+// WHY (2026-10-22 phone reliability, cause 5): a phone counts only a COMPLETE frame as a sign of life, so one multi-MB answer (a
+// conversation load: history, recent tail and terminal) over a slow relay looked like a dead computer for as long as it took to
+// arrive — the phone gave up after ~20 s, reconnected and asked for the same load again, forever. Sent as pieces of this size,
+// every piece is a sign of life. 256K characters is ~60–90 KB on the wire after compression: well under a second on any link
+// that can carry a conversation at all, while a load stays a handful of frames.
+const PIECE_CHARS = 256 * 1024;
+/** How often to look for Tailscale again while it is installed but not connected. One `tailscale status`, off the main thread. */
+const TAILSCALE_RETRY_MS = 20_000;
 
 interface AuthenticatedClient {
   id: string;
@@ -123,6 +135,10 @@ interface AuthenticatedClient {
   audienceId?: number;
   /** The hello (session list, topics, status) has been sent on this connection. */
   helloSent?: boolean;
+  /** The page refills one conversation on a `session:refill` push, so an expired fill hold need not hang up on it. */
+  refillPush?: boolean;
+  /** The page puts a large answer back together from `remote:piece` frames (sendAnswer). */
+  pieces?: boolean;
 }
 
 /** The slice of WindowRegistry a phone connection needs: join on connect, leave on drop. */
@@ -183,6 +199,8 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     },
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
+    // Requests sent right behind the sign-in are held and answered after it (handleConnection), so a page may stop waiting a round trip.
+    pipelined: true,
   };
 }
 
@@ -205,9 +223,10 @@ export class RemoteServer {
   private unauthSockets = 0;
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
   private devices: RemoteDeviceStore;
-  // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
-  // because Vite content-hashes the URLs it serves; see compressStatic().
-  private compressedAssets = new Map<string, Buffer>();
+  /** The page's files, compressed once each (remote-asset-compression.ts). */
+  private assets = new CompressedAssets();
+  /** Messages a socket's opening request carried (handleProtocols), handed to its sign-in once the connection exists. */
+  private firstFrames = new WeakMap<http.IncomingMessage, string[]>();
   // Channels already warned about, so an unbridged channel that a client polls
   // logs once instead of every second. See the `default:` case in handleMessage.
   private warnedChannels = new Set<string>();
@@ -223,6 +242,8 @@ export class RemoteServer {
   private completedRequests = new Map<string, { id: string; at: number }[]>();
   /** The OS reason the last start() failed, so the panel can say it rather than guess. */
   private lastStartError: string | null = null;
+  /** The next look for Tailscale while it is installed but not yet connected (waitForTailscale). */
+  private tailscaleWait: ReturnType<typeof setTimeout> | null = null;
   /** The tailnet address to bind to. Null means Tailscale is not up, and start() refuses
    *  rather than falling back to every interface — that fallback IS the open listener. */
   private bindAddress: string | null = null;
@@ -290,10 +311,13 @@ export class RemoteServer {
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
    *  project list and a flashing password screen could not be traced, because the host recorded
    *  no connects, drops or catch-ups. A short device id only: never a secret, address or name. */
-  private logDevice(client: { deviceId: string }, event: string): void {
+  private logDevice(client: { deviceId: string; owner?: boolean }, event: string): void {
     // WHY the time (2026-09-11): the log recorded seven drops in ten minutes with no way to
     // tell which were the phone being locked or refreshed and which happened on their own.
     console.log(`[remote-server] ${new Date().toISOString()} device ${client.deviceId.slice(0, 8)}: ${event}`);
+    // WHY also desktop.log (2026-10-22 phone reliability): console.log never reaches a built app's
+    // log file, so a packaged laptop recorded nothing about the phone's drops and none could be counted.
+    log('INFO', 'Remote', event, { device: client.deviceId.slice(0, 8), ...(client.owner ? { local: true } : {}) });
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
@@ -336,7 +360,18 @@ export class RemoteServer {
     for (const l of this.statusListeners) l(status);
   }
 
-  async start(): Promise<void> {
+  /** A start in progress: every other caller joins it (start). */
+  private starting: Promise<void> | null = null;
+
+  /** WHY one start at a time (branch review F2): `running` turns true only once the port is bound, after the Tailscale check, and
+   *  the 20 s Tailscale retry, the wake handler and the settings switch can all call this. Two overlapping starts bound twice: the
+   *  loser's rollback tore down the winner's server, or both subscribed and a phone got every terminal chunk twice. */
+  start(): Promise<void> {
+    this.starting ??= this.startOnce().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async startOnce(): Promise<void> {
     if (this.local) {
       if (this.running) return;
       this.bindAddress = '127.0.0.1'; this.serveBuiltPage = true; // loopback; a phone has no dev server
@@ -358,8 +393,14 @@ export class RemoteServer {
         ? 'Tailscale is installed but not connected, so there is no private address to listen on.'
         : 'Tailscale is not installed, so there is no private address to listen on.';
       this.emitStatus();
+      // WHY (2026-10-22 phone reliability): the app often opens at login before Tailscale has
+      // connected, and this ran once — so remote access stayed off all day while the switch read
+      // on. Installed-but-not-connected fixes itself, so look again until it does. Not installed
+      // does not, and the setup flow starts the server itself once it is.
+      if (ts.installed) this.waitForTailscale();
       throw new Error(this.lastStartError);
     }
+    this.clearTailscaleWait();
     this.bindAddress = ts.ip;
     return this.listen(this.config.port, '/ws');
   }
@@ -422,6 +463,20 @@ export class RemoteServer {
       server: this.httpServer,
       path: wsPath,
       maxPayload: 52428800,
+      // WHY (2026-10-22 phone reliability): a phone's conversation load is plain JSON — up to ~2 MB of history plus the terminal —
+      // over a Tailscale relay measured at 75–100 ms. On Destin's own transcripts level 1 shrank text 3–4.5× for ~6–10 ms per 2 MB,
+      // run on zlib's thread pool, not the main thread (pictures do not shrink, and cost little). Small frames are left alone. No
+      // context kept between messages: a few hundred KB less per phone for a slightly lower ratio. Not on the Android app's own
+      // loopback backend, where nothing crosses a network and the phone's CPU would pay for nothing.
+      perMessageDeflate: this.local ? false : {
+        zlibDeflateOptions: { level: 1 },
+        threshold: 1024,
+        serverNoContextTakeover: true,
+        clientNoContextTakeover: true,
+      },
+      // A phone's sign-in and first requests can ride in the opening request (shared/first-frames.ts): taken here, answered with
+      // the "connected". Anything else offered is answered as ws would by default (the first name), so an old page is unaffected.
+      handleProtocols: (offered, req) => this.pickProtocol(offered, req),
       verifyClient: (info, cb) => {
         if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
           cb(true);
@@ -487,6 +542,8 @@ export class RemoteServer {
         // The liveness ping is armed by addClient (first client) and disarmed on
         // the last drop — see startLiveness (simplification audit W14).
         console.log(`[RemoteServer] Listening on ${this.bindAddress ?? '*'}:${port}`);
+        // The page's own files get their tight compressed copies in the background, after the app has finished starting.
+        if (hasStaticBuild && !this.local) setTimeout(() => { void this.assets.warm(staticDir); }, 30_000).unref?.();
         this.emitStatus();
         resolve();
       });
@@ -505,9 +562,31 @@ export class RemoteServer {
     this.broadcast({ type: 'status:data', payload: data });
   }
 
+  /** Try start() again in a while, once: each failed attempt schedules the next. */
+  private waitForTailscale(): void {
+    if (this.tailscaleWait) return;
+    this.tailscaleWait = setTimeout(() => {
+      this.tailscaleWait = null;
+      if (this.config.enabled && !this.running) this.start().catch(() => { /* scheduled the next look itself */ });
+    }, TAILSCALE_RETRY_MS);
+    this.tailscaleWait.unref?.();
+  }
+
+  private clearTailscaleWait(): void {
+    if (this.tailscaleWait) { clearTimeout(this.tailscaleWait); this.tailscaleWait = null; }
+  }
+
+  /** The computer woke: if remote access is on but not listening, look for Tailscale now rather than at the next tick. */
+  startAfterWake(): void {
+    if (this.local || !this.config.enabled || this.running) return;
+    this.clearTailscaleWait();
+    this.start().catch(() => { /* start() reported it and scheduled the next look */ });
+  }
+
   /** @param forRollback internal use: unwinding a start that failed, where the caller sets
    *  the real reason on the next line. Every other caller is a user switching it off. */
   stop(forRollback = false): void {
+    this.clearTailscaleWait();
     this.running = false;
     if (this.uploadCleanupTimer) {
       clearInterval(this.uploadCleanupTimer);
@@ -714,45 +793,20 @@ export class RemoteServer {
       return;
     }
 
-    const body = this.compressStatic(urlPath, policy.encoding, data);
+    const body = this.assets.get(urlPath, policy.encoding, data);
     headers['Content-Encoding'] = policy.encoding;
     res.writeHead(200, headers);
     res.end(body);
   }
 
-  /**
-   * Compresses once per (asset, encoding) and reuses the result.
-   *
-   * Assets under assets/ are content-hashed, so a given URL's bytes never
-   * change and the cached output can never go stale. This is what makes brotli
-   * affordable — compressing a 2 MB chunk per request would cost far more than
-   * the transfer it saves.
-   */
-  private compressStatic(urlPath: string, encoding: 'br' | 'gzip', data: Buffer): Buffer {
-    const key = `${encoding}:${urlPath}`;
-    const cached = this.compressedAssets.get(key);
-    if (cached) return cached;
-
-    const compressed = encoding === 'br'
-      // Quality 5 rather than the default 11: near-gzip CPU cost for
-      // meaningfully better ratios. At 11 the first request for the entry chunk
-      // would stall for seconds.
-      // Measured on the real 1,969 kB entry chunk (2026-07-20): q5 = 38 ms,
-      // q11 = 4,719 ms. Do NOT raise this — the default (11) would stall the
-      // first request by ~5 s, costing more than the transfer it saves.
-      ? zlib.brotliCompressSync(data, {
-          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
-        })
-      : zlib.gzipSync(data);
-
-    // Bound the cache. A production build emits a handful of assets, but this
-    // is fed by request URLs, so it must not be allowed to grow without limit.
-    if (this.compressedAssets.size >= 64) this.compressedAssets.clear();
-    this.compressedAssets.set(key, compressed);
-    return compressed;
-  }
-
   // --- WebSocket connection handling ---
+
+  /** The subprotocol answered to an opening request; takes the messages it carries (shared/first-frames.ts). */
+  private pickProtocol(offered: Set<string>, req: http.IncomingMessage): string | false {
+    const frames = this.local ? null : readFirstFrames(offered);
+    if (frames) { this.firstFrames.set(req, frames); return TOOK_FRAMES_PROTOCOL; }
+    return offered.values().next().value ?? false;
+  }
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
@@ -817,8 +871,22 @@ export class RemoteServer {
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
       detachBudget();
-      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
+      // WHY detached and holding BEFORE the slowdown wait: a request sent behind the sign-in that arrived during the wait reached
+      // this handler as a second sign-in, and was refused as "expected auth" with the socket closed.
       ws.off('message', authHandler);
+      // WHY held (2026-10-22 phone speed): a page that has signed in here before sends its first requests (the session list, its
+      // conversation) right behind the sign-in instead of a round trip later (`pipelined` in authOkMessage). They wait here and are
+      // handled once it is signed in; a failed sign-in closes the socket and they are dropped. Bounded like the sign-in itself.
+      const early: Array<Buffer | string> = [];
+      let earlyBytes = 0;
+      const holdEarly = (r: Buffer | string) => {
+        earlyBytes += r.length;
+        if (early.length >= 16 || earlyBytes > PRE_AUTH_MAX_BYTES) { ws.close(4009, 'Too much before sign-in'); return; }
+        early.push(r);
+      };
+      ws.on('message', holdEarly);
+      const replayEarly = () => { ws.off('message', holdEarly); for (const r of early) ws.emit('message', r); };
+      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
 
       try {
         const msg = JSON.parse(raw.toString());
@@ -832,8 +900,8 @@ export class RemoteServer {
         if (this.local) {
           if (!localTokenMatches(msg.token, this.local.token)) { ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' })); ws.close(4001, 'Auth failed'); return; }
           releaseUnauth();
-          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true });
-          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); return; // the phone's own abilities
+          this.addClient(ws, 'local', ip, { sendsReady: msg.readyHandshake === true, owner: true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
+          ws.send(JSON.stringify(authOkMessage({ deviceId: 'local' }, this.getFocusSessionId(), true))); replayEarly(); return; // the phone's own abilities
         }
 
         // No password configured
@@ -852,10 +920,11 @@ export class RemoteServer {
             this.clearFailedAttempts();
             releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
-            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true });
+            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
             // WHY one builder (R4-1): the two sign-in paths used to spell the handshake by hand and had to be kept
             // in step; a returning device paints the same UI as a newly paired one.
             ws.send(JSON.stringify(authOkMessage({ deviceId: result.device.id }, this.getFocusSessionId())));
+            replayEarly();
             // The restore waits for client:ready (addClient armed the old-client fallback).
             return;
           }
@@ -882,8 +951,9 @@ export class RemoteServer {
           const paired = this.devices.pairAgain(msg.previousDeviceId) ?? this.devices.pair(msg.deviceName);
           releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
-          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
+          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true, refillPush: msg.refillPush === true, pieces: msg.pieces === true });
           ws.send(JSON.stringify(authOkMessage({ deviceId: paired.deviceId, secret: paired.secret }, this.getFocusSessionId())));
+          replayEarly();
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();
@@ -893,10 +963,16 @@ export class RemoteServer {
       } catch {
         ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-message' }));
         ws.close(4000, 'Invalid auth message');
+      } finally {
+        ws.off('message', holdEarly);   // signed in: already handed on (replayEarly); refused: dropped with the socket
       }
     };
 
     ws.on('message', authHandler);
+    // The opening request's messages, in order: the sign-in reaches authHandler, the rest wait in its early hold like frames sent
+    // right behind it. They count against the same limits.
+    for (const frame of this.firstFrames.get(req) ?? []) ws.emit('message', Buffer.from(frame), false);
+    this.firstFrames.delete(req);
   }
 
   /** Close sockets that stopped answering. Without this a half-open connection is invisible
@@ -928,10 +1004,18 @@ export class RemoteServer {
     }, PING_INTERVAL_MS);
   }
 
-  /** Hang up on one phone by its registry id so it reconnects and fills everything again (a fill of its that never completed). */
-  dropAudience(audienceId: number): void {
+  /** A phone's fill of a conversation never completed (its held pushes were dropped): have it fill that conversation again.
+   *  WHY not always a hang-up (2026-10-22 phone reliability): one slow conversation used to close the whole connection, so
+   *  every watched conversation refilled — a page that refills on `session:refill` refills just this one. Older pages,
+   *  which ignore that push, are still hung up on, or they would silently keep a copy with a hole in it. */
+  dropAudience(audienceId: number, sessionId?: string): void {
     for (const client of this.clients) {
       if (client.audienceId !== audienceId) continue;
+      if (client.refillPush && sessionId) {
+        this.logDevice(client, 'fill never completed; asked to fill that conversation again');
+        try { client.ws.send(JSON.stringify({ type: 'session:refill', payload: { sessionId } })); } catch { /* closing anyway */ }
+        continue;
+      }
       this.logDevice(client, 'fill never completed; closing so it reconnects and fills again');
       client.ws.close(4010, 'Catch-up needed');
       this.removeClient(client);
@@ -946,11 +1030,22 @@ export class RemoteServer {
     this.getNativeRuntime()?.fills.forget(`s${client.audienceId}`);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean } = {}): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean; owner?: boolean; refillPush?: boolean; pieces?: boolean } = {}): void {
+    // A device that signed in again replaces its older connection, which is usually a dead one the ping has not caught
+    // yet (60–80 s). Never the phone's own app on its own runtime ('local'), and never across devices.
+    if (!opts.owner) {
+      for (const old of [...this.clients]) {
+        if (old.owner || old.deviceId !== deviceId) continue;
+        this.logDevice(old, 'replaced by a newer connection from the same device');
+        try { old.ws.close(CLOSE_REPLACED, 'Replaced'); } catch { /* already gone */ }
+        this.removeClient(old);
+      }
+    }
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
-      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true,
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(), owner: opts.owner === true, refillPush: opts.refillPush === true,
+      pieces: opts.pieces === true && !this.local,
     };
     this.clients.add(client);
     // Join the window registry as a member with a negative id (one-core R5-1). A phone is sent a session's pushes once it has
@@ -1022,6 +1117,7 @@ export class RemoteServer {
       // WHY afterReply (one-core R5-2): session:open lets a screen's held pushes through once its answer has been SENT, so they
       // arrive after it on this socket. Callbacks are collected here and run right after respond() below.
       const afterReply: Array<() => void> = [];
+      const started = Date.now();
       const outcome = await serveRemoteChannel(tableDef, payload, {
         door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId, clientId: client.id,
         audienceId: client.audienceId, afterReply: (fn) => { afterReply.push(fn); },
@@ -1057,7 +1153,11 @@ export class RemoteServer {
         desktop: client.owner ? ownerDesktopServices({ broadcast: (m) => this.broadcast(m), sessionRoots: () => this.sessionRoots(), sessionManager: this.sessionManager }) : undefined,
       }, { owner: client.owner === true });
       // Only an awaited request (it has an id) is answered.
-      if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
+      if (outcome.reply && id) {
+        const chars = this.respond(client, type, id, outcome.payload);
+        // How long a phone waited on what it needs to draw a conversation, and how much came back (remote-timings.ts).
+        if (!client.owner && (type === 'session:open' || type === 'session:list')) this.logDevice(client, describeAnswer(type, payload, Date.now() - started, chars));
+      }
       for (const fn of afterReply) { try { fn(); } catch (err) { console.warn('[remote-server] after-reply callback failed:', String(err)); } }
       return;
     }
@@ -1092,11 +1192,17 @@ export class RemoteServer {
         this.sendHello(client);
         break;
       }
+      case 'remote:timings': {
+        // Push, no reply: how long this phone took to show its conversations (renderer/remote-timings.ts), for the log.
+        const line = describePhoneTimings(payload);
+        if (line) this.logDevice(client, line);
+        break;
+      }
       case 'remote:ping':
         // The phone's wake check (remote-shim checkConnectionAfterWake): any answer proves the
         // connection is alive. Answered at once and in every phase — a phone that is catching
         // up is exactly the one most likely to be asking.
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client, type, id, { ok: true });
         break;
       // --- Request/response ---
       // WHY (2026-09-30 one-core R3-6): handoff:*, native:*, permission(s):*, specialists:*, model:*, provider:*,
@@ -1130,7 +1236,7 @@ export class RemoteServer {
             ? this.outcomeOf(requestId)
             : 'unknown';
         }
-        this.respond(client.ws, type, id, { outcomes });
+        this.respond(client, type, id, { outcomes });
         break;
       }
       default: {
@@ -1159,7 +1265,7 @@ export class RemoteServer {
             this.warnedChannels.add(type);
             console.warn(`[RemoteServer] unhandled channel: ${type}`);
           }
-          this.respond(client.ws, type, id, {
+          this.respond(client, type, id, {
             ok: false,
             error: `This feature isn't available over remote access yet (${type}).`,
             unsupported: true,
@@ -1182,6 +1288,7 @@ export class RemoteServer {
   // Negative and descending: never a webContents id (those are positive).
   // WHY -1000 (R5-1 review): -1 is the `?? -1` stand-in ipc/buddy.ts uses for a missing sender; a phone must never own it.
   private nextWatchId = -1000;
+  private nextPieceId = 1;
 
   // Download links (§10). The revocation check reads the device store lazily,
   // at each GET, so a device unpaired while its link was alive is refused.
@@ -1222,11 +1329,24 @@ export class RemoteServer {
 
   // --- Helpers ---
 
-  private respond(ws: WebSocket, type: string, id: string, payload: any): void {
+  /** Returns how many characters were sent (0 when the socket had closed). */
+  private respond(client: AuthenticatedClient, type: string, id: string, payload: any): number {
     this.noteCompleted(id);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: `${type}:response`, id, payload }));
-    }
+    if (client.ws.readyState !== WebSocket.OPEN) return 0;
+    const data = JSON.stringify({ type: `${type}:response`, id, payload });
+    this.sendAnswer(client, data);
+    return data.length;
+  }
+
+  /** One answer, in `remote:piece` frames when it is large and the page can put them back together (PIECE_CHARS says why). The
+   *  pieces go out back to back in one call, so nothing else lands between them; an older page gets the answer whole. */
+  private sendAnswer(client: AuthenticatedClient, data: string): void {
+    if (!client.pieces || data.length <= PIECE_CHARS) { client.ws.send(data); return; }
+    const pieceId = this.nextPieceId++;
+    const parts: string[] = [];
+    // A cut may fall between an emoji's two halves: JSON.stringify writes a lone half as an escape, and the page's join restores it.
+    for (let at = 0; at < data.length; at += PIECE_CHARS) parts.push(data.slice(at, at + PIECE_CHARS));
+    parts.forEach((part, i) => client.ws.send(JSON.stringify({ type: 'remote:piece', payload: { id: pieceId, i, n: parts.length, data: part } })));
   }
 
   /** Request ids are `<deviceId>:<generation>:<n>`, so the device is the ring's key. */

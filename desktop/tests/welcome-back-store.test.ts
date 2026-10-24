@@ -237,6 +237,33 @@ describe('createWelcomeBackStore', () => {
     });
   });
 
+  describe('Skip permissions', () => {
+    it('a session tracked with Skip permissions on is offered back with it on, through a restart and a remap', async () => {
+      const { fs, contentNow } = createFakeFs();
+      const store = createWelcomeBackStore(FILE, fs);
+      await store.ready;
+      store.track('desktop-1', 'conv-1', 'claude', true);
+      store.track('desktop-2', 'conv-2', 'claude');
+      store.remap('desktop-1', 'conv-1b');
+      await store.flush();
+      // A fresh store reads the file the last run left, as the next launch does.
+      const next = createWelcomeBackStore(FILE, createFakeFs(contentNow() ?? undefined).fs);
+      await next.startup();
+      expect(next.offerEntries().sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+        { id: 'conv-1b', skipPermissions: true },
+        { id: 'conv-2', skipPermissions: false },
+      ]);
+    });
+
+    it('a file written before the setting was remembered reads back as Skip permissions off', async () => {
+      const seeded = { version: 1, open: {}, offer: [{ conversationId: 'conv-old', provider: 'claude' }] };
+      const { fs } = createFakeFs(JSON.stringify(seeded));
+      const store = createWelcomeBackStore(FILE, fs);
+      await store.ready;
+      expect(store.offerEntries()).toEqual([{ id: 'conv-old', skipPermissions: false }]);
+    });
+  });
+
   describe('forget()', () => {
     it('removes only the given conversation ids from offer', async () => {
       const seeded = {

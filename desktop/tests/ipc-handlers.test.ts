@@ -552,7 +552,7 @@ describe('session:create native resume — missing stored header', () => {
       { provider: 'native', resumeSessionId: 'ghost-native-1', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
     )).rejects.toThrow('saved data is missing');
     expect(mockSessionManager.destroySession).toHaveBeenCalledWith('ghost-native-1');
-    expect(welcomeBackStore.track).toHaveBeenCalledWith('ghost-native-1', 'ghost-native-1', 'native');
+    expect(welcomeBackStore.track).toHaveBeenCalledWith('ghost-native-1', 'ghost-native-1', 'native', false);
     expect(welcomeBackStore.untrack).toHaveBeenCalledWith('ghost-native-1');
   });
 
@@ -1455,7 +1455,7 @@ describe('Welcome back tracking hooks', () => {
       undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
     const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
     await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'conv-1' });
-    expect(store.track).toHaveBeenCalledWith('desktop-r1', 'conv-1', 'claude');
+    expect(store.track).toHaveBeenCalledWith('desktop-r1', 'conv-1', 'claude', false);
   });
 
   it('SESSION_DESTROY untracks the session; destroySession alone (an ordinary exit) does not', async () => {
@@ -1535,7 +1535,7 @@ describe('Welcome back tracking hooks', () => {
       emit!(event);
       emit!(event); // a second message must not re-track — one write per session
       expect(store.track).toHaveBeenCalledTimes(1);
-      expect(store.track).toHaveBeenCalledWith('desktop-c2', 'conv-2', 'claude');
+      expect(store.track).toHaveBeenCalledWith('desktop-c2', 'conv-2', 'claude', false);
     } finally { onSpy.mockRestore(); }
   });
 

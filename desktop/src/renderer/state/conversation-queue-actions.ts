@@ -3,6 +3,7 @@ import type { InputBarHandle } from '../components/InputBar';
 import type { ToastAction } from '../components/ui/Toast';
 import { createQueuedEditActions } from './queued-edit-actions';
 import { queueEditStorage } from './queue-transfer-storage';
+import { RESTORE_UNSENT_EVENT } from './submit-outgoing';
 interface Options {
  provider(id: string): string | undefined;
  composer(): InputBarHandle | null;
@@ -22,7 +23,11 @@ export function createConversationQueueActions(o: Options) {
  return {
   cancel: async (sid: string,id: string) => {
    if(o.provider(sid)==='native'){const ok=await window.claude.native.queueRemove(sid,id);o.dispatch({type:'QUEUED_MESSAGE_REMOVED',sessionId:sid,queueId:id});if(!ok)o.toast('Already sending — too late to cancel.');return;}
-   try{const kind=o.session(sid)?.queuedMessages.find(q=>q.queueId===id)?.status==='uncertain'?'dismiss':'remove';const r=await action(sid,{kind,itemId:id});if(r.status!=='done')throw Error('message'in r?r.message:'Queue removal was not confirmed.');}catch(e){failure(e);}
+   try{const kind=o.session(sid)?.queuedMessages.find(q=>q.queueId===id)?.status==='uncertain'?'dismiss':'remove';const r=await action(sid,{kind,itemId:id});if(r.status!=='done')throw Error('message'in r?r.message:'Queue removal was not confirmed.');
+    // WHY (2026-10-22): a dismissed unconfirmed message's words go back into THIS screen's message box (the listener fills only an empty one), so nothing is lost and resending is the person's own choice.
+    if(r.restore){const detail:{sessionId:string;text:string;paths:string[];restored?:boolean}={sessionId:sid,text:r.restore.text,paths:[...r.restore.attachments]};window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT,{detail}));
+     // The box already held a draft (it is never overwritten): keep the words reachable instead of losing them silently.
+     if(!detail.restored&&r.restore.text.trim()){void navigator.clipboard?.writeText(r.restore.text).catch(()=>{});o.toast('Your message box wasn\'t empty, so the dismissed message was copied to the clipboard.');}}}catch(e){failure(e);}
   },
   edit: async (sid: string,id: string,text: string) => {
    if(o.provider(sid)==='native'){

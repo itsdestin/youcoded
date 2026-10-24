@@ -4,6 +4,59 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-10-23
+
+**Claude Code CLI baseline:** v2.1.309 (desktop review); Android bundles v2.1.300.
+
+Changes since 1.3.2: automatic updates, reliable phone remote access, a status chip for background commands, model switches shown as dividers, and fixes to the message queue and chat.
+
+### Updates — desktop
+
+- YouCoded downloads new versions by itself. Switch it off with "Install updates automatically" in the update popup or in Settings → Help & feedback → Updates. A download keeps going when the popup closes.
+- The update installs when you quit; "Restart to update" installs it and reopens. Linux packages, and Macs that need an administrator, ask for a password only when you choose Restart.
+- A release without its signed file is never offered, and a downloaded copy that fails its check is thrown away before installing.
+
+### Phone remote access
+
+- The phone stays connected through outages, sleep and freezes; unlocking it checks the connection instead of reconnecting, one failed send no longer blocks others, and large answers arrive in pieces.
+- Faster: first open 8.4 → 6.1 s, reload 3.6 → 2.0 s, reconnect 1.9 → 1.0 s; coming back after a long absence is immediate (was 11 s).
+- Connection notices sit above the message box.
+
+### Claude Code conversations
+
+- Message queue: messages with quote chips no longer get stuck as "Unconfirmed"; attached files are no longer sent with "read this entire file"; dismissing a failed attempt resumes the queue and puts your words back in the message box; your bubble appears the moment you press Send; the terminal view no longer stalls.
+- Emoji no longer garble the terminal or make the app think Claude asked a question.
+- A prompt Claude Code recorded twice shows once.
+- Model switches show as a thin "Model switched to Opus" divider instead of a `/model` bubble, in native chats too; they survive reopening, and a declined switch draws nothing.
+- Conversations reopen on their own model; an Opus chat no longer comes back on Sonnet after a crash.
+
+### Helpers and background work
+
+- Helper cards and the status bar show working, finished, failed or stopped correctly across pause, restart and interrupt.
+- A new Background chip lists background commands, shells and watchers; ones the app started can be stopped from it.
+- Cards for checking on, messaging, resuming or stopping a helper say what they do instead of "Hiring a specialist".
+
+### Chat
+
+- Message times show the real day ("Yesterday at 2:34 PM", then the date) and when a reply last changed; reopened chats no longer show the reopen time.
+- The Jump to bottom button no longer gets stuck, lands on the real bottom, and fades in and out.
+- Even spacing above the input bar; the last message no longer hides under it.
+
+### Appearance and panels
+
+- The built-in themes, including YouCoded and YouCoded Night, appear in Library and Marketplace, and new ones are starred once, so installs from before 1.3.1 can pick them.
+- New Office icon: a document with a spreadsheet in front.
+- The Browser panel's open button shows the assistant's own browser window, not your personal browser.
+
+### Reliability
+
+- Linux: new Claude Code sessions no longer hang on "Initializing session…" when a temp-file cleaner deletes the app's connection file; it now lives in a private folder, and on Linux and macOS the app re-creates it if it disappears.
+
+### Known issues
+
+- A custom provider whose models don't report their conversation size may show a "conversation too long" error that Summarize and continue can't fix. Start a new conversation or pick a model with a known size.
+- On Android, Assistant settings shows the Local models page, but local models don't run on phones.
+
 ## [1.3.2] — 2026-10-21
 
 **Claude Code CLI baseline:** v2.1.306 (desktop review); Android bundles v2.1.300.

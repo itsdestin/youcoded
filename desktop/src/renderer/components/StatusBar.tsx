@@ -17,6 +17,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
+import BackgroundCommandsChip from './BackgroundCommandsChip';
 import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, RowStatus, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -55,6 +56,10 @@ interface StatusData {
     latest: string;
     update_available: boolean;
     download_url: string | null;
+    /** #183: the update finished downloading in the background and waits for a restart. */
+    downloaded?: boolean;
+    /** #183: installing it asks for a password (a Linux package, a non-administrator Mac). */
+    needs_password?: boolean;
   } | null;
   announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;
@@ -1113,6 +1118,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {/* Specialists (1c) — hidden when the conversation has no helpers. */}
       <SpecialistsChip sessionId={sessionId} />
 
+      {/* Background commands and watchers (2026-10-22) — its own chip beside the helpers',
+          hidden when the conversation never left anything running. */}
+      <BackgroundCommandsChip sessionId={sessionId} />
+
       {/* Rate limits — one chip per window the plan reports, in the order
           5h, 7d, then any other length (W-2 = a: a free ChatGPT plan shows a
           single "30d:" chip). A plan with no windows shows no chips. The chip
@@ -1600,7 +1609,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('version') && updateStatus && (
         <Tooltip text={
             (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available
+            (updateStatus.update_available && updateStatus.downloaded
+              ? `v${updateStatus.latest} is downloaded — click to restart and update`
+              : updateStatus.update_available
               ? `Update available: v${updateStatus.latest} — click to download`
               : `YouCoded v${updateStatus.current}`)
           }>
@@ -1622,7 +1633,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           {updateStatus.update_available ? (
             // Normal words on the amber tint (small-fixes-3#SF3-10); sentence case (decisions "Sentence case").
             <span className="text-fg font-medium">
-              v{updateStatus.latest} — Update available
+              {/* #183 Q-chip "keep-pulse": same tint and pulse, words say it is already here.
+                  Wording is Destin's (auto-updates-review#R-1): "Ready - Restart Needed", in
+                  sentence case, after the version in the same shape as the "available" chip
+                  (auto-updates-review-2#R2-1: "no still keep the version"). */}
+              {updateStatus.downloaded
+                ? <>v{updateStatus.latest} — Ready - restart needed</>
+                : <>v{updateStatus.latest} — Update available</>}
             </span>
           ) : (
             <span>v{updateStatus.current}</span>

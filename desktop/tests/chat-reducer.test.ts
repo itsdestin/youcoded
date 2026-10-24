@@ -58,6 +58,19 @@ describe('compaction boundary outcomes', () => {
     expect(tail?.kind).toBe('user');
     expect(tail?.kind === 'user' && tail.pending).toBe(true);
   });
+
+  it('back-to-back model switches keep only where the user landed; a message between keeps both', () => {
+    const labels = (s: ReturnType<typeof initState>) => s.get(SESSION)!.timeline.flatMap(e => e.kind === 'system-marker' ? [e.marker.label] : []);
+    let state = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'waiting', timestamp: 1 });
+    for (const [id, label] of [['m1', 'Model switched to Haiku'], ['m2', 'Model switched to Sonnet'], ['m3', 'Model switched to Opus']]) {
+      state = dispatch(state, { type: 'MODEL_SWITCH_MARKER', sessionId: SESSION, markerId: id, timestamp: 2, label });
+    }
+    expect(labels(state)).toEqual(['Model switched to Opus']);
+    expect(state.get(SESSION)!.timeline.at(-1)?.kind).toBe('user');   // the pending send stays last
+    state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u1', text: 'waiting', timestamp: 3 });
+    state = dispatch(state, { type: 'MODEL_SWITCH_MARKER', sessionId: SESSION, markerId: 'm4', timestamp: 4, label: 'Model switched to Fable' });
+    expect(labels(state)).toEqual(['Model switched to Opus', 'Model switched to Fable']);
+  });
 });
 
 describe('pending send ordering around context operations', () => {

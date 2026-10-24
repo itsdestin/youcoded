@@ -414,7 +414,7 @@ export function registerIpcHandlers(
   runtime.fills.setExpireHandler((key, sessionId) => {
     const id = Number(key.slice(1));
     if (key[0] === 'w') sendToRenderer(webContents.fromId(id), IPC.SESSION_REFILL, [sessionId]);
-    else remoteServer?.dropAudience(id);
+    else remoteServer?.dropAudience(id, sessionId);
   });
   const publish = createPublish({
     records: runtime.records,
@@ -645,7 +645,7 @@ export function registerIpcHandlers(
       // unlike a brand-new session, which only earns that once its first user
       // message actually lands (the hook on the transcript-event listeners
       // below). 'shell' has no conversation id to remember (welcome-back-store.ts).
-      if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider);
+      if (info.provider !== 'shell') trackWelcomeBack(info.id, opts.resumeSessionId, info.provider, info.skipPermissions === true);
       // WHY: a resumed Claude Code session's pill sat on the 'Resuming...'
       // placeholder for its whole life — only native resumes re-applied the
       // stored title below (Destin, 2026-09-24). Same re-apply, same rename
@@ -1275,7 +1275,7 @@ export function registerIpcHandlers(
     deliver: (data) => { send(IPC.STATUS_DATA, data); if (remoteServer) remoteServer.broadcastStatusData(data); },
     mainWindow, windowRegistry, remoteServer,
   });
-  setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
+  setSyncHealthGate(statusPush.hasAudience); updateService.onStatusChange(() => statusPush.push()); // 2nd: WHY (#183 T2, E13) "ready to restart" shows the moment a background download lands, not up to 10 s later // the sync health check asks the same question (audit W12)
   // WHY (one-core R5-1): the per-session summary rides its own push beside attentionMap; a phone's dots and attention sound read it (R5-3).
   const summaryPush = startSessionSummaryPush({
     records: runtime.records,
@@ -1325,10 +1325,11 @@ export function registerIpcHandlers(
   // store's own track() is a plain overwrite-and-persist with no such guard
   // (design §1: "changes are a handful per session", not one per turn).
   const welcomeBackTracked = new Set<string>();
-  const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider) => {
+  // WHY skipPermissions: Welcome back reopens a session with it still on (Destin, 2026-10-23).
+  const trackWelcomeBack = (desktopId: string, conversationId: string, provider: WelcomeBackProvider, skipPermissions = false) => {
     if (!welcomeBackStore || welcomeBackTracked.has(desktopId)) return;
     welcomeBackTracked.add(desktopId);
-    welcomeBackStore.track(desktopId, conversationId, provider);
+    welcomeBackStore.track(desktopId, conversationId, provider, skipPermissions);
   };
   const untrackWelcomeBack = (desktopId: string) => {
     welcomeBackTracked.delete(desktopId);
@@ -1544,7 +1545,7 @@ export function registerIpcHandlers(
     // remembered (S-sent) — this is where a brand-new (non-resume) session
     // earns its spot, the moment its first user message actually lands.
     // trackWelcomeBack no-ops after the first call, so later messages are free.
-    if (claudeId && event.type === 'user-message') trackWelcomeBack(event.sessionId, claudeId, 'claude');
+    if (claudeId && event.type === 'user-message') trackWelcomeBack(event.sessionId, claudeId, 'claude', sessionManager.getSession(event.sessionId)?.skipPermissions === true);
     // Claude Code sessions are named by the SAME policy as native ones: this
     // tailer emits 'turn-complete' only when stop_reason !== 'tool_use', so a
     // turn that ran twenty tools counts as the one reply it is.
@@ -1698,6 +1699,16 @@ export function registerIpcHandlers(
     }
 
     let source: ResolvedPageSource | null = transcriptWatcher.pageSourceFor(sessionId);
+    // A7/C3: no watcher means no Claude Code process of ours is attached to this transcript, and no
+    // resume boundary means we did not just spawn one (a pre-hook resume has a boundary and a live
+    // process). Then the conversation is only being viewed, so background work it never reported an
+    // end for cannot still be running — see TranscriptPageResult.reconcileBackground.
+    // Review F3: and no live Claude Code process of ours under this id either — a session whose
+    // watcher is not registered yet (or whose pre-spawn snapshot failed, so it has no boundary)
+    // is still running its work; settling it "stopped" here would be permanent.
+    const ours = sessionManager.getSession(sessionId);
+    const liveProcess = !!ours && ours.provider === 'claude' && ours.status !== 'destroyed';
+    const viewOnly = !source && !resumePageBoundaries.has(sessionId) && !liveProcess;
     if (!source) {
       // No watcher yet (pre-hook resume), anymore (exit), or ever (buddy).
       // Resolve from validated locator ids supplied now or on the first page;
@@ -1733,7 +1744,7 @@ export function registerIpcHandlers(
     const reconcile = resumeOffset != null && !entirelyOld;
     const old = reconcile ? await readTranscriptPage({ jsonlPath: source.jsonlPath,
       sessionId, endOffset: resumeOffset }) : null;
-    return { ...page, reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
+    return { ...page, ...(viewOnly ? { reconcileBackground: true } : {}), reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
       ? [...new Set(old.events.filter(ev => ev.type === 'tool-use').map(ev => ev.data.toolUseId).filter((id): id is string => !!id))]
       : undefined };
   };

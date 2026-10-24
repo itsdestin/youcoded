@@ -6,6 +6,8 @@ import { TranscriptEvent, StampableEvent } from '../shared/types';
 import { SubagentIndex } from './subagent-index';
 import { SubagentWatcher } from './subagent-watcher';
 import { ccProjectSlug } from './slug-encoding';
+import { parseQueueWire } from '../shared/claude-queue-wire';
+import { claudeAliasForModelId } from '../shared/model-ids';
 
 // ---------------------------------------------------------------------------
 // parseTranscriptLine
@@ -34,6 +36,8 @@ export interface TurnUsageTally {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** Typed prompts already read, by the entry they follow (parentUuid → text): see the re-recorded prompt check below. */
+  promptsByParent?: Map<string, string>;
 }
 
 export function emptyTurnUsageTally(): TurnUsageTally {
@@ -82,6 +86,15 @@ export function parseTranscriptLine(
   // a wrong-but-recent time beats no time at all.
   const timestamp = stamp === 'recorded' && recordedAt ? recordedAt : Date.now();
 
+  // A task-notification Claude Code only ever wrote as a `queue-operation` enqueue line (~2% of Bash
+  // background ends measured 2026-10-22, e.g. task b61arikpe): no user line and no attachment follows,
+  // so without this the card spins until the session exits (audit A6). The same notice may ALSO arrive
+  // as a user line or attachment — applying a notice twice is harmless (it settles the same card the
+  // same way), so there is no cross-line dedup here. The line has no uuid; its time is its identity.
+  if (parsed?.type === 'queue-operation' && parsed.operation === 'enqueue' && typeof parsed.content === 'string') {
+    return taskNotificationEvents(parsed.content, sessionId, `queue:${parsed.timestamp ?? ''}`, timestamp);
+  }
+
   // A message typed while Claude is still working. Claude Code records it ONLY as a queued_command
   // attachment (no ordinary user line follows), and skipping it with every other non-user line left
   // the typing device's bubble unconfirmed at the bottom of its chat while every other device never
@@ -99,7 +112,7 @@ export function parseTranscriptLine(
   const queuedText = queuedPromptText(parsed);
   if (queuedText !== null) {
     if (!queuedText) return [];
-    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp, data: { text: queuedText } }];
+    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp, data: queueWireData(queuedText) }];
   }
 
   // Only process user / assistant message lines
@@ -159,6 +172,8 @@ export function parseTranscriptLine(
           ? parsed.toolUseResult.structuredPatch
           : undefined;
         const backgroundTaskId = backgroundLaunchId(parsed.toolUseResult);
+        const backgroundPersistent = backgroundTaskId && parsed.toolUseResult?.persistent === true ? true : undefined;
+        const stoppedTaskId = stoppedTaskIdOf(parsed.toolUseResult);
         const resumed = parsed.toolUseResult?.resumedAgentId;
         const resumedTaskId = typeof resumed === 'string' && resumed ? resumed : undefined;
         for (const block of content) {
@@ -175,6 +190,8 @@ export function parseTranscriptLine(
                 recordedAt,
                 ...(structuredPatch ? { structuredPatch } : {}),
                 ...(backgroundTaskId ? { backgroundTaskId } : {}),
+                ...(backgroundPersistent ? { backgroundPersistent } : {}),
+                ...(stoppedTaskId && !block.is_error ? { stoppedTaskId } : {}),
                 ...(resumedTaskId ? { resumedTaskId } : {}),
               },
             });
@@ -189,9 +206,11 @@ export function parseTranscriptLine(
     // an ordinary-looking plugin row before its real command/summary. Neither is a new chat turn.
     const bridgeCommand = parsed.origin?.kind === 'plugin' && parsed.origin.name === 'youcoded-control-bridge' && parsed.origin.asUser !== true;
     if (bridgeCommand && /^\/compact(?:[ \t]|$)/.test(rawUserText)) return [];
+    const switchedTo = modelSwitchFromStdout(rawUserText);
+    if (switchedTo) return [{ type: 'model-switch', sessionId, uuid, timestamp, data: { model: switchedTo } }];
     if (/^\s*<command-name>/.test(rawUserText)) {
       const command = slashCommandText(rawUserText);
-      if (command) return [{ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } }];
+      if (command) { const event = slashCommandEvent(command, sessionId, uuid, timestamp); return event ? [event] : []; }
     }
 
     // User-typed prompt: has a promptId and text content (not tool results)
@@ -209,7 +228,8 @@ export function parseTranscriptLine(
         // "stuck thinking" trap described on STRIP_ENTIRELY_RE below.
         const command = slashCommandText(raw);
         if (!command) return events; // a notice, or e.g. interrupted tool use placeholders
-        events.push({ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } });
+        const event = slashCommandEvent(command, sessionId, uuid, timestamp);
+        if (event) events.push(event);
         return events;
       }
 
@@ -239,12 +259,23 @@ export function parseTranscriptLine(
         return events;
       }
 
+      // WHY (Destin, 2026-10-22: "claude only ever received a single wyd"): when a request stalls, Claude Code can write the SAME
+      // prompt a second time — a new line with the same parent entry and the same text, which replaces the first on its own chain
+      // (its terminal shows one). Read as two messages, the chat drew two bubbles. A message typed again later has a different
+      // parent (the reply or the first copy), so only a re-recording is skipped.
+      const parent = typeof parsed.parentUuid === 'string' ? parsed.parentUuid : '';
+      if (parent && tally.promptsByParent?.get(parent) === text) return events;
+      if (parent) {
+        tally.promptsByParent ??= new Map();
+        tally.promptsByParent.set(parent, text);
+        if (tally.promptsByParent.size > 64) tally.promptsByParent.delete(tally.promptsByParent.keys().next().value as string);
+      }
       events.push({
         type: 'user-message',
         sessionId,
         uuid,
         timestamp,
-        data: { text },
+        data: queueWireData(text),
       });
       return events;
     }
@@ -379,8 +410,15 @@ export function parseTranscriptLine(
  * any other line. Background-task notices (commandMode 'task-notification') and messages another
  * Claude Code session sent in (origin.kind 'peer') are not something the person typed. A queued
  * line with no origin at all is read as typed: all 84 measured on 2026-09-11 carried one, so this
- * only matters for a Claude Code build this was not measured on. Mirrored in TranscriptWatcher.kt.
+ * only matters for a Claude Code build this was not measured on.
  */
+/** WHY (2026-10-22): a message sent through the queue reached Claude Code with the queue's file lines added; the chat shows
+ *  what the person typed, with the attached files as chips (`attachedFiles`), on every screen and after a reload. */
+function queueWireData(text: string): { text: string; attachedFiles?: string[] } {
+  const parsed = parseQueueWire(text);
+  return parsed.attached.length ? { text: parsed.text, attachedFiles: parsed.attached } : { text: parsed.text };
+}
+
 function queuedPromptText(parsed: any): string | null {
   const a = parsed?.type === 'attachment' ? parsed.attachment : null;
   if (!a || a.type !== 'queued_command' || a.commandMode !== 'prompt') return null;
@@ -398,12 +436,30 @@ function queuedTaskNotificationText(parsed: any): string | null {
 
 /** The id of the background work a Claude Code tool result only LAUNCHED:
  *  an Agent's `agentId` when its status is 'async_launched' (every CC Agent
- *  call measured on 2026-09-24), or a Bash command's `backgroundTaskId`. */
+ *  call measured on 2026-09-24), a Bash command's `backgroundTaskId`, a
+ *  Workflow's `taskId` (`status: 'async_launched'`, `taskType: 'local_workflow'`,
+ *  no agentId — audit A5), or a Monitor's `taskId` (`{taskId, timeoutMs,
+ *  persistent}` — audit C2). Without the last two those cards never started
+ *  as running, so a live watcher or workflow read "done". */
 function backgroundLaunchId(r: any): string | undefined {
   if (!r || typeof r !== 'object') return undefined;
   if (r.status === 'async_launched' && typeof r.agentId === 'string' && r.agentId) return r.agentId;
   if (typeof r.backgroundTaskId === 'string' && r.backgroundTaskId) return r.backgroundTaskId;
+  if (r.status === 'async_launched' && typeof r.taskId === 'string' && r.taskId) return r.taskId;
+  // The Monitor receipt has no status field; `timeoutMs` beside `taskId` is its signature.
+  if (typeof r.taskId === 'string' && r.taskId && typeof r.timeoutMs === 'number') return r.taskId;
   return undefined;
+}
+
+/** The task a SUCCESSFUL TaskStop ended. Shape (measured): `toolUseResult
+ *  {message: 'Successfully stopped task: <id> (<command>)', task_id, task_type:
+ *  local_bash | local_agent | local_workflow, command}`. Any other `task_id`
+ *  result (TaskOutput's, an error string) is not a stop. */
+function stoppedTaskIdOf(r: any): string | undefined {
+  if (!r || typeof r !== 'object') return undefined;
+  if (typeof r.task_id !== 'string' || !r.task_id || typeof r.task_type !== 'string') return undefined;
+  if (typeof r.message !== 'string' || !/^Successfully stopped/i.test(r.message)) return undefined;
+  return r.task_id;
 }
 
 const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>/g;
@@ -414,7 +470,7 @@ const TASK_NOTIFICATION_RE = /<task-notification>([\s\S]*?)<\/task-notification>
  * card and yield nothing. Shape measured on 2026-09-24 across 1,915 notices:
  * <task-id> (one, or several for an orphan summary on resume), usually a
  * <tool-use-id>, <status> completed|failed|killed|stopped, <summary>, and for
- * a helper a <result> holding its final report. Mirrored in TranscriptWatcher.kt.
+ * a helper a <result> holding its final report.
  */
 function taskNotificationEvents(raw: string, sessionId: string, uuid: string, timestamp: number): StampableEvent[] {
   if (!raw || !raw.includes('<task-notification>')) return [];
@@ -440,6 +496,8 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
     const re = body.lastIndexOf('</result>');
     const result = rs !== -1 && re > rs ? body.slice(rs + '<result>'.length, re).trim() : undefined;
     const summary = tagText(body, 'summary');
+    // A Bash command's exit code exists only inside the summary sentence.
+    const exit = summary ? /exit code (-?\d+)/i.exec(summary) : null;
     out.push({
       type: 'background-task',
       sessionId,
@@ -452,6 +510,7 @@ function taskNotificationEvents(raw: string, sessionId: string, uuid: string, ti
           taskIds, status: mapped,
           ...(summary ? { summary } : {}),
           ...(result ? { result } : {}),
+          ...(exit ? { exitCode: Number(exit[1]) } : {}),
         },
       },
     });
@@ -474,6 +533,29 @@ function slashCommandText(raw: string): string | null {
   const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(raw)?.[1]?.replace(ANSI_RE, '').trim() ?? '';
   const command = name.startsWith('/') ? name : `/${name}`;
   return args ? `${command} ${args}` : command;
+}
+
+/** A recorded slash command as its event, or null for one the chat shows another way. WHY `/model` is
+ *  dropped (2026-10-22): drawn as a user bubble it read as something said to Claude ("/model opus[1m]").
+ *  Its outcome is drawn instead, from Claude Code's reply line (modelSwitchFromStdout). An argument
+ *  naming no known model (a typo) stays the plain command, as before. */
+function slashCommandEvent(command: string, sessionId: string, uuid: string, timestamp: number): StampableEvent | null {
+  const model = /^\/model(?:[ \t]+(\S+))?\s*$/.exec(command);
+  if (model && (!model[1] || claudeAliasForModelId(model[1]))) return null;
+  return { type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } };
+}
+
+/** The model a `/model` reply line says the conversation is now on, or null. WHY the reply and not the
+ *  command line: Claude Code records the command even when the switch does not happen ("Kept model as
+ *  Opus 4.8" after `/model fable`, a "Switch model?" pop-up answered No: 15+ times in local transcripts,
+ *  2026-10-22). Only "Set model to <name>" means it switched. The name comes bold (ANSI) or in backticks
+ *  depending on the version; mapped onto the app's alias where it names one, else kept as written. */
+function modelSwitchFromStdout(raw: string): string | null {
+  const body = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(raw)?.[1];
+  if (!body) return null;
+  const name = /^Set model to\s+(.+?)(?:\s+and saved\b|\s+·|\n|$)/.exec(body.replace(ANSI_RE, '').replace(/`/g, '').trim())?.[1]?.trim();
+  if (!name) return null;
+  return claudeAliasForModelId(name) ?? name;
 }
 
 function extractTextFromBlocks(content: any): string {

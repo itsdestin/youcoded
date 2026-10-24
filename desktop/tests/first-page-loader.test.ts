@@ -147,6 +147,35 @@ describe('first-page loader (one fill)', () => {
     await vi.waitFor(() => expect(r.types()).toContain('HISTORY_PAGE_LOADED'));
   });
 
+  it('a dropped connection does not use up a conversation\'s loads: it still loads after many drops', async () => {
+    // Four drops in one run used to stop a phone's conversation from ever loading again until the app restarted.
+    let n = 0;
+    const drops = FIRST_PAGE_MAX_RUNS * 3;
+    const r = rig(() => (++n <= drops ? Promise.reject(Object.assign(new Error('dropped'), { outcomeUnknown: true })) as any : real));
+    await r.loader.load('s');
+    for (let i = 0; i < drops; i++) { r.loader.noteLiveActivity('s'); await new Promise((res) => setTimeout(res, 0)); }
+    await vi.waitFor(() => expect(r.types()).toContain('HISTORY_PAGE_LOADED'));
+  });
+
+  it('a load that fails the same way every time still stops after its runs, however many live events come', async () => {
+    // Only a question the connection lost is uncounted; anything else would be asked again on every live event, without end.
+    let n = 0;
+    const r = rig(() => { n++; return Promise.reject(new Error('no host record')) as any; });
+    await r.loader.load('s');
+    for (let i = 0; i < FIRST_PAGE_MAX_RUNS * 3; i++) { r.loader.noteLiveActivity('s'); await new Promise((res) => setTimeout(res, 0)); }
+    expect(n).toBe(FIRST_PAGE_MAX_RUNS);
+  });
+
+  it('a catch-up that cannot be applied is a failed fill, not a thrown round', async () => {
+    const open = vi.fn(async () => ({ ok: true, epoch: 'e', headSeq: 9, resume: 'events', before: [], page: null,
+      after: [{ type: 'transcript:event', payload: {} }], facts: { working: true } } as OpenReply));
+    let throwOnPlay = false;
+    const loader = createFirstPageLoader({ open, requestPage: vi.fn(), dispatch: () => {}, flush: () => {}, play: () => { if (throwOnPlay) throw new Error('bad event'); }, sleep: async () => {} });
+    await loader.load('s');
+    throwOnPlay = true;
+    await expect(loader.refill('s', { fresh: false })).resolves.toBe('failed');
+  });
+
   it('a bridge with no host record (the Android app on its own runtime) fails quietly, as it always did', async () => {
     const r = rig(() => null);
     expect(await r.loader.load('s')).toBe('failed');

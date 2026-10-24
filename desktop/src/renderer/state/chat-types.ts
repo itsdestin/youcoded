@@ -266,7 +266,9 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty'; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
+  // `sendTransport: 'queue'` = a Claude Code send handed to the host queue (never given the terminal's retry Enter); `boundUuid` = the transcript line the
+  // host says it became, so the bubble is confirmed by identity even when Claude Code recorded different words.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendTransport?: 'direct' | 'pty' | 'queue'; boundUuid?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean; sendRefused?: true }
   | { kind: 'assistant-turn'; turnId: string; afterMarkerId?: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -353,6 +355,12 @@ export interface SessionChatState {
    *  appears — see chat-reducer.ts `applyParkedSpecialistRuns`. Transient:
    *  never serialized; absent means nothing is waiting. */
   parkedSpecialistRuns?: Map<string, SpecialistRunView>;
+  /** Native background-shell records that arrived before their Bash card existed,
+   *  keyed by the launching toolUseId (latest only) — the shell twin of
+   *  `parkedSpecialistRuns` (audit D1: they used to be dropped, so a card on an
+   *  older page never learned its command had ended). Applied by
+   *  chat-reducer.ts `applyParkedShellRuns`. Transient: never serialized. */
+  parkedShellRuns?: Map<string, import('../../shared/types').ShellRunView>;
   /**
    * Native runtime: the model is READING the prompt (prefill), not hanging. Set
    * by a `promptProcessing`-bearing heartbeat and cleared the moment prefill ends
@@ -497,6 +505,9 @@ export interface SessionChatState {
    * way seenUuids is. Tiny — one entry per background task.
    */
   ccBackgroundOutcomes: Record<string, import('../../shared/types').CcBackgroundRun>;
+  /** The "Background" chip's list: every background command / watcher of this
+   *  session, independent of which cards are loaded. See state/background-commands.ts. */
+  backgroundCommands: import('./background-commands').BackgroundCommands;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -535,6 +546,7 @@ export function createSessionChatState(): SessionChatState {
     totals: emptyTotals(),
     sessionContext: null,
     ccBackgroundOutcomes: {},
+    backgroundCommands: {},
   };
 }
 
@@ -562,7 +574,7 @@ export type ChatAction =
       /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
       sendId?: string;
       /** Direct/uncertain sends must never receive the terminal's automatic Enter retry. */
-      sendTransport?: 'direct' | 'pty';
+      sendTransport?: 'direct' | 'pty' | 'queue';
     }
   | { type: 'SEND_TRANSPORT'; sessionId: string; sendId: string; transport: 'direct' | 'pty' }
   | {
@@ -596,6 +608,8 @@ export type ChatAction =
       type: 'QUEUE_SYNCED';
       sessionId: string;
       queue: QueuedItem[];
+      /** Recent Claude Code queue sends and the transcript line each became. */
+      bound?: { sendId: string; uuid: string }[];
     }
   | {
       // The host took back a "Model switched to X" divider because Claude Code refused the switch (one-core R5-4a review).
@@ -904,6 +918,8 @@ export type ChatAction =
       // A slash command read from its command tags (TranscriptEvent.data.slashCommand). It starts
       // no turn: many commands get no reply, and a watching device would stay "thinking".
       slashCommand?: boolean;
+      /** Files attached to a Claude Code queue send (TranscriptEvent.data.attachedFiles), drawn as chips. */
+      attachedFiles?: string[];
       // Host-injected user-role turn (TranscriptEvent.data.injected, e.g.
       // 'specialist-report') + its structured header. Carried onto the
       // timeline entry so the renderer draws a compact report card, not a bubble.
@@ -961,6 +977,10 @@ export type ChatAction =
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
       /** Claude Code: the result is only a launch receipt — see ToolCallState.ccBackground. */
       backgroundTaskId?: string;
+      /** Claude Code Monitor: started `persistent` (runs until stopped or the session exits). */
+      backgroundPersistent?: boolean;
+      /** Claude Code TaskStop: the task a successful stop ended. */
+      stoppedTaskId?: string;
       /** Claude Code SendMessage: the finished helper this call resumed. */
       resumedTaskId?: string;
       parentAgentToolUseId?: string;
@@ -972,7 +992,10 @@ export type ChatAction =
       type: 'TRANSCRIPT_BACKGROUND_TASK';
       sessionId: string;
       uuid: string;
+      /** When the notice was read — the command list's "ended" time. */
+      timestamp?: number;
       toolUseId?: string;
+      exitCode?: number;
       taskIds: string[];
       status: Exclude<import('../../shared/types').CcBackgroundRun['status'], 'running'>;
       summary?: string;
@@ -1067,6 +1090,8 @@ export type ChatAction =
       reconcileInterrupted?: boolean;
       /** Tool ids known to predate a resumed CC process (page may also have new work). */
       reconcileInterruptedToolIds?: string[];
+      /** CC: no process of this app is attached to this transcript — see TranscriptPageResult.reconcileBackground. */
+      reconcileBackground?: boolean;
       /** Handle for the page OLDER than this one; null when hasMore is false. */
       cursor: PageCursor | null;
       hasMore: boolean;
@@ -1247,6 +1272,7 @@ export interface SerializedSessionChatState {
   sessionContext?: SessionContext | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   ccBackgroundOutcomes?: Record<string, import('../../shared/types').CcBackgroundRun>;
+  backgroundCommands?: import('./background-commands').BackgroundCommands;
 }
 
 export interface SerializedChatState {
@@ -1290,6 +1316,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         totals: s.totals,
         sessionContext: s.sessionContext,
         ccBackgroundOutcomes: s.ccBackgroundOutcomes,
+        backgroundCommands: s.backgroundCommands,
       },
     ]);
   }
@@ -1357,6 +1384,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       sessionContext: ser.sessionContext ?? null,
       // Older hosts predate background tracking — nothing seen yet.
       ccBackgroundOutcomes: ser.ccBackgroundOutcomes ?? {},
+      // Older hosts predate the command list — start empty.
+      backgroundCommands: ser.backgroundCommands ?? {},
     });
   }
   return result;

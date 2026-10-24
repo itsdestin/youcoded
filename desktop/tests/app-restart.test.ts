@@ -4,7 +4,10 @@
 // on the spot if a responsive window has unsaved text edits (and says so each time); otherwise
 // it arms a 10 s watchdog that lets a still-open (hung) window go.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests, shutdownStep } from '../src/main/app-restart';
+import { QUIT_WATCHDOG_MS, currentExitAction, gatedQuit, onWillQuit, quitAfterTeardown, registerInstallExit, requestInstallRestart, requestRestart, resetRestartForTests, shutdownStep, takeUntrackForTeardown } from '../src/main/app-restart';
+import { internalAppQuit } from '../src/main/internal-quit';
+import fs from 'fs';
+import path from 'path';
 
 it('repeated quit stays blocked until teardown is complete', () => {
   const t = deps(true);
@@ -134,5 +137,133 @@ describe('a quit after teardown', () => {
     quitAfterTeardown(t.d);
     t.fire();
     expect(t.d.exit).not.toHaveBeenCalled();
+  });
+});
+
+// #183 T3: a quit can also install a downloaded update — but only a person's own quit, and only at exit.
+describe('quit install and Restart to update', () => {
+  const personQuit = (t: ReturnType<typeof deps>, allowed = true) => gatedQuit({ ...t.d, quitInstallAllowed: () => allowed });
+
+  it('a person\'s plain quit installs the update at exit, without reopening', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    await personQuit(deps(true));
+    expect(currentExitAction()).toBe('install');
+    onWillQuit(vi.fn());
+    expect(install).toHaveBeenCalledWith(false, expect.any(Function));
+  });
+
+  it('does not install when the service says no (switch off, password needed, not the latest, 2 failures …)', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    await personQuit(deps(true), false);
+    onWillQuit(vi.fn());
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('a quit raised by our own code never installs (internal quit)', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    internalAppQuit(() => {});
+    await personQuit(deps(true));
+    onWillQuit(vi.fn());
+    expect(install).not.toHaveBeenCalled();
+    // ...and the mark is spent: the next plain quit may install again.
+    await personQuit(deps(true));
+    expect(currentExitAction()).toBe('install');
+  });
+
+  it('a settings restart relaunches and does not install', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestRestart(() => {});
+    await personQuit(deps(true));
+    const relaunch = vi.fn();
+    onWillQuit(relaunch);
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('SIGTERM never installs: it does not pass the quit gate, so there is no exit action', () => {
+    const install = vi.fn(); registerInstallExit(install);
+    onWillQuit(vi.fn());
+    expect(currentExitAction()).toBe('none');
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('main.ts decides quit-install with the system-shutdown flag (Windows session-end, powerMonitor shutdown)', () => {
+    const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
+    expect(main).toMatch(/quitInstallAllowed: \(\) => !systemShutdown && /);
+    expect(main).toMatch(/powerMonitor\.on\('shutdown', \(\) => \{ systemShutdown = true; \}\)/);
+    expect(main).toMatch(/'session-end', \(\) => \{ systemShutdown = true; \}/);
+  });
+
+  it('a quit held for unsaved files spawns nothing', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    await personQuit(deps(false));
+    expect(currentExitAction()).toBe('none');
+    onWillQuit(vi.fn());
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('runs from the watchdog exit too (exit skips will-quit), and only once', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    const t = deps(true, 1);
+    await personQuit(t);
+    quitAfterTeardown(t.d);
+    t.fire();
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(t.d.exit).toHaveBeenCalledTimes(1);
+    onWillQuit(vi.fn()); // a late will-quit finds nothing left to do
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
+  it('Restart to update installs and reopens, and untracks only after the gate passed', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, ['s1', 's2']);
+    const t = deps(true);
+    await gatedQuit(t.d);
+    expect(takeUntrackForTeardown()).toEqual(['s1', 's2']);
+    onWillQuit(vi.fn());
+    expect(install).toHaveBeenCalledWith(true, expect.any(Function));
+  });
+
+  it('a held Restart keeps its sessions tracked and forgets the install', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, ['s1']);
+    await gatedQuit(deps(false).d);
+    expect(takeUntrackForTeardown()).toEqual([]);
+    await gatedQuit(deps(true).d); // the next plain quit untracks nothing either
+    expect(takeUntrackForTeardown()).toEqual([]);
+    onWillQuit(vi.fn());
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('a restart dropped after teardown (unsaved edits) still installs, but does not reopen', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, []);
+    const t = deps(true, 1);
+    await gatedQuit(t.d);
+    t.d.refuseForUnsaved.mockReturnValue(true);
+    expect(quitAfterTeardown(t.d)).toBe(false); // told to save first
+    expect(currentExitAction()).toBe('install');
+    t.d.refuseForUnsaved.mockReturnValue(false);
+    onWillQuit(vi.fn());
+    expect(install).toHaveBeenCalledWith(false, expect.any(Function));
+  });
+
+  it('a Restart whose installer already ran (Linux package) quits with no install step', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, ['s1'], false);
+    await gatedQuit(deps(true).d);
+    expect(takeUntrackForTeardown()).toEqual(['s1']);
+    onWillQuit(vi.fn());
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('a second quit while a restart is already under way does not downgrade it to a plain install', async () => {
+    const install = vi.fn(); registerInstallExit(install);
+    requestInstallRestart(() => {}, []);
+    await gatedQuit(deps(true).d);                 // Restart passed the gate: install-relaunch
+    await personQuit(deps(true));                   // the person quits again during teardown
+    expect(currentExitAction()).toBe('install-relaunch');
+    onWillQuit(vi.fn());
+    expect(install).toHaveBeenCalledWith(true, expect.any(Function));
   });
 });

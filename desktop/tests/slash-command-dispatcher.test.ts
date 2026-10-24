@@ -49,28 +49,10 @@ describe('dispatchSlashCommand — typed /model <alias> never falls through to a
     expect(r).toEqual({ handled: true });
   });
 
-  it('a sent switch appends a friendly marker in place of the raw command text', () => {
+  it('a sent switch draws nothing itself: the divider comes from the /model line Claude Code records', () => {
     const dispatch = vi.fn();
-    dispatchModelCommand('/model opus', { onModelSwitchCommand: () => 'sent' }, dispatch);
-
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    const action = dispatch.mock.calls[0][0];
-    expect(action.type).toBe('MODEL_SWITCH_MARKER');
-    expect(action.sessionId).toBe('sess-1');
-    expect(action.label).toBe('Model switched to Opus');
-  });
-
-  it('sonnet/haiku/fable map to their own labels', () => {
-    for (const [typed, alias, label] of [
-      ['sonnet', 'sonnet', 'Sonnet'],
-      ['haiku', 'haiku', 'Haiku'],
-      ['fable', 'fable', 'Fable'],
-    ] as const) {
-      const dispatch = vi.fn();
-      dispatchModelCommand(`/model ${typed}`, { onModelSwitchCommand: () => 'sent' }, dispatch);
-      expect(dispatch.mock.calls[0][0].label).toBe(`Model switched to ${label}`);
-      void alias;
-    }
+    expect(dispatchModelCommand('/model opus', { onModelSwitchCommand: () => 'sent' }, dispatch)).toEqual({ handled: true });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('a refused send (turn in flight) is swallowed, not sent as a chat message', () => {

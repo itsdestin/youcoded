@@ -23,7 +23,7 @@
 //
 // Electron-free and injected, like session-live.ts: tests drive it with a real record and a fake terminal or the real @xterm/headless.
 import { Terminal } from '@xterm/headless';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { applyClaudeCodeWidths } from '../shared/terminal-widths';
 import type { SessionRecords } from './session-record';
 import type { SessionLiveFacts } from './session-live';
 import { screenTextOf, visibleScreenTextOf, type ScreenBuffer } from '../shared/terminal-screen-text';
@@ -96,12 +96,14 @@ interface PerSession {
   screenCache: { gen: number; text: string } | null;
   /** The screen text the keyboard verdict was last worked out from (the same text gives the same verdict). */
   focusScreen: string | null;
+  /** An ask or permission card held queue input at the last refresh (its closing edge wakes the queue). */
+  queueHeldByRecord: boolean;
 }
 
 const fresh = (): PerSession => ({
   term: null, pending: 0, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
   stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false, inputKey: '',
-  screenGen: 0, screenCache: null, focusScreen: null,
+  screenGen: 0, screenCache: null, focusScreen: null, queueHeldByRecord: false,
 });
 
 export class SessionScreens {
@@ -283,6 +285,11 @@ export class SessionScreens {
     if (gate && s.tickTimer === null) this.startTicks(sessionId, s);
     else if (!gate && s.tickTimer !== null) this.stopTicks(sessionId, s);
     else if (!gate && s.stuckShown) this.clearStuck(sessionId, s);
+    // WHY (2026-10-22): a card or ask closing can make input safe with no new terminal output, and only output used to
+    // wake the queue, so waiting messages sat until the next idle poll. Checked only on that closing edge (a screen read).
+    const held = need.asking || !!need.permissionCard;
+    if (s.queueHeldByRecord && !held && this.queueInputSafe(sessionId)) this.deps.onQueueInputReady?.(sessionId);
+    s.queueHeldByRecord = held;
   }
 
   // ------------------------------------------------------------------------------------------------------------------------------------
@@ -381,11 +388,11 @@ export class SessionScreens {
   }
 }
 
-/** The real thing: @xterm/headless, with the same width table the window's terminal uses (so a wrapped line breaks in the same place). */
+/** The real thing: @xterm/headless, with the same width table the window's terminal uses (so a wrapped line breaks in the same place).
+ *  Claude Code's own emoji widths (shared/terminal-widths.ts): with Unicode 11 alone, one joined emoji left this copy garbled and
+ *  the message box unreadable, so the app said a question was open and the queue held every message. */
 function realTerminal(cols: number, rows: number): ScreenTerminal {
   const term = new Terminal({ cols, rows, scrollback: SCREEN_SCROLLBACK_ROWS, allowProposedApi: true });
-  const unicode11 = new Unicode11Addon();
-  term.loadAddon(unicode11 as never);
-  term.unicode.activeVersion = '11';
+  applyClaudeCodeWidths(term);
   return term as unknown as ScreenTerminal;
 }

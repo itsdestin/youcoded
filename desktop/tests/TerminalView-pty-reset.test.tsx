@@ -17,7 +17,7 @@ vi.mock('@xterm/xterm', () => ({
   Terminal: vi.fn(function (this: any) {
     this.loadAddon = vi.fn();
     this.open = vi.fn();
-    this.unicode = { activeVersion: '11' };
+    this.unicode = { activeVersion: '11', register: vi.fn() };
     this.attachCustomKeyEventHandler = vi.fn();
     this.onData = vi.fn();
     this.onScroll = vi.fn().mockReturnValue({ dispose: vi.fn() });
@@ -41,7 +41,7 @@ vi.mock('@xterm/xterm', () => ({
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: vi.fn(function (this: any) { this.fit = vi.fn(); this.proposeDimensions = vi.fn().mockReturnValue({ cols: 80, rows: 24 }); }),
 }));
-vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: vi.fn(function (this: any) {}) }));
+vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: vi.fn(function (this: any) { this.activate = (t: any) => t.unicode.register({ version: '11', wcwidth: () => 1, charProperties: () => 2 }); }) }));
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: vi.fn(function (this: any) { this.onContextLoss = vi.fn(); this.dispose = vi.fn(); }) }));
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 vi.mock('../src/renderer/platform', () => ({

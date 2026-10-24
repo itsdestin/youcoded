@@ -34,9 +34,7 @@ import { formatVersionLine } from '../../shared/version-line';
 // and the launch path in App.tsx cannot drift apart on what `needed` means.
 import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
 import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
-// UiToggle is aliased because this file still exports its own `Toggle` (the
-// compat wrapper below) that AboutPopup imports by that name.
-import { Button, CARD_LEVEL_1, CloseButton, Slider, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
+import { Button, CARD_LEVEL_1, CloseButton, Slider, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useGuideReset } from './guide/guide-events';
 
@@ -384,32 +382,9 @@ function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSess
 }
 
 // ─── Toggle component (shared) ──────────────────────────────────────────────
-// Was a hand-rolled 32x16 track (green-600 on / red-600 for danger) with its own
-// knob math; now a thin wrapper over the shared <Toggle> primitive so there is
-// one 36x20 geometry app-wide (changes 15-17). Kept as a named export — and with
-// its original `enabled`/`onToggle`/`color` signature — because AboutPopup's
-// analytics opt-out imports `Toggle` from this file.
-//
-// color="red" maps to tone="danger" (the theme's destructive token, replacing the
-// raw red-600); the default maps to the app accent, replacing green-600.
-
-export function Toggle({ enabled, onToggle, color = 'green', label, disabled }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string; disabled?: boolean }) {
-  return (
-    <UiToggle
-      // The primitive already dims and blocks a disabled switch; this wrapper just
-      // never passed it through, so a caller could not express "shown, not operable".
-      disabled={disabled}
-      checked={enabled}
-      // The primitive hands back the next state; every call site here is a plain
-      // flip, so we discard it and keep the existing zero-arg handlers intact.
-      onChange={() => onToggle()}
-      tone={color === 'red' ? 'danger' : 'default'}
-      // None of these switches had an accessible name before (a <button> inside a
-      // <label> does not inherit one); call sites pass the visible row text.
-      aria-label={label}
-    />
-  );
-}
+// Lives in settings-toggle.tsx (2026-10-22 phone speed): AboutPopup and the beta-channel row import it, and importing it
+// from this file pulled all of Settings into the startup download.
+import { Toggle } from './settings-toggle';
 
 
 // ─── Sound settings popout ────────────────────────────────────────────────

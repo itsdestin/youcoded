@@ -27,7 +27,7 @@ export function useOfficeEditScreen(
   useScreenOpen('chat/files/edit', (id) => { if (id) { open(id); editWhenReady(40); } }, ids);
   // WHY here: SessionDrawer calls officeHeaderAction inside its header JSX, where no hook can
   // go, and it stays inside its line budget only without a new line. This subscription re-renders
-  // the drawer once the availability answer arrives, so the briefcase appears then.
+  // the drawer once the availability answer arrives, so the Office icon appears then.
   useOfficeAvailable();
 }
 
@@ -52,7 +52,7 @@ export function officeHeaderAction(
   if (!officeAvailableNow()) return null;
   return {
     title: 'Open in Office',
-    // The Office page's own briefcase, so the button reads as "go to Office".
+    // The Office page's own icon, so the button reads as "go to Office".
     glyph: <PageGlyph icon="office" className="w-4 h-4" />,
     onClick: () => {
       // One editor per file: an in-place edit closes before the file moves to a full tab —

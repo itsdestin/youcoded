@@ -77,7 +77,7 @@ interface CompactionRecord {
 }
 
 /** A `background-task` event's payload: which task(s) ended and how. `taskIds` is a list because Claude Code reports several orphaned commands in one notice on resume. */
-interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundRun['status'], 'running'>; summary?: string; result?: string }
+interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundRun['status'], 'running'>; summary?: string; result?: string; /** A Bash command's exit code, read from the notice's summary text ("…failed with exit code 144") — Claude Code writes it nowhere else. */ exitCode?: number }
 
 /** One coalesced-part UUID/range witness (see `assistant-text`.deltaReferences). */
 interface DeltaRef { eventUuid: string; start: number; end: number }
@@ -125,6 +125,8 @@ interface UserMessageData extends SubagentStamp {
   /** A slash command read from its command tags. The chat starts no turn for
    *  it, because many commands get no reply (2026-09-11). */
   slashCommand?: boolean;
+  /** Claude Code queue: files the person attached, read back off the message's "Attached:" lines (shared/claude-queue-wire.ts). */
+  attachedFiles?: string[];
   /** Native: absolute composer attachment paths, persisted so resume can
    *  re-read the pixels (events carry no binary). #290 follow-up fix 2. */
   attachments?: string[];
@@ -199,6 +201,10 @@ interface ToolResultData extends SubagentStamp {
    *  so the result is a launch receipt, not the outcome. The outcome arrives
    *  later as a 'background-task' event. */
   backgroundTaskId?: string;
+  /** Claude Code Monitor only: the watcher was started `persistent` — it runs until it is stopped or the session exits, with no timeout of its own (audit C5). */
+  backgroundPersistent?: boolean;
+  /** Claude Code TaskStop only: the task a SUCCESSFUL stop ended (`toolUseResult.task_id`). TaskStop writes no <task-notification> for a Bash command (264 of 264 measured), so this result is the only signal (audit C1). */
+  stoppedTaskId?: string;
   /** Claude Code SendMessage only: the finished helper it resumed
    *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
   resumedTaskId?: string;
@@ -332,6 +338,11 @@ interface ContextClearData {
   contextUsedAfter?: number;
 }
 
+interface ModelSwitchData extends SubagentStamp {
+  /** The model the conversation is on from here: a Claude Code alias (`opus[1m]`) or a native provider model id. */
+  model: string;
+}
+
 interface SkillInvokedData {
   /** The resolved, qualified id (wecoded-themes-plugin:theme-builder). */
   skillId: string;
@@ -370,6 +381,7 @@ interface TranscriptDataMap {
   'replay-complete': ReplayCompleteData;
   'session-error': SessionErrorData;
   'context-clear': ContextClearData;
+  'model-switch': ModelSwitchData;
   'skill-invoked': SkillInvokedData;
   'subagent-usage': SubagentUsageData;
   'background-task': BackgroundTaskData;

@@ -35,8 +35,10 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
+
+// Matches the .jump-to-bottom exit transition in globals.css.
+const JUMP_FADE_MS = 180;
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { StatusStrip, Button } from './ui';
 import { helperAsksOf } from '../utils/specialist-cards';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 import { useBrowserExpanded } from '../state/browser-store';
@@ -103,14 +105,6 @@ interface Props {
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
   onSendQueuedNow?: (sessionId: string, queueId: string) => void;
-  /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
-   *  where a PHONE's copy of this conversation stands. `reconnecting` and
-   *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
-   *  behind the computer and offers Refresh. Undefined / `complete` shows
-   *  nothing. Only ever set on a remote client — App owns the subscription. */
-  conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
-  /** Asks the host for a fresh copy — the strip's Refresh. */
-  onRefreshConversation?: () => void;
   /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
    *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
    *  Never set on the computer. */
@@ -124,7 +118,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo, model, providerType }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, filling, modelLoadingDemo, model, providerType }: Props) {
   // Paused while hidden: an unstamped session's lookup registers a listener and reads
   // the provider lists, and a hidden tab does no work (performance.md rule 2).
   // Guard: use-provider-type.test.tsx "a paused caller…".
@@ -133,31 +127,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
-  // What the conversation strip shows: the live status, plus a 2.5 s "Up to
-  // date" after a refresh so the person can see it worked (tester U9). An
-  // initial `complete` — the desktop, or a phone that connected cleanly —
-  // shows nothing; only a transition OUT of restoring/incomplete earns the beat.
-  const [stripStatus, setStripStatus] = useState<'reconnecting' | 'restoring' | 'incomplete' | 'up-to-date' | null>(null);
-  const prevStatusRef = useRef<typeof conversationStatus>(undefined);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = conversationStatus;
-    if (conversationStatus === 'complete') {
-      if (prev === 'restoring' || prev === 'incomplete') {
-        setStripStatus('up-to-date');
-        const t = window.setTimeout(() => setStripStatus(null), 2500);
-        return () => window.clearTimeout(t);
-      }
-      setStripStatus(null);
-      return;
-    }
-    setStripStatus(conversationStatus ?? null);
-  }, [conversationStatus]);
   // WHY (one-core R5-3): a phone watches only a few conversations, so switching to one it has not opened means its content is still
-  // on its way. Until some arrives, show the SAME "Catching up with your computer…" strip a reconnect shows (no new copy) and not the
-  // "Start a conversation" hint, which would claim a conversation with history is empty for the moment the fill takes.
+  // on its way. Until some arrives, the input bar's connection strip says "Catching up with your computer…" (ConnectionStrip.tsx),
+  // and this view does not draw the "Start a conversation" hint, which would claim a conversation with history is empty.
   const waitingForFill = !!filling && state.timeline.length === 0;
-  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : null);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -224,12 +197,24 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   }, [cwd, sessionId, artifactDispatch]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Keeps the Jump-to-bottom button mounted for its fade-out after atBottom flips
+  // true (it unmounts instantly otherwise, which reads as a pop). WHY "mounted"
+  // rather than an "exiting" flag set on the flip: that flag only lands in the
+  // render AFTER atBottom changes, so for one render the button was unmounted and
+  // came back already faded — the exit looked instant.
+  const [jumpMounted, setJumpMounted] = useState(false);
+
   // Auto-scroll ("stick to bottom"). See use-stick-to-bottom.ts for why this is
   // intent-driven instead of observer-driven — the old IntersectionObserver
   // could not see a scroll that a streaming delta undid in the same frame.
   const {
     atBottom, stickRef, scrollToBottom, stickToBottom, jumpToBottom, releaseStick,
   } = useStickToBottom(scrollContainerRef);
+  useEffect(() => {
+    if (!atBottom) { setJumpMounted(true); return; }
+    const t = setTimeout(() => setJumpMounted(false), JUMP_FADE_MS);
+    return () => clearTimeout(t);
+  }, [atBottom]);
   // Task 12 review fix: refs for the --queued-strip-height measurement effect
   // below (chatRootRef = this component's OUTER root; queuedStripRef = the
   // strip's own rendered element).
@@ -345,11 +330,19 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // session. The bottom bar is the one whose height varies with drafts/multi-line.
     const chrome = document.querySelector('.chrome-wrapper--bottom');
     if (!chrome) return;
+    // WHY the rAF: useChromeMeasurements publishes --bottom-chrome-height from
+    // its OWN ResizeObserver on this same element, and observers run in
+    // registration order. When ours ran first we pinned against the OLD padding,
+    // then the padding grew and nothing re-pinned — a theme with a taller input
+    // bar opened 16-24px short of the bottom, the last message under the bar.
+    // One frame later every observer has run and the padding is current.
+    let raf = 0;
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     });
     observer.observe(chrome);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(raf); };
   }, [visible, scrollToBottom, stickRef]);
 
   // Auto-scroll when new content arrives and the view is still stuck to the
@@ -487,7 +480,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
         // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds, reconcileBackground: page.reconcileBackground === true });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
@@ -881,7 +874,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // hardcodes an offset — so once .chat-scroll's padding-bottom grows by
   // this var, both naturally settle content above the strip. No JS change
   // needed there.
-  const QUEUED_STRIP_GAP = '0.5rem'; // visual breathing room above the strip's top edge (Destin's ask)
+  const QUEUED_STRIP_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap — see :root in globals.css
   // WHY: measure the real strip with review-only rows too, preserving the composer clearance.
   const queuePreview = workbenchQueuePreview();
   const hasQueuedMessages = state.queuedMessages.length > 0 || (!!queuePreview && queuePreview !== 'idle-after');
@@ -905,6 +898,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // read a single number instead of remembering to add the gap itself.
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--queued-strip-height', `calc(${h}px + ${QUEUED_STRIP_GAP})`);
+      // The var grows .chat-scroll's padding, which no content observer sees —
+      // re-pin so the last message moves up above the cards instead of under them.
+      if (stickRef.current) scrollToBottom();
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -932,7 +928,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // modelStatusRef.current directly after each render: null means the component
   // rendered nothing this pass, so the effect zeroes the var instead of
   // guessing from a re-derived boolean.
-  const MODEL_STATUS_GAP = '0.75rem'; // matches .jump-to-bottom's own gap so the two bands stack evenly
+  const MODEL_STATUS_GAP = 'var(--chat-float-gap, 0.375rem)'; // the shared stack gap, so every band stacks evenly
   useEffect(() => {
     const root = chatRootRef.current;
     if (!root) return;
@@ -944,6 +940,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     const update = () => {
       const h = Math.ceil(el.getBoundingClientRect().height);
       root.style.setProperty('--model-status-height', `calc(${h}px + ${MODEL_STATUS_GAP})`);
+      if (stickRef.current) scrollToBottom(); // same reason as the queued strip's
     };
     const observer = new ResizeObserver(update);
     observer.observe(el);
@@ -1020,7 +1017,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
-          {visible && <ChatEdgeFade belowFindRow={findOpen || !!shownStrip} />}
+          {visible && <ChatEdgeFade belowFindRow={findOpen} />}
           {/* Center the hint between measured chrome edges, clearing even a
               floating header's extra margin. Use the actual provider name. */}
           {state.timeline.length === 0 && !state.isThinking && !waitingForFill && (
@@ -1055,41 +1052,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               onClose={() => setFindOpen(false)}
             />
           )}
-          {/* Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say
-              so"): where the phone's copy of this conversation stands. Its own
-              ROW above the messages, like the find bar — not inside the scroller,
-              because the chat sticks to its newest message and a strip at the
-              top of the scroll content was never on screen (measured 2026-09-10).
-              `.find-row` clears the overlaid header the same way. Desktop never
-              sets the prop, so nothing changes there. */}
-          {shownStrip && (
-            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={shownStrip}>
-              {shownStrip === 'incomplete' ? (
-                // Wording per the first phone tester (U11, 2026-09-10): "behind
-                // your computer" read as a place, not a time.
-                <StatusStrip
-                  tone="warn"
-                  detail="The last refresh didn’t finish, so newer messages may be missing."
-                  action={<Button size="sm" onClick={onRefreshConversation}>Refresh</Button>}
-                >
-                  This conversation may be out of date.
-                </StatusStrip>
-              ) : shownStrip === 'reconnecting' ? (
-                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
-                  Reconnecting to your computer…
-                </StatusStrip>
-              ) : shownStrip === 'restoring' ? (
-                // No draft line here: the connection IS back (tester U8).
-                <StatusStrip tone="busy" detail="Loading the newest messages…">
-                  Catching up with your computer…
-                </StatusStrip>
-              ) : (
-                // A beat of "Up to date" after a refresh, so it visibly worked
-                // (tester U9) — then the row goes away on its own.
-                <StatusStrip tone="ok">Up to date.</StatusStrip>
-              )}
-            </div>
-          )}
           {/* flex-1 min-h-0 (was h-full): with the find row in flow above it,
               h-full would overflow the pane by the row's height and clip the
               last message under the input bar. chat-scroll--below-find-row
@@ -1103,7 +1065,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               wallpaper laid OVER this scroller (pinned by float-chrome-pops.test.ts); the framed
               layouts cut messages at the frame's edge and have no fade yet — an open question for
               Destin, not decided here. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || shownStrip ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}
@@ -1379,10 +1341,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
          offset so the button appears above the frosted input bar.
          Positioned in the outer absolute div so it floats above the full
          framed-shell (chat + drawer) without being clipped by chat-pane. */}
-      {!atBottom && (
+      {(!atBottom || jumpMounted) && (
         <button
           onClick={jumpToBottom}
-          className="jump-to-bottom absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 rounded-full shadow-lg transition-colors z-10"
+          // data-state drives the fade/slide in globals.css. panel-glass gives the
+          // frosted look on wallpaper themes (solid themes keep a plain surface).
+          data-state={atBottom ? 'out' : 'in'}
+          tabIndex={atBottom ? -1 : undefined}
+          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
         </button>

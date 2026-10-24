@@ -36,7 +36,7 @@ vi.mock('@xterm/xterm', () => {
       this._core = { _renderService: { _isPaused: false, _handleIntersectionChange: handleIntersectionSpy } };
       this.loadAddon = vi.fn();
       this.open = vi.fn();
-      this.unicode = { activeVersion: '11' };
+      this.unicode = { activeVersion: '11', register: vi.fn() };
       this.attachCustomKeyEventHandler = vi.fn();
       this.onData = onDataSpy;
       // TerminalView subscribes to drive the overlay scrollbar's position.
@@ -76,7 +76,7 @@ vi.mock('@xterm/addon-fit', () => ({
 }));
 
 vi.mock('@xterm/addon-unicode11', () => ({
-  Unicode11Addon: vi.fn(function (this: any) {}),
+  Unicode11Addon: vi.fn(function (this: any) { this.activate = (t: any) => t.unicode.register({ version: '11', wcwidth: () => 1, charProperties: () => 2 }); }),
 }));
 
 vi.mock('@xterm/addon-webgl', () => ({

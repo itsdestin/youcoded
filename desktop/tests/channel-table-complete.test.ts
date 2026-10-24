@@ -182,6 +182,7 @@ const ALLOWED_REGISTRATIONS: Record<string, string> = {
 const ALLOWED_CASES: Record<string, string> = {
   'client:ready': 'connection housekeeping: the page is listening, so the host sends the session list, topic names and last status',
   'remote:ping': 'connection housekeeping: the phone\'s wake check',
+  'remote:timings': 'connection housekeeping: how long the phone took to show its conversations, for the computer\'s log',
   'remote:request-outcome': 'connection housekeeping: "did my action run?" for a request the phone sent before it lost its connection',
 };
 

@@ -18,6 +18,18 @@ describe('QueuedMessagesStrip', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('explains an unconfirmed row and shows the host\'s note on a waiting row only', () => {
+    render(<QueuedMessagesStrip queuedMessages={[
+      { queueId: 'a', content: 'unknown delivery', timestamp: 0, status: 'uncertain', notice: 'Queued delivery is unconfirmed.' },
+      { queueId: 'b', content: 'next', timestamp: 1, status: 'waiting', notice: 'Waiting for the message box in the terminal to be empty.' },
+      { queueId: 'c', content: 'later', timestamp: 2, status: 'waiting' },
+    ]} onCancel={vi.fn()} />);
+    expect(screen.getByText(/Dismiss puts the words back in your message box/)).toBeTruthy();
+    expect(screen.queryByText('Queued delivery is unconfirmed.')).toBeNull();
+    expect(screen.getAllByText('Waiting for the message box in the terminal to be empty.')).toHaveLength(1);
+    expect(screen.getByText('later').parentElement!.textContent).toBe('later');
+  });
+
   it('previews direct dismissal without a blocked-state replacement', () => {
     preview.mode = 'uncertain-after';
     const onSendNow = vi.fn();

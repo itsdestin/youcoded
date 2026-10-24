@@ -82,4 +82,8 @@ export type ThemeRegistryEntryWithStatus = ThemeRegistryEntry & {
    * from `installed: true` which means "manifest.json exists on disk" — a
    * marketplace theme can be installed but not local. */
   isLocal?: boolean;
+  /** True for a theme that ships inside the app (Light, Dark, Midnight, Crème, the
+   *  YouCoded pair). Always installed; it cannot be uninstalled, updated or liked —
+   *  it has no catalog row. Added by the renderer, never by the main process. */
+  isBuiltin?: boolean;
 };

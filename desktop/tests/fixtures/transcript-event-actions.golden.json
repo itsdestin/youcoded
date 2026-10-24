@@ -650,7 +650,8 @@
           "status": "completed",
           "summary": "s",
           "result": "r",
-          "parentAgentToolUseId": "parent-1"
+          "parentAgentToolUseId": "parent-1",
+          "timestamp": 1700
         }
       }
     ],
@@ -668,7 +669,8 @@
           "status": "completed",
           "summary": "s",
           "result": "r",
-          "parentAgentToolUseId": "parent-1"
+          "parentAgentToolUseId": "parent-1",
+          "timestamp": 1700
         }
       }
     ],
@@ -683,7 +685,8 @@
       "status": "completed",
       "summary": "s",
       "result": "r",
-      "parentAgentToolUseId": "parent-1"
+      "parentAgentToolUseId": "parent-1",
+      "timestamp": 1700
     }
   },
   "background-task without payload": {
@@ -1885,5 +1888,76 @@
         "outputTokens": 5
       }
     }
+  },
+  "model-switch claude code alias": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "MODEL_SWITCH_MARKER",
+          "sessionId": "s1",
+          "markerId": "model-switch-u-model-switch",
+          "timestamp": 1700,
+          "label": "Model switched to Opus"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "MODEL_SWITCH_MARKER",
+          "sessionId": "s1",
+          "markerId": "model-switch-u-model-switch",
+          "timestamp": 1700,
+          "label": "Model switched to Opus"
+        }
+      }
+    ],
+    "page": {
+      "type": "MODEL_SWITCH_MARKER",
+      "sessionId": "s1",
+      "markerId": "model-switch-u-model-switch",
+      "timestamp": 1700,
+      "label": "Model switched to Opus"
+    }
+  },
+  "model-switch native model id": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "MODEL_SWITCH_MARKER",
+          "sessionId": "s1",
+          "markerId": "model-switch-u-model-switch",
+          "timestamp": 1700,
+          "label": "Model switched to Deepseek V4 Flash"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "MODEL_SWITCH_MARKER",
+          "sessionId": "s1",
+          "markerId": "model-switch-u-model-switch",
+          "timestamp": 1700,
+          "label": "Model switched to Deepseek V4 Flash"
+        }
+      }
+    ],
+    "page": {
+      "type": "MODEL_SWITCH_MARKER",
+      "sessionId": "s1",
+      "markerId": "model-switch-u-model-switch",
+      "timestamp": 1700,
+      "label": "Model switched to Deepseek V4 Flash"
+    }
+  },
+  "model-switch subagent-stamped": {
+    "app": [],
+    "buddy": [],
+    "page": null
   }
 }

@@ -1163,6 +1163,8 @@ export class HarnessSession extends EventEmitter {
     // model had, so `null` is a real value here and only `undefined` skips.
     if (pricing !== undefined) this.opts.pricing = pricing;
     if (free !== undefined) this.opts.free = free;
+    // WHY: a native switch left no trace in the chat. Emitted, so it is persisted and drawn as the divider Claude Code's gets.
+    if (changed) this.emitEvent('model-switch', { model: binding.modelId });
   }
 
   private stripOpenAIContinuation(): void {

@@ -47,7 +47,7 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Three sources: YouCoded-handled (clickable, dispatched in-app), filesystem-scanned user/project/plugin commands (forwarded to the terminal), and Claude Code built-ins (visible reference, run in Terminal View)
 
 **Themes**
-- 4 built-in themes (Light, Dark, Midnight, Creme) + community theme packs
+- 6 built-in themes (YouCoded, YouCoded Night, Light, Dark, Midnight, Crème) + community theme packs
 - Custom wallpapers, particle effects, mascot characters, and icon overrides
 - Build your own themes with `/theme-builder`
 
@@ -75,7 +75,7 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 |----------|--------|---------|
 | Windows | Available | Download `.exe` from [Releases](https://github.com/itsdestin/youcoded/releases) |
 | macOS | Available | Download `.dmg` from [Releases](https://github.com/itsdestin/youcoded/releases) |
-| Linux | Available | Download `.AppImage` from [Releases](https://github.com/itsdestin/youcoded/releases) |
+| Linux | Available | Download `.AppImage`, `.deb`, `.rpm` or `.pacman` from [Releases](https://github.com/itsdestin/youcoded/releases) |
 | Android | Available | Download `.apk` from [Releases](https://github.com/itsdestin/youcoded/releases) |
 | Web browser | Via remote access | Open the app on any device, then access from any browser on your network |
 

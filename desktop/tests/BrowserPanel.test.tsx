@@ -285,7 +285,7 @@ describe('Browser panel', () => {
     }
   });
 
-  it('has Session Files\' header buttons: open in your own browser, copy link, expand, close', async () => {
+  it('has Session Files\' header buttons: open in a window, copy link, expand, close', async () => {
     const b = installBrowserBridge();
     const openExternal = vi.fn(async () => {});
     (window as any).claude.shell = { openExternal };
@@ -294,11 +294,12 @@ describe('Browser panel', () => {
     setBrowserState(browserState());
     openBrowserPane('s1');
     render(<BrowserPanel sessionId="s1" />);
-    // The old window toggle and ••• menu are gone from the panel.
-    expect(screen.queryByRole('button', { name: /window/i })).toBeNull();
     expect(screen.queryByRole('button', { name: 'More browser actions' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Open in your own browser' }));
-    expect(openExternal).toHaveBeenCalledWith('https://library.example.org/catalog');
+    // The open button shows the assistant's OWN browser, never the person's
+    // default browser (Destin, 2026-10-22: it opened his Chrome profile instead).
+    expect(screen.queryByRole('button', { name: 'Open in your own browser' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open the browser in its own window' })).toBeInTheDocument();
+    expect(openExternal).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://library.example.org/catalog'));
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
@@ -310,6 +311,31 @@ describe('Browser panel', () => {
     // Closing ends the expansion: the panel reopens at the side.
     expect(isBrowserExpanded('s1')).toBe(false);
     expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
+  });
+
+  it('opening the window asks first when pages are open (they reload), naming other chats', async () => {
+    const openExternal = vi.fn(async () => {});
+    const b = installBrowserBridge(browserInfo({ sessionsWithTabs: 3 }));
+    (window as any).claude.shell = { openExternal };
+    setBrowserState(browserState());
+    render(<BrowserPanel sessionId="s1" />);
+    await waitFor(() => expect(b.bridge.info).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open the browser in its own window' }));
+    expect(await screen.findByText(/Opening the window restarts the browser\. Pages reopen where they were, but anything typed and not yet sent is lost\. This also affects 2 other chats using the browser\./)).toBeInTheDocument();
+    expect(b.bridge.setShowWindow).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Open window' }));
+    await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(true));
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it('with the window open, the same button hides it', async () => {
+    const b = installBrowserBridge(browserInfo({ sessionsWithTabs: 1 }));
+    setBrowserState(browserState({ windowShown: true }));
+    render(<BrowserPanel sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide the browser window' }));
+    expect(await screen.findByText(/Hiding the window restarts the browser\./)).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Hide window' }));
+    await waitFor(() => expect(b.bridge.setShowWindow).toHaveBeenCalledWith(false));
   });
 
   it('the first-time explainer goes away for good with Got it', async () => {
@@ -325,6 +351,8 @@ describe('Browser panel', () => {
     setBrowserState(browserState({ myChrome: true, windowShown: true }));
     render(<BrowserPanel sessionId="s1" />);
     expect(screen.getByText(/Working in your Chrome/)).toBeInTheDocument();
+    // Its window is the person's own Chrome: there is no separate one to open.
+    expect(screen.queryByRole('button', { name: /window/i })).toBeNull();
   });
 });
 

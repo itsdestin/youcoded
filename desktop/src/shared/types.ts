@@ -232,6 +232,9 @@ export type TranscriptEventType =
   // Unlike session-error this IS persisted: a barrier that vanished on resume
   // would silently resurrect the context the user deliberately dropped.
   | 'context-clear'
+  // BOTH runtimes: the "Model switched to …" divider (2026-10-22). Claude Code's is read from its
+  // "Set model to" reply (transcript-watcher.ts), a native one is persisted by HarnessSession.setBinding.
+  | 'model-switch'
   // Native-runtime only: a user-invoked skill (/skill-name, M3 item 1). Persisted
   // because the skill's instructions ARE part of the model's history — a resume
   // that dropped them would replay a conversation whose first move makes no sense.
@@ -271,6 +274,13 @@ export interface CcBackgroundRun {
   status: CcBackgroundStatus;
   summary?: string;
   result?: string;
+  /** A Bash command's exit code (read from the notice's summary text). */
+  exitCode?: number;
+  /** When the end was read (epoch ms) — the background-command list shows it. */
+  endedAt?: number;
+  /** Only on the `reopen:<taskId>` marker in `ccBackgroundOutcomes`: the SendMessage
+   *  call that resumed this finished helper. See cc-background.ts `markHelperReopened`. */
+  viaToolUseId?: string;
 }
 
 /**
@@ -311,6 +321,10 @@ export interface TranscriptPageResult {
   hasMore: boolean;
   /** Native page is idle. */ reconcileInterrupted?: boolean;
   /** CC tool calls before the pre-spawn cutoff; new calls on this page stay live. */ reconcileInterruptedToolIds?: string[];
+  /** CC: no Claude Code process of this app is attached to the transcript this page was read from
+   *  (the conversation is only being viewed), so background work it launched and never reported an end
+   *  for cannot still be running — the page's cards read stopped instead of spinning forever (audit A7/C3). */
+  reconcileBackground?: boolean;
   /**
    * "I could not locate this session's transcript", as distinct from "you have
    * reached the beginning of the conversation" — which is what an empty page
@@ -469,6 +483,36 @@ export interface SpecialistRunView {
    *  "cannot order these", and the reducer falls back to its old behaviour
    *  rather than dropping the update. */
   seq?: number;
+  /** Audit 2026-10-22 B2/B3. Which run of this helper this record describes:
+   *  1 = the original hire, 2 = the first resume via task_id, and so on. The
+   *  record is ONE row per helper, so after a resume it describes the NEWEST
+   *  run; the earlier run's outcome is gone from it. Absent on a record
+   *  written before this field existed (read it as 1). */
+  runNumber?: number;
+  /** The Task call whose card carries the LIVE (newest) run: equals
+   *  `parentToolCallId` for run 1, the resume call's id after a resume. The
+   *  helper's live activity and any permission asks it raises are stamped
+   *  with THIS id, so this is the card to show them on. `parentToolCallId`
+   *  deliberately stays the ORIGINAL hire card (the identity the reducer
+   *  matches records to cards by, and where a background report is folded). */
+  activeToolCallId?: string;
+  /** When the newest run began, if it is a resume (runNumber >= 2). */
+  resumedAt?: number;
+  /** True when the report shown on the ORIGINAL hire card (the earlier run's)
+   *  is superseded by a newer run: the card should say so rather than present
+   *  the old report beside the new status. Becomes false again once a
+   *  background resume's new report has been delivered (that report is folded
+   *  onto the original card). A foreground resume's report lives on the
+   *  resume card's own tool result, so for those it stays true. */
+  reportStale?: boolean;
+  /** Audit 2026-10-22 B8. The helper finished (completed/failed, background)
+   *  but its report has not reached the assistant yet:
+   *   'waiting-for-turn'  it will be handed over at the next quiet moment
+   *   'held-after-stop'   the user pressed Stop, so it is held until they
+   *                       next write something
+   *  Absent once delivered, and for running/interrupted/foreground runs (a
+   *  foreground report is the Task call's own result). */
+  reportPending?: 'waiting-for-turn' | 'held-after-stop';
 }
 
 /** Task 5 (plan 1c) — the push event `specialists:event` carries: one
@@ -806,6 +850,34 @@ export interface ShellRunView {
   /** The last lines of output so far (the full log lives at logPath). */
   tail: string;
   logPath: string;
+  /** Audit 2026-10-22 D5. The command line as run, so a card that never saw the
+   *  tool call (an older page, another window, a restart) can still name it. */
+  command?: string;
+  /** The one-line "what this does" the assistant gave the Bash call, when it gave one. */
+  description?: string;
+  /** Set when the process was ended by a signal it was not asked to handle
+   *  (e.g. 'SIGKILL' from the out-of-memory killer) and nobody pressed Stop.
+   *  `exitCode` is then absent — draw "Ended by SIGKILL", not "Exit ?" and not a
+   *  failure. A user/assistant Stop is `status:'stopped'` with `stopReason`, not this. */
+  signal?: string;
+  /** Audit D2/D3. True when this record was restored from disk after an app
+   *  restart rather than observed live this session: its output no longer
+   *  updates (the pipe to it is gone) and `tail` is as of the last save. */
+  restored?: boolean;
+  /** Audit D2/D3. The command ended while the app was not watching, so its real
+   *  exit code was never seen (`exitCode`/`signal` absent). Say "ended — exit
+   *  code unknown", not "Exit ?". */
+  exitUnknown?: boolean;
+  /** Audit D3. Something still holds this command's process id but this machine
+   *  cannot prove it is the same command (no process-identity check outside
+   *  Linux). Reported as exited+exitUnknown with this flag so the card can say
+   *  "may still be running"; Stop is NOT offered (we will not signal a process
+   *  we cannot identify). */
+  maybeStillRunning?: boolean;
+  /** Review F1: shown from the saved record of a conversation that is NOT live on
+   *  this host. Nothing here can signal it, so screens offer no Stop (the button
+   *  would only be refused as not-live); reopening the conversation re-attaches it. */
+  viewOnly?: boolean;
 }
 
 /** Structured companion to `injected: 'specialist-report'` (2026-08-16): who
@@ -1046,10 +1118,10 @@ export interface PackageInfo {
 export interface UserSkillConfig {
   version: 1 | 2;
   favorites: string[];
-  /** Slugs of themes the user has pinned as favorites. Drives the Appearance
-   *  panel (favorites-only) and the "My favorite themes" section in Library.
-   *  Seeded with the four built-ins on first read; see SkillConfigStore.getThemeFavorites(). */
+  /** Starred theme slugs: the Appearance panel (favorites-only) and the Library's favorites. */
   themeFavorites?: string[];
+  /** Built-ins already starred once (offerNewBuiltinThemes, skill-config-store.ts). */
+  themeFavoritesOffered?: string[];
   chips: ChipConfig[];
   overrides: Record<string, MetadataOverride>;
   privateSkills: SkillEntry[];
@@ -1361,6 +1433,9 @@ export const SESSION_FLAG_NAMES: SessionFlagName[] = ['complete', 'priority'];
  *  disabled-state tooltip so all three say the same thing. */
 export const META_UNSUPPORTED_FALLBACK =
   "Tags and notes aren't available for this session.";
+
+/** A session:reopen-list row (Welcome back): was it running with Skip permissions on at close. */
+export interface ReopenEntry { id: string; skipPermissions: boolean }
 
 /** session:get-meta result. `supported: false` means writes will be REFUSED for
  *  this session — render the controls disabled rather than accepting edits. */

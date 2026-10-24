@@ -20,7 +20,7 @@
 import { useEffect, useState } from 'react';
 import { NewCommentPopover } from './NewCommentPopover';
 import { useDocComments } from '../../state/doc-comments-store';
-import { visibleEditorFor } from '../artifact-views/cm/ref-line-highlight';
+import { visibleEditorFor } from '../artifact-views/cm/editor-registry';
 
 interface Props {
   path: string;

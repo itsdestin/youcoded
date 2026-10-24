@@ -82,7 +82,7 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
       deps.batcher.push({ type: 'DIRECT_STOP_CONFIRMED', sessionId, uuid: `direct-stop-${live.id}`, userUuid: live.userUuid, timestamp: live.at });
       return;
     case 'queue':
-      deps.batcher.push({ type: 'QUEUE_SYNCED', sessionId, queue: live.queue });
+      deps.batcher.push({ type: 'QUEUE_SYNCED', sessionId, queue: live.queue, ...(live.bound ? { bound: live.bound } : {}) });
       return;
     case 'model':
       deps.batcher.push({ type: 'MODEL_ANNOUNCED', sessionId, model: live.model });

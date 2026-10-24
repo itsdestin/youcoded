@@ -17,7 +17,7 @@ function memory() {
   };
   return { store, records };
 }
-async function fixture(options: { maxItems?: number; maxTombstones?: number; ready?: () => boolean } = {}) {
+async function fixture(options: { maxItems?: number; maxTombstones?: number; maxCheckouts?: number; ready?: () => boolean } = {}) {
   const m = memory(); const publish = vi.fn();
   const q = new ClaudeQueue({ storage: m.store, publish, ready: () => true, ...options });
   await q.restore(); const id = await q.bind(alias, 'live-one');
@@ -247,7 +247,7 @@ describe('host-owned Claude queue', () => {
     await restored.cancelCheckout(id, old); expect(restored.snapshot(id).items[0].checkout).toEqual(newer);
   });
   it('bounds terminal cancellation history and rejects old editor requests after send epoch rotation', async () => {
-    const { q, id } = await fixture(); const row = await enqueue(q, id, payload()); const oldEpoch = q.snapshot(id).sendEpoch;
+    const { q, id } = await fixture({ maxCheckouts: 16 }); const row = await enqueue(q, id, payload()); const oldEpoch = q.snapshot(id).sendEpoch;
     const first = { checkoutId: 'old-cancel', sessionId: 'screen', draftRevision: 1, sendEpoch: oldEpoch };
     await q.checkout(id, row.item.queueItemId, first); await q.cancelCheckout(id, first);
     await q.remove(id, row.item.queueItemId); const epoch = await q.rotateSendEpoch(id, oldEpoch);
@@ -259,11 +259,11 @@ describe('host-owned Claude queue', () => {
     await q.cancelCheckout(id, { checkoutId: 'unscoped', sessionId: 'screen', draftRevision: 1 });
     expect(q.snapshot(id).items[0].checkout).toEqual(owner);
     await q.cancelCheckout(id, owner);
-    for (let n = 0; n < 1023; n++) {
+    for (let n = 0; n < 15; n++) {
       const token = { checkoutId: 'terminal-' + n, sessionId: 'screen', draftRevision: n, sendEpoch: epoch };
       await q.checkout(id, next.item.queueItemId, token); await q.cancelCheckout(id, token);
     }
-    expect(q.snapshot(id).cancelledCheckouts).toHaveLength(1024);
+    expect(q.snapshot(id).cancelledCheckouts).toHaveLength(16);
     await expect(q.checkout(id, next.item.queueItemId, { checkoutId: 'overflow', sessionId: 'screen', draftRevision: 2000, sendEpoch: epoch })).rejects.toThrow(/history full/);
     await q.cancelCheckout(id, owner); expect(q.snapshot(id).items[0].checkout).toBeUndefined(); // old terminal ack still works at cap
     // WHY 120s: ~2000 sequential persisted writes take 5s idle but passed 30s on a loaded machine (load 36 on 32 threads), so the default timeout made it fail only under load.

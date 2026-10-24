@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserInfo, BrowserInputEvent, BrowserSessionState } from '../../../shared/browser-types';
 import { closeBrowserPane, toggleBrowserExpanded, useBrowserExpanded, useBrowserState } from '../../state/browser-store';
-import { Button, Callout, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
+import { Button, Callout, Dialog, DocumentTabs, EmptyState, ErrorState, FieldError, LoadingState, TextInput, ZoomPill } from '../ui';
 import { PanelIconButton } from '../panel-icon-button';
 import { BackIcon, ForwardIcon, GlobeIcon, ReloadIcon, StopIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
@@ -469,7 +469,6 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   // A running browser says what it IS; a stopped one is whatever the settings say it will start as.
   const running = state?.run === 'running';
   const myChrome = (running ? state?.myChrome : info?.settings.useMyChrome) ?? false;
-  const webPage = !!active && /^https?:/i.test(active.url);
 
   // Gone the moment it's pressed; the saved setting follows. A failed save
   // only means it shows again next time.
@@ -493,9 +492,28 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       window.setTimeout(() => setCopied(false), 1500);
     }).catch(() => {});
   }, [active]);
-  const openInMyBrowser = useCallback(() => {
-    if (active && webPage) void (window.claude as any).shell?.openExternal?.(active.url);
-  }, [active, webPage]);
+  // WHY the open button shows the assistant's OWN browser as a real window
+  // (Destin, 2026-10-22): handing the address to the person's default browser
+  // opened it in their own Chrome profile — without the assistant's sign-ins,
+  // tabs or typing — so it showed a different page. Copy link still takes the
+  // address anywhere. Showing/hiding restarts the browser (a hidden browser
+  // can't grow a window), so pages reload: ask first when any are open.
+  const windowShown = (running ? state?.windowShown : info?.settings.showWindow) ?? false;
+  const [confirmWindow, setConfirmWindow] = useState<null | boolean>(null);
+  const [switching, setSwitching] = useState(false);
+  const applyWindow = useCallback(async (show: boolean) => {
+    setConfirmWindow(null);
+    setSwitching(true);
+    try { setInfo(await bridge().setShowWindow(show)); } catch { /* the state push says what happened */ }
+    setSwitching(false);
+  }, []);
+  const onWindowButton = useCallback(() => {
+    if (switching) return;
+    const show = !windowShown;
+    if ((state?.tabs.length ?? 0) > 0 || (info?.sessionsWithTabs ?? 0) > 0) setConfirmWindow(show);
+    else void applyWindow(show);
+  }, [switching, windowShown, state, info, applyWindow]);
+  const otherChats = Math.max(0, (info?.sessionsWithTabs ?? 0) - ((state?.tabs.length ?? 0) > 0 ? 1 : 0));
 
   // The address box: the page's address until the person edits it. Its text
   // lives here, in the panel — not in any shared store (performance rule 5).
@@ -560,7 +578,7 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
   let showingPicture = false;
   if (state?.run === 'error' && state.error) {
     body = <ErrorState className="m-3" message={state.error} onRetry={() => { void bridge().stop(); }} />;
-  } else if (state?.run === 'starting') {
+  } else if (state?.run === 'starting' || switching) {
     body = <LoadingState what="the browser" verb="Starting" />;
   } else if (!state || state.tabs.length === 0 || state.run !== 'running') {
     body = <EmptyState message="Nothing is open. Type an address or a search above to browse, or ask the assistant to use the browser." />;
@@ -619,7 +637,10 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
           </>
         )}
         <span className="text-2xs text-fg-muted shrink-0 mx-1" aria-live="polite">{status}</span>
-        {webPage && <PanelIconButton name="external" title="Open in your own browser" onClick={openInMyBrowser} />}
+        {/* My Chrome's window is the person's own Chrome: nothing separate to open. */}
+        {hasTabs && !myChrome && (
+          <PanelIconButton name="external" title={windowShown ? 'Hide the browser window' : 'Open the browser in its own window'} active={windowShown} onClick={onWindowButton} />
+        )}
         {active && <PanelIconButton name={copied ? 'check' : 'link'} title={copied ? 'Copied' : 'Copy link'} onClick={copyLink} />}
         {/* Expand is a no-op at phone width — the panel is already the whole screen. */}
         {!narrow && (
@@ -661,6 +682,22 @@ export default function BrowserPanel({ sessionId }: { sessionId: string }) {
       )}
       {narrow && state?.prompt && <BrowserAskCard sessionId={sessionId} />}
       {body}
+      <Dialog
+        open={confirmWindow !== null}
+        onClose={() => setConfirmWindow(null)}
+        title={confirmWindow ? 'Open the browser window?' : 'Hide the browser window?'}
+        size="prompt"
+        noScreen="a two-button confirm inside the Browser panel; its wording is pinned by BrowserPanel.test.tsx"
+      >
+        <p className="text-sm text-fg-2">
+          {confirmWindow ? 'Opening' : 'Hiding'} the window restarts the browser. Pages reopen where they were, but anything typed and not yet sent is lost.
+          {otherChats > 0 ? ` This also affects ${otherChats} other chat${otherChats === 1 ? '' : 's'} using the browser.` : ''}
+        </p>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="secondary" onClick={() => setConfirmWindow(null)}>Cancel</Button>
+          <Button variant="primary" onClick={() => void applyWindow(!!confirmWindow)}>{confirmWindow ? 'Open window' : 'Hide window'}</Button>
+        </div>
+      </Dialog>
     </div>
   );
 }

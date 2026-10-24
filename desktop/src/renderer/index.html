@@ -42,6 +42,29 @@
     @media (prefers-reduced-motion: reduce) { #boot > div { animation: none; } }
     @keyframes boot-spin { to { transform: rotate(360deg); } }
   </style>
+  <!-- WHY (2026-10-22 phone speed): a phone keeps this page for a week (remote-static-policy cacheControlFor) instead of asking
+       the computer for it on every open, which cost a round trip (~0.5 s) before anything ran. So a page that came from that
+       copy asks in the background, once it has loaded, whether the computer still serves this version, and loads the new one
+       if not (after an app update). Plain script, here, so it works whatever the app code does, even if it no longer loads.
+       Only over the network: the desktop and Android apps load this file from disk. Once per new version, so it cannot loop. -->
+  <script>
+    (function () {
+      if (!/^https?:$/.test(location.protocol)) return;
+      addEventListener('load', function () {
+        try {
+          var nav = performance.getEntriesByType('navigation')[0];
+          if (nav && nav.transferSize > 0) return;   // fetched from the computer just now: already current
+          var entry = function (doc) { var s = doc.querySelector('script[type="module"][src]'); return s && s.getAttribute('src'); };
+          fetch(location.href.split('#')[0], { cache: 'no-cache' }).then(function (r) { return r.ok ? r.text() : null; }).then(function (html) {
+            var served = html && entry(new DOMParser().parseFromString(html, 'text/html'));
+            if (!served || served === entry(document) || sessionStorage.getItem('yc-page-reloaded') === served) return;
+            sessionStorage.setItem('yc-page-reloaded', served);
+            location.reload();
+          }).catch(function () {});
+        } catch (e) {}
+      });
+    })();
+  </script>
 </head>
 <body>
   <!-- Lives inside #root so React's first commit clears it — createRoot()

@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult, TranscriptEvent } from '../shared/types';
+import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, ReopenEntry, SessionMetaResult, TranscriptEvent } from '../shared/types';
 // Type-only (erased at build), so the sandboxed preload still resolves nothing at
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
@@ -102,6 +102,9 @@ const IPC = {
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',
   UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',
+  UPDATE_GET_AUTO_INSTALL: 'update:get-auto-install',
+  UPDATE_SET_AUTO_INSTALL: 'update:set-auto-install',
+  UPDATE_RESTART_TO_UPDATE: 'update:restart-to-update',
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   OPEN_PATH: 'shell:open-path',
@@ -1150,7 +1153,7 @@ contextBridge.exposeInMainWorld('claude', {
     getMeta: (sessionId: string): Promise<SessionMetaResult> =>
       ipcRenderer.invoke(IPC.SESSION_GET_META, { sessionId }),
     // Welcome back (design §3): conversation ids open at the last shutdown.
-    reopenList: (): Promise<string[]> =>
+    reopenList: (): Promise<ReopenEntry[]> =>
       ipcRenderer.invoke(IPC.SESSION_REOPEN_LIST),
     forgetReopen: (ids: string[]): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke(IPC.SESSION_FORGET_REOPEN, { ids }),
@@ -1525,6 +1528,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Shared UpdateBetaChannelState documents saved versus effective channel.
     getBetaChannel: (): Promise<import('../shared/update-install-types').UpdateBetaChannelState> => ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
     setBetaChannel: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateBetaChannelState> => ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, { enabled }),
+    // "Install updates automatically" (#183); {supported:false} where there is no in-app updater.
+    getAutoInstall: (): Promise<import('../shared/update-install-types').UpdateAutoInstallState> => ipcRenderer.invoke(IPC.UPDATE_GET_AUTO_INSTALL),
+    setAutoInstall: (enabled: boolean): Promise<import('../shared/update-install-types').UpdateAutoInstallState> => ipcRenderer.invoke(IPC.UPDATE_SET_AUTO_INSTALL, { enabled }),
+    // Restart to update (#183 T3).
+    restartToUpdate: (): Promise<import('../shared/update-install-types').UpdateRestartResult> => ipcRenderer.invoke(IPC.UPDATE_RESTART_TO_UPDATE),
     onInstallProgress: (handler: (ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => void) => {
       const wrap = (_event: unknown, ev: import('../shared/update-install-types').UpdateInstallProgressEvent) => handler(ev);
       ipcRenderer.on(IPC.UPDATE_INSTALL_PROGRESS, wrap);
@@ -1777,8 +1785,8 @@ contextBridge.exposeInMainWorld('claude', {
     // this instead of showing an OS dialog when the closing window still owns
     // active sessions; the renderer answers with `{requestId, close, reopen}`.
     // Electron-only — no shim/Android twin (design §3).
-    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
-      const wrapped = (_e: IpcRendererEvent, req: { requestId: string; sessions: number }) => cb(req);
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number; reason?: 'update' }) => void) => {
+      const wrapped = (_e: IpcRendererEvent, req: { requestId: string; sessions: number; reason?: 'update' }) => cb(req);
       ipcRenderer.on(IPC.WINDOW_CLOSE_REQUEST, wrapped);
       return () => ipcRenderer.removeListener(IPC.WINDOW_CLOSE_REQUEST, wrapped);
     },

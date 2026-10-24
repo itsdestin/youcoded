@@ -57,3 +57,32 @@ describe('Claude Code background helper card', () => {
     expect(header()).not.toMatch(/[\u2800-\u28FF]/);
   });
 });
+
+describe('collapsed group header outcomes (A3 / B9)', () => {
+  const two = (a: CcBackgroundRun['status'], b: CcBackgroundRun['status']) => [
+    { ...agent({ taskId: 'a1', status: a }), id: 'x1', toolUseId: 't1' } as ToolCallState,
+    { ...agent({ taskId: 'a2', status: b }), id: 'x2', toolUseId: 't2' } as ToolCallState,
+  ];
+  const header = (tools: ToolCallState[]) => {
+    (window as any).claude = { on: {} };
+    const { container } = render(<ChatProvider><CollapsedToolGroup tools={tools} sessionId="s1" /></ChatProvider>);
+    return container.querySelector('button')!.textContent ?? '';
+  };
+  it('counts a helper that failed after launch as failed', () => {
+    expect(header(two('completed', 'failed'))).toContain('1 failed');
+  });
+  it('counts a stopped helper as stopped, not failed', () => {
+    const h = header(two('completed', 'stopped'));
+    expect(h).toContain('1 stopped');
+    expect(h).not.toContain('failed');
+  });
+  it('a stopped foreground Task is stopped, not also failed', () => {
+    const task: ToolCallState = {
+      id: 'x', toolUseId: 't9', toolName: 'Task', status: 'failed', input: { description: 'd' },
+      specialistRun: { childId: 'c', parentToolCallId: 't9', agentType: 'worker', title: 'W', background: false, status: 'interrupted', startedAt: 1 },
+    } as ToolCallState;
+    const h = header([task, { ...agent({ taskId: 'a1', status: 'completed' }), id: 'x1', toolUseId: 't1' } as ToolCallState]);
+    expect(h).toContain('1 stopped');
+    expect(h).not.toContain('failed');
+  });
+});

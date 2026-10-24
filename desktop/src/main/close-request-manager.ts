@@ -29,6 +29,8 @@ interface CloseAnswer {
 export interface CloseRequestPush {
   requestId: string;
   sessions: number;
+  /** 'update' = Restart to update asked (the prompt words it as an update, not a window close). */
+  reason?: 'update';
 }
 
 export interface CloseRequestManagerDeps {
@@ -40,12 +42,22 @@ export interface CloseRequestManagerDeps {
 interface PendingRequest {
   requestId: string;
   resolvers: Array<(answer: CloseAnswer) => void>;
+  /** What a whole-app quit (settleAll) resolves this request as. */
+  onQuit: CloseAnswer;
 }
 
 /** A whole-app-quit settle: keep every owned session tracked (no untrack) and
  *  let the caller's destroy+close loop run — the same fate a crash leaves a
  *  session in. */
 const KEEP_TRACKED: CloseAnswer = { close: true, reopen: true };
+
+/** WHY (#183 review F1): a Restart-to-update prompt that a quit settles as "close" would read as a Yes.
+ *  A quit that begins while it is open must instead cancel the restart (the quit then proceeds on its own). */
+const CANCEL: CloseAnswer = { close: false };
+
+/** The key Restart to update asks under: not any window's id (those are webContents ids, always positive),
+ *  so a window's own close prompt and this one never share a slot (design D22). */
+export const UPDATE_REQUEST_KEY = -1;
 
 export interface CloseRequestManager {
   /**
@@ -55,7 +67,7 @@ export interface CloseRequestManager {
    * it (design §4 step 4: "no stacking") and never calls `send` again; both
    * callers' promises resolve together when the one request finally settles.
    */
-  request(windowId: number, sessions: number, send: (push: CloseRequestPush) => void): Promise<CloseAnswer>;
+  request(windowId: number, sessions: number, send: (push: CloseRequestPush) => void, opts?: { reason?: 'update' }): Promise<CloseAnswer>;
   /** The renderer answered `requestId`. A no-op if that request already
    *  settled by settleAll() — a late answer changes nothing
    *  (design §4 step 5). */
@@ -70,7 +82,8 @@ export interface CloseRequestManager {
   dropFor(windowId: number): void;
   /**
    * Whole-app quit wins over every prompt still in flight (design §4 step 5).
-   * Resolves each pending request as `{close:true, reopen:true}` and calls
+   * Resolves each pending request as `{close:true, reopen:true}` (an update-restart request as
+   * Cancel, #183 review F1) and calls
    * `cancelled(windowId, requestId)` for each so the caller can push
    * `window:close-request-cancelled` to that window. Call once, at the top
    * of shutdownApp() — the one function every quit route (before-quit AND
@@ -132,7 +145,7 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
   }
 
   return {
-    request(windowId, sessions, send) {
+    request(windowId, sessions, send, opts) {
       const existing = pending.get(windowId);
       if (existing) {
         // Re-use (design §4 step 4): no new requestId, no second push — just
@@ -140,10 +153,10 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
         return new Promise((resolve) => existing.resolvers.push(resolve));
       }
       const requestId = deps.genId();
-      const entry: PendingRequest = { requestId, resolvers: [] };
+      const entry: PendingRequest = { requestId, resolvers: [], onQuit: opts?.reason === 'update' ? CANCEL : KEEP_TRACKED };
       pending.set(windowId, entry);
       const promise = new Promise<CloseAnswer>((resolve) => entry.resolvers.push(resolve));
-      send({ requestId, sessions });
+      send(opts?.reason ? { requestId, sessions, reason: opts.reason } : { requestId, sessions });
       return promise;
     },
 
@@ -163,7 +176,7 @@ export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseR
       // Snapshot first: settle() deletes from `pending` mid-loop otherwise.
       for (const [windowId, entry] of [...pending]) {
         cancelled(windowId, entry.requestId);
-        settle(windowId, KEEP_TRACKED);
+        settle(windowId, entry.onQuit);
       }
     },
   };

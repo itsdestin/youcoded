@@ -21,6 +21,8 @@
 import { CHATGPT_APP_LIMIT_MESSAGE } from '../../../shared/chatgpt-types';
 import { chatReducer } from '../../state/chat-reducer';
 import type { ChatState, ChatAction, ToolCallState } from '../../state/chat-types';
+import { eventToAction } from '../../state/transcript-event-actions';
+import type { TranscriptEvent } from '../../../shared/types';
 
 const SANDBOX_SESSION_ID = 'sandbox';
 
@@ -292,6 +294,15 @@ export function loadFixture(
           toolUseId: parsed.tool_use_id,
           result: content,
           isError: parsed.is_error === true,
+          // A line that states its own time keeps it (a launch's start time); others stay unstamped as before.
+          ...(typeof parsed.elapsedMs === 'number' || typeof parsed.timestamp === 'number' ? { timestamp: fixtureTime(parsed, actions.length) } : {}),
+          // Claude Code's background receipts, as transcript-watcher.ts reads them off
+          // `toolUseResult` (2026-10-22): a launch (Agent / Bash / Monitor / Workflow), a
+          // persistent Monitor, a successful TaskStop, and a SendMessage that resumed a helper.
+          ...(typeof parsed.background_task_id === 'string' ? { backgroundTaskId: parsed.background_task_id } : {}),
+          ...(parsed.background_persistent === true ? { backgroundPersistent: true } : {}),
+          ...(typeof parsed.stopped_task_id === 'string' ? { stoppedTaskId: parsed.stopped_task_id } : {}),
+          ...(typeof parsed.resumed_task_id === 'string' ? { resumedTaskId: parsed.resumed_task_id } : {}),
         };
         state = chatReducer(state, action);
         actions.push(action);
@@ -458,6 +469,22 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'task_notification') {
+        // Claude Code's <task-notification>: background work a card launched has ended
+        // (TRANSCRIPT_BACKGROUND_TASK, from transcript-watcher.ts taskNotificationEvents).
+        const action: ChatAction = {
+          type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId,
+          uuid: `${name}-note-${actions.length}`,
+          timestamp: fixtureTime(parsed, actions.length),
+          toolUseId: parsed.tool_use_id,
+          taskIds: Array.isArray(parsed.task_ids) ? parsed.task_ids : [],
+          status: parsed.status ?? 'completed',
+          ...(typeof parsed.exit_code === 'number' ? { exitCode: parsed.exit_code } : {}),
+          ...(parsed.summary ? { summary: parsed.summary } : {}),
+          ...(parsed.result ? { result: parsed.result } : {}),
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
       } else if (parsed.type === 'specialist_report') {
         // Specialists 1c: the host-injected user-role turn carrying a
         // BACKGROUND report — folds into the launching Task card.
@@ -474,6 +501,15 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'transcript_event' && parsed.event) {
+        // A transcript event exactly as main publishes it, through the app's ONE translator
+        // (eventToAction) — e.g. a `model-switch` divider, or the "/model …" bubble a Claude Code
+        // switch drew before 2026-10-22, so a before/after review shows both from one checkout.
+        const event = { sessionId, uuid: `${name}-ev-${actions.length}`, timestamp: FIXTURE_T0 + actions.length * 1000, ...parsed.event } as TranscriptEvent;
+        for (const action of eventToAction(event, { live: true })) {
+          state = chatReducer(state, action);
+          actions.push(action);
+        }
       }
       // Unknown types are silently skipped (same policy as before).
     }

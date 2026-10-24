@@ -5,7 +5,7 @@
 // like marketplace-channel-types.ts and sync-channel-types.ts, ChannelTypes extends this so a
 // row is still found by name through ChannelTypes.
 import type {
-  SessionInfo, SessionCreateResult, SessionMetaResult, HistoryMessage, PastSession,
+  SessionInfo, SessionCreateResult, SessionMetaResult, HistoryMessage, PastSession, ReopenEntry,
   TranscriptPageRequest, TranscriptPageResult,
 } from './types';
 import type { CreateSessionOpts } from '../main/session-manager';
@@ -31,7 +31,7 @@ export interface SessionChannelTypes {
   'session:switch': { request: { sessionId: string }; response: { ok: true } };
   'session:claude-control': { request: { sessionId: string; request: ClaudeControlRequest }; response: ClaudeControlResult };
   // Terminal traffic: fire-and-forget on every door.
-  'session:input': { request: { sessionId: string; text: string; /** a typed chat command, so the host can draw its divider (R5-4a) */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
+  'session:input': { request: { sessionId: string; text: string; /** a typed chat command (R5-4a); accepted but unread since 2026-10-22, the divider comes from the transcript */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
   'session:resize': { request: { sessionId: string; cols: number; rows: number }; response: void };
   'session:terminal-ready': { request: { sessionId: string }; response: void };
   // Terminal flow control (desktop window only; a phone's copy is refused silently, so a slow phone can never brake the desktop's program).
@@ -61,6 +61,7 @@ export interface SessionChannelTypes {
   'session-naming:title': { request: { sessionId: string; fallback: string }; response: { title: string; manual: boolean } };
   'session-naming:rename': { request: { sessionId: string; title: string }; response: { ok: true; name: string } | { ok: false; error: string } };
   // Welcome back: the conversations open at the last shutdown (the computer's own screen).
-  'session:reopen-list': { request: void; response: string[] };
+  // Each row also says whether that session ran with Skip permissions on.
+  'session:reopen-list': { request: void; response: ReopenEntry[] };
   'session:forget-reopen': { request: { ids: string[] }; response: { ok: boolean } };
 }
