@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { KeychainClient } from '../src/main/providers/keychain-client';
 import { RecoverableSafeStorage, type SecretStorage } from '../src/main/providers/recoverable-safe-storage';
 import { keychainLaunchOptions } from '../src/main/providers/keychain-launch';
+import { createKeychainWarmup } from '../src/main/providers/keychain-warmup';
 
 it('wires all stores to one private helper and cleans up only its scratch files', async () => {
   const native = { isEncryptionAvailable: () => false, getSelectedStorageBackend: () => 'kwallet6' };
@@ -32,6 +33,7 @@ it('wires all stores to one private helper and cleans up only its scratch files'
       case './keychain-client': return { KeychainClient };
       case './keychain-launch': return { keychainLaunchOptions };
       case './recoverable-safe-storage': return { RecoverableSafeStorage };
+      case './keychain-warmup': return { createKeychainWarmup };
       default: throw new Error(`Unexpected dependency ${name}`);
     }
   } });
@@ -39,7 +41,8 @@ it('wires all stores to one private helper and cleans up only its scratch files'
   expect(exports.getSecretStorage!()).toBe(a);
   expect(spawn).not.toHaveBeenCalled();
   const pending = a.isEncryptionAvailable();
-  expect(spawn).toHaveBeenCalledWith('/real/youcoded', expect.arrayContaining(['--password-store=kwallet6']), expect.objectContaining({ cwd: '/tmp/owned-keychain', stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }));
+  // The helper now starts one tick later: the probe first waits for the (non-blocking) wallet wake-up.
+  await vi.waitFor(() => expect(spawn).toHaveBeenCalledWith('/real/youcoded', expect.arrayContaining(['--password-store=kwallet6']), expect.objectContaining({ cwd: '/tmp/owned-keychain', stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })));
   children[0].emit('message', { ok: true, value: true });
   await expect(pending).resolves.toBe(true);
   app.emit('will-quit');
