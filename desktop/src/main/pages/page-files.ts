@@ -24,6 +24,7 @@ import {
   listInside, openForRead, openForWrite, resolveInside, type GuardContext, type Opened, type Refused, type WriteLevel,
 } from './page-file-guard';
 import type { RememberedFile } from './connections-store';
+import { addThumbs } from './page-thumbs';
 import type {
   PageFileAccess, PageFileEncoding, PageFileEntry, PageFileHandle, PageFileLevel, PageFilesRefusal, PageFilesRequest, PageFilesResult,
 } from '../../shared/pages-types';
@@ -145,7 +146,11 @@ export class PageFiles {
     if (!segs || segs.some((x) => x.startsWith('.'))) return { ok: false, message: 'That folder name cannot be used.' };
     const ctx = await this.context(null);
     const r = await listInside(ctx.home, segs, ctx, FILE_LIMITS.listEntries);
-    return 'refused' in r ? { ok: false, message: r.refused } : { ok: true, entries: r.entries };
+    if ('refused' in r) return { ok: false, message: r.refused };
+    // Pictures for the tiles of the kinds this ask wants (an Open for .csv needs none).
+    const wanted = ask.types ? r.entries.filter((e) => ask.types!.some((t) => e.name.toLowerCase().endsWith(t))) : r.entries;
+    await addThumbs(path.join(ctx.home, ...segs), wanted);
+    return { ok: true, entries: r.entries };
   }
 
   // ── The door ──────────────────────────────────────────────────────────────────
