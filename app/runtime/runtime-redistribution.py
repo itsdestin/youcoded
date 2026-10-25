@@ -163,7 +163,7 @@ def finalize(output, cache, musl_archive, claude_archive):
         destination = local / 'app' / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(HERE.parent / relative, destination)
-    for relative in ('LICENSE', 'TERMS.md', 'gradle.properties', 'build.gradle.kts', 'settings.gradle.kts',
+    for relative in ('LICENSE', 'NOTICE', 'TERMS.md', 'gradle.properties', 'build.gradle.kts', 'settings.gradle.kts',
                      'desktop/package-lock.json', 'desktop/package.json'):
         destination = local / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +190,9 @@ def finalize(output, cache, musl_archive, claude_archive):
     legal.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(evidence / 'inputs.json', legal / 'runtime-components.json')
     shutil.copyfile(repo / 'LICENSE', legal / 'YouCoded-LICENSE.txt')
+    # WHY: LICENSE is now the bare MIT text (so GitHub detects MIT); the scope
+    # and third-party note it used to carry lives in NOTICE and must still ship.
+    shutil.copyfile(repo / 'NOTICE', legal / 'YouCoded-NOTICE.txt')
     shutil.copyfile(musl, legal / 'musl-COPYRIGHT.txt')
     # WHY: collect only after resolution and stamped build inputs exist; never
     # require an unpopulated, hand-authored pre-build dossier.
