@@ -248,6 +248,16 @@ export const KINDS: { [K in Kind]: KindDef<K> } = {
       if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
       const hello = cleanSocketHello(o.socketHello);
       if (hello) c.socketHello = hello;
+      // Step 1b: a device that does not speak Home Assistant's `{ type }` JSON.
+      // Present but invalid drops the line (the card must show what is enforced).
+      if (o.socketFormat !== undefined) {
+        if (o.socketFormat !== 'json' && o.socketFormat !== 'text') return null;
+        c.socketFormat = o.socketFormat;
+      }
+      if (o.socketTypeField !== undefined) {
+        if (typeof o.socketTypeField !== 'string' || !/^[A-Za-z0-9_]{1,32}$/.test(o.socketTypeField)) return null;
+        c.socketTypeField = o.socketTypeField;
+      }
       // WHY strict, like socketDeny: a bad socketAuthFailed silently dropped meant a wrong key was never
       // recognised, so the socket retried logins for ten minutes (Home Assistant bans an address after a
       // few failed logins). A reply type that is present but invalid drops the whole connection.

@@ -195,3 +195,26 @@ describe('the one-shot exchange refuses a denied message', () => {
     expect(got.map((g) => JSON.parse(g)).slice(-1)).toEqual([rename]);
   });
 });
+
+describe('a device that does not speak Home Assistant', () => {
+  it('names messages by its own field', () => {
+    expect(checkOutgoingSocketMessage('{"cmd":"lights/on"}', [], { typeField: 'cmd' })).toMatchObject({ ok: true });
+    expect(checkOutgoingSocketMessage('{"cmd":"auth/new_token"}', [], { typeField: 'cmd' }).ok).toBe(false);
+    expect(checkOutgoingSocketMessage('{"type":"x"}', [], { typeField: 'cmd' }).ok).toBe(false);
+  });
+
+  it('checks a plain-text device by the start of the text, and sends it unchanged', () => {
+    expect(checkOutgoingSocketMessage('VOLUME 20', [], { format: 'text' })).toEqual({ ok: true, text: 'VOLUME 20' });
+    expect(checkOutgoingSocketMessage('Auth/reset', [], { format: 'text' }).ok).toBe(false);
+  });
+
+  it('keeps a Home Assistant line\'s fingerprint unchanged, and adds the shape only when declared', () => {
+    const base = { id: 'd', kind: 'device', service: 'Box', address: '192.168.1.9', access: 'full', socketHello: 'hi' };
+    const [plain] = parseConnections([base]);
+    const [shaped] = parseConnections([{ ...base, socketFormat: 'text' }]);
+    expect(fingerprint(plain)).toBe('device|Box|full|key|profile:{"socketHello":"hi"}');
+    expect(fingerprint(shaped)).toBe('device|Box|full|key|profile:{"socketFormat":"text","socketHello":"hi"}');
+    expect(parseConnections([{ ...base, socketFormat: 'xml' }])).toEqual([]);
+  });
+});
+

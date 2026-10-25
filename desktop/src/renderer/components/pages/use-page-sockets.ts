@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from 'react';
-import type { PagesBridge } from '../../../shared/pages-types';
+import type { PagesBridge, VideoProfile } from '../../../shared/pages-types';
 import { createPageSocketHub } from './page-socket-host';
 import { createPageVideoHub, type VideoHostDeps } from './page-video-host';
 
@@ -15,6 +15,8 @@ export function usePageSockets(
   active: boolean,
   docKey: string | null,
   bridge: () => PagesBridge | undefined,
+  /** The approved device line's camera profile by connection id (step 1b). */
+  profileOf?: (connection: string) => VideoProfile | undefined,
 ): void {
   useEffect(() => {
     if (!active || pageId === null) return;
@@ -25,7 +27,7 @@ export function usePageSockets(
     // Camera video for the same frame instance (page-video-host.ts): it ends with
     // the hub, so a frame going away stops its videos exactly as it closes its sockets.
     const video = createPageVideoHub({
-      pageId, frame: hub.frame, bridge,
+      pageId, frame: hub.frame, bridge, profileOf,
       // The workbench's fake backend may bring a pretend peer and frame source (no real camera there);
       // the real bridges never set this.
       deps: bridge()?.videoPlayback as Partial<VideoHostDeps> | undefined,

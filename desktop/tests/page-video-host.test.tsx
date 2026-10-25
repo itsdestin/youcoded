@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { createPageVideoHub, DISCONNECT_MS, ICE_GATHER_CAP_MS, QUIET_MS, VIDEO_MAX_MS, VIDEO_PING_MS, type PeerLike, type VideoElLike, type VideoHostDeps } from '../src/renderer/components/pages/page-video-host';
 import { usePageSockets } from '../src/renderer/components/pages/use-page-sockets';
-import type { PageSocketEvent } from '../src/shared/pages-types';
+import type { PageSocketEvent, VideoProfile } from '../src/shared/pages-types';
 
 const START = { type: 'youcoded:video:start', id: 'v1', connection: 'ha', target: 'camera.living_room' };
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
@@ -46,7 +46,7 @@ class FakeEl implements VideoElLike {
 }
 interface Bitmap { id: number; closed: boolean; close(): void }
 
-function rig(extra: Partial<VideoHostDeps> = {}) {
+function rig(extra: Partial<VideoHostDeps> = {}, profileOf?: (connection: string) => VideoProfile | undefined) {
   let n = 0;
   const listeners = new Set<(e: PageSocketEvent) => void>();
   const bridge = {
@@ -75,7 +75,7 @@ function rig(extra: Partial<VideoHostDeps> = {}) {
     ...extra,
   };
   const hub = createPageVideoHub({
-    pageId: 'personal:home', frame: 'f1', bridge: () => bridge as any, deps,
+    pageId: 'personal:home', frame: 'f1', bridge: () => bridge as any, deps, profileOf,
     post: (m, t) => { posted.push(m); transfers.push(t ?? []); },
   });
   return {
@@ -116,6 +116,16 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('starting a video', () => {
+  it("builds the offer a device's own camera profile asks for", async () => {
+    const profile = { targetPrefix: 'camera.', send: '{}', answer: 'a', candidate: 'c', failed: 'f', tracks: ['video'] as Array<'video'>, dataChannel: false as const };
+    const r = rig({}, (c) => (c === 'ha' ? profile : undefined));
+    r.hub.handleFrameMessage(START);
+    await flush();
+    expect(r.peers[0].transceivers).toEqual([['video', { direction: 'recvonly' }]]);
+    expect(r.peers[0].channels).toEqual([]);
+    r.hub.dispose();
+  });
+
   it('builds a receive-only peer with the data channel Nest needs, sends main only the offer, and tells the page it is starting', async () => {
     const r = rig();
     expect(r.hub.handleFrameMessage(START)).toBe(true);

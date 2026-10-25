@@ -10,7 +10,7 @@
 // with the last. One hub per FRAME INSTANCE, like the socket hub: the frame
 // going away, a new document, the window being hidden, 5 minutes, or main
 // saying 'stopped' all end a video here.
-import type { PageVideoCall, PageSocketEvent, PagesBridge } from '../../../shared/pages-types';
+import type { PageVideoCall, PageSocketEvent, PagesBridge, VideoProfile } from '../../../shared/pages-types';
 import {
   PAGE_VIDEO_ACK_MESSAGE, PAGE_VIDEO_EVENT_MESSAGE, PAGE_VIDEO_START_MESSAGE, PAGE_VIDEO_STOP_MESSAGE,
 } from './page-theme';
@@ -127,6 +127,10 @@ export function createPageVideoHub(opts: {
   post: (message: unknown, transfer?: Transferable[]) => boolean | void;
   isHidden?: () => boolean;
   deps?: Partial<VideoHostDeps>;
+  /** The approved device line's camera profile, by connection id (step 1b): what the
+   *  offer receives and which data channel it opens. Absent: Nest's audio + video +
+   *  `dataSendChannel`, as before. */
+  profileOf?: (connection: string) => VideoProfile | undefined;
 }): PageVideoHub {
   const deps = { ...defaultDeps(), ...opts.deps };
   const local = new Map<string, Entry>();
@@ -324,10 +328,12 @@ export function createPageVideoHub(opts: {
       try {
         const pc = deps.createPeer();
         e.pc = pc;
-        // Nest needs audio, video and a data channel named exactly this, or it refuses the offer.
-        pc.addTransceiver('audio', { direction: 'recvonly' });
-        pc.addTransceiver('video', { direction: 'recvonly' });
-        pc.createDataChannel('dataSendChannel');
+        // Nest needs audio, video and a data channel named exactly this, or it refuses the
+        // offer — the default. Another camera's profile names its own (step 1b).
+        const profile = opts.profileOf?.(connection);
+        for (const kind of profile?.tracks ?? (['audio', 'video'] as const)) pc.addTransceiver(kind, { direction: 'recvonly' });
+        const channel = profile?.dataChannel === undefined ? 'dataSendChannel' : profile.dataChannel;
+        if (channel !== false) pc.createDataChannel(channel);
         pc.addEventListener('track', (ev: { track: unknown; streams?: unknown[] }) => {
           if (e.attempt !== attempt || !e.el) return;
           // A track arrives for audio and for video; only the picture matters.

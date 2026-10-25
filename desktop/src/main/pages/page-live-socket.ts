@@ -96,6 +96,8 @@ interface Live {
   ws: LiveWsLike | null;
   connectionId: string | null;
   deny: readonly string[];
+  /** How this device's messages are shaped (step 1b): Home Assistant's `{ type }` JSON unless the manifest says. */
+  shape: { format?: 'json' | 'text'; typeField?: string };
   secrets: string[];
   authFailedType?: string;
   readyType?: string;
@@ -140,7 +142,7 @@ export class PageLiveSockets {
       // Unguessable, and chosen here: a frame can never name an id of its own.
       id: `ls_${randomBytes(16).toString('hex')}`,
       owner, page: req.page, frame: req.frame, url: req.url,
-      state: 'connecting', gen: 0, tries: 0, ws: null, connectionId: null, deny: [], secrets: [],
+      state: 'connecting', gen: 0, tries: 0, ws: null, connectionId: null, deny: [], shape: {}, secrets: [],
       attempt: 0, downSince: null, lastPing: Date.now(), abort: new AbortController(),
       sentAt: [], flow: new Array(LIVE_LIMITS.floodBuckets).fill(0), flowSlot: 0, flowTotal: 0, watching: false, binary: 0, sawReady: false, batch: [], closed: false, timers: {},
     };
@@ -167,7 +169,7 @@ export class PageLiveSockets {
     // string, so a page cannot spam bad messages past the 20-a-second rule.
     s.sentAt.push(now);
     // The checked, re-serialised text is what is sent (see checkOutgoingSocketMessage).
-    const vetted = checkOutgoingSocketMessage(req.text, s.deny);
+    const vetted = checkOutgoingSocketMessage(req.text, s.deny, s.shape);
     if (!vetted.ok) return refusal(vetted.reason);
     try { s.ws.send(vetted.text); } catch { return refusal('The live connection could not send that.'); }
     return { ok: true };
@@ -235,6 +237,7 @@ export class PageLiveSockets {
     }
     s.connectionId = access.connection.id;
     s.deny = access.connection.socketDeny ?? [];
+    s.shape = { format: access.connection.socketFormat, typeField: access.connection.socketTypeField };
     s.secrets = access.secrets;
     s.readyType = access.connection.socketReady;
     s.authFailedType = access.connection.socketAuthFailed;
@@ -355,7 +358,9 @@ export class PageLiveSockets {
     let authFailed = false;
     if (s.watching && raw.length <= 4096) {
       let type: unknown;
-      try { type = (JSON.parse(raw) as { type?: unknown } | null)?.type; } catch { /* not JSON: not a login reply */ }
+      // A plain-text device's login reply is the text itself (step 1b).
+      if (s.shape.format === 'text') type = raw.trim();
+      else try { type = (JSON.parse(raw) as Record<string, unknown> | null)?.[s.shape.typeField ?? 'type']; } catch { /* not JSON: not a login reply */ }
       if (typeof type === 'string') {
         if (s.authFailedType && type === s.authFailedType) authFailed = true;
         else if (s.readyType && type === s.readyType && !s.sawReady) {

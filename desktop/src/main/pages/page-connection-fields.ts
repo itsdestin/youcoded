@@ -144,7 +144,16 @@ export function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
   const candidate = cleanDotted(o.candidate);
   const failed = cleanDotted(o.failed);
   if (!targetPrefix || !send || !answer || !candidate || !failed) return undefined;
-  return { targetPrefix, ...(socketPath ? { socketPath } : {}), send, answer, candidate, failed };
+  // pages-finish step 1b: what the camera offer receives and which data channel it
+  // opens, for cameras other than Nest. Absent keeps today's offer (and fingerprint).
+  const tracks = Array.isArray(o.tracks) && o.tracks.length > 0 && o.tracks.length <= 2 && o.tracks.every((t) => t === 'audio' || t === 'video')
+    ? [...new Set(o.tracks as Array<'audio' | 'video'>)].sort() : undefined;
+  const dataChannel = o.dataChannel === false ? false
+    : typeof o.dataChannel === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(o.dataChannel) ? o.dataChannel : undefined;
+  return {
+    targetPrefix, ...(socketPath ? { socketPath } : {}), send, answer, candidate, failed,
+    ...(tracks ? { tracks } : {}), ...(dataChannel !== undefined ? { dataChannel } : {}),
+  };
 }
 
 export function cleanSteps(raw: unknown): { steps: string[] } | undefined {
@@ -176,6 +185,10 @@ export function cleanWritePaths(raw: unknown): string[] {
  *  manifest never matters), or '' when the connection has none. */
 export function profileSegment(c: Extract<PageConnection, { kind: 'device' }>): string {
   const profile: Record<string, unknown> = {};
+  // Step 1b: present only when a manifest names them, so a Home Assistant page's
+  // fingerprint (and its approval) is what it always was.
+  if (c.socketFormat) profile.socketFormat = c.socketFormat;
+  if (c.socketTypeField) profile.socketTypeField = c.socketTypeField;
   if (c.socketHello) profile.socketHello = c.socketHello;
   if (c.socketReady) profile.socketReady = c.socketReady;
   if (c.socketAuthFailed) profile.socketAuthFailed = c.socketAuthFailed;

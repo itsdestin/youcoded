@@ -148,6 +148,12 @@ export type PageConnection =
       // must know about the device, read from the approved manifest and never
       // chosen by a page. All of it rides the approval fingerprint (one
       // `|profile:` segment).
+      /** How the device's socket messages are shaped (pages-finish step 1b). Absent:
+       *  JSON objects named by a `type` field, as Home Assistant speaks. `text`: plain
+       *  text, checked by its start against the deny list. */
+      socketFormat?: 'json' | 'text';
+      /** The JSON field that names a message (absent: `type`). */
+      socketTypeField?: string;
       /** The reply TYPE that means "logged in" (Home Assistant: `auth_ok`). */
       socketReady?: string;
       /** The reply TYPE that means "wrong key" (`auth_invalid`). */
@@ -363,6 +369,12 @@ export interface VideoProfile {
   answer: string;
   candidate: string;
   failed: string;
+  /** What the camera offer receives (pages-finish step 1b). Absent: audio and video,
+   *  which is what Home Assistant's Nest cameras require. */
+  tracks?: Array<'audio' | 'video'>;
+  /** The data channel the offer opens: a name, or false for none. Absent:
+   *  `dataSendChannel`, the exact name Nest refuses an offer without. */
+  dataChannel?: string | false;
 }
 
 /** A connection as the person sees it on one page. */

@@ -151,7 +151,7 @@ export class PageLiveVideos {
       const filled = profile.send.replace(/\{\{(offer|target)\}\}/g, (_m, k: string) => JSON.stringify(k === 'offer' ? req.offer : req.target));
       // The filled message passes the same check as any page-written one, with
       // this connection's deny list: a manifest cannot make the video template a back door.
-      const vetted = checkOutgoingSocketMessage(filled, access.connection.socketDeny);
+      const vetted = checkOutgoingSocketMessage(filled, access.connection.socketDeny, { format: access.connection.socketFormat, typeField: access.connection.socketTypeField });
       if (!vetted.ok) { this.finish(v, 'The app could not start that video.', true); return; }
       try { ws.send(vetted.text); v.phase = 'negotiating'; }
       catch (e) { this.finish(v, redact(e instanceof Error ? e.message : String(e), v.secrets), true); }
@@ -175,7 +175,8 @@ export class PageLiveVideos {
       // text) is read from redacted text, so a key can never ride any of them.
       let msg: unknown;
       try { msg = JSON.parse(redact(raw, v.secrets)); } catch { return; }
-      const type = (msg as { type?: unknown } | null)?.type;
+      // The field that names a reply: Home Assistant's `type` unless the manifest says (step 1b).
+      const type = (msg as Record<string, unknown> | null)?.[access.connection.socketTypeField ?? 'type'];
       if (typeof type !== 'string') return;
       if (authFailed && type === authFailed) { this.finish(v, 'The device refused the saved key. Remove this connection on the page and add the key again.', true); return; }
       if (v.phase === 'greeting') {

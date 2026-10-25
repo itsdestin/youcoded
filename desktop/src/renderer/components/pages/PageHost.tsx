@@ -296,6 +296,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // latest start-session callback.
   const loadedPageRef = useRef<PageDocument | null>(null);
   loadedPageRef.current = load.state === 'ready' ? load.page : null;
+  // The camera profile of one of the loaded page's device lines (step 1b), read from the
+  // document the gate read. Stable for the life of the host, like the bridge.
+  const videoProfileOf = useRef((connection: string) => {
+    const c = loadedPageRef.current?.connections?.find((x) => x.id === connection);
+    return c?.kind === 'device' ? c.videoProfile : undefined;
+  }).current;
   const onStartSessionRef = useRef(onStartSession);
   onStartSessionRef.current = onStartSession;
   // See-through: the pane is glass (a wallpaper theme in a floating style AND the global
@@ -578,7 +584,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }, [runsPrograms, pageId, programFrame]);
   // The page's live sockets live only as long as ITS frame: not while the view is
   // closed, awaiting approval or loading, and a new document is a new frame.
-  usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge);
+  usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge, videoProfileOf);
   /** The band's refresh button is how a person asks the page for fresh
    *  information; the page hears it through `youcoded.onRefresh` (§5). */
   const askPageToRefresh = () => {

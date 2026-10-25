@@ -101,18 +101,24 @@ const SOCKET_DENY_FLOOR = ['auth/', 'config/auth', 'person/'] as const;
  *  exactly what is sent; a duplicate collapses to the checked value. A nested
  *  `"type"` (a dashboard save) is ordinary and passes. */
 export type OutgoingCheck = { ok: true; text: string } | { ok: false; reason: string };
-export function checkOutgoingSocketMessage(text: string, extraDeny: readonly string[] = []): OutgoingCheck {
+export function checkOutgoingSocketMessage(text: string, extraDeny: readonly string[] = [], shape: { format?: 'json' | 'text'; typeField?: string } = {}): OutgoingCheck {
   const unreadable: OutgoingCheck = { ok: false, reason: 'That page tried to send a message the app could not read, so nothing was sent.' };
+  const refuse = (t: string): OutgoingCheck => ({ ok: false, reason: `That page tried to send "${t}", which the app never allows on a home device, so nothing was sent.` });
+  const denied = (t: string) => [...SOCKET_DENY_FLOOR, ...extraDeny].some((p) => t.startsWith(p.toLowerCase()));
+  // pages-finish step 1b: a device that speaks plain text is checked by the start of
+  // the text itself, the same deny list; the page's exact text is what is sent.
+  if (shape.format === 'text') {
+    const t = text.trim().toLowerCase();
+    return denied(t) ? refuse(t.slice(0, 40)) : { ok: true, text };
+  }
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { return unreadable; }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unreadable;
-  const type = (parsed as { type?: unknown }).type;
+  // The field that names a message: Home Assistant's `type` unless the manifest says.
+  const type = (parsed as Record<string, unknown>)[shape.typeField ?? 'type'];
   if (typeof type !== 'string') return unreadable;
   const t = type.trim().toLowerCase();
-  const hit = [...SOCKET_DENY_FLOOR, ...extraDeny].find((p) => t.startsWith(p.toLowerCase()));
-  return hit
-    ? { ok: false, reason: `That page tried to send "${t}", which the app never allows on a home device, so nothing was sent.` }
-    : { ok: true, text: JSON.stringify(parsed) };
+  return denied(t) ? refuse(t) : { ok: true, text: JSON.stringify(parsed) };
 }
 
 /** Everything a socket to a home device must pass, in one place so the
@@ -214,7 +220,7 @@ export async function performPageSocket(request: PageFetchRequest, ctx: PageSock
   // The checked, re-serialised text is what gets sent (see checkOutgoingSocketMessage).
   const toSend: string[] = [];
   for (const m of plan.send) {
-    const vetted = checkOutgoingSocketMessage(m, connection.socketDeny);
+    const vetted = checkOutgoingSocketMessage(m, connection.socketDeny, { format: connection.socketFormat, typeField: connection.socketTypeField });
     if (!vetted.ok) return refuse('method-not-allowed', vetted.reason);
     toSend.push(vetted.text);
   }
