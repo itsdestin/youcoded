@@ -60,13 +60,24 @@ export interface PageKeyRecord {
   /** The word before the key in a header. Recorded at approval, like the
    *  placement, because what was approved is what is sent. */
   scheme: 'bearer' | 'token' | 'none';
+  /** A recipe's multi-part sign-in: where each part goes, recorded at approval
+   *  (design review 1, finding 8), so the value is only ever used by a line with
+   *  the same layout. Absent for an ordinary single key. */
+  parts?: Array<{ id: string; in: string; param?: string }>;
 }
 
 interface ConnectionsFile {
   version: number;
   pages: Record<string, Record<string, PageApproval>>;
   keys: Record<string, PageKeyRecord>;
+  /** Per page: websites the person said it may open without asking (pages-finish
+   *  step 1, "Open this website?"). Optional and unversioned on purpose: an older
+   *  app ignores it, and at worst a site asks again. */
+  openSites?: Record<string, string[]>;
 }
+
+/** At most this many remembered sites per page. */
+export const MAX_OPEN_SITES = 50;
 
 export const UNKNOWN_VERSION_MESSAGE =
   'The saved page connections on this computer were written by a newer version of YouCoded, so they cannot be read here. Nothing was changed.';
@@ -97,6 +108,7 @@ export function hashHtml(html: string): string {
 export interface ConnectionsSnapshot {
   pages: Record<string, Record<string, PageApproval>>;
   keys: Record<string, PageKeyRecord>;
+  openSites: Record<string, string[]>;
 }
 
 export class PageConnectionsStore {
@@ -118,7 +130,7 @@ export class PageConnectionsStore {
     let raw: string;
     try { raw = await fs.readFile(this.file, 'utf8'); }
     catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { pages: {}, keys: {} };
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { pages: {}, keys: {}, openSites: {} };
       throw e;
     }
     return parseFile(raw);
@@ -144,13 +156,14 @@ export class PageConnectionsStore {
   /** Encrypt and remember one key. Throws with a showable message when the
    *  computer has no keychain — SecretsStore refuses a plaintext fallback by
    *  design, and the caller must then record NO approval (finding 11). */
-  async saveKey(service: string, address: string, plaintext: string, placement: { in: 'header' | 'query'; param: string; scheme: 'bearer' | 'token' | 'none' }): Promise<PageKeyRecord> {
+  async saveKey(service: string, address: string, plaintext: string, placement: { in: 'header' | 'query'; param: string; scheme: 'bearer' | 'token' | 'none' }, parts?: ReadonlyArray<{ id: string; in: string; param?: string }>): Promise<PageKeyRecord> {
     const id = savedKeyId(service, address);
     // Reuse the existing ref when there is one, so replacing a key rotates it
     // in place and every page pointing at it keeps working.
     const existing = (await this.read()).keys[id];
     const secretRef = await this.secrets.set(plaintext, existing?.secretRef);
     const record: PageKeyRecord = { secretRef, in: placement.in, param: placement.param, scheme: placement.in === 'query' ? 'none' : placement.scheme };
+    if (parts?.length) record.parts = parts.map((p) => ({ id: p.id, in: p.in, ...(p.param ? { param: p.param } : {}) }));
     await this.mutate((cur) => { cur.keys[id] = record; return true; });
     return record;
   }
@@ -161,6 +174,36 @@ export class PageConnectionsStore {
     if (Object.keys(approvals).length === 0) return;
     await this.mutate((cur) => {
       cur.pages[pageKey] = { ...(cur.pages[pageKey] ?? {}), ...approvals };
+      return true;
+    });
+  }
+
+  /** Sites one page may open without asking. */
+  async openSitesFor(pageKey: string): Promise<string[]> {
+    return (await this.read()).openSites[pageKey] ?? [];
+  }
+
+  /** Remember a site for a page ("Don't ask again"). The host is cleaned the same
+   *  way every reader cleans it; a page at the cap keeps its first sites. */
+  async addOpenSite(pageKey: string, site: string): Promise<void> {
+    const host = cleanSite(site);
+    if (!host) return;
+    await this.mutate((cur) => {
+      const list = (cur.openSites ??= {})[pageKey] ?? [];
+      if (list.includes(host) || list.length >= MAX_OPEN_SITES) return false;
+      cur.openSites[pageKey] = [...list, host];
+      return true;
+    });
+  }
+
+  /** Forget a site for a page: its links ask again. */
+  async removeOpenSite(pageKey: string, site: string): Promise<void> {
+    const host = cleanSite(site);
+    await this.mutate((cur) => {
+      const list = cur.openSites?.[pageKey];
+      if (!host || !list?.includes(host)) return false;
+      const rest = list.filter((s) => s !== host);
+      if (rest.length) cur.openSites![pageKey] = rest; else delete cur.openSites![pageKey];
       return true;
     });
   }
@@ -223,6 +266,11 @@ export class PageConnectionsStore {
         delete cur.pages[pageKey];
         changed = true;
       }
+      for (const pageKey of Object.keys(cur.openSites ?? {})) {
+        if (livePageKeys.has(pageKey)) continue;
+        delete cur.openSites![pageKey];
+        changed = true;
+      }
       for (const [id, record] of Object.entries(cur.keys)) {
         if (usedKeyIds.has(id)) continue;
         delete cur.keys[id];
@@ -244,7 +292,7 @@ export class PageConnectionsStore {
     let refused: string | null = null;
     const ok = await mutateFileUnderLock(this.file, (onDisk) => {
       let cur: ConnectionsFile;
-      try { cur = onDisk === null ? { version: VERSION, pages: {}, keys: {} } : toFile(parseFile(onDisk)); }
+      try { cur = onDisk === null ? { version: VERSION, pages: {}, keys: {}, openSites: {} } : toFile(parseFile(onDisk)); }
       catch (e) { refused = e instanceof ConnectionsUnreadableError ? e.message : UNKNOWN_VERSION_MESSAGE; return null; }
       return mutate(cur) ? JSON.stringify(cur, null, 2) : null;
     });
@@ -254,20 +302,39 @@ export class PageConnectionsStore {
 }
 
 function toFile(snapshot: ConnectionsSnapshot): ConnectionsFile {
-  return { version: VERSION, pages: snapshot.pages, keys: snapshot.keys };
+  return { version: VERSION, pages: snapshot.pages, keys: snapshot.keys, openSites: snapshot.openSites };
 }
 
 /** One parser, shared by read() and mutate(), so their tolerance cannot drift. */
 function parseFile(raw: string): ConnectionsSnapshot {
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return { pages: {}, keys: {} }; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { pages: {}, keys: {} };
+  try { parsed = JSON.parse(raw); } catch { return { pages: {}, keys: {}, openSites: {} }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { pages: {}, keys: {}, openSites: {} };
   const o = parsed as Partial<ConnectionsFile>;
   // finding 10: a version we do not know refuses EVERYTHING with a plain
   // sentence. Reading the parts that happen to look familiar would be exactly
   // the half-understanding the refusal exists to prevent.
   if (o.version !== VERSION) throw new ConnectionsUnreadableError(UNKNOWN_VERSION_MESSAGE);
-  return { pages: cleanPages(o.pages), keys: cleanKeys(o.keys) };
+  return { pages: cleanPages(o.pages), keys: cleanKeys(o.keys), openSites: cleanOpenSites(o.openSites) };
+}
+
+/** A remembered site: a hostname, lower case, no trailing dot, plain characters.
+ *  Re-checked on every read, so a hand-edited file cannot store anything else. */
+export function cleanSite(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const host = raw.trim().replace(/\.$/, '').toLowerCase();
+  return host.length > 0 && host.length <= 253 && /^[a-z0-9.-]+$/.test(host) && !host.startsWith('.') ? host : null;
+}
+
+function cleanOpenSites(raw: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [pageKey, list] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(list)) continue;
+    const kept = [...new Set(list.map(cleanSite).filter((s): s is string => !!s))].slice(0, MAX_OPEN_SITES);
+    if (kept.length) out[pageKey] = kept;
+  }
+  return out;
 }
 
 function cleanPages(raw: unknown): Record<string, Record<string, PageApproval>> {
@@ -307,6 +374,14 @@ function cleanKeys(raw: unknown): Record<string, PageKeyRecord> {
     // actually sent) rather than silently changing to Bearer.
     const scheme = e.scheme === 'bearer' || e.scheme === 'token' ? e.scheme : 'none';
     out[id] = { secretRef: e.secretRef, in: e.in === 'query' ? 'query' : 'header', param: e.param, scheme: e.in === 'query' ? 'none' : scheme };
+    // A parts layout of plain words only; anything odd reads as no layout, which
+    // no recipe line will then use (it asks for the sign-in again).
+    if (Array.isArray(e.parts)) {
+      const parts = e.parts.filter((p): p is { id: string; in: string; param?: string } =>
+        !!p && typeof p.id === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(p.id) && typeof p.in === 'string' && /^[a-z-]{1,20}$/.test(p.in)
+        && (p.param === undefined || (typeof p.param === 'string' && /^[a-z0-9!#$%&'*+.^_`|~-]{1,64}$/.test(p.param))));
+      if (parts.length === e.parts.length && parts.length) out[id].parts = parts.map((p) => ({ id: p.id, in: p.in, ...(p.param ? { param: p.param } : {}) }));
+    }
   }
   return out;
 }

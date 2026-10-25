@@ -274,11 +274,13 @@ export function allowSegment(allow: readonly PageAllowRule[] | undefined): strin
 
 /** Does a request fit one of the recipe's rules? Same method, and the request's own
  *  path (already dot-normalised by URL parsing) equal to the rule's or under it at a
- *  `/` boundary. An encoded slash, dot or backslash is refused outright: a server may
- *  decode it into a path the rule does not cover. */
+ *  `/` boundary. Anything encoded (`%`), a `;` path parameter, a backslash or an empty
+ *  segment (`//`) is refused outright (design review 1, finding 7): a server may read
+ *  any of them as a path the rule does not cover, and the YouCoded write rule refuses
+ *  `%` for the same reason. */
 export function allowMatches(allow: readonly PageAllowRule[], method: string, pathname: string): boolean {
   const m = method.toUpperCase();
-  if (/%(2f|2e|5c)/i.test(pathname)) return false;
+  if (/[%;\\]|\/\//.test(pathname)) return false;
   return allow.some((r) => r.method === m && (r.path === '/' || pathname === r.path || pathname.startsWith(r.path + '/')));
 }
 
@@ -314,6 +316,12 @@ export function cleanParts(raw: unknown): PageKeyPart[] | undefined | null {
   const passwords = out.filter((p) => p.in === 'basic-password').length;
   if (users > 1 || passwords > 1 || users !== passwords) return null;
   return out;
+}
+
+/** A parts layout as one comparable string (ids, places and names, sorted). The
+ *  saved record and the line must agree on it before a saved value is used. */
+export function partsLayout(parts: ReadonlyArray<{ id: string; in: string; param?: string }> | undefined): string {
+  return (parts ?? []).map((p) => `${p.id}:${p.in}:${p.param ?? ''}`).sort().join(',');
 }
 
 /** The parts as they ride a fingerprint: where each value goes, never its label. */

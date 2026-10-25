@@ -11,6 +11,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
 import { fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
 import { kindOf } from './page-kinds';
+import { partsLayout } from './page-connection-fields';
 import { log } from '../logger';
 import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
@@ -312,16 +313,23 @@ class PagesService {
       // A recipe's sign-in of several values arrives as one JSON object keyed by
       // part id (the card builds it); refuse a missing box rather than save a
       // sign-in that can never work.
-      if (!reuseSaved && c.kind === 'key' && c.parts && !partsComplete(typed, c.parts.map((p) => p.id))) {
-        return { ok: false, message: `Fill in every box to sign in to ${c.service}.` };
+      const parts = c.kind === 'key' ? c.parts : undefined;
+      if (!reuseSaved && parts && !partsComplete(typed, parts)) {
+        return { ok: false, message: `Fill in every box to sign in to ${c.kind === 'key' ? c.service : ''}.` };
       }
       try {
         if (reuseSaved) {
-          if (!(await store.savedKey(target.service, target.address))) {
+          const saved = await store.savedKey(target.service, target.address);
+          if (!saved) {
             return { ok: false, message: `No ${target.service} key is saved on this computer yet. Add one to let this page use it.` };
           }
+          // A saved sign-in is reused only by a line that places its values the
+          // same way (design review 1, finding 8).
+          if (partsLayout(saved.parts) !== partsLayout(parts)) {
+            return { ok: false, message: `The ${target.service} sign-in saved on this computer was made for a different page. Enter it again for this one.` };
+          }
         } else {
-          await store.saveKey(target.service, target.address, typed, keyPlacement(c));
+          await store.saveKey(target.service, target.address, typed, keyPlacement(c), parts);
         }
       } catch (e) { return { ok: false, message: messageOf(e) }; }
     }
@@ -649,12 +657,20 @@ class PagesService {
 /** A thrown store failure already carries a sentence the person can act on
  *  (an unreadable file, a busy lock, a computer with no keychain). Never
  *  replace it with a guess — docs/error-message-standards.md. */
-/** True when a typed multi-part sign-in names a non-empty value for every part. */
-function partsComplete(typed: string, ids: readonly string[]): boolean {
-  try {
-    const v = JSON.parse(typed) as Record<string, unknown>;
-    return !!v && typeof v === 'object' && ids.every((id) => typeof v[id] === 'string' && (v[id] as string).trim() !== '');
-  } catch { return false; }
+/** True when a typed multi-part sign-in names a usable value for every part:
+ *  a non-empty string of at most 1,000 characters with no line break (it would
+ *  split a header), and no ':' in a Basic user name (it would move the split
+ *  between name and password). Checked here, not only on the card, because the
+ *  card's check is a courtesy and any caller can send this message. */
+function partsComplete(typed: string, parts: ReadonlyArray<{ id: string; in: string }>): boolean {
+  let v: unknown;
+  try { v = JSON.parse(typed); } catch { return false; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return parts.every((p) => {
+    const x = o[p.id];
+    return typeof x === 'string' && x.trim() !== '' && x.length <= 1000 && !/[\r\n]/.test(x) && !(p.in === 'basic-user' && x.includes(':'));
+  });
 }
 
 function messageOf(e: unknown): string {

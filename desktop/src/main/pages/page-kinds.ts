@@ -17,7 +17,7 @@ import {
   DEFAULT_KEY_PLACEMENT, GITHUB_HOST, MAX_SERVICE, YOUCODED_HOST, allowMatches, allowSegment, applyScheme,
   chatScopeKey, cleanAccess, cleanAddress, cleanAllow, cleanChatScope, cleanKeyPage, cleanParam, cleanParts,
   cleanProgramFile, cleanReplyType, cleanSocketDeny, cleanSocketHello, cleanSteps, cleanVideoProfile,
-  cleanWritePaths, keyPlacement, partsSegment, profileSegment,
+  cleanWritePaths, keyPlacement, partsLayout, partsSegment, profileSegment,
 } from './page-connection-fields';
 
 type Kind = PageConnection['kind'];
@@ -85,7 +85,8 @@ function movedSegment(c: PageConnection): string {
 async function savedKeyCredential(deps: CredentialDeps, service: string, address: string): Promise<PageCredential | null> {
   if (!deps.store) return null;
   const record = await deps.store.savedKey(service, address);
-  if (!record) return null;
+  // A multi-part sign-in saved by a recipe is never sent as one plain key.
+  if (!record || record.parts?.length) return null;
   const value = await deps.store.keyValue(record).catch(() => null);
   return value ? { in: record.in, param: record.param, value: record.in === 'header' ? applyScheme(record.scheme, value) : value, secret: value } : null;
 }
@@ -98,7 +99,10 @@ async function savedKeyCredential(deps: CredentialDeps, service: string, address
 async function partsCredential(deps: CredentialDeps, c: Of<'key'>): Promise<PageCredential | null> {
   if (!deps.store || !c.parts) return null;
   const record = await deps.store.savedKey(c.service, c.address);
-  if (!record) return null;
+  // The saved value must have been made for THIS layout (design review 1,
+  // finding 8): another page's single key, or a different set of parts, under
+  // the same service and address would otherwise be sent in the wrong places.
+  if (!record || partsLayout(record.parts) !== partsLayout(c.parts)) return null;
   const raw = await deps.store.keyValue(record).catch(() => null);
   let values: Record<string, unknown>;
   try { values = raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { return null; }

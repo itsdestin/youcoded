@@ -22,7 +22,7 @@
 import WebSocket from 'ws';
 import { assertHomeHttpUrl } from '../harness/tools/net-guard';
 import { covers, fingerprint, SOCKET_KEY_TOKEN } from './page-connections';
-import { redact, type PageCredential, type PageFetchContext } from './page-fetch';
+import { credentialSecrets, redact, type PageCredential, type PageFetchContext } from './page-fetch';
 import type { PageConnection, PageFetchRequest, PageFetchResult } from '../../shared/pages-types';
 
 /** Caps. Sized for a settings page: a rename is three messages out, three
@@ -165,11 +165,7 @@ export async function checkDeviceSocketAccess(
   // parts), so a multi-part answer cannot occur here; treat it as no key at all.
   const answered = await ctx.credential(connection);
   const credential = answered && answered.in !== 'multi' ? answered : null;
-  const secrets: string[] = [];
-  if (credential) {
-    secrets.push(credential.value);
-    if (credential.secret && credential.secret !== credential.value) secrets.push(credential.secret);
-  }
+  const secrets = credentialSecrets(credential);
   const hello = connection.socketHello;
   if (hello?.includes(SOCKET_KEY_TOKEN) && !credential) {
     return no(refuse('not-approved', `There is no saved key for ${connection.service}. Remove this connection and add the key again.`));

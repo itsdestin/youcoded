@@ -1,6 +1,7 @@
 // The manifest is written by an assistant or a stranger, and what it says is
 // what the approval screen promises — so these pin the refusals.
 import { describe, expect, it } from 'vitest';
+import { kindOf } from '../src/main/pages/page-kinds';
 import { applyScheme, covers, fingerprint, keyPlacement, methodAllowed, parseConnections } from '../src/main/pages/page-connections';
 
 const key = { id: 'k', kind: 'key', service: 'OpenWeather', address: 'api.openweathermap.org', access: 'lookup' };
@@ -282,3 +283,22 @@ describe('service recipes in a manifest', () => {
   });
 });
 
+
+describe('a saved multi-part sign-in', () => {
+  const parts = [{ id: 'user', label: 'Email', in: 'basic-user' }, { id: 'pass', label: 'Password', in: 'basic-password' }];
+  const [line] = parseConnections([{ id: 'k', kind: 'key', service: 'Cal', address: 'cal.example.com', access: 'full', parts }]);
+  const value = JSON.stringify({ user: 'me@example.com', pass: 'secret-pass' });
+  const storeWith = (record: object) => ({ savedKey: async () => ({ secretRef: 'r', in: 'header' as const, param: 'authorization', scheme: 'none' as const, ...record }), keyValue: async () => value });
+
+  it('is sent as Basic only to a line with the same layout it was saved for', async () => {
+    const same = await kindOf(line).credential(line, { store: storeWith({ parts: [{ id: 'user', in: 'basic-user' }, { id: 'pass', in: 'basic-password' }] }) });
+    expect(same).toMatchObject({ in: 'multi', headers: { authorization: `Basic ${Buffer.from('me@example.com:secret-pass').toString('base64')}` } });
+    expect(await kindOf(line).credential(line, { store: storeWith({}) })).toBeNull();
+    expect(await kindOf(line).credential(line, { store: storeWith({ parts: [{ id: 'user', in: 'header', param: 'x-user' }, { id: 'pass', in: 'basic-password' }] }) })).toBeNull();
+  });
+
+  it('is never sent as a plain key by a line without parts', async () => {
+    const [plain] = parseConnections([{ id: 'k', kind: 'key', service: 'Cal', address: 'cal.example.com' }]);
+    expect(await kindOf(plain).credential(plain, { store: storeWith({ parts: [{ id: 'user', in: 'basic-user' }] }) })).toBeNull();
+  });
+});

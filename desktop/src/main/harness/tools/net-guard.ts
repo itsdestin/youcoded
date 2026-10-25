@@ -180,7 +180,8 @@ export interface GuardedFetchOpts {
    */
   /** `url` is the whole hop address, for a caller whose rule includes the
    *  port (a page's device connection: one service on one box). */
-  allowHost?: (hostname: string, hop: number, url: URL) => HostDecision;
+  /** `method` is the one this hop will be sent with (a 303 turns a POST into a GET). */
+  allowHost?: (hostname: string, hop: number, url: URL, method: string) => HostDecision;
   /**
    * Headers sent ONLY while the hop's host still equals hop 0's. A redirect to
    * a different host keeps the request and loses these — the credential does
@@ -214,21 +215,23 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
   // inside would give 6 hops × 30s = up to 180s, defeating the cap.
   const deadline = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? 30_000)]);
   let current = rawUrl;
-  let originHost: string | null = null;
+  // WHY the whole origin, not just the host (design review 1, finding 5): a
+  // redirect from https to http on the same host, or to another port, is a
+  // different place to send a credential to.
+  let origin: string | null = null;
   let method = (opts.method ?? 'GET').toUpperCase();
   let body = opts.body;
   for (let hop = 0; ; hop++) {
     const url = opts.reach === 'home'
       ? await assertHomeHttpUrl(current, lookup, deadline)
       : await assertPublicHttpUrl(current, lookup, deadline);
-    const host = url.hostname.toLowerCase();
-    if (originHost === null) originHost = host;
-    const decision = opts.allowHost?.(url.hostname, hop, url);
+    if (origin === null) origin = url.origin;
+    const decision = opts.allowHost?.(url.hostname, hop, url, method);
     if (decision && !decision.ok) throw new NetGuardError(decision.message);
     // Off-host: the request goes on, the credential does not. Both the header
     // form and the in-the-URL form, because a service that redirects while
     // preserving the query string would otherwise carry the key across.
-    const onOrigin = host === originHost;
+    const onOrigin = url.origin === origin;
     if (!onOrigin) for (const p of opts.credentialQueryParams ?? []) url.searchParams.delete(p);
     const target = url.toString();
     deadline.throwIfAborted(); // no dispatch after DNS or allowHost used the remaining budget

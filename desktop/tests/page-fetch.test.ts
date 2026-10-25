@@ -246,3 +246,51 @@ describe('a service recipe', () => {
     for (const secret of [USER, PASS, basic]) expect(body).not.toContain(secret);
   });
 });
+
+describe('a sign-in never travels unprotected or off course', () => {
+  const tasks = parseConnections([{
+    id: 'tasks', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full',
+    allow: [{ method: 'POST', path: '/rest/v2/tasks', does: 'Add tasks' }],
+  }])[0];
+  const keyCtx = (fetchImpl: unknown) => ({
+    ...ctx([tasks], fetchImpl),
+    credential: async (): Promise<PageCredential> => ({ in: 'header', param: 'authorization', value: `Bearer ${KEY_VALUE}`, secret: KEY_VALUE }),
+  });
+  const redirectTo = (location: string, status = 307) => new Response(null, { status, headers: { location } });
+
+  it('refuses plain http for a connection that carries a key', async () => {
+    const fetchMock = ok();
+    const res = await performPageFetch(get('http://api.todoist.com/rest/v2/tasks', { method: 'POST' }), keyCtx(fetchMock));
+    expect(res).toMatchObject({ ok: false, reason: 'bad-url' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('stops a redirect to a path the recipe does not allow', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://api.todoist.com/rest/v2/admin/delete')).mockResolvedValue(new Response('done'));
+    const res = await performPageFetch(get('https://api.todoist.com/rest/v2/tasks', { method: 'POST', body: '{}' }), keyCtx(fetchMock));
+    expect(res).toMatchObject({ ok: false, reason: 'not-approved' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops a redirect that drops to plain http on the same host', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('http://api.todoist.com/rest/v2/tasks')).mockResolvedValue(new Response('done'));
+    const res = await performPageFetch(get('https://api.todoist.com/rest/v2/tasks', { method: 'POST' }), keyCtx(fetchMock));
+    expect(res).toMatchObject({ ok: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses encoded, parameterised and doubled paths under a recipe', async () => {
+    const fetchMock = ok();
+    for (const path of ['/rest/v2/tasks/%2e%2e/x', '/rest/v2/tasks;admin', '/rest/v2/tasks//x']) {
+      const res = await performPageFetch(get(`https://api.todoist.com${path}`, { method: 'POST' }), keyCtx(fetchMock));
+      expect(res, path).toMatchObject({ ok: false, reason: 'method-not-allowed' });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('hides a key a service echoes back JSON-escaped or as base64', () => {
+    const secret = 'pa"ss\\word-1234';
+    const text = `{"echo":${JSON.stringify(secret)},"auth":"${Buffer.from(secret).toString('base64')}"}`;
+    expect(redact(text, [secret])).not.toMatch(/word-1234|cGEic3Nc/);
+  });
+});

@@ -135,12 +135,34 @@ export function redact(text: string, secrets: readonly string[]): string {
     // Short strings are not credentials worth hunting for, and blanking a
     // two-character value would mangle ordinary text.
     if (!secret || secret.length < 4) continue;
-    for (const form of new Set([secret, encodeURIComponent(secret)])) {
+    // WHY the extra forms (design review 1, finding 9): a JSON service echoes a
+    // value with its quotes and backslashes escaped, and an echoed Authorization
+    // header carries a sign-in as base64 — each would otherwise reach the page.
+    const b64 = Buffer.from(secret, 'utf8').toString('base64');
+    const forms = [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), b64, b64.replace(/=+$/, ''), Buffer.from(secret, 'utf8').toString('base64url')];
+    // Longest first, so a form that contains another is blanked whole.
+    for (const form of [...new Set(forms)].filter((f) => f.length >= 4).sort((a, b) => b.length - a.length)) {
       out = out.split(form).join(REDACTED);
     }
   }
   return out;
 }
+
+/** Every string a credential must never hand back to a page, for every door
+ *  (fetch, the one-shot socket, the live socket, video) to redact alike. */
+export function credentialSecrets(credential: PageCredential | null): string[] {
+  if (!credential) return [];
+  if (credential.in === 'multi') return [...credential.secrets];
+  // The bare key too, when the value wraps it ("Bearer <key>"): a service that
+  // echoes the key without the word must not hand it back to the page.
+  return credential.secret && credential.secret !== credential.value ? [credential.value, credential.secret] : [credential.value];
+}
+
+/** Kinds that attach a credential the app holds. Such a request never travels
+ *  as plain http: a key or password would cross the network readable by anyone
+ *  on the way (design review 1, finding 5). A home device is the exception: it
+ *  is reached only inside the home, and most speak nothing else. */
+const NEEDS_HTTPS = new Set<PageConnection['kind']>(['key', 'github', 'youcoded']);
 
 /**
  * Steps 1–6 of §4. The caller has already resolved the page and its approvals;
@@ -164,6 +186,9 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
   const connection = ctx.connections.find((c) => covers(c, url));
   if (!connection) {
     return { ok: false, reason: 'not-approved', message: `This page is not allowed to reach ${url.hostname}.` };
+  }
+  if (url.protocol === 'http:' && NEEDS_HTTPS.has(connection.kind)) {
+    return { ok: false, reason: 'bad-url', message: `This page asked for ${url.hostname} without https://. The app only sends your sign-in to it over an encrypted connection.` };
   }
   const recorded = ctx.approved[connection.id];
   if (!recorded || recorded !== fingerprint(connection)) {
@@ -214,15 +239,11 @@ async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchCon
   const credentialHeaders: Record<string, string> = {};
   const credentialQueryParams: string[] = [];
   const secrets: string[] = [];
+  secrets.push(...credentialSecrets(credential));
   if (credential?.in === 'multi') {
-    secrets.push(...credential.secrets);
     Object.assign(credentialHeaders, credential.headers);
     for (const [param, value] of Object.entries(credential.query)) { url.searchParams.set(param, value); credentialQueryParams.push(param); }
   } else if (credential) {
-    secrets.push(credential.value);
-    // The bare key too, when the value wraps it ("Bearer <key>"): a service
-    // that echoes the key without the word must not hand it back to the page.
-    if (credential.secret && credential.secret !== credential.value) secrets.push(credential.secret);
     if (credential.in === 'header') credentialHeaders[credential.param] = credential.value;
     else { url.searchParams.set(credential.param, credential.value); credentialQueryParams.push(credential.param); }
   }
@@ -230,10 +251,24 @@ async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchCon
   // Step 5. Every hop is re-checked against the SAME connection, so a 302 to a
   // host the approval does not name is refused outright rather than followed.
   let refusedHost: string | null = null;
-  const allowHost = (hostname: string, _hop: number, hopUrl: URL): HostDecision => {
-    if (covers(connection, connection.kind === 'device' ? hopUrl : hostname)) return { ok: true };
-    refusedHost = hostname;
-    return { ok: false, message: `That page was sent on to ${hostname}, which it is not allowed to reach.` };
+  // WHY the method and path too (design review 1, finding 6): an allowed POST
+  // answered with a 307 to another path on the same host would otherwise be
+  // replayed there with the same body and sign-in — past a recipe's `allow` or a
+  // YouCoded write path. Every hop is judged as if the page had asked for it.
+  const allowHost = (hostname: string, _hop: number, hopUrl: URL, hopMethod: string): HostDecision => {
+    if (!covers(connection, connection.kind === 'device' ? hopUrl : hostname)) {
+      refusedHost = hostname;
+      return { ok: false, message: `That page was sent on to ${hostname}, which it is not allowed to reach.` };
+    }
+    if (hopUrl.protocol === 'http:' && NEEDS_HTTPS.has(connection.kind)) {
+      refusedHost = hostname;
+      return { ok: false, message: `${hostname} sent the request on without https://, so the app stopped it.` };
+    }
+    if (!methodAllowed(connection, hopMethod, hopUrl.pathname)) {
+      refusedHost = hostname;
+      return { ok: false, message: `${hostname} sent the request on to ${hopUrl.pathname}, which this page is not allowed to use.` };
+    }
+    return { ok: true };
   };
 
   try {
