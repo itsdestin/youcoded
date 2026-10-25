@@ -222,8 +222,27 @@ class WebViewUrlRouter(
         fun openExternally(url: String)
     }
 
-    /** Returns true when the WebView must NOT load the URL itself. */
-    fun onNavigation(url: String): Boolean = when (WebViewUrlPolicy.decide(url, isPairedHost, devServersInApp)) {
+    /**
+     * Returns true when the WebView must NOT load the URL itself.
+     *
+     * WHY the frame and the tap (pages-finish step 1, design review 1, finding 1): a
+     * YouCoded Page runs in a sandboxed frame, and its script could navigate that frame
+     * to an address carrying what the page read (`location.href = ...`). Here that used
+     * to land on OPEN_EXTERNALLY and hand the address to the phone's browser with no
+     * question. A sub-frame navigation that nobody tapped is now refused outright. A
+     * tapped link inside a frame (an HTML preview's link) still opens as before; a
+     * Page's own links never get here, because the Page asks the app first.
+     */
+    fun onNavigation(url: String, isMainFrame: Boolean = true, hasGesture: Boolean = true): Boolean {
+        if (!isMainFrame) {
+            // A frame's own blank or inline document loads in place; nothing leaves the phone.
+            if (url.startsWith("about:")) return false
+            if (!hasGesture) return true
+        }
+        return route(url)
+    }
+
+    private fun route(url: String): Boolean = when (WebViewUrlPolicy.decide(url, isPairedHost, devServersInApp)) {
         UrlDecision.DOWNLOAD -> { actions.download(url, WebViewUrlPolicy.downloadFileName(url)); true }
         UrlDecision.OPEN_EXTERNALLY -> { actions.openExternally(url); true }
         UrlDecision.BLOCK -> true

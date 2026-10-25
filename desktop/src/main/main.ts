@@ -51,6 +51,7 @@ import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHan
 import { canDeliverToRenderer, sendToRenderer, wireRendererRecovery } from './renderer-recovery';
 import { registerThemeProtocol } from './theme-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
+import { sealPageFrames } from './pages/page-frame-guard';
 import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
 import { startOffice } from './office/office-boot';
 import { getOfficeSessions, quitOfficeSessions } from './office/office-session-registry';
@@ -744,6 +745,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
   sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
+  sealPageFrames(win.webContents); // WHY: a page frame never navigates itself away — the address could carry what it read (page-frame-guard.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
     // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.

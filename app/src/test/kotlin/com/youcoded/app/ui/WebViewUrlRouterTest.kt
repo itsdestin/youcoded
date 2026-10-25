@@ -126,6 +126,19 @@ class WebViewUrlRouterTest {
         assertEquals(emptyList<Pair<String, String>>(), actions.downloads)
     }
 
+    @Test fun `a frame inside the page cannot navigate itself out unless it was tapped`() {
+        val actions = FakeActions()
+        val router = WebViewUrlRouter(actions, paired)
+        // A Page's script sending its frame to an address carrying what it read.
+        assertTrue(router.onNavigation("https://evil.example/?chats=x", isMainFrame = false, hasGesture = false))
+        assertEquals(emptyList<String>(), actions.external)
+        // A frame loading its own document is left alone.
+        assertFalse(router.onNavigation("about:srcdoc", isMainFrame = false, hasGesture = false))
+        // A tapped link inside a frame (an HTML preview) still opens as before.
+        assertTrue(router.onNavigation("https://example.com/", isMainFrame = false, hasGesture = true))
+        assertEquals(listOf("https://example.com/"), actions.external)
+    }
+
     @Test fun `lookalike local addresses are not local`() {
         for (url in listOf(
             "http://localhost.evil.com/",
@@ -286,8 +299,8 @@ class WebViewUrlRouterTest {
             if (src[i] == '}') { depth--; if (depth == 0) { close = i; break } }
         }
         val body = src.substring(open, close + 1)
-        assertTrue("the override must be exactly `return urlRouter.onNavigation(request.url.toString())`, got: $body",
-            Regex("""^\{\s*return\s+urlRouter\.onNavigation\(\s*request\.url\.toString\(\)\s*\)\s*\}$""").matches(body.trim()))
+        assertTrue("the override must be exactly `return urlRouter.onNavigation(request.url.toString(), request.isForMainFrame, request.hasGesture())`, got: $body",
+            Regex("""^\{\s*return\s+urlRouter\.onNavigation\(\s*request\.url\.toString\(\),\s*request\.isForMainFrame,\s*request\.hasGesture\(\)\s*\)\s*\}$""").matches(body.trim()))
 
         assertEquals("exactly one download listener", 1, Regex("""setDownloadListener""").findAll(src).count())
         assertTrue("the download listener must call urlRouter.onDownloadRequested",

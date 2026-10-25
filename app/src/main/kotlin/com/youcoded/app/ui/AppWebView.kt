@@ -80,7 +80,7 @@ object AppWebView {
             val themesDir = File(homeDir, ".claude/wecoded-themes")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    return urlRouter.onNavigation(request.url.toString())
+                    return urlRouter.onNavigation(request.url.toString(), request.isForMainFrame, request.hasGesture())
                 }
 
                 override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
