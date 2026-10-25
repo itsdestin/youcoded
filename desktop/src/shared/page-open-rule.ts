@@ -22,13 +22,13 @@ export type PageOpenDecision =
 export const PAGE_FRAME_NAME = 'youcoded-page';
 
 /** Longest address the app will open for a page. */
-export const MAX_PAGE_OPEN_URL = 2000;
+const MAX_PAGE_OPEN_URL = 2000;
 
 const SILENT_KINDS = new Set<PageConnectionStatus['kind']>(['public', 'key', 'youcoded', 'github']);
 const FIXED_HOST: Partial<Record<PageConnectionStatus['kind'], string>> = { youcoded: 'api.youcoded.ai', github: 'api.github.com' };
 
 /** A hostname as connections and remembered sites compare it. */
-export function siteOf(hostname: string): string {
+function siteOf(hostname: string): string {
   return hostname.trim().replace(/\.$/, '').toLowerCase();
 }
 

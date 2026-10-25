@@ -221,9 +221,9 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   // frame-navigation guard instead.
   window.addEventListener('click', function (e) {
     if (e.defaultPrevented || e.button !== 0) return;
-    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (!a) return;
-    var href = a.href;
+    var link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!link) return;
+    var href = link.href;
     if (!/^(https?:|mailto:)/i.test(href)) return;
     e.preventDefault();
     askOpen(href);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { isPrivateIp, isNeverDialIp, assertPublicHttpUrl, assertHomeHttpUrl, guardedFetch, readBodyCapped, NetGuardError } from '../src/main/harness/tools/net-guard';
+import { isPrivateIp, isNeverDialIp, assertPublicHttpUrl, assertHomeHttpUrl, guardedFetch, pinnedLookup, readBodyCapped, NetGuardError } from '../src/main/harness/tools/net-guard';
 
 describe('isPrivateIp', () => {
   it.each([
@@ -367,5 +367,34 @@ describe('guardedFetch', () => {
     const { text, truncated } = await readBodyCapped(res, 1024);
     expect(text.length).toBeLessThanOrEqual(1024);
     expect(truncated).toBe(true);
+  });
+});
+
+describe('name-server re-binding', () => {
+  const call = (fn: ReturnType<typeof pinnedLookup>, host: string, all = true) =>
+    new Promise<{ err: Error | null; addrs: unknown }>((resolve) => fn(host, { all }, (err, addrs) => resolve({ err, addrs })));
+
+  it('hands out only allowed addresses, decided by the one lookup', async () => {
+    const pub = pinnedLookup('public', async () => [{ address: '93.184.216.34', family: 4 }]);
+    expect(await call(pub, 'example.com')).toEqual({ err: null, addrs: [{ address: '93.184.216.34', family: 4 }] });
+    const rebound = pinnedLookup('public', async () => [{ address: '93.184.216.34', family: 4 }, { address: '10.0.0.5', family: 4 }]);
+    expect((await call(rebound, 'example.com')).err?.message).toMatch(/private\/internal address 10\.0\.0\.5/);
+    expect((await call(pinnedLookup('public'), '127.0.0.1')).err).toBeInstanceOf(NetGuardError);
+  });
+
+  it('keeps a home device on its IPv4 home answers only', async () => {
+    const home = pinnedLookup('home', async () => [{ address: 'fd7a:115c:a1e0::1', family: 6 }, { address: '100.99.1.2', family: 4 }]);
+    expect(await call(home, 'pi.tail.ts.net')).toEqual({ err: null, addrs: [{ address: '100.99.1.2', family: 4 }] });
+    const outside = pinnedLookup('home', async () => [{ address: '93.184.216.34', family: 4 }]);
+    expect((await call(outside, 'pi.local')).err?.message).toMatch(/outside your home network/);
+  });
+
+  it('connects through the pinned lookup, so a second answer cannot reach the home network', async () => {
+    let calls = 0;
+    // The check sees a public address; the connection is answered with a private one.
+    const lookup = async () => (++calls === 1 ? [{ address: '93.184.216.34', family: 4 }] : [{ address: '127.0.0.1', family: 4 }]);
+    await expect(guardedFetch('http://rebind.example/', { signal: new AbortController().signal, lookup, timeoutMs: 5000 }))
+      .rejects.toSatisfy((e: unknown) => /127\.0\.0\.1/.test(String((e as { cause?: unknown })?.cause ?? e)));
+    expect(calls).toBe(2);
   });
 });

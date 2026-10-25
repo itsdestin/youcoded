@@ -119,7 +119,7 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
 /** The plain words for what a service recipe allows, each once, in the order the
  *  recipe lists them (several method + path pairs may share one sentence). Empty
  *  for a line with no recipe list. */
-export function doesOf(c: PageConnection): string[] {
+function doesOf(c: PageConnection): string[] {
   const rules = c.kind === 'key' || c.kind === 'public' ? c.allow ?? [] : [];
   return [...new Set(rules.map((r) => r.does))];
 }

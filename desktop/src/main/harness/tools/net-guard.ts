@@ -3,11 +3,16 @@
 // EVERY hop is re-validated (a public URL 302ing to http://192.168.1.1/ is the
 // classic bypass). Same guard family as the secret-path denial in guards.ts.
 //
-// HONESTY LIMIT (PITFALLS): we validate the DNS answer, then fetch by hostname,
-// so a TOCTOU DNS-rebind between check and fetch is theoretically possible.
-// Honest friction, not a security boundary — the accepted Phase 2 posture.
+// NAME-SERVER RE-BINDING (pages-finish step 1, design §5; review 1 finding 10): the
+// check below reads the DNS answer, but a hostile name server can answer the CHECK
+// with a public address and the CONNECTION with a private one. So when the app does
+// the request itself (no injected fetchImpl) it uses undici's own fetch with a shared
+// Agent whose connect-time lookup resolves, applies the same rule, and returns only
+// the addresses it allowed — one lookup decides both. The up-front check stays for its
+// plain-language refusal.
 import { isIP } from 'net';
 import { lookup as dnsLookup } from 'dns/promises';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { isHomeIpv4 } from '../../../shared/page-device-address';
 import { embeddedIpv4, parseIpBytes } from './ip-bytes';
 
@@ -151,6 +156,60 @@ export async function assertHomeHttpUrl(raw: string, lookup: LookupFn = defaultL
   return url;
 }
 
+/** What undici asks a connect-time lookup with (Node's net `lookup` shape). */
+type ConnectLookupCallback = (err: Error | null, address: string | Array<{ address: string; family: number }>, family?: number) => void;
+
+/**
+ * A connect-time lookup that only ever hands out addresses the guard allows
+ * (`public`: none private; `home`: IPv4 inside the home or Tailscale, every
+ * other answer dropped — happy-eyeballs must never dial an unchecked AAAA).
+ * Exported for tests: it is the whole of the re-binding fix.
+ */
+export function pinnedLookup(reach: 'public' | 'home', lookup: LookupFn = defaultLookup) {
+  return (hostname: string, options: { all?: boolean } | number | undefined, callback: ConnectLookupCallback): void => {
+    const host = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    const answer = (addrs: Array<{ address: string; family: number }>) => {
+      const all = typeof options === 'object' && options !== null && options.all === true;
+      if (all) callback(null, addrs);
+      else callback(null, addrs[0].address, addrs[0].family);
+    };
+    const refuse = (message: string) => callback(new NetGuardError(message), []);
+    const literal = isIP(host);
+    const decide = (addrs: Array<{ address: string; family: number }>) => {
+      if (reach === 'public') {
+        if (addrs.length === 0) return refuse(`Could not resolve ${host}.`);
+        const bad = addrs.find((a) => isPrivateIp(a.address));
+        if (bad) return refuse(`${host} resolves to the private/internal address ${bad.address} — fetching it is blocked.`);
+        return answer(addrs);
+      }
+      const v4 = addrs.filter((a) => a.family === 4 || /^\d+\.\d+\.\d+\.\d+$/.test(a.address));
+      if (v4.length === 0) return refuse(`Could not find ${host} on your network.`);
+      const outside = v4.find((a) => !isHomeIpv4(a.address));
+      if (outside) return refuse(`${host} points at ${outside.address}, which is outside your home network — reaching it is blocked.`);
+      return answer(v4.map((a) => ({ address: a.address, family: 4 })));
+    };
+    if (literal) { decide([{ address: host, family: literal }]); return; }
+    Promise.resolve().then(() => lookup(host)).then(decide, () => refuse(`Could not resolve ${host} — check the URL or the network connection.`));
+  };
+}
+
+/** One shared Agent per reach (and per injected lookup, for tests), so sockets
+ *  are pooled and nothing per request needs closing. */
+const agents = new Map<string, Agent>();
+const lookupIds = new WeakMap<LookupFn, number>();
+let lookupSeq = 0;
+function agentFor(reach: 'public' | 'home', lookup: LookupFn): Agent {
+  let id = lookupIds.get(lookup);
+  if (id === undefined) { id = ++lookupSeq; lookupIds.set(lookup, id); }
+  const key = `${reach}:${id}`;
+  let agent = agents.get(key);
+  if (!agent) {
+    agent = new Agent({ connect: { lookup: pinnedLookup(reach, lookup) as never } });
+    agents.set(key, agent);
+  }
+  return agent;
+}
+
 const MAX_REDIRECTS = 5;
 
 /** An allowHost answer. A refusal carries the sentence the caller shows; it is
@@ -208,8 +267,12 @@ export interface GuardedFetchOpts {
  *  Caller abort / deadline (AbortError / TimeoutError) also ends DNS waiting;
  *  neither is a NetGuardError or proof that OS resolution was canceled. */
 export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Promise<{ res: Response; finalUrl: string }> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const lookup = opts.lookup ?? defaultLookup;
+  // An injected fetchImpl (tests) is used as given. Otherwise undici's own fetch
+  // with the pinned Agent for this reach (see the top of this file).
+  const dispatcher = opts.fetchImpl ? undefined : agentFor(opts.reach === 'home' ? 'home' : 'public', lookup);
+  const fetchImpl: typeof fetch = opts.fetchImpl
+    ?? (((input: string, init: RequestInit) => undiciFetch(input, { ...(init as object), dispatcher } as never)) as unknown as typeof fetch);
   // ONE deadline for the WHOLE call: 30s is the TOTAL wall-clock budget ACROSS
   // all redirect hops, not per-hop. Built once before the loop — building it
   // inside would give 6 hops × 30s = up to 180s, defeating the cap.
