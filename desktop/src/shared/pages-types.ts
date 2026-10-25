@@ -191,7 +191,20 @@ export type PageConnection =
    *  approval follows the program file, not page.html: what runs is the
    *  program, so an edited program must ask again and an edited page need not.
    *  `file` is relative to the page's folder and never leaves it. */
-  | { id: string; kind: 'program'; file: string };
+  | { id: string; kind: 'program'; file: string }
+  /** The person's files (pages-finish step 2; deck 1 Q-filepick + note). Four levels,
+   *  narrowest first — a page asks for the least that does the job:
+   *    pick     — a file the person chooses each time in the Open / Save window;
+   *    remember — files picked once and reopened later without asking;
+   *    folder   — everything inside ONE folder the person chooses on the card;
+   *    all      — any file the person's account can reach (the blunt line).
+   *  `access` keeps reading and changing apart (Destin: "read/write distinct").
+   *  `types`: the file endings the page works with (`.csv`), shown on the Open window.
+   *  YouCoded does every read and write; the page never holds a path. */
+  | { id: string; kind: 'files'; level: PageFileLevel; access: PageFileAccess; types?: string[] };
+
+export type PageFileLevel = 'pick' | 'remember' | 'folder' | 'all';
+export type PageFileAccess = 'read' | 'write' | 'readwrite';
 
 /** Which chats a `chats` connection covers. */
 export type PageChatScope = { all: true } | { projects: string[] } | { tag: string };
@@ -387,6 +400,11 @@ export type PageConnectionStatus = PageConnection & {
    *  device it is the key saved for the SUGGESTED address; a changed address
    *  asks for a key again, because keys are kept per service AND address. */
   savedKey?: boolean;
+  /** `files` at `folder` level: the folder the person chose on the card, as they
+   *  see it (`~/Pictures/Family`). Absent until chosen. */
+  folder?: string;
+  /** `files` at `remember` level: the files remembered so far, by display name. */
+  remembered?: Array<{ id: string; name: string }>;
 };
 
 /** Freshness of a connected page, owned by the app and shown in the band
@@ -561,7 +579,19 @@ export interface PagesBridge {
    *  `device` connection id, or 'saved' to use the one already kept.
    *  `addresses` carries the address the person allowed per `device` id; main
    *  re-checks it is a home address before recording anything. */
-  approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => Promise<PageApproveResult>;
+  /** `folders`: per `files`/`folder` line, the folder token the person chose with
+   *  `chooseFolder` (pages-finish step 2) — main records what it stands for. */
+  approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>, folders?: Record<string, string>) => Promise<PageApproveResult>;
+  /** DESIGN STAGE (mock-only.ts, pages-finish step 2): the computer's own Choose
+   *  folder window. Answers a token main keeps the real path behind, and the folder
+   *  as the person reads it (`~/Pictures/Family`). Desktop only. */
+  chooseFolder?: () => Promise<{ ok: true; token: string; display: string } | { ok: false }>;
+  /** DESIGN STAGE (mock-only.ts, step 2): change the folder an approved folder line
+   *  reaches, from Page settings. */
+  setFolder?: (id: string, connectionId: string, token: string) => Promise<PageSummary[]>;
+  /** DESIGN STAGE (mock-only.ts, step 2): forget one remembered file; the page must
+   *  ask for it again. */
+  forgetFile?: (id: string, connectionId: string, fileId: string) => Promise<PageSummary[]>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
   /** Opens `url` in the browser for the page (main re-checks it); `remember` adds

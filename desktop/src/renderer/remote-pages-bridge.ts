@@ -29,7 +29,7 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     // Phase 2. Approving from here may only REUSE a key already saved on the
     // desktop; the host refuses pasted key material from a remote caller, so
     // the rule holds even if this file is bypassed entirely.
-    approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => invoke('pages:approve', { id, keys, addresses }),
+    approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>, folders?: Record<string, string>) => invoke('pages:approve', { id, keys, addresses, folders }),
     removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
     openWebsite: (id: string, url: string, remember: boolean, open: boolean) => invoke('pages:open-website', { id, url, remember, open }),
     forgetOpenSite: (id: string, site: string) => invoke('pages:forget-open-site', { id, site }),

@@ -45,9 +45,9 @@ export interface KindDef<K extends Kind> {
   credential(c: Of<K>, deps: CredentialDeps): Promise<PageCredential | null>;
   /** The saved key this line stands on, when it holds a pasted one. */
   savedKeyTarget?(c: Of<K>): { service: string; address: string } | null;
-  /** Holds something private (a credential, a chat list): never on one page
-   *  with the whole internet, which could carry it anywhere. */
-  privateData: boolean;
+  /** Holds something private (a credential, a chat list, files it can read):
+   *  never on one page with the whole internet, which could carry it anywhere. */
+  privateData: boolean | ((c: Of<K>) => boolean);
   /** A second line of this kind would be a second card line for the same thing. */
   onePerPage?: boolean;
 }
@@ -357,6 +357,28 @@ export const KINDS: { [K in Kind]: KindDef<K> } = {
     // when the file changes (Pages scope §9: changed code never inherits trust).
     fingerprint: (c) => `program|${c.file}`,
     privateData: false,
+  },
+
+  // The person's files (pages-finish step 2). An app ability, never a network
+  // destination: YouCoded does every read and write itself, and the page never
+  // holds a path. A level the parser does not know drops the line; an access it
+  // does not know reads as the narrowest, `read`.
+  files: {
+    ...APP_ABILITY,
+    parse: (o, id) => {
+      const level = o.level === 'pick' || o.level === 'remember' || o.level === 'folder' || o.level === 'all' ? o.level : null;
+      if (!level) return null;
+      const access = o.access === 'write' || o.access === 'readwrite' ? o.access : 'read';
+      const types = Array.isArray(o.types)
+        ? [...new Set(o.types.filter((t): t is string => typeof t === 'string').map((t) => t.trim().toLowerCase()).filter((t) => /^\.[a-z0-9]{1,8}$/.test(t)))].slice(0, 10)
+        : [];
+      return types.length ? { id, kind: 'files', level, access, types } : { id, kind: 'files', level, access };
+    },
+    // Widening the level or the access asks again; the file endings do not (they
+    // only filter the Open window).
+    fingerprint: (c) => `files|${c.level}|${c.access}`,
+    // Reading files is private, like a chat list; a page that only saves new files is not.
+    privateData: (c) => c.access !== 'write',
   },
 };
 

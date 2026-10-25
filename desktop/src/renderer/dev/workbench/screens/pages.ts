@@ -103,6 +103,11 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-family-calendar', 'view', 'approval'), newIn: 'after' },
   { ...pg('pages/page/page-family-calendar#key', 'view', 'approval'), params: { pagesStep: 'keys' }, newIn: 'after' },
   { ...pg('pages/page/open-website', 'dialog'), newIn: 'after' },
+  // Finishing Pages, step 2 (files): one approval card per level, and Page settings' Files section.
+  { ...pg('pages/page/page-photo-board', 'view', 'approval'), newIn: 'after' },
+  { ...pg('pages/page/page-photo-board#chosen', 'view', 'approval'), open: ['Choose folder…'], newIn: 'after' },
+  { ...pg('pages/page/page-budget', 'view', 'approval'), newIn: 'after' },
+  { ...pg('pages/page/page-file-browser', 'view', 'approval'), newIn: 'after' },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on
@@ -121,6 +126,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/library/settings', 'dialog'), newIn: 'after' },
   { ...pg('pages/library/settings#calendar', 'dialog'), params: { pagesSettings: 'page-family-calendar' }, newIn: 'after' },
   { ...pg('pages/library/settings#work-board', 'dialog'), params: { pagesSettings: 'page-work-board' }, newIn: 'after' },
+  { ...pg('pages/library/settings#files', 'dialog'), params: { pagesSettings: 'page-recipes' }, newIn: 'after' },
   { ...pg('pages/library/settings#phone', 'dialog', 'narrow'), params: { pagesSettings: 'page-family-calendar' }, viewport: PHONE, newIn: 'after' },
   { ...pg('pages/page/open-website#phone', 'dialog', 'narrow'), viewport: PHONE, newIn: 'after' },
   pg('pages/library/edit', 'dialog'),

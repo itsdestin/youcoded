@@ -55,8 +55,13 @@ export function parseConnections(raw: unknown): PageConnection[] {
     if (out.length >= MAX_CONNECTIONS) break;
   }
   const hasOpen = out.some((c) => c.kind === 'open');
-  if (hasOpen && out.some((c) => KINDS[c.kind].privateData)) return [];
+  if (hasOpen && out.some(holdsPrivateData)) return [];
   return out;
+}
+
+function holdsPrivateData(c: PageConnection): boolean {
+  const p = kindOf(c).privateData;
+  return typeof p === 'function' ? p(c) : p;
 }
 
 /** What an approval is recorded against. Access and address are in it because

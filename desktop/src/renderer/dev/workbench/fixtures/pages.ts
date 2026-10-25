@@ -291,6 +291,43 @@ function connectedPages(): PageDocument[] {
       // Rewritten since it was allowed: the band shows the quiet note.
       codeChanged: true,
     },
+    // ── Finishing Pages step 2 (files), 2026-10-24: one practice page per level ──
+    {
+      ...base, id: 'page-photo-board', name: 'Photo board', icon: 'paint',
+      description: 'Every photo in one folder as a board, with captions you can edit.',
+      updatedAt: '2026-10-24T10:00:00.000Z', htmlStamp: 1792836000000,
+      html: simplePage('Family', 'Photo board', [['Beach day', '14 photos'], ['Birthday', '22 photos']]),
+      connections: [{ id: 'photos', kind: 'files', level: 'folder', access: 'readwrite', types: ['.jpg', '.png'], approved: false }],
+    },
+    {
+      ...base, id: 'page-budget', name: 'Budget', icon: 'chart',
+      description: 'Open your budget spreadsheet, see where the money went, and save it back.',
+      updatedAt: '2026-10-24T10:00:00.000Z', htmlStamp: 1792836000000,
+      html: simplePage('This month', 'Budget', [['Groceries', '$412 of $500'], ['Rent', '$1,850 of $1,850']]),
+      connections: [
+        { id: 'open', kind: 'files', level: 'pick', access: 'readwrite', types: ['.xlsx', '.csv'], approved: false },
+        { id: 'recent', kind: 'files', level: 'remember', access: 'readwrite', types: ['.xlsx', '.csv'], approved: false },
+      ],
+    },
+    {
+      ...base, id: 'page-file-browser', name: 'File browser', icon: 'list',
+      description: 'Your own view of everything on this computer, sorted the way you like.',
+      updatedAt: '2026-10-24T10:00:00.000Z', htmlStamp: 1792836000000,
+      html: simplePage('This computer', 'File browser', [['Documents', '1,204 files'], ['Pictures', '8,331 files']]),
+      connections: [{ id: 'everything', kind: 'files', level: 'all', access: 'readwrite', approved: false }],
+    },
+    {
+      // Approved, for Page settings' Files section: a folder and remembered files.
+      ...base, id: 'page-recipes', name: 'Recipe notes', icon: 'notes',
+      description: 'Recipes from your Recipes folder, with notes saved beside each one.',
+      updatedAt: '2026-10-24T10:00:00.000Z', htmlStamp: 1792836000000,
+      html: simplePage('Recipes', 'Recipe notes', [['Lemon pasta', 'Tuesday'], ['Shakshuka', 'Sunday']]),
+      connections: [
+        { id: 'folder', kind: 'files', level: 'folder', access: 'read', approved: true, folder: '~/Documents/Recipes' },
+        { id: 'notes', kind: 'files', level: 'remember', access: 'readwrite', types: ['.md'], approved: true,
+          remembered: [{ id: 'f1', name: 'Shopping list.md' }, { id: 'f2', name: 'Meal plan October.md' }] },
+      ],
+    },
     {
       // Finishing Pages step 1 (2026-10-24): a service no one built into the app,
       // described by a recipe — iCloud's calendar server, signed in with an Apple

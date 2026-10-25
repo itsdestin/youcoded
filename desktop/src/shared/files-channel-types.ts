@@ -96,7 +96,7 @@ export interface FilesChannelTypes {
   'pages:get': { request: { id: string }; response: unknown };
   'pages:set-pinned': { request: { id: string; pinned: boolean }; response: unknown };
   'pages:set-data': { request: { id: string; data: unknown }; response: unknown };
-  'pages:approve': { request: { id: string; keys: Record<string, string>; addresses?: Record<string, string> }; response: PagesAnswer<'approve'> | { ok: false; message: string } };
+  'pages:approve': { request: { id: string; keys: Record<string, string>; addresses?: Record<string, string>; folders?: Record<string, string> }; response: PagesAnswer<'approve'> | { ok: false; message: string } };
   'pages:remove-connection': { request: { id: string; connectionId: string }; response: PagesAnswer<'removeConnection'> };
   'pages:open-website': { request: { id: string; url: string; remember: boolean; open: boolean }; response: PagesAnswer<'openWebsite'> | { ok: false; message: string; pages: [] } };
   'pages:forget-open-site': { request: { id: string; site: string }; response: PagesAnswer<'forgetOpenSite'> };

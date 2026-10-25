@@ -2496,7 +2496,7 @@ contextBridge.exposeInMainWorld('claude', {
     // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
     // reuse the one already kept; main is the side that decides, so a pasted
     // key from a phone is refused there rather than here.
-    approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys, addresses }),
+    approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>, folders?: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys, addresses, folders }),
     removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, { id, connectionId }),
     openWebsite: (id: string, url: string, remember: boolean, open: boolean) => ipcRenderer.invoke(IPC.PAGES_OPEN_WEBSITE, { id, url, remember, open }),
     forgetOpenSite: (id: string, site: string) => ipcRenderer.invoke(IPC.PAGES_FORGET_OPEN_SITE, { id, site }),

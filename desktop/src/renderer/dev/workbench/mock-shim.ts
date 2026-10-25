@@ -248,6 +248,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
   'pages.openWebsite', 'pages.forgetOpenSite',
+  // Finishing Pages, step 2 (files): designed ahead of the backend; rows in mock-only.ts.
+  'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
@@ -4542,13 +4544,15 @@ function createPagesMock(scenario: string): PagesBridge {
     // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
     // Allow: every waiting line becomes approved, a pasted key becomes a saved
     // key, and the page gets its first "Updated just now".
-    approve: async (id, keys, addresses = {}) => {
+    approve: async (id, keys, addresses = {}, folders = {}) => {
       await delay();
       pages = pages.map((p) => {
         if (p.id !== id) return p;
         // A device takes the address the person allowed (home-device deck,
         // Q-address), exactly as the real store records it.
-        const conns = (p.connections ?? []).map((c) => (c.kind === 'device' && addresses[c.id] ? { ...c, address: addresses[c.id] } : c));
+        const conns = (p.connections ?? []).map((c) => (c.kind === 'device' && addresses[c.id] ? { ...c, address: addresses[c.id] }
+          // Step 2: a folder line takes the folder chosen on the card (the practice token's folder).
+          : c.kind === 'files' && folders[c.id] ? { ...c, folder: folders[c.id] === 'tok-family' ? '~/Pictures/Family' : folders[c.id] } : c));
         for (const c of conns) {
           if ((c.kind === 'key' || c.kind === 'device') && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
         }
@@ -4574,6 +4578,20 @@ function createPagesMock(scenario: string): PagesBridge {
         publish();
       }
       return { ok: true as const, pages: summaries() };
+    },
+    // Step 2 (files): the Choose folder window answers one practice folder; the
+    // token stands for it the way main's would stand for a real path.
+    chooseFolder: async () => ({ ok: true as const, token: 'tok-family', display: '~/Pictures/Family' }),
+    setFolder: async (id, connectionId, token) => {
+      const display = token === 'tok-family' ? '~/Pictures/Family' : token;
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, folder: display } : c)) }));
+      publish();
+      return summaries();
+    },
+    forgetFile: async (id, connectionId, fileId) => {
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, remembered: (c.remembered ?? []).filter((f) => f.id !== fileId) } : c)) }));
+      publish();
+      return summaries();
     },
     forgetOpenSite: async (id, site) => {
       pages = pages.map((p) => (p.id !== id ? p : { ...p, openSites: (p.openSites ?? []).filter((s) => s !== site) }));

@@ -18,7 +18,8 @@ import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Chip, SectionLabel, Tooltip } from 
 import { Dialog } from '../ui/Dialog';
 import { TrashIcon } from '../project-view/icons';
 import { PageGlyph } from './page-icons';
-import { CombinedRisk, ConnectionLine, splitAddress } from './page-connections';
+import { CombinedRisk, ConnectionLine, FolderField, splitAddress } from './page-connections';
+import { getCapabilities } from '../../platform';
 import { publishPages } from './use-pages';
 
 function bridge(): PagesBridge | undefined {
@@ -39,7 +40,12 @@ export function PageSettingsDialog({ page, onClose, onConnect, onEdit }: { page:
 }
 
 function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onConnect: (pageId: string) => void; onEdit?: (page: PageSummary) => void }) {
-  const list = page.connections ?? [];
+  const all = page.connections ?? [];
+  // WHY files apart (deck 2 Q-settingswindow: sections for What it can reach, Files,
+  // …): a page's own files are not a place it "reaches" on the network, and each
+  // files line has its own things to change (the folder, the remembered files).
+  const list = all.filter((c) => c.kind !== 'files');
+  const files = all.filter((c) => c.kind === 'files');
   const sites = page.openSites ?? [];
   return (
     <div className="flex flex-col gap-4" data-page-settings={page.id}>
@@ -73,12 +79,22 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
         <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
           {list.length === 0 && <div className="text-xs text-fg-muted">This page reaches nothing outside itself.</div>}
           {list.map((c) => <ReachRow key={c.id} page={page} c={c} onConnect={onConnect} />)}
-          <CombinedRisk connections={list} openSites={sites} />
+          <CombinedRisk connections={all} openSites={sites} />
           {list.length > 0 && (
             <div className="text-xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected services.</div>
           )}
         </div>
       </section>
+
+      {/* Only for a page that asks for files: an empty section would be a promise of nothing. */}
+      {files.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <SectionLabel>Files</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
+            {files.map((c) => <ReachRow key={c.id} page={page} c={c} onConnect={onConnect} />)}
+          </div>
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <SectionLabel>Websites it opens without asking</SectionLabel>
@@ -105,6 +121,17 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
  *  was already sent (Remove "stops future use", never "revokes"). */
 function ReachRow({ page, c, onConnect }: { page: PageSummary; c: NonNullable<PageSummary['connections']>[number]; onConnect: (pageId: string) => void }) {
   const [confirming, setConfirming] = useState(false);
+  // Files (step 2): change the folder, or forget one remembered file. Neither can
+  // widen what the page reaches, so neither asks first.
+  const changeFolder = async () => {
+    const b = bridge();
+    const r = await b?.chooseFolder?.();
+    if (r?.ok && b?.setFolder) publishPages(await b.setFolder(page.id, c.id, r.token));
+  };
+  const forgetFile = async (fileId: string) => {
+    const b = bridge();
+    if (b?.forgetFile) publishPages(await b.forgetFile(page.id, c.id, fileId));
+  };
   const remove = async () => {
     const b = bridge();
     if (!b?.removeConnection) return;
@@ -114,6 +141,26 @@ function ReachRow({ page, c, onConnect }: { page: PageSummary; c: NonNullable<Pa
   return (
     <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-2`} data-reach-row={c.kind}>
       <ConnectionLine c={c} small />
+      {c.kind === 'files' && c.level === 'folder' && c.approved && (
+        <FolderField folder={c.folder} canChoose={getCapabilities().openInOs} onChoose={() => { void changeFolder(); }} />
+      )}
+      {c.kind === 'files' && c.level === 'remember' && c.approved && (
+        (c.remembered ?? []).length === 0
+          ? <div className="text-xs text-fg-muted">No files remembered yet.</div>
+          // Short names in ONE shared box (guide "Lists of short names"), a bin on each.
+          : <div className="flex flex-col py-0.5" data-remembered-files>
+              {(c.remembered ?? []).map((f) => (
+                <div key={f.id} className="flex items-center gap-2 py-0.5 text-xs text-fg">
+                  <span className="min-w-0 flex-1 truncate" title={f.name}>{f.name}</span>
+                  <Tooltip text="Forget this file" placement="bottom">
+                    <Button size="icon-sm" variant="ghost" aria-label={`Forget ${f.name}`} className="hover:text-destructive-fg" onClick={() => { void forgetFile(f.id); }}>
+                      <TrashIcon size={14} />
+                    </Button>
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+      )}
       {confirming ? (
         <div className="flex flex-col gap-2">
           <div className="text-xs text-fg-2 leading-relaxed" data-remove-confirm>

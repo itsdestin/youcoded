@@ -17,7 +17,7 @@ import type { PageConnection, PageConnectionStatus, PageKeyPart, PageSummary, Pa
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, Callout, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
+import { Button, CARD_LEVEL_2, Callout, ErrorState, FieldError, SectionLabel, TextInput, Tooltip } from '../ui';
 import { PageGlyph } from './page-icons';
 import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
 import { publishPages } from './use-pages';
@@ -113,7 +113,43 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
     // internet's, never softened. The limit is what the app really controls.
     case 'program':
       return { what: `Run ${c.file} on this computer.`, limit: 'It can do anything your account on this computer can.' };
+    // The person's files (pages-finish step 2). The sentence names the level and
+    // keeps reading and changing apart (Destin, deck 1 Q-filepick note); the second
+    // half says what stays out of reach, which YouCoded enforces by doing every
+    // read and write itself.
+    case 'files':
+      return filesWords(c);
   }
+}
+
+function filesWords(c: Extract<PageConnection, { kind: 'files' }>): { what: string; limit: string } {
+  const types = c.types?.length ? ` (${listWords(c.types)} files)` : '';
+  switch (c.level) {
+    case 'pick':
+      return c.access === 'read' ? { what: `Open a file you pick each time${types}, in the normal Open window.`, limit: 'It sees only that file, and never learns where it is kept.' }
+        : c.access === 'write' ? { what: `Save a new file where you choose${types}, in the normal Save window.`, limit: 'It cannot open or change any other file.' }
+        : { what: `Open a file you pick each time${types}, and save changes back to it.`, limit: 'Only that file. It never learns where it is kept.' };
+    case 'remember':
+      return { what: c.access === 'read' ? `Reopen files you picked before${types}, without asking again.` : `Reopen files you picked before${types} and save changes to them, without asking again.`,
+        limit: 'Only files you picked in it. You can forget any of them in Page settings.' };
+    case 'folder':
+      return { what: c.access === 'read' ? 'See and open everything in one folder you choose.' : c.access === 'write' ? 'Save new files into one folder you choose.' : 'See, open, change, add and delete files in one folder you choose.',
+        limit: 'Nothing outside that folder. Password and key files inside it are always hidden.' };
+    case 'all':
+      return { what: c.access === 'read' ? 'See and open any file your account on this computer can.' : 'See, open, change and delete any file your account on this computer can.',
+        limit: 'Password and key files are still hidden from it.' };
+  }
+}
+
+/** What reaching every file means in practice, under its sentence — the same blunt
+ *  treatment as the whole internet and programs (Destin: "permissions/warnings for
+ *  this need to be very clear"). */
+export function allFilesMeans(c: Extract<PageConnection, { kind: 'files' }>): string[] {
+  return [
+    'That includes your documents, photos, downloads and other apps\' files.',
+    ...(c.access === 'read' ? [] : ['A change or a deletion cannot be undone by YouCoded. Keep backups of anything you cannot replace.']),
+    'Use it only for a page you trust to manage your files, such as a file browser you built.',
+  ];
 }
 
 /** The plain words for what a service recipe allows, each once, in the order the
@@ -151,6 +187,10 @@ function privateSource(c: PageConnection): { words: string; site?: string } | nu
     case 'github': return { words: 'what it reads from GitHub', site: 'github.com' };
     case 'youcoded': return { words: 'what it reads from your YouCoded account', site: 'youcoded' };
     case 'plaid': return { words: 'your bank balances' };
+    // Reading files is private; a page that only saves new files reads nothing.
+    case 'files':
+      if (c.access === 'write') return null;
+      return { words: c.level === 'all' ? 'your files' : c.level === 'folder' ? 'the files in the folder you chose' : 'files you open in it' };
     default: return null;
   }
 }
@@ -398,6 +438,23 @@ function KeyHelp({ c }: { c: KeyedLine }) {
   );
 }
 
+/** The folder a `files` line at `folder` level reaches, chosen on the card with the
+ *  computer's own Choose folder window (pages-finish step 2). The page never names
+ *  it and never sees its path: YouCoded keeps it. Shown the way the person reads it.
+ *  On a phone the window cannot appear, so the card says where to finish instead —
+ *  the same treatment as typing a key. Also used by Page settings to change it. */
+export function FolderField({ folder, onChoose, canChoose, label = 'Choose folder…' }: { folder: string | undefined; onChoose: () => void; canChoose: boolean; label?: string }) {
+  return (
+    <div className="flex flex-col gap-1.5" data-folder-field>
+      <div className={`${CARD_LEVEL_2} flex items-center gap-2 pl-3 pr-1.5 py-1.5`}>
+        <span className={`min-w-0 flex-1 truncate text-sm ${folder ? 'text-fg' : 'text-fg-muted'}`} title={folder}>{folder ?? 'No folder chosen yet'}</span>
+        {canChoose && <Button variant="secondary" size="sm" onClick={onChoose}>{folder ? 'Change…' : label}</Button>}
+      </div>
+      {!canChoose && <div className="text-xs text-fg-muted leading-relaxed">Choose the folder on your computer: the folder window cannot open on a phone.</div>}
+    </div>
+  );
+}
+
 /** The address box on a device line (home-device deck, Q-address): the page
  *  suggests, the person may change it before allowing. Checked as they type
  *  with the same rule main applies, so a refusal is explained here instead of
@@ -483,6 +540,16 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     c.kind === 'device' && addresses[c.id] !== undefined ? { ...c, address: cleanDeviceAddress(addresses[c.id]) ?? '' } : c;
   const shown = asking.map(asTyped);
   const addressesOk = shown.every((c) => c.kind !== 'device' || cleanDeviceAddress(addresses[c.id]) !== null);
+  // pages-finish step 2: the folder each folder-level files line will reach, as a
+  // token main keeps the path behind, plus how the person reads it. Allow waits
+  // until every such line has one.
+  const [folders, setFolders] = useState<Record<string, { token: string; display: string }>>({});
+  const folderLines = shown.filter((c) => c.kind === 'files' && c.level === 'folder');
+  const foldersOk = folderLines.every((c) => !!folders[c.id]);
+  const chooseFolder = async (id: string) => {
+    const r = await bridge()?.chooseFolder?.();
+    if (r?.ok) setFolders((m) => ({ ...m, [id]: { token: r.token, display: r.display } }));
+  };
 
   const keyLines: KeyedLine[] = shown.flatMap((c): KeyedLine[] =>
     c.kind === 'key' || (c.kind === 'device' && c.needsKey) ? [c as KeyedLine] : c.kind === 'plaid' ? [plaidKeyed(c)] : []);
@@ -505,8 +572,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     for (const c of keyLines) sent[c.id] = toType.some((t) => t.id === c.id) ? keys[c.id].trim() : 'saved';
     const sentAddresses: Record<string, string> = {};
     for (const c of shown) if (c.kind === 'device') sentAddresses[c.id] = c.address;
+    const sentFolders = Object.fromEntries(Object.entries(folders).map(([id, f]) => [id, f.token]));
     try {
-      const r = await b.approve(page.id, sent, sentAddresses);
+      const r = await b.approve(page.id, sent, sentAddresses, sentFolders);
       // On a yes the host replaces this screen with the page itself, so the
       // button stays "Allowing…" rather than flicking back to Allow for the
       // frame or two in between — which would invite a second press.
@@ -601,7 +669,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   }
 
   return shell(<>
-    {heading(isChange ? 'This page changed' : 'Before this page opens', isChange ? `${page.name} wants additional permissions` : `${page.name} wants to connect`)}
+    {/* "connect" only when something on the list is out on the network; a page that
+        asks for files or app abilities alone "wants access" (pages-finish step 2). */}
+    {heading(isChange ? 'This page changed' : 'Before this page opens', isChange ? `${page.name} wants additional permissions` : asking.some((c) => c.kind !== 'files' && c.kind !== 'session' && c.kind !== 'chats' && c.kind !== 'program') ? `${page.name} wants to connect` : `${page.name} wants access`)}
 
     <div className="flex flex-col gap-2">
       <div className="text-xs text-fg-dim">This page would be able to:</div>
@@ -628,6 +698,14 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             )}
             {c.kind === 'device' && (
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />
+            )}
+            {c.kind === 'files' && c.level === 'folder' && (
+              <FolderField folder={folders[c.id]?.display} canChoose={here} onChoose={() => { void chooseFolder(c.id); }} />
+            )}
+            {c.kind === 'files' && c.level === 'all' && (
+              <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-all-files-means>
+                {allFilesMeans(c).map((t) => <li key={t}>{t}</li>)}
+              </ul>
             )}
             {(() => {
               const k = keyLines.find((x) => x.id === c.id);
@@ -675,11 +753,15 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           </span>
         </Button>
       ) : toType.length > 0 ? (
-        <Button variant="primary" onClick={() => setStep('keys')} disabled={!addressesOk} className="w-full">Continue</Button>
+        <Button variant="primary" onClick={() => setStep('keys')} disabled={!addressesOk || !foldersOk} className="w-full">Continue</Button>
       ) : (
-        <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || !addressesOk} className="w-full">
-          {busy ? 'Allowing…' : 'Allow and open'}
-        </Button>
+        // Guide "Buttons": a disabled control says why — here, in a hover hint, like an
+        // action waiting on a tick box.
+        <Tooltip text={!foldersOk ? 'Choose the folder first' : ''} placement="top">
+          <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || !addressesOk || !foldersOk} className="w-full">
+            {busy ? 'Allowing…' : 'Allow and open'}
+          </Button>
+        </Tooltip>
       )}
       <Button variant="secondary" onClick={onNotNow} className="w-full">Not now</Button>
     </div>
