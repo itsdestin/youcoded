@@ -108,12 +108,8 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
-  // Finishing Pages, step 2 (files): the Choose folder window, changing a page's folder
-  // and forgetting a remembered file. Delete each row when main answers it.
-  { channel: 'pages.chooseFolder', feature: 'Pages: a folder a page may use (files, step 2)' },
-  { channel: 'pages.setFolder', feature: 'Pages: change the folder in Page settings (files, step 2)' },
-  { channel: 'pages.forgetFile', feature: 'Pages: forget a remembered file (files, step 2)' },
-  { channel: 'pages.listFolder', feature: "Pages: YouCoded's own file chooser on a phone (files, step 2)" },
+  // Finishing Pages, step 2 (files): pages.chooseFolder / setFolder / forgetFile / listFolder were
+  // designed here and came off when main answered them (2026-10-24); their fakes stay.
   // Finishing Pages, step 1: `pages.openWebsite` / `pages.forgetOpenSite` were designed here
   // and came off when pages:open-website / pages:forget-open-site landed on every surface
   // (2026-10-24). The fakes in mock-shim.ts stay so the ask and the site list stay reviewable.

@@ -479,3 +479,40 @@ describe('opening a website for a page', () => {
     expect(opened).toEqual(['mailto:a@example.com']);
   });
 });
+
+describe('a page that uses a folder of files', () => {
+  const FOLDER = { id: 'photos', kind: 'files', level: 'folder', access: 'read' };
+  const PICK = { id: 'one', kind: 'files', level: 'pick', access: 'readwrite' };
+
+  it('is allowed only with a folder chosen in this window, and the card then shows it', async () => {
+    const chosen = path.join(root, 'home', 'Pictures');
+    await fs.mkdir(chosen, { recursive: true });
+    start({ filesHome: path.join(root, 'home'), fileDialogs: { showFolder: async () => chosen } });
+    await writePage('board', [FOLDER]);
+    expect(await service.approve('personal:board', {}, { remote: false, ownerKey: 'window:1' })).toMatchObject({ ok: false });
+    const pick = await service.files.chooseFolder({ ownerKey: 'window:1', remote: false });
+    if (!pick.ok) throw new Error('no folder');
+    // Another window cannot spend this window's choice.
+    expect(await service.approve('personal:board', {}, { remote: false, folders: { photos: pick.token }, ownerKey: 'window:2' })).toMatchObject({ ok: false });
+    const again = await service.files.chooseFolder({ ownerKey: 'window:1', remote: false });
+    if (!again.ok) throw new Error('no folder');
+    expect(await service.approve('personal:board', {}, { remote: false, folders: { photos: again.token }, ownerKey: 'window:1' })).toMatchObject({ ok: true });
+    const listed = (await service.listAndWatch())[0];
+    expect(listed.connections?.[0]).toMatchObject({ approved: true });
+    expect(listed.connections?.[0]).toHaveProperty('folder');
+    // A files-only page fetches nothing, so it has no "last updated" band.
+    expect(listed.refresh).toBeUndefined();
+  });
+
+  it('shows remembered files by name and forgets them', async () => {
+    await writePage('notes', [{ ...PICK, level: 'remember' }]);
+    await service.approve('personal:notes', {}, { remote: false });
+    const store = new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage()));
+    const id = await store.rememberFile('personal:notes', 'one', 'list.txt', path.join(root, 'list.txt'));
+    const listed = (await service.listAndWatch())[0];
+    expect(listed.connections?.[0]).toMatchObject({ remembered: [{ id, name: 'list.txt' }] });
+    expect(JSON.stringify(listed)).not.toContain(path.join(root, 'list.txt'));
+    const after = await service.forgetFile('personal:notes', 'one', id!);
+    expect(after[0].connections?.[0]).not.toHaveProperty('remembered');
+  });
+});

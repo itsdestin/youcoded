@@ -62,6 +62,10 @@ export interface Capabilities {
    *  computer's own window — the browser runs there, and its live picture and controls are not sent to phones in this
    *  release (spec docs/active/specs/2026-10-13-assistant-browser-design.md §3). */
   assistantBrowser: boolean;
+  /** A page may use the COMPUTER's files (`youcoded.files`, pages-finish step 2): a computer window, and a phone's browser
+   *  watching it through YouCoded's own file chooser. FALSE on the Android app's own backend: its files are the phone's,
+   *  which need Android's document permissions (card #203), so its pages say "Not available on the Android app yet". */
+  pageFiles: boolean;
 }
 
 /** What the computer's own window can do. The preload copies this and overrides `nativeSessions` from the
@@ -83,6 +87,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  pageFiles: true,
 };
 
 /** What a screen watching a computer over the network can do (a phone's browser, or the Android app paired to a
@@ -111,6 +116,8 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   // lines itself. A host WITH a record says true explicitly in its handshake (remote-server.ts), never by this default (review fix, R5-4a F3).
   sessionRecord: false,
   assistantBrowser: false,
+  // FALSE by default: an older computer has no pages:files. A current one says true in its handshake.
+  pageFiles: false,
 };
 
 /** What the Android app's own page can do on the phone's own backend (not paired to a computer).
@@ -135,6 +142,7 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: false,
+  pageFiles: false,
 };
 
 const KEYS = Object.keys(REMOTE_SCREEN_CAPABILITIES) as Array<keyof Capabilities>;

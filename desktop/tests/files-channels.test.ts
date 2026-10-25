@@ -138,7 +138,7 @@ describe('which of these a phone may call: exactly what it could before', () => 
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;
 
   it('the table holds all 62 channels of the group', () => {
-    expect(entries).toHaveLength(62); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 22 pages (12 + 4 socket + 3 video + plaid + 2 program) + 3 singles
+    expect(entries).toHaveLength(67); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 27 pages (12 + 4 socket + 3 video + plaid + 2 program + 5 files) + 3 singles
   });
 
   it('exactly these are open to a phone; everything else is refused', () => {
@@ -147,7 +147,7 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'artifacts:list-project', 'artifacts:list-projects-index', 'artifacts:list-session', 'artifacts:read-binary',
       'artifacts:resolve-path', 'artifacts:search-content', 'artifacts:unwatch-project', 'artifacts:watch-project',
       'chatsearch:read', 'chatsearch:resolve', 'file:upload', 'fs:read-head', 'get-home-path',
-      'pages:approve', 'pages:delete-saved-key', 'pages:fetch', 'pages:forget-open-site', 'pages:get', 'pages:list', 'pages:open-website', 'pages:refresh',
+      'pages:approve', 'pages:delete-saved-key', 'pages:fetch', 'pages:files', 'pages:forget-file', 'pages:forget-open-site', 'pages:get', 'pages:list', 'pages:list-folder', 'pages:open-website', 'pages:refresh',
       'pages:remove-connection', 'pages:saved-keys', 'pages:set-data', 'pages:set-pinned',
       // The live socket and camera video (HA-pages branch): open to a phone, each owned by the phone that opened it.
       'pages:socket-close', 'pages:socket-open', 'pages:socket-ping', 'pages:socket-send', 'pages:video-ping', 'pages:video-start', 'pages:video-stop',
@@ -161,10 +161,12 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'artifacts:append-version', 'artifacts:delete-project', 'artifacts:exclude', 'artifacts:import-file', 'artifacts:include-external',
       'artifacts:remove-record', 'artifacts:rename', 'artifacts:save',
       'git:commit', 'git:commit-file-diff', 'git:discard', 'git:file-review', 'git:file-status', 'git:stage', 'git:unstage', 'git:unwatch', 'git:watch',
+      // Choosing a page's folder shows the computer's Choose folder window (pages-finish step 2).
+      'pages:choose-folder',
       // A bank sign-in opens a browser on the computer, so a phone never reaches Plaid.
       'pages:plaid',
       // A program runs with the computer account's full access; a phone is refused until Destin widens it (spec 2026-10-16).
-      'pages:run-program', 'pages:stop-programs',
+      'pages:run-program', 'pages:set-folder', 'pages:stop-programs',
       'project:write-context-file',
     ]);
   });
@@ -254,12 +256,12 @@ describe('what only one door does', () => {
 
   it('pages:approve is told which door asked: a phone may only reuse a saved key, the computer may paste one', async () => {
     await overIpc('pages:approve', { id: 'p1', keys: { svc: 'k' } });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: false, addresses: {} });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, expect.objectContaining({ remote: false, addresses: {}, folders: {} }));
     await overRemote('pages:approve', { id: 'p1', keys: { svc: 'k' } });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: true, addresses: {} });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, expect.objectContaining({ remote: true, addresses: {}, folders: {} }));
     // The payload cannot claim to be the computer.
     await overRemote('pages:approve', { id: 'p1', keys: {}, remote: false });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', {}, { remote: true, addresses: {} });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', {}, expect.objectContaining({ remote: true, addresses: {} }));
   });
 
   it('a pages call that throws gives a phone the soft answer its page reads, and the computer a rejection', async () => {

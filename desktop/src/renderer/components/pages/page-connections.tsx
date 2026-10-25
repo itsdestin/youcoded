@@ -15,7 +15,7 @@
 import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageKeyPart, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
-import { isRemoteMode } from '../../platform';
+import { getCapabilities, isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
 import { Button, CARD_LEVEL_2, Callout, ErrorState, FieldError, SectionLabel, TextInput, Tooltip } from '../ui';
 import { PageGlyph } from './page-icons';
@@ -144,7 +144,7 @@ function filesWords(c: Extract<PageConnection, { kind: 'files' }>): { what: stri
 /** What reaching every file means in practice, under its sentence — the same blunt
  *  treatment as the whole internet and programs (Destin: "permissions/warnings for
  *  this need to be very clear"). */
-export function allFilesMeans(c: Extract<PageConnection, { kind: 'files' }>): string[] {
+function allFilesMeans(c: Extract<PageConnection, { kind: 'files' }>): string[] {
   return [
     'That includes your documents, photos, downloads and other apps\' files.',
     ...(c.access === 'read' ? [] : ['A change or a deletion cannot be undone by YouCoded. Keep backups of anything you cannot replace.']),
@@ -546,6 +546,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const [folders, setFolders] = useState<Record<string, { token: string; display: string }>>({});
   const folderLines = shown.filter((c) => c.kind === 'files' && c.level === 'folder');
   const foldersOk = folderLines.every((c) => !!folders[c.id]);
+  // The Android app's own pages cannot use files yet (card #203): its files are the phone's,
+  // which need Android's own permissions. Said on the button, like "Finish on your computer".
+  const filesUnavailable = shown.some((c) => c.kind === 'files') && !getCapabilities().pageFiles;
   const chooseFolder = async (id: string) => {
     const r = await bridge()?.chooseFolder?.();
     if (r?.ok) setFolders((m) => ({ ...m, [id]: { token: r.token, display: r.display } }));
@@ -743,7 +746,14 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     <div className="flex flex-col gap-2">
       {/* On the phone a key cannot be typed (deck Q-phone). The button sits where
           Allow would, greyed, with the reason under it (review round 1, C-5). */}
-      {toType.length > 0 && !here ? (
+      {filesUnavailable ? (
+        <Button variant="primary" disabled className="w-full h-auto" data-files-not-on-android>
+          <span className="flex flex-col items-center gap-0.5 py-1 whitespace-normal text-center">
+            <span>Not available on the Android app yet</span>
+            <span className="text-2xs opacity-80">Pages can't use files on the phone yet. Open this page in YouCoded on your computer.</span>
+          </span>
+        </Button>
+      ) : toType.length > 0 && !here ? (
         // The reason sits INSIDE the greyed button (review round 2, D-6), so
         // the one control where Allow would be carries its own explanation.
         <Button variant="primary" disabled className="w-full h-auto" data-finish-on-computer>

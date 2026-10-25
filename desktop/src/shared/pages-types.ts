@@ -218,6 +218,36 @@ export interface PageFileEntry {
 }
 export type PageFileAccess = 'read' | 'write' | 'readwrite';
 
+/** What a page may ask of `youcoded.files` (pages-finish step 2, design §3). Paths are
+ *  relative to the approved folder (`folder` level) or `~/`-relative (`all` level); a
+ *  page never sees a full path. `data` is text, or base64 when `encoding` says so. */
+export type PageFilesRequest =
+  | { op: 'pick'; types?: string[]; multiple?: boolean }
+  | { op: 'saveAs'; suggestedName: string; types?: string[]; data?: string; encoding?: PageFileEncoding }
+  /** A phone's answer from YouCoded's own chooser to an `ask` main handed out. */
+  | { op: 'choose'; ask: string; folder: string; file: string; data?: string; encoding?: PageFileEncoding }
+  | { op: 'cancel'; ask: string }
+  | { op: 'read'; handle: string; as?: PageFileEncoding }
+  | { op: 'save'; handle: string; data: string; encoding?: PageFileEncoding }
+  | { op: 'recent' }
+  | { op: 'list'; path: string }
+  | { op: 'readPath'; path: string; as?: PageFileEncoding }
+  | { op: 'writePath'; path: string; data: string; encoding?: PageFileEncoding; replace?: boolean }
+  | { op: 'remove'; path: string }
+  | { op: 'makeFolder'; path: string }
+  /** The host closed or switched the page: its picked files are let go. */
+  | { op: 'close' };
+export type PageFileEncoding = 'text' | 'base64';
+/** A file the page may use again by its handle, never by its path. */
+export interface PageFileHandle { handle: string; name: string; size: number; modified?: string }
+export type PageFilesResult =
+  | { ok: true; op: PageFilesRequest['op']; files?: PageFileHandle[]; data?: string; encoding?: PageFileEncoding; entries?: PageFileEntry[]; more?: boolean;
+      /** On a phone: main cannot show an Open/Save window there, so the host shows
+       *  YouCoded's chooser for this ask and answers with `choose` or `cancel`. */
+      ask?: { id: string; kind: 'open' | 'save'; types?: string[]; suggestedName?: string; multiple?: boolean } }
+  | { ok: false; op: PageFilesRequest['op']; code: PageFilesRefusal; message: string };
+export type PageFilesRefusal = 'NOT_ALLOWED' | 'CANCELLED' | 'TOO_BIG' | 'REFUSED' | 'TOO_MANY' | 'UNSUPPORTED' | 'BAD_REQUEST' | 'FAILED';
+
 /** Which chats a `chats` connection covers. */
 export type PageChatScope = { all: true } | { projects: string[] } | { tag: string };
 
@@ -594,18 +624,21 @@ export interface PagesBridge {
   /** `folders`: per `files`/`folder` line, the folder token the person chose with
    *  `chooseFolder` (pages-finish step 2) — main records what it stands for. */
   approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>, folders?: Record<string, string>) => Promise<PageApproveResult>;
-  /** DESIGN STAGE (mock-only.ts, pages-finish step 2): the computer's own Choose
+  /** A page's file call (`youcoded.files`, pages-finish step 2). Main checks the
+   *  approved files line for the op's level and access on every call. */
+  files?: (id: string, req: PageFilesRequest) => Promise<PageFilesResult>;
+  /** The computer's own Choose
    *  folder window. Answers a token main keeps the real path behind, and the folder
    *  as the person reads it (`~/Pictures/Family`). Desktop only. */
   chooseFolder?: () => Promise<{ ok: true; token: string; display: string } | { ok: false }>;
-  /** DESIGN STAGE (mock-only.ts, step 2): one folder of the computer, under its home,
-   *  for YouCoded's own file chooser on a phone (`folder` is `Documents/Budgets`;
-   *  '' is home). Password and key files are never listed. */
-  listFolder?: (folder: string) => Promise<{ ok: true; entries: PageFileEntry[] } | { ok: false; message: string }>;
-  /** DESIGN STAGE (mock-only.ts, step 2): change the folder an approved folder line
+  /** One folder of the computer, under its home, for YouCoded's own file chooser on a
+   *  phone (`folder` is `Documents/Budgets`; '' is home). Answered only while that page
+   *  has an `ask` waiting for this same screen. Password and key files are never listed. */
+  listFolder?: (id: string, ask: string, folder: string) => Promise<{ ok: true; entries: PageFileEntry[] } | { ok: false; message: string }>;
+  /** Change the folder an approved folder line
    *  reaches, from Page settings. */
   setFolder?: (id: string, connectionId: string, token: string) => Promise<PageSummary[]>;
-  /** DESIGN STAGE (mock-only.ts, step 2): forget one remembered file; the page must
+  /** Forget one remembered file; the page must
    *  ask for it again. */
   forgetFile?: (id: string, connectionId: string, fileId: string) => Promise<PageSummary[]>;
   /** Stops future use of one connection; the page asks again next time. */

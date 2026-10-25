@@ -594,6 +594,12 @@ export const IPC = {
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
   PAGES_OPEN_WEBSITE: 'pages:open-website',
   PAGES_FORGET_OPEN_SITE: 'pages:forget-open-site',
+  // ---- A page's files (pages-finish step 2): the door, the Choose folder window, Page settings, the phone's chooser ----
+  PAGES_FILES: 'pages:files',
+  PAGES_CHOOSE_FOLDER: 'pages:choose-folder',
+  PAGES_SET_FOLDER: 'pages:set-folder',
+  PAGES_FORGET_FILE: 'pages:forget-file',
+  PAGES_LIST_FOLDER: 'pages:list-folder',
   PAGES_REFRESH: 'pages:refresh',
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',

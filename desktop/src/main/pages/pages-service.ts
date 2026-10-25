@@ -23,6 +23,7 @@ import { PageProgramRunner, hashProgramFile } from './page-program';
 import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
 import { PageLiveSockets, type LiveWsLike } from './page-live-socket';
 import { PageLiveVideos } from './page-live-video';
+import { PageFiles, type FileLine, type FilesAccess, type PageFilesDeps } from './page-files';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageOpenResult, PageFetchRequest, PageFetchResult,
@@ -59,6 +60,12 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   openExternal?: (url: string) => Promise<void> | void;
   /** Test injection: the time limit on a page's program (production: 120 s, page-program.ts). */
   programTimeoutMs?: number;
+  /** The computer's Open / Save / Choose folder windows and its bin, for a page's files
+   *  (pages-finish step 2). Absent on the headless backend and in tests: a pick then goes
+   *  through YouCoded's own chooser, and remove is refused. */
+  fileDialogs?: Pick<PageFilesDeps, 'showOpen' | 'showSave' | 'showFolder' | 'trash'>;
+  /** Test injection: the home a page's `all` files line is confined to. */
+  filesHome?: string;
 }
 
 class PagesService {
@@ -80,6 +87,8 @@ class PagesService {
   readonly videos: PageLiveVideos;
   /** Programs a page is running (page-program.ts): tracked per page and per window so closing either stops them. */
   readonly programs: PageProgramRunner;
+  /** A page's file door (page-files.ts): handles per page and window, dropped with either. */
+  readonly files: PageFiles;
   /** What each page looked like last listing (code stamp + connections), so a
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
@@ -101,6 +110,37 @@ class PagesService {
       gate: this.gate,
       connect: deps.liveSocketConnect,
     });
+    this.files = new PageFiles({
+      ...deps.fileDialogs,
+      access: (pageId) => this.filesAccess(pageId),
+      // A newly remembered file shows in Page settings → Files, so the list goes out again.
+      rememberFile: async (pageKey, lineId, name, filePath) => {
+        const id = (await deps.connections?.rememberFile(pageKey, lineId, name, filePath).catch(() => null)) ?? null;
+        if (id) this.schedule();
+        return id;
+      },
+      // YouCoded's own folders: its settings and keys, and every Pages folder it knows.
+      protectedRoots: () => {
+        const personal = deps.personalRoot();
+        return [deps.localFallbackDir(), ...(personal ? [path.join(personal, PAGES_DIR)] : []), ...this.projectWatchers.keys()];
+      },
+      gate: this.gate,
+      home: deps.filesHome,
+    });
+  }
+
+  /** The approved files lines of a page, with their folders and remembered files; read
+   *  fresh on every file call, so a removed line or a changed page stops at once. */
+  private async filesAccess(pageId: string): Promise<FilesAccess | null> {
+    const store = this.deps.connections;
+    const info = await this.store.connectionsOf(pageId);
+    const pageKey = await this.store.approvalKeyFor(pageId);
+    if (!store || !info || !pageKey) return null;
+    const records = await store.approvalsFor(pageKey).catch(() => ({} as Record<string, PageApproval>));
+    const lines: FileLine[] = info.connections.flatMap((c) => (c.kind === 'files' && records[c.id]?.fingerprint === fingerprint(c)
+      ? [{ id: c.id, level: c.level, access: c.access, ...(c.types ? { types: c.types } : {}) }] : []));
+    const { folders, remembered } = await store.filesFor(pageKey);
+    return { pageKey, lines, folders, remembered, pageDir: await this.store.pageDir(pageId) };
   }
 
   /** WHY one place: every site that must stop a page's live connections (an
@@ -113,6 +153,8 @@ class PagesService {
     // or a fresh approval stops what is running; the page's frame reloads or asks again anyway. A removed
     // connection that was not the program's own does not need this, but it is the rarer, cheaper mistake.
     this.programs.stopPage(pageId, 'The page changed or an approval changed, so the program was stopped.');
+    // Files picked under the old yes are let go: the page asks for them again.
+    this.files.closePage(pageId);
   }
 
   /** A window or remote client went away: its sockets and videos go with it. */
@@ -120,6 +162,7 @@ class PagesService {
     this.sockets.closeOwner(ownerKey);
     this.videos.closeOwner(ownerKey);
     this.programs.stopOwner(ownerKey);
+    this.files.closeOwner(ownerKey);
   }
 
   /** Start (or re-point) the Personal watcher. Safe to call again: the
@@ -243,7 +286,7 @@ class PagesService {
    * written and a sentence the card can show (finding 11). Recording the
    * approval first would leave a page marked connected with no key behind it.
    */
-  async approve(id: string, keys: Record<string, string>, opts: { remote: boolean; addresses?: Record<string, string> }): Promise<PageApproveResult> {
+  async approve(id: string, keys: Record<string, string>, opts: { remote: boolean; addresses?: Record<string, string>; folders?: Record<string, string>; ownerKey?: string }): Promise<PageApproveResult> {
     const store = this.deps.connections;
     if (!store) return { ok: false, message: 'Page connections are not available on this computer.' };
     const info = await this.store.connectionsOf(id);
@@ -335,6 +378,18 @@ class PagesService {
       } catch (e) { return { ok: false, message: messageOf(e) }; }
     }
 
+    // A folder line records the folder the person chose on the card, behind the token the
+    // Choose folder window gave THIS window (step 2 design §2). Checked before any approval
+    // is written, so a missing folder leaves nothing half-allowed.
+    const chosenFolders: Record<string, string> = {};
+    for (const c of waiting) {
+      if (c.kind !== 'files' || c.level !== 'folder') continue;
+      const token = opts.folders?.[c.id];
+      const folder = token && opts.ownerKey ? this.files.takeFolderToken(token, opts.ownerKey) : null;
+      if (!folder) return { ok: false, message: 'Choose the folder this page may use, then allow it.' };
+      chosenFolders[c.id] = folder;
+    }
+
     const at = new Date().toISOString();
     const htmlHash = hashHtml(info.html);
     const fresh: Record<string, PageApproval> = {};
@@ -349,7 +404,10 @@ class PagesService {
         ...(c.kind === 'program' ? { programHash: programHashes.get(c.id) ?? '' } : {}),
       };
     }
-    try { await store.recordApprovals(pageKey, fresh); }
+    try {
+      for (const [connId, folder] of Object.entries(chosenFolders)) await store.setFolder(pageKey, connId, folder);
+      await store.recordApprovals(pageKey, fresh);
+    }
     catch (e) { return { ok: false, message: messageOf(e) }; }
     // A new approval (maybe a new address or key) is a new yes: sockets opened
     // on the old one close and are asked for again under the new rules.
@@ -384,6 +442,28 @@ class PagesService {
       catch (e) { return { ok: false, message: `The address could not be opened. ${messageOf(e)}`, pages: await this.listAndWatch() }; }
     }
     return { ok: true, pages: await this.listAndWatch() };
+  }
+
+  /** `pages:set-folder` — Page settings → Change…: an approved folder line now reaches
+   *  another folder the person chose. Level and access are unchanged, so nothing is asked
+   *  again; files the page held in the old folder are let go. */
+  async setFolder(id: string, connectionId: string, token: string, ownerKey: string): Promise<PageSummary[]> {
+    const pageKey = await this.store.approvalKeyFor(id);
+    const info = await this.store.connectionsOf(id);
+    const line = info?.connections.find((c) => c.id === connectionId);
+    const folder = this.files.takeFolderToken(token, ownerKey);
+    if (pageKey && folder && line?.kind === 'files' && line.level === 'folder' && this.deps.connections) {
+      await this.deps.connections.setFolder(pageKey, connectionId, folder);
+      this.files.closePage(id);
+    }
+    return this.listAndWatch();
+  }
+
+  /** `pages:forget-file` — Page settings → Files: the page must ask for that file again. */
+  async forgetFile(id: string, connectionId: string, fileId: string): Promise<PageSummary[]> {
+    const pageKey = await this.store.approvalKeyFor(id);
+    if (pageKey && this.deps.connections) await this.deps.connections.forgetFile(pageKey, connectionId, fileId).catch(() => { /* already gone */ });
+    return this.listAndWatch();
   }
 
   /** `pages:forget-open-site` — links from this page to that site ask again. */

@@ -248,8 +248,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
   'pages.openWebsite', 'pages.forgetOpenSite',
-  // Finishing Pages, step 2 (files): designed ahead of the backend; rows in mock-only.ts.
-  'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile', 'pages.listFolder',
+  // Finishing Pages, step 2 (files): real channels since 2026-10-24; faked over a practice home.
+  'pages.files', 'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile', 'pages.listFolder',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
@@ -637,7 +637,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
     // (?platform=android), or the computer's window. The app asks capabilities, so the same screens render as before.
     // WHY explicit host answers: the conservative defaults describe an old host,
     // not the current backend whose account/settings this fixture displays.
-    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: true, chatgptAccount: true }
+    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: true, chatgptAccount: true, pageFiles: true }
       : getPlatform() === 'android' ? { ...ANDROID_LOCAL_CAPABILITIES } : { ...DESKTOP_WINDOW_CAPABILITIES },
     protocolVersion: PROTOCOL_VERSION,
     devLabel: 'Session Naming · Workbench',
@@ -4583,7 +4583,19 @@ function createPagesMock(scenario: string): PagesBridge {
     // token stands for it the way main's would stand for a real path.
     chooseFolder: async () => ({ ok: true as const, token: 'tok-family', display: '~/Pictures/Family' }),
     // A small practice home for YouCoded's own file chooser (no real disk here).
-    listFolder: async (folder: string) => {
+    // A page's files: the workbench has no Open window, so a pick or save comes back as an ask
+    // for YouCoded's own chooser, the way it does for a phone; a choice reads back practice text.
+    files: async (_id, req) => {
+      await delay(80);
+      if (req.op === 'pick' || req.op === 'saveAs') {
+        return { ok: true as const, op: req.op, ask: { id: 'ask-1', kind: req.op === 'pick' ? 'open' as const : 'save' as const, types: req.types, ...(req.op === 'saveAs' ? { suggestedName: req.suggestedName } : {}) } };
+      }
+      if (req.op === 'choose') return { ok: true as const, op: req.op, files: [{ handle: `h-${req.file}`, name: req.file, size: 41230 }] };
+      if (req.op === 'read') return { ok: true as const, op: req.op, data: 'Month,Spent\nOctober,1240\n', encoding: 'text' as const };
+      if (req.op === 'recent') return { ok: true as const, op: req.op, files: [] };
+      return { ok: true as const, op: req.op };
+    },
+    listFolder: async (_id: string, _ask: string, folder: string) => {
       // Dates a few days back from now, so the Changed column reads naturally.
       const ago = (days: number, h = 10) => new Date(Date.now() - days * 86_400_000 - h * 3_600_000).toISOString();
       // A soft two-colour picture per photo, standing in for a real thumbnail.

@@ -56,6 +56,9 @@ export const PAGE_FETCH_RESULT_MESSAGE = 'youcoded:fetch:result';
 /** Page → host: `youcoded.plaid(request)` (finance dashboard). Host → page: the
  *  whole PlaidResult, ok or not, matched by the page's own id — a refusal is a
  *  normal answer here (a bank that needs signing in again), not a thrown error. */
+/** A page's files (pages-finish step 2): one request kind, one answer kind. */
+export const PAGE_FILES_MESSAGE = 'youcoded:files';
+export const PAGE_FILES_RESULT_MESSAGE = 'youcoded:files:result';
 export const PAGE_PLAID_MESSAGE = 'youcoded:plaid';
 export const PAGE_PLAID_RESULT_MESSAGE = 'youcoded:plaid:result';
 /** The live socket (spec 2026-10-04). Page → host: open / send / close, each
@@ -150,7 +153,10 @@ export function readThemeCss(root: HTMLElement = document.documentElement, seeTh
  *  it. `e.source !== parent` drops anything that did not come from the host,
  *  and every answer is matched against this bootstrap's own request map, so a
  *  forged `youcoded:fetch:result` resolves nothing (design review 1, finding 8). */
-function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false, chatsAccess: 'none' | 'lookup' | 'full' = 'none', programFiles: readonly string[] = []): string {
+/** What a page's approved files lines allow, for its `youcoded.files` (pages-finish step 2). */
+interface FilesAbility { levels: string[]; read: boolean; write: boolean }
+
+function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false, chatsAccess: 'none' | 'lookup' | 'full' = 'none', programFiles: readonly string[] = [], files: FilesAbility | null = null): string {
   return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
@@ -160,6 +166,9 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   var REFRESH = ${JSON.stringify(PAGE_REFRESH_MESSAGE)};
   var FETCH = ${JSON.stringify(PAGE_FETCH_MESSAGE)};
   var RESULT = ${JSON.stringify(PAGE_FETCH_RESULT_MESSAGE)};
+  var FILES = ${JSON.stringify(PAGE_FILES_MESSAGE)};
+  var FILES_RESULT = ${JSON.stringify(PAGE_FILES_RESULT_MESSAGE)};
+  var FILE_ABILITY = ${JSON.stringify(files)};
   var PLAID = ${JSON.stringify(PAGE_PLAID_MESSAGE)};
   var PLAID_RESULT = ${JSON.stringify(PAGE_PLAID_RESULT_MESSAGE)};
   var S_OPEN = ${JSON.stringify(PAGE_SOCKET_OPEN_MESSAGE)};
@@ -388,6 +397,69 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       }
     };
   }
+  // A page's files (pages-finish step 2). WHY only the calls its approved lines allow: a page
+  // feature-detects them. Every call resolves { ok, ... }, never throws; the host and main check
+  // the approval, level and access again on every call, because page code can post on its own.
+  // Contents travel as text, or as base64 for bytes (turned back into a Uint8Array here).
+  if (FILE_ABILITY) {
+    var toBase64 = function (data) {
+      var bytes = data instanceof Uint8Array ? data : data instanceof ArrayBuffer ? new Uint8Array(data) : null;
+      if (!bytes) return null;
+      var s = '';
+      for (var i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return btoa(s);
+    };
+    var payload = function (data) {
+      if (typeof data === 'string') return { data: data, encoding: 'text' };
+      var b = toBase64(data);
+      return b === null ? null : { data: b, encoding: 'base64' };
+    };
+    var fileCall = function (request, needsClick) {
+      return new Promise(function (resolve) {
+        var no = function (message) { resolve({ ok: false, code: 'BAD_REQUEST', message: message }); };
+        if (needsClick) {
+          // WHY a real click: an Open or Save window never appears on a timer.
+          var ua = window.navigator && window.navigator.userActivation;
+          if (!ua || !ua.isActive) { no('Open and Save windows open only when the person presses something on the page.'); return; }
+        }
+        var id = 'l' + (++seq);
+        waiting[id] = { resolve: resolve, reject: resolve, files: true, bytes: request.as === 'base64' };
+        try { parent.postMessage({ type: FILES, id: id, request: request }, '*'); }
+        catch (e) { delete waiting[id]; no('This page could not reach YouCoded.'); }
+      });
+    };
+    var withData = function (request, data) {
+      var p = payload(data);
+      if (!p) return Promise.resolve({ ok: false, code: 'BAD_REQUEST', message: 'Contents must be text, a Uint8Array or an ArrayBuffer.' });
+      request.data = p.data; request.encoding = p.encoding;
+      return fileCall(request, false);
+    };
+    var encodingOf = function (o) { return o && o.as === 'bytes' ? 'base64' : 'text'; };
+    window.youcoded.files = {
+      pick: function (o) { o = o || {}; return fileCall({ op: 'pick', types: o.types, multiple: !!o.multiple }, true); },
+      read: function (handle, o) { return fileCall({ op: 'read', handle: String(handle), as: encodingOf(o) }, false); }
+    };
+    var F = window.youcoded.files;
+    if (FILE_ABILITY.write) {
+      F.save = function (handle, data) { return withData({ op: 'save', handle: String(handle) }, data); };
+      F.saveAs = function (o) {
+        o = o || {};
+        var p = payload(o.data === undefined ? '' : o.data);
+        if (!p) return Promise.resolve({ ok: false, code: 'BAD_REQUEST', message: 'Contents must be text, a Uint8Array or an ArrayBuffer.' });
+        return fileCall({ op: 'saveAs', suggestedName: String(o.suggestedName || 'Untitled'), types: o.types, data: p.data, encoding: p.encoding }, true);
+      };
+    }
+    if (FILE_ABILITY.levels.indexOf('remember') >= 0) F.recent = function () { return fileCall({ op: 'recent' }, false); };
+    if (FILE_ABILITY.levels.indexOf('folder') >= 0 || FILE_ABILITY.levels.indexOf('all') >= 0) {
+      F.list = function (p) { return fileCall({ op: 'list', path: String(p || '') }, false); };
+      F.readPath = function (p, o) { return fileCall({ op: 'readPath', path: String(p), as: encodingOf(o) }, false); };
+      if (FILE_ABILITY.write) {
+        F.writePath = function (p, data, o) { return withData({ op: 'writePath', path: String(p), replace: !!(o && o.replace) }, data); };
+        F.remove = function (p) { return fileCall({ op: 'remove', path: String(p) }, false); };
+        F.makeFolder = function (p) { return fileCall({ op: 'makeFolder', path: String(p) }, false); };
+      }
+    }
+  }
   window.addEventListener('message', function (e) {
     if (e.source !== parent) return;
     var d = e && e.data;
@@ -449,6 +521,21 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       cw.resolve(d.result && typeof d.result === 'object' && typeof d.result.ok === 'boolean' ? d.result : { ok: false, reason: CHATS_REFUSED.badRequest });
       return;
     }
+    if (d.type === FILES_RESULT) {
+      var fw = waiting[d.id];
+      if (!fw || !fw.files) return;
+      delete waiting[d.id];
+      var fr = d.result && typeof d.result === 'object' && typeof d.result.ok === 'boolean' ? d.result : { ok: false, code: 'FAILED', message: 'The file could not be used.' };
+      if (fr.ok && fw.bytes && typeof fr.data === 'string') {
+        try {
+          var bin = atob(fr.data), out = new Uint8Array(bin.length);
+          for (var j = 0; j < bin.length; j++) out[j] = bin.charCodeAt(j);
+          fr = Object.assign({}, fr, { data: out });
+        } catch (err) { fr = { ok: false, code: 'FAILED', message: 'The file could not be read.' }; }
+      }
+      fw.resolve(fr);
+      return;
+    }
     if (d.type === PLAID_RESULT) {
       var pp = waiting[d.id];
       if (!pp || !pp.plaid) return;
@@ -459,7 +546,7 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
     if (d.type === RESULT) {
       var p = waiting[d.id];
       // A fetch answer never settles a startSession call (it would resolve with a fetch's shape).
-      if (!p || p.session || p.chats || p.program) return;
+      if (!p || p.session || p.chats || p.program || p.files) return;
       delete waiting[d.id];
       var r = d.result;
       if (r && r.ok) p.resolve({ status: r.status, headers: r.headers, body: r.body });
@@ -644,7 +731,7 @@ export function prepareHostedDocument(
   themeCss: string,
   kitCss: string,
   data: unknown = null,
-  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean; access?: string; file?: string }[] = [],
+  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean; access?: string; file?: string; level?: string }[] = [],
   seeThrough = false,
 ): string {
   // `</script>` inside the data would end the script early; escape the one
@@ -659,6 +746,12 @@ export function prepareHostedDocument(
   const chatsLine = connections.find((c) => c.kind === 'chats' && c.approved);
   const chatsAccess: 'none' | 'lookup' | 'full' = !chatsLine ? 'none' : chatsLine.access === 'full' ? 'full' : 'lookup';
   const programFiles = connections.flatMap((c) => (c.kind === 'program' && c.approved && typeof c.file === 'string' ? [c.file] : []));
+  const fileLines = connections.filter((c) => c.kind === 'files' && c.approved);
+  const files: FilesAbility | null = fileLines.length === 0 ? null : {
+    levels: [...new Set(fileLines.map((c) => String(c.level)))],
+    read: fileLines.some((c) => c.access !== 'write'),
+    write: fileLines.some((c) => c.access !== 'read'),
+  };
   const ours =
     `<meta http-equiv="Content-Security-Policy" content="${pageCsp(connections)}">` +
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
@@ -666,7 +759,7 @@ export function prepareHostedDocument(
     `<style id="youcoded-kit">${kitCss}</style>` +
     // Only an APPROVED session line gives the page startSession. A page waiting
     // for a yes is never framed anyway; this keeps the bootstrap honest alone.
-    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved), chatsAccess, programFiles)}</script>` +
+    `<script>${bootstrap(dataJson, devicesJson, connections.some((c) => c.kind === 'session' && c.approved), chatsAccess, programFiles, files)}</script>` +
     // WHY here, before the author's head: the kit's dropdown (page-kit.ts PAGE_KIT_JS) must
     // register its listeners before the page's own, so an open list owns its keys and no page
     // ever shows the browser's own white dropdown list (design guide, "Building a Page").

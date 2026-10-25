@@ -26,7 +26,7 @@ export interface SenderLike {
   on(event: 'render-process-gone', l: () => void): unknown;
 }
 
-const windowOwnerKey = (webContentsId: number): string => `window:${webContentsId}`;
+export const windowOwnerKey = (webContentsId: number): string => `window:${webContentsId}`;
 export const clientOwnerKey = (clientId: string): string => `client:${clientId}`;
 
 const watched = new Set<number>();

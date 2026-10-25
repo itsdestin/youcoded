@@ -369,6 +369,11 @@ const IPC = {
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
   PAGES_OPEN_WEBSITE: 'pages:open-website',
   PAGES_FORGET_OPEN_SITE: 'pages:forget-open-site',
+  PAGES_FILES: 'pages:files',
+  PAGES_CHOOSE_FOLDER: 'pages:choose-folder',
+  PAGES_SET_FOLDER: 'pages:set-folder',
+  PAGES_FORGET_FILE: 'pages:forget-file',
+  PAGES_LIST_FOLDER: 'pages:list-folder',
   PAGES_REFRESH: 'pages:refresh',
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
@@ -598,6 +603,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   liveHandoff: true,
   sessionRecord: true,
   assistantBrowser: true,
+  pageFiles: true,
 } as const;
 // <<< GENERATED-CAPABILITIES
 
@@ -2500,6 +2506,12 @@ contextBridge.exposeInMainWorld('claude', {
     removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, { id, connectionId }),
     openWebsite: (id: string, url: string, remember: boolean, open: boolean) => ipcRenderer.invoke(IPC.PAGES_OPEN_WEBSITE, { id, url, remember, open }),
     forgetOpenSite: (id: string, site: string) => ipcRenderer.invoke(IPC.PAGES_FORGET_OPEN_SITE, { id, site }),
+    // A page's files (pages-finish step 2): main knows the calling window itself, and shows the Open/Save windows for it.
+    files: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FILES, { id, request: req }),
+    chooseFolder: () => ipcRenderer.invoke(IPC.PAGES_CHOOSE_FOLDER),
+    setFolder: (id: string, connectionId: string, token: string) => ipcRenderer.invoke(IPC.PAGES_SET_FOLDER, { id, connectionId, token }),
+    forgetFile: (id: string, connectionId: string, fileId: string) => ipcRenderer.invoke(IPC.PAGES_FORGET_FILE, { id, connectionId, fileId }),
+    listFolder: (id: string, ask: string, folder: string) => ipcRenderer.invoke(IPC.PAGES_LIST_FOLDER, { id, ask, folder }),
     refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, { id }),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
     // Both parts: a key is identified by service AND address.

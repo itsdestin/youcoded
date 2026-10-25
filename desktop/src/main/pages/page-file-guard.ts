@@ -31,7 +31,7 @@ const FOLD_CASE = process.platform === 'win32' || process.platform === 'darwin';
 const fold = (p: string) => (FOLD_CASE ? p.toLowerCase() : p);
 
 /** `child` is `root` or inside it. Both canonical. */
-export function within(child: string, root: string): boolean {
+function within(child: string, root: string): boolean {
   const c = fold(child).replace(/\/+$/, '');
   const r = fold(root).replace(/\/+$/, '');
   return c === r || c.startsWith(r === '' ? '/' : `${r}/`);
@@ -44,8 +44,8 @@ export interface GuardContext {
   protectedRoots: string[];
 }
 
-export async function guardContext(protectedRoots: string[]): Promise<GuardContext> {
-  const set = os.homedir();
+export async function guardContext(protectedRoots: string[], homeDir = os.homedir()): Promise<GuardContext> {
+  const set = homeDir;
   const real = await fs.promises.realpath(set).catch(() => set);
   const roots = await Promise.all(protectedRoots.map(async (r) => canonicalize(await fs.promises.realpath(r).catch(() => r), null)));
   return { home: canonicalize(real, null), protectedRoots: roots };
@@ -110,10 +110,15 @@ const WRITE_DENY_UNDER_HOME = [
   'appdata/roaming/microsoft/windows/start menu/programs/startup/', '.gitconfig', '.npmrc',
 ];
 
-export function isWriteDenied(canonical: string, ctx: GuardContext, level: 'folder' | 'all'): boolean {
+/** How a write was reached: a file the person `chosen` in an Open/Save window, inside an
+ *  approved `folder`, or anywhere at the `all` level. Only `all` is confined to home: a
+ *  chosen file may live on a USB drive, and a folder was already checked when chosen. */
+export type WriteLevel = 'chosen' | 'folder' | 'all';
+
+export function isWriteDenied(canonical: string, ctx: GuardContext, level: WriteLevel): boolean {
   if (isReadDenied(canonical, ctx)) return true;
   if (ctx.protectedRoots.some((r) => within(canonical, r))) return true;
-  if (!within(canonical, ctx.home)) return true;
+  if (!within(canonical, ctx.home)) return level !== 'chosen';
   const rel = canonical.slice(ctx.home.replace(/\/+$/, '').length + 1).toLowerCase();
   if (WRITE_DENY_UNDER_HOME.some((p) => (p.endsWith('/') ? `${rel}/`.startsWith(p) : rel === p || rel.startsWith(`${p}/`)))) return true;
   // At `all`, every hidden folder (or file) directly under home is configuration: never written.
@@ -143,7 +148,7 @@ const refuse = (refused: string): Refused => ({ refused });
 
 /** The root re-resolved now, and the target's real path inside it. A file that does
  *  not exist yet resolves through its parent. */
-async function resolveInside(root: string, segs: string[]): Promise<{ rootReal: string; real: string; exists: boolean } | Refused> {
+export async function resolveInside(root: string, segs: string[]): Promise<{ rootReal: string; real: string; exists: boolean } | Refused> {
   const rootReal = canonicalize(await fs.promises.realpath(root).catch(() => ''), null);
   if (!rootReal) return refuse('That folder is no longer there.');
   const target = path.join(rootReal, ...segs);
@@ -173,7 +178,7 @@ export async function openForRead(root: string, segs: string[], ctx: GuardContex
 }
 
 /** Open a file inside `root` for writing: `new` refuses an existing one, `replace` needs one. */
-export async function openForWrite(root: string, segs: string[], ctx: GuardContext, level: 'folder' | 'all', mode: 'new' | 'replace'): Promise<Opened | Refused> {
+export async function openForWrite(root: string, segs: string[], ctx: GuardContext, level: WriteLevel, mode: 'new' | 'replace'): Promise<Opened | Refused> {
   if (segs.some(badSegment)) return refuse('That name cannot be used.');
   const r = await resolveInside(root, segs);
   if ('refused' in r) return r;
@@ -213,6 +218,8 @@ export async function listInside(root: string, segs: string[], ctx: GuardContext
   const r = await resolveInside(root, segs);
   if ('refused' in r) return r;
   if (!r.exists) return refuse('That folder is not there any more.');
+  // A secrets folder is not listed at all, not even as empty.
+  if (isReadDenied(r.real, ctx)) return refuse('That folder holds passwords or keys, so pages never see it.');
   let dirents: fs.Dirent[];
   try { dirents = await fs.promises.readdir(r.real, { withFileTypes: true }); } catch { return refuse('That folder could not be read.'); }
   const visible = dirents.filter((d) => !d.name.startsWith('.') && (d.isDirectory() || d.isFile()) && !badSegment(d.name)

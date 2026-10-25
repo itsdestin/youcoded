@@ -28,7 +28,8 @@ function bridge(): PagesBridge | undefined {
   return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
 }
 
-export type FileChooserMode = { kind: 'open'; types?: string[] } | { kind: 'save'; suggestedName: string; types?: string[] };
+/** `ask`: the waiting pick or save main handed out; the listing is answered only while it waits. */
+export type FileChooserMode = { kind: 'open'; ask: string; types?: string[] } | { kind: 'save'; ask: string; suggestedName: string; types?: string[] };
 type View = 'list' | 'tiles';
 type Sort = 'name' | 'changed' | 'size';
 
@@ -81,7 +82,11 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
   // Round 3 (Destin, 2026-10-24, step 2e deck): the places live in a menu on the first
   // item of the path — "the name of the folder should be in the dropdown as the first
   // breadcrumb item" — so they take no row or column, and a phone shows the same.
-  const [placesOpen, setPlacesOpen] = useState(() => workbenchParam('pagesChooserPlaces') === 'open');
+  const [placesOpen, setPlacesOpen] = useState(false);
+  // WHY after mount (the photo-only build's open menu): a menu open from the first render signs up
+  // for Escape before its dialog does, so one Escape would close both. Opening it a moment later is
+  // what a click does.
+  useEffect(() => { if (workbenchParam('pagesChooserPlaces') === 'open') setPlacesOpen(true); }, []);
   // The folder shown, as path segments under Home ([] = Home itself).
   const [trail, setTrail] = useState<string[]>(() => (workbenchParam('pagesChooserAt') ?? '').split('/').filter(Boolean));
   // Tiles first for someone new (Destin: "we should default to tiles for new users").
@@ -99,12 +104,12 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
     setEntries(null); setFailed(null); setQuery('');
     const b = bridge();
     if (!b?.listFolder) { setFailed("This screen can't browse the computer's files."); return () => { live = false; }; }
-    b.listFolder(folder).then((r) => {
+    b.listFolder(page.id, mode.ask, folder).then((r) => {
       if (!live) return;
       if (r.ok) setEntries(r.entries); else setFailed(r.message);
     }).catch(() => { if (live) setFailed("The computer's folder couldn't be read."); });
     return () => { live = false; };
-  }, [folder]);
+  }, [folder, page.id, mode.ask]);
 
   const types = mode.types ?? [];
   const fits = (e: PageFileEntry) => e.kind === 'folder' || types.length === 0 || types.some((t) => e.name.toLowerCase().endsWith(t));

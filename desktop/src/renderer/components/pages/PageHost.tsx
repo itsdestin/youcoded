@@ -47,7 +47,7 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { isWorkbenchDocument, isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
-import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
+import type { PageDocument, PageFetchRequest, PageFetchResult, PageFileEncoding, PageFilesRequest, PageFilesResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PAGE_PROGRAM_INPUT, MAX_PAGE_SESSION_PROMPT, MAX_PINNED_PAGES, OFFICE_PAGE_ID, PAGE_CHATS_REFUSED, PAGE_PROGRAM_REFUSED, PAGE_SESSION_HIDDEN_CHARS, PAGE_SESSION_REFUSED } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
@@ -72,7 +72,7 @@ import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_CHATS_MESSAGE, PAGE_CHATS_RESULT_MESSAGE, PAGE_PROGRAM_MESSAGE, PAGE_PROGRAM_RESULT_MESSAGE,
-  PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE,
+  PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE, PAGE_FILES_MESSAGE, PAGE_FILES_RESULT_MESSAGE,
   PAGE_OPEN_MESSAGE, PAGE_REFRESH_MESSAGE, PAGE_SESSION_START_MESSAGE, PAGE_SESSION_START_RESULT_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
@@ -210,13 +210,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // YouCoded's own file chooser (pages-finish step 2), shown to a page used from a
   // phone's browser; in the photo-only build, on the Budget practice page.
   const [chooser, setChooser] = useState<FileChooserMode | null>(null);
+  // The page's call the chooser answers: who to tell, and (for Save as) what to write.
+  const chooserCallRef = useRef<{ answer: (r: PageFilesResult) => void; data?: string; encoding?: PageFileEncoding } | null>(null);
   useScreenOpen('pages/page/file-chooser', () => {
     const params = new URLSearchParams(isWorkbenchMode() ? location.search : '');
     // Pictures belong to the Photo board practice page, spreadsheets to Budget.
     const photos = (params.get('pagesChooserAt') ?? '').startsWith('Pictures');
     dispatch({ type: 'PAGE_OPENED', pageId: photos ? 'page-photo-board' : 'page-budget' });
     const types = photos ? ['.jpg', '.png'] : ['.xlsx', '.csv'];
-    setChooser(params.get('pagesChooser') === 'save' ? { kind: 'save', suggestedName: 'Budget 2026 (October).xlsx', types } : { kind: 'open', types });
+    setChooser(params.get('pagesChooser') === 'save' ? { kind: 'save', ask: 'ask-1', suggestedName: 'Budget 2026 (October).xlsx', types } : { kind: 'open', ask: 'ask-1', types });
   });
   useScreenOpen('pages/page/open-website', () => {
     dispatch({ type: 'PAGE_OPENED', pageId: 'page-analytics' });
@@ -483,6 +485,44 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         }, () => answer({ ok: false, reason: 'The program could not be run.' }));
         return;
       }
+      if (d.type === PAGE_FILES_MESSAGE) {
+        // A page's files (pages-finish step 2). Needs an approved files line on the loaded page
+        // and a screen that reaches the computer's files; main checks the line, level and access
+        // again. A computer window gets main's own Open / Save window; a phone gets an `ask`,
+        // answered through YouCoded's own chooser below.
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const request = (d as { request?: unknown }).request as PageFilesRequest | undefined;
+        const op = request && typeof request === 'object' && typeof request.op === 'string' ? request.op : 'read';
+        const answer = (result: PageFilesResult) => {
+          try { source.postMessage({ type: PAGE_FILES_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+        };
+        const page = loadedPageRef.current;
+        if (!request || !page?.connections?.some((c) => c.kind === 'files' && c.approved)) {
+          answer({ ok: false, op, code: 'NOT_ALLOWED', message: 'This page has not been allowed to use your files.' }); return;
+        }
+        const bridge = pagesBridge();
+        if (!getCapabilities().pageFiles || !bridge?.files) {
+          answer({ ok: false, op, code: 'UNSUPPORTED', message: 'Files are not available on the Android app yet. Use this page in YouCoded on your computer.' }); return;
+        }
+        // Only the host's own ops reach main: a page cannot answer an ask for itself.
+        if (op === 'choose' || op === 'cancel' || op === 'close') { answer({ ok: false, op, code: 'BAD_REQUEST', message: 'The page asked for something the app does not do.' }); return; }
+        bridge.files(pageId, request).then((r) => {
+          if (r.ok && r.ask) {
+            // Keep Save as's contents here, so they cross to the computer once, with the choice.
+            const sa = request.op === 'saveAs' ? request : null;
+            chooserCallRef.current?.answer({ ok: false, op: 'pick', code: 'CANCELLED', message: 'Another file window opened.' });
+            chooserCallRef.current = { answer, ...(sa ? { data: sa.data, encoding: sa.encoding } : {}) };
+            setChooser(r.ask.kind === 'save'
+              ? { kind: 'save', ask: r.ask.id, suggestedName: r.ask.suggestedName ?? 'Untitled', types: r.ask.types }
+              : { kind: 'open', ask: r.ask.id, types: r.ask.types });
+            return;
+          }
+          answer(r);
+        }, () => answer({ ok: false, op, code: 'FAILED', message: 'The file could not be used.' }));
+        return;
+      }
       if (d.type === PAGE_PLAID_MESSAGE) {
         // Plaid on the page's behalf: the request is passed through as-is and
         // main keeps only the shapes it knows (plaid.ts cleanPlaidRequest).
@@ -594,6 +634,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     const stopFor = pageId;
     return () => { void pagesBridge()?.stopPrograms?.(stopFor)?.catch?.(() => { /* the program ends with its window anyway */ }); };
   }, [runsPrograms, pageId, programFrame]);
+  // Files a page picked are let go when its frame goes away (closed, switched, rebuilt), so a
+  // handle never outlives the page that was given it (files design review 1, finding 7).
+  const usesFiles = open && load.state === 'ready' && !awaitingApproval && !!loadedPage?.connections?.some((c) => c.kind === 'files' && c.approved);
+  useEffect(() => {
+    if (!usesFiles || pageId === null || !getCapabilities().pageFiles) return;
+    const closeFor = pageId;
+    return () => { void pagesBridge()?.files?.(closeFor, { op: 'close' })?.catch?.(() => { /* the handles go with the window anyway */ }); };
+  }, [usesFiles, pageId, programFrame]);
   // The page's live sockets live only as long as ITS frame: not while the view is
   // closed, awaiting approval or loading, and a new document is a new frame.
   usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge, videoProfileOf);
@@ -807,7 +855,26 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     </div>
     <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
       onEdit={onEditPage ? (p) => { setPageSettingsOpen(false); onEditPage(p); } : undefined} />
-    <PageFileChooser page={chooser ? summary : null} mode={chooser} onChoose={() => setChooser(null)} onClose={() => setChooser(null)} />
+    <PageFileChooser page={chooser ? summary : null} mode={chooser}
+      onChoose={(c) => {
+        const call = chooserCallRef.current;
+        const ask = chooser?.ask;
+        chooserCallRef.current = null;
+        setChooser(null);
+        if (!call || !ask || pageId === null) return;
+        const b = pagesBridge();
+        if (!b?.files) { call.answer({ ok: false, op: 'choose', code: 'UNSUPPORTED', message: 'This window cannot use files.' }); return; }
+        b.files(pageId, { op: 'choose', ask, folder: c.folder, file: c.file, ...(call.data !== undefined ? { data: call.data, encoding: call.encoding } : {}) })
+          .then(call.answer, () => call.answer({ ok: false, op: 'choose', code: 'FAILED', message: 'The file could not be used.' }));
+      }}
+      onClose={() => {
+        const call = chooserCallRef.current;
+        const ask = chooser?.ask;
+        chooserCallRef.current = null;
+        setChooser(null);
+        if (ask && pageId !== null) void pagesBridge()?.files?.(pageId, { op: 'cancel', ask })?.catch?.(() => {});
+        call?.answer({ ok: false, op: 'cancel', code: 'CANCELLED', message: 'Nothing was chosen.' });
+      }} />
     <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onConfirm={confirmOpen}
       onClose={(cancelled) => { if (cancelled && pageId) quietUntilRef.current.set(pageId, Date.now() + OPEN_QUIET_MS); setOpenAsk(null); }} />
     </>

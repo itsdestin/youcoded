@@ -196,6 +196,8 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
       // WHY: account visibility belongs to the host, not the transport. The local
       // Android owner can sign in; a visiting client still sees status and guidance.
       chatgptAccount: process.env.YOUCODED_CHATGPT !== '0',
+      // A phone's browser reaches the COMPUTER's files through YouCoded's own chooser; the Android app's own backend does not yet (card #203).
+      pageFiles: !local,
     },
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },

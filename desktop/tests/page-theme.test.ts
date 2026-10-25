@@ -554,3 +554,40 @@ describe('running a program from a page', () => {
     expect(r.posted[1]).toMatchObject({ file: 'a.mjs', input: '' });
   });
 });
+
+describe("a page's files", () => {
+  const files = (level: string, access: string, approved = true) => [{ kind: 'files', id: 'f', level, access, approved } as never];
+  const F = (r: ReturnType<typeof runBootstrap>) => r.yc.files as unknown as Record<string, ((...a: unknown[]) => Promise<Record<string, unknown>>) | undefined>;
+
+  it('gets only the calls its allowed line gives it', () => {
+    expect(runBootstrap().yc.files).toBeUndefined();
+    expect(runBootstrap('<p>hi</p>', files('pick', 'read', false)).yc.files).toBeUndefined();
+    const pickRead = F(runBootstrap('<p>hi</p>', files('pick', 'read')));
+    expect(Object.keys(pickRead).sort()).toEqual(['pick', 'read']);
+    const remember = F(runBootstrap('<p>hi</p>', files('remember', 'readwrite')));
+    expect(Object.keys(remember).sort()).toEqual(['pick', 'read', 'recent', 'save', 'saveAs']);
+    const folder = F(runBootstrap('<p>hi</p>', files('folder', 'readwrite')));
+    expect(Object.keys(folder).sort()).toEqual(['list', 'makeFolder', 'pick', 'read', 'readPath', 'remove', 'save', 'saveAs', 'writePath']);
+    expect(Object.keys(F(runBootstrap('<p>hi</p>', files('all', 'read')))).sort()).toEqual(['list', 'pick', 'read', 'readPath']);
+  });
+
+  it('opens a file window only on a real press', async () => {
+    const r = runBootstrap('<p>hi</p>', files('pick', 'read'));
+    (r.win.navigator as { userActivation: { isActive: boolean } }).userActivation.isActive = false;
+    await expect(F(r).pick!()).resolves.toMatchObject({ ok: false });
+    expect(r.posted).toHaveLength(0);
+  });
+
+  it('sends bytes as base64 and hands bytes back as a Uint8Array', async () => {
+    const r = runBootstrap('<p>hi</p>', files('folder', 'readwrite'));
+    void F(r).writePath!('a.bin', new Uint8Array([104, 105]));
+    expect(r.posted[0]).toMatchObject({ type: 'youcoded:files', request: { op: 'writePath', path: 'a.bin', data: 'aGk=', encoding: 'base64', replace: false } });
+    const p = F(r).readPath!('a.bin', { as: 'bytes' });
+    const id = r.posted[1].id;
+    // Another kind's answer with the same id settles nothing.
+    r.deliver({ type: 'youcoded:program:result', id, result: { ok: true } });
+    r.deliver({ type: 'youcoded:files:result', id, result: { ok: true, op: 'readPath', data: 'aGk=', encoding: 'base64' } });
+    const got = await p;
+    expect(Array.from(got.data as Uint8Array)).toEqual([104, 105]);
+  });
+});

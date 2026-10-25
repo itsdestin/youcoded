@@ -22,7 +22,7 @@ import type { getPagesService } from '../main/pages/pages-service';
 import type { ensureProjectCoalesced } from '../main/artifacts/project-manager';
 import type { readFileHead } from '../main/fs-read-head';
 import type { ChatsearchReadRequest } from './chatsearch-refs';
-import type { PageFetchRequest, PageProgramResult, PlaidResult, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
+import type { PageFetchRequest, PageFileEntry, PageFilesRequest, PageFilesResult, PageProgramResult, PlaidResult, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
 
 type Answer<F extends (...a: any[]) => any> = Awaited<ReturnType<F>>;
 type PagesService = NonNullable<ReturnType<typeof getPagesService>>;
@@ -100,6 +100,11 @@ export interface FilesChannelTypes {
   'pages:remove-connection': { request: { id: string; connectionId: string }; response: PagesAnswer<'removeConnection'> };
   'pages:open-website': { request: { id: string; url: string; remember: boolean; open: boolean }; response: PagesAnswer<'openWebsite'> | { ok: false; message: string; pages: [] } };
   'pages:forget-open-site': { request: { id: string; site: string }; response: PagesAnswer<'forgetOpenSite'> };
+  'pages:files': { request: { id: string; request: PageFilesRequest }; response: PageFilesResult };
+  'pages:choose-folder': { request: void; response: { ok: true; token: string; display: string } | { ok: false; message?: string } };
+  'pages:set-folder': { request: { id: string; connectionId: string; token: string }; response: PagesAnswer<'setFolder'> };
+  'pages:forget-file': { request: { id: string; connectionId: string; fileId: string }; response: PagesAnswer<'forgetFile'> };
+  'pages:list-folder': { request: { id: string; ask: string; folder: string }; response: { ok: true; entries: PageFileEntry[] } | { ok: false; message: string } };
   'pages:refresh': { request: { id: string }; response: PagesAnswer<'refresh'> };
   'pages:saved-keys': { request: void; response: PagesAnswer<'savedKeys'> };
   'pages:delete-saved-key': { request: { service: string; address: string }; response: PagesAnswer<'deleteSavedKey'> };

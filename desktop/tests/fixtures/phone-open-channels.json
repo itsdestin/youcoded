@@ -137,9 +137,12 @@
   "pages:approve",
   "pages:delete-saved-key",
   "pages:fetch",
+  "pages:files",
+  "pages:forget-file",
   "pages:forget-open-site",
   "pages:get",
   "pages:list",
+  "pages:list-folder",
   "pages:open-website",
   "pages:refresh",
   "pages:remove-connection",
@@ -290,5 +293,6 @@
   "zoom:reset"
  ],
  "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video).",
+ "_added_files": "2026-10-24: pages:files, pages:forget-file and pages:list-folder (a page's files, pages-finish step 2). Destin's answers on the step 2 deck: Q-filesphone (a page used from a phone reaches the COMPUTER's files, as the desktop does) and Q-remote-pick (YouCoded's own file chooser on a phone), then \"build it however you think is best\" (2026-10-24). pages:list-folder answers only while that page has a pick or save waiting for the same phone; from a phone a page changes files only inside an approved folder. pages:choose-folder and pages:set-folder stay desktop-only (they show the computer's Choose folder window).",
  "_added_open_website": "2026-10-24: pages:open-website and pages:forget-open-site (a page's \"Open this website?\" and Page settings' remembered sites). Destin signed off this widening on 2026-10-24 (\"ok\", to: should \"Don't ask again for this site\" work from your phone too — recommended yes). A phone only records the site; it opens the address itself (open:false is forced for the phone door in main/ipc/pages.ts)."
 }

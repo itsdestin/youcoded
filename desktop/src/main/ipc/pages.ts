@@ -24,7 +24,7 @@
 import { IPC } from '../../shared/backend-contract';
 import { getPagesService } from '../pages/pages-service';
 import type { SocketOwner } from '../pages/page-live-socket';
-import { windowOwner, clientOwnerKey, type SenderLike } from '../pages/page-owner';
+import { windowOwner, windowOwnerKey, clientOwnerKey, type SenderLike } from '../pages/page-owner';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
 
 const NOT_AVAILABLE = 'Pages are not available on this host.';
@@ -41,6 +41,11 @@ function ownerOf(svc: NonNullable<ReturnType<typeof getPagesService>>, ctx: Main
     return { key: clientOwnerKey(ctx.clientId), push: ctx.remote.pageSocketPush };
   }
   return ctx.sender ? windowOwner(svc, ctx.sender as SenderLike) : null;
+}
+/** The caller's owner key, without watching the window (approve only needs the name). */
+function ownerKeyOf(ctx: MainChannelCtx): string | undefined {
+  if (ctx.door === 'remote') return ctx.clientId ? clientOwnerKey(ctx.clientId) : undefined;
+  return ctx.sender ? windowOwnerKey((ctx.sender as SenderLike).id) : undefined;
 }
 const NO_OWNER = { ok: false as const, message: 'Could not tell which window is asking.' };
 
@@ -80,7 +85,11 @@ export const pagesChannels: MainChannelDef[] = [
     remoteOnError: (e) => ({ ok: false, message: msg(e) }),
     // `addresses`: the address the person allowed per device line, re-checked in main (page-device-address.ts).
     handler: async (p, ctx) =>
-      (await getPagesService()?.approve(str(p?.id), (p?.keys ?? {}) as Record<string, string>, { remote: ctx.door === 'remote', addresses: (p?.addresses ?? {}) as Record<string, string> }))
+      (await getPagesService()?.approve(str(p?.id), (p?.keys ?? {}) as Record<string, string>, {
+        remote: ctx.door === 'remote', addresses: (p?.addresses ?? {}) as Record<string, string>,
+        // `folders`: a Choose folder token per folder line, spendable only by the window that chose it.
+        folders: (p?.folders ?? {}) as Record<string, string>, ownerKey: ownerKeyOf(ctx),
+      }))
         ?? { ok: false as const, message: NOT_AVAILABLE },
   }),
   defineChannel({
@@ -100,6 +109,52 @@ export const pagesChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.PAGES_FORGET_OPEN_SITE, kind: 'handle', remoteOnError: failure,
     handler: async (p) => (await getPagesService()?.forgetOpenSite(str(p?.id), str(p?.site))) ?? [],
+  }),
+  // A page's files (pages-finish step 2). The caller is the DOOR's (window or phone), never the
+  // request's, so a handle or an ask belongs to the screen that got it. A phone gets an `ask` for
+  // YouCoded's own chooser instead of an Open window, and its listing (pages:list-folder) is
+  // answered only while that ask waits. Choosing or changing a page's folder shows the computer's
+  // Choose folder window, so those two are desktop only.
+  defineChannel({
+    name: IPC.PAGES_FILES, kind: 'handle',
+    remoteOnError: (e) => ({ ok: false as const, op: 'read' as const, code: 'FAILED' as const, message: msg(e) }),
+    handler: async (p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      const op = p?.request?.op ?? 'read';
+      if (!svc) return { ok: false as const, op, code: 'UNSUPPORTED' as const, message: NOT_AVAILABLE };
+      if (!owner) return { ok: false as const, op, code: 'FAILED' as const, message: NO_OWNER.message };
+      return svc.files.call({ ownerKey: owner.key, remote: ctx.door === 'remote', sender: ctx.sender }, str(p?.id), (p?.request ?? {}) as never);
+    },
+  }),
+  defineChannel({
+    name: IPC.PAGES_CHOOSE_FOLDER, kind: 'handle', desktopOnly: true,
+    handler: async (_p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      return svc && owner ? svc.files.chooseFolder({ ownerKey: owner.key, remote: false, sender: ctx.sender }) : { ok: false as const, message: NOT_AVAILABLE };
+    },
+  }),
+  defineChannel({
+    name: IPC.PAGES_SET_FOLDER, kind: 'handle', desktopOnly: true,
+    handler: async (p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      return svc && owner ? svc.setFolder(str(p?.id), str(p?.connectionId), str(p?.token), owner.key) : [];
+    },
+  }),
+  defineChannel({
+    name: IPC.PAGES_FORGET_FILE, kind: 'handle', remoteOnError: failure,
+    handler: async (p) => (await getPagesService()?.forgetFile(str(p?.id), str(p?.connectionId), str(p?.fileId))) ?? [],
+  }),
+  defineChannel({
+    name: IPC.PAGES_LIST_FOLDER, kind: 'handle', remoteOnError: (e) => ({ ok: false as const, message: msg(e) }),
+    handler: async (p, ctx) => {
+      const svc = getPagesService();
+      const owner = svc && ownerOf(svc, ctx);
+      if (!svc || !owner) return { ok: false as const, message: NOT_AVAILABLE };
+      return svc.files.listForAsk({ ownerKey: owner.key, remote: ctx.door === 'remote' }, str(p?.id), str(p?.ask), str(p?.folder));
+    },
   }),
   defineChannel({
     name: IPC.PAGES_REFRESH, kind: 'handle', remoteOnError: failure,

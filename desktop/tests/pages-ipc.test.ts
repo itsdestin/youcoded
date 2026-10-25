@@ -85,9 +85,9 @@ describe('pages:approve, one entry for both doors', () => {
     const r = rig(() => {});
     const body = { id: 'personal:home', keys: { ha: 'k' }, addresses: { ha: '192.168.4.54:8123' } };
     await r.call(IPC.PAGES_APPROVE, body);
-    expect(r.service.approve).toHaveBeenLastCalledWith('personal:home', { ha: 'k' }, { remote: false, addresses: { ha: '192.168.4.54:8123' } });
+    expect(r.service.approve).toHaveBeenLastCalledWith('personal:home', { ha: 'k' }, expect.objectContaining({ remote: false, addresses: { ha: '192.168.4.54:8123' } }));
     const { serveRemoteChannel } = await import('../src/main/ipc/channel-table');
     await serveRemoteChannel(findChannel(IPC.PAGES_APPROVE)!, body, { door: 'remote', runtime: null, clientId: 'A', broadcast: () => {} } as never);
-    expect(r.service.approve).toHaveBeenLastCalledWith('personal:home', { ha: 'k' }, { remote: true, addresses: { ha: '192.168.4.54:8123' } });
+    expect(r.service.approve).toHaveBeenLastCalledWith('personal:home', { ha: 'k' }, expect.objectContaining({ remote: true, addresses: { ha: '192.168.4.54:8123' } }));
   });
 });

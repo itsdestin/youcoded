@@ -128,6 +128,7 @@ import { SessionScreens } from './session-screens';
 import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summary-push';
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
+import { pageFileDialogs } from './pages/page-file-dialogs';
 import { PageConnectionsStore } from './pages/connections-store';
 import { wireDocCommentsPush } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
@@ -2405,6 +2406,8 @@ export function registerIpcHandlers(
     noteOwnWrite,
     // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
     // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    // A page's files (pages-finish step 2): this computer's Open / Save / Choose folder windows and its bin.
+    fileDialogs: pageFileDialogs,
     connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with

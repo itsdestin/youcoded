@@ -16,6 +16,7 @@
 // and the copy is removed. All folding and writing goes through
 // mutateFileUnderLock, like the naming store.
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { fingerprint, parseConnections, withApprovedAddress } from './page-connections';
@@ -27,6 +28,13 @@ import type {
   PageLoadFailure, PageRefreshState, PageSummary,
 } from '../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../shared/pages-types';
+
+/** A folder as the card shows it: `~/Pictures/Family` under home, else as stored. */
+function homeRelative(folder: string): string {
+  const home = os.homedir().replace(/\\/g, '/').replace(/\/+$/, '');
+  const f = folder.replace(/\\/g, '/');
+  return f === home ? '~' : f.startsWith(`${home}/`) ? `~/${f.slice(home.length + 1)}` : f;
+}
 
 export const PAGES_DIR = 'Pages';
 const PINS_DIR = '.pins';
@@ -120,6 +128,8 @@ export class PagesStore {
         next.set(id, { id, dir, slug: e.name, home: h.home });
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
         const openSites = saved.openSites[approvalKey(h.home, e.name)] ?? [];
+        const folders = saved.folders[approvalKey(h.home, e.name)] ?? {};
+        const remembered = saved.remembered[approvalKey(h.home, e.name)] ?? {};
         // WHY a program line is approved only while its FILE still hashes to what was allowed (spec
         // 2026-10-16, program card: "If the file changes, the page asks again"). A missing file is not
         // approved either. Read once per program line per listing, and the file itself only when it moved.
@@ -137,7 +147,8 @@ export class PagesStore {
         // declaration / the program file), so they stay out of the "code changed" comparison.
         const notCodeIds = new Set(manifest.connections.filter((c) => c.kind === 'session' || c.kind === 'program').map((c) => c.id));
         // Session, chats and program lines fetch nothing, so they alone give the page no "last updated" band.
-        const reachesNetwork = manifest.connections.some((c) => c.kind !== 'session' && c.kind !== 'chats' && c.kind !== 'program');
+        // Files lines (pages-finish step 2) fetch nothing either.
+        const reachesNetwork = manifest.connections.some((c) => c.kind !== 'session' && c.kind !== 'chats' && c.kind !== 'program' && c.kind !== 'files');
         const connections: PageConnectionStatus[] = manifest.connections.map((m) => {
           const approved = isApproved.get(m.id) === true;
           // An approved device is shown at the address the person allowed; one
@@ -147,6 +158,10 @@ export class PagesStore {
             ...c,
             approved,
             ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: !!saved.keys[savedKeyId(c.service, c.address)] } : {}),
+            // A files line's folder is shown as `~/…`; remembered files by name only — a
+            // screen (a phone included) never learns a full path (step 2 design §1).
+            ...(c.kind === 'files' && approved && folders[c.id] ? { folder: homeRelative(folders[c.id]) } : {}),
+            ...(c.kind === 'files' && approved && remembered[c.id]?.length ? { remembered: remembered[c.id].map((f) => ({ id: f.id, name: f.name })) } : {}),
           };
         });
         out.push({
@@ -241,6 +256,11 @@ export class PagesStore {
     if (!manifest) return null;
     const html = await fs.readFile(path.join(loc.dir, 'page.html'), 'utf8').catch(() => '');
     return { connections: manifest.connections, html };
+  }
+
+  /** A page's own folder (pages-finish step 2: a page never writes into it). */
+  async pageDir(id: string): Promise<string | null> {
+    return (await this.locate(id))?.dir ?? null;
   }
 
   /** The folder of a page and its `program` line for `file`, or null when the page is gone or does not list
