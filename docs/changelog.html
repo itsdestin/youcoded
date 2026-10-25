@@ -1,0 +1,645 @@
+<!doctype html>
+<!-- Generated from CHANGELOG.md by docs/tools/gen-legal-pages.mjs. Do not edit the text here. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Changelog — YouCoded Assistant</title>
+<meta name="description" content="What changed in each YouCoded release.">
+<link rel="icon" type="image/png" href="legal-assets/brand.png">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body id="top">
+<a class="skip-link" href="#policy-content">Skip to content</a>
+<nav class="site-nav" aria-label="Main navigation">
+  <a class="logo" href="index.html" aria-label="YouCoded home"><img src="legal-assets/brand.png" width="36" height="36" alt=""><span class="wordmark"><span>you</span>coded</span></a>
+  <div class="policy-nav"><a href="privacy.html">Privacy</a>
+<a href="terms.html">Terms</a>
+<a href="security.html">Security</a>
+<a href="changelog.html" aria-current="page">Changelog</a></div>
+</nav>
+<main>
+  <div class="document-layout">
+    <aside class="toc-desktop" aria-label="On this page"><div class="toc-panel"><h2>On this page</h2><ol><li><a href="#133-2026-10-23"><span>1.3.3 — 2026-10-23</span></a></li>
+<li><a href="#132-2026-10-21"><span>1.3.2 — 2026-10-21</span></a></li>
+<li><a href="#131-2026-10-18"><span>1.3.1 — 2026-10-18</span></a></li>
+<li><a href="#130-2026-09-20"><span>1.3.0 — 2026-09-20</span></a></li>
+<li><a href="#124-2026-05-18"><span>1.2.4 — 2026-05-18</span></a></li>
+<li><a href="#123-2026-05-01"><span>1.2.3 — 2026-05-01</span></a></li>
+<li><a href="#122-2026-04-29"><span>1.2.2 — 2026-04-29</span></a></li>
+<li><a href="#121-2026-04-23"><span>1.2.1 — 2026-04-23</span></a></li>
+<li><a href="#120-2026-04-22"><span>1.2.0 — 2026-04-22</span></a></li>
+<li><a href="#112-2026-04-21"><span>1.1.2 — 2026-04-21</span></a></li>
+<li><a href="#111-2026-04-20"><span>1.1.1 — 2026-04-20</span></a></li>
+<li><a href="#110-2026-04-20"><span>1.1.0 — 2026-04-20</span></a></li>
+<li><a href="#101-2026-04-15"><span>1.0.1 — 2026-04-15</span></a></li>
+<li><a href="#100-2026-04-15"><span>1.0.0 — 2026-04-15</span></a></li></ol><a class="toc-home" href="index.html">← Back to home</a></div></aside>
+    <div class="reading-column">
+      <header class="hero">
+        <p class="eyebrow">Updates</p>
+        <h1 id="changelog" tabindex="-1">Changelog</h1>
+        <div class="policy-meta">
+          <a class="source-link" href="https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md">View source ↗</a>
+        </div>
+      </header>
+      <!-- WHY: native details works with keyboards and with JavaScript disabled;
+           a separate desktop TOC avoids forcing the mobile disclosure open. -->
+      <details class="toc-mobile"><summary><span>On this page</span><svg class="toc-chevron" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></summary><nav aria-label="Page sections"><ol><li><a href="#133-2026-10-23"><span>1.3.3 — 2026-10-23</span></a></li>
+<li><a href="#132-2026-10-21"><span>1.3.2 — 2026-10-21</span></a></li>
+<li><a href="#131-2026-10-18"><span>1.3.1 — 2026-10-18</span></a></li>
+<li><a href="#130-2026-09-20"><span>1.3.0 — 2026-09-20</span></a></li>
+<li><a href="#124-2026-05-18"><span>1.2.4 — 2026-05-18</span></a></li>
+<li><a href="#123-2026-05-01"><span>1.2.3 — 2026-05-01</span></a></li>
+<li><a href="#122-2026-04-29"><span>1.2.2 — 2026-04-29</span></a></li>
+<li><a href="#121-2026-04-23"><span>1.2.1 — 2026-04-23</span></a></li>
+<li><a href="#120-2026-04-22"><span>1.2.0 — 2026-04-22</span></a></li>
+<li><a href="#112-2026-04-21"><span>1.1.2 — 2026-04-21</span></a></li>
+<li><a href="#111-2026-04-20"><span>1.1.1 — 2026-04-20</span></a></li>
+<li><a href="#110-2026-04-20"><span>1.1.0 — 2026-04-20</span></a></li>
+<li><a href="#101-2026-04-15"><span>1.0.1 — 2026-04-15</span></a></li>
+<li><a href="#100-2026-04-15"><span>1.0.0 — 2026-04-15</span></a></li></ol></nav></details>
+      <article class="policy-content" id="policy-content" tabindex="-1" aria-label="Changelog">
+<p>All notable changes to YouCoded are documented in this file.</p>
+<h2 id="133-2026-10-23" tabindex="-1">1.3.3 — 2026-10-23</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.309 (desktop review); Android bundles v2.1.300.</p>
+<p>Changes since 1.3.2: automatic updates, reliable phone remote access, a status chip for background commands, model switches shown as dividers, and fixes to the message queue and chat.</p>
+<h3 id="updates-desktop" tabindex="-1">Updates — desktop</h3>
+<ul>
+<li>YouCoded downloads new versions by itself. Switch it off with &quot;Install updates automatically&quot; in the update popup or in Settings → Help &amp; feedback → Updates. A download keeps going when the popup closes.</li>
+<li>The update installs when you quit; &quot;Restart to update&quot; installs it and reopens. Linux packages, and Macs that need an administrator, ask for a password only when you choose Restart.</li>
+<li>A release without its signed file is never offered, and a downloaded copy that fails its check is thrown away before installing.</li>
+</ul>
+<h3 id="phone-remote-access" tabindex="-1">Phone remote access</h3>
+<ul>
+<li>The phone stays connected through outages, sleep and freezes; unlocking it checks the connection instead of reconnecting, one failed send no longer blocks others, and large answers arrive in pieces.</li>
+<li>Faster: first open 8.4 → 6.1 s, reload 3.6 → 2.0 s, reconnect 1.9 → 1.0 s; coming back after a long absence is immediate (was 11 s).</li>
+<li>Connection notices sit above the message box.</li>
+</ul>
+<h3 id="claude-code-conversations" tabindex="-1">Claude Code conversations</h3>
+<ul>
+<li>Message queue: messages with quote chips no longer get stuck as &quot;Unconfirmed&quot;; attached files are no longer sent with &quot;read this entire file&quot;; dismissing a failed attempt resumes the queue and puts your words back in the message box; your bubble appears the moment you press Send; the terminal view no longer stalls.</li>
+<li>Emoji no longer garble the terminal or make the app think Claude asked a question.</li>
+<li>A prompt Claude Code recorded twice shows once.</li>
+<li>Model switches show as a thin &quot;Model switched to Opus&quot; divider instead of a <code>/model</code> bubble, in native chats too; they survive reopening, and a declined switch draws nothing.</li>
+<li>Conversations reopen on their own model; an Opus chat no longer comes back on Sonnet after a crash.</li>
+</ul>
+<h3 id="helpers-and-background-work" tabindex="-1">Helpers and background work</h3>
+<ul>
+<li>Helper cards and the status bar show working, finished, failed or stopped correctly across pause, restart and interrupt.</li>
+<li>A new Background chip lists background commands, shells and watchers; ones the app started can be stopped from it.</li>
+<li>Cards for checking on, messaging, resuming or stopping a helper say what they do instead of &quot;Hiring a specialist&quot;.</li>
+</ul>
+<h3 id="chat" tabindex="-1">Chat</h3>
+<ul>
+<li>Message times show the real day (&quot;Yesterday at 2:34 PM&quot;, then the date) and when a reply last changed; reopened chats no longer show the reopen time.</li>
+<li>The Jump to bottom button no longer gets stuck, lands on the real bottom, and fades in and out.</li>
+<li>Even spacing above the input bar; the last message no longer hides under it.</li>
+</ul>
+<h3 id="appearance-and-panels" tabindex="-1">Appearance and panels</h3>
+<ul>
+<li>The built-in themes, including YouCoded and YouCoded Night, appear in Library and Marketplace, and new ones are starred once, so installs from before 1.3.1 can pick them.</li>
+<li>New Office icon: a document with a spreadsheet in front.</li>
+<li>The Browser panel&#x27;s open button shows the assistant&#x27;s own browser window, not your personal browser.</li>
+</ul>
+<h3 id="reliability" tabindex="-1">Reliability</h3>
+<ul>
+<li>Linux: new Claude Code sessions no longer hang on &quot;Initializing session…&quot; when a temp-file cleaner deletes the app&#x27;s connection file; it now lives in a private folder, and on Linux and macOS the app re-creates it if it disappears.</li>
+</ul>
+<h3 id="known-issues" tabindex="-1">Known issues</h3>
+<ul>
+<li>A custom provider whose models don&#x27;t report their conversation size may show a &quot;conversation too long&quot; error that Summarize and continue can&#x27;t fix. Start a new conversation or pick a model with a known size.</li>
+<li>On Android, Assistant settings shows the Local models page, but local models don&#x27;t run on phones.</li>
+</ul>
+<h2 id="132-2026-10-21" tabindex="-1">1.3.2 — 2026-10-21</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.306 (desktop review); Android bundles v2.1.300.</p>
+<p>Changes since 1.3.1: custom model providers, a durable message queue for Claude Code conversations, crash recovery that keeps unsent work, signed and notarized macOS downloads, and many reliability fixes.</p>
+<h3 id="models-and-providers" tabindex="-1">Models and providers</h3>
+<ul>
+<li>Add your own OpenAI-compatible provider: YouCoded matches it against the public model list or asks the endpoint for its own models, and shows model counts on each provider card.</li>
+<li>The last key check is remembered for every kind of API key.</li>
+<li>A failed reply now says what happened in plain words and offers the way forward (switch model, open settings, try again or summarize and continue).</li>
+<li>Recover from cut-off replies and from a custom endpoint&#x27;s &quot;conversation too long&quot; error; per-provider output limits.</li>
+<li>Conversations with many images no longer get permanently stuck after a provider rejects them.</li>
+<li>New 500k context option for cloud models (the default for new installations).</li>
+<li>ChatGPT accounts work on Android and from remote browsers, with sign-in guidance.</li>
+</ul>
+<h3 id="claude-code-conversations-1" tabindex="-1">Claude Code conversations</h3>
+<ul>
+<li>Messages sent while Claude is busy wait in a durable queue that survives restarts, with Cancel and Send now for each one.</li>
+<li>Stop, Clear and model changes go through Claude Code&#x27;s own controls where available.</li>
+<li>Summary (&quot;compaction&quot;) dividers stay in the right place while a reply streams and after reopening.</li>
+</ul>
+<h3 id="safety-and-permissions" tabindex="-1">Safety and permissions</h3>
+<ul>
+<li>The assistant prefers normal commands and asks before work that needs administrator rights; you can approve admin commands with a scope you choose.</li>
+</ul>
+<h3 id="reliability-1" tabindex="-1">Reliability</h3>
+<ul>
+<li>A crashed window recovers, and unsent messages and file edits are kept.</li>
+<li>&quot;Welcome back&quot; reopens several conversations at once safely and waits until their tools are ready.</li>
+<li>File previews, comparisons, indexing and session lists stay responsive on large folders; Windows file-watching no longer blocks.</li>
+</ul>
+<h3 id="desktop" tabindex="-1">Desktop</h3>
+<ul>
+<li>macOS downloads are signed with Developer ID and notarized by Apple.</li>
+<li>Linux: the update button shows installer actions and progress; launcher icons ship in every size.</li>
+<li>Windows: fixed the buddy and chat input.</li>
+<li>Touch scrolling works in the active sessions list; file-comment popups and side panels have cleaner borders; Pages can use purpose-designed icons.</li>
+</ul>
+<h3 id="known-issues-1" tabindex="-1">Known issues</h3>
+<ul>
+<li>A custom provider whose models don&#x27;t report their conversation size may show a &quot;conversation too long&quot; error that Summarize and continue can&#x27;t fix. Start a new conversation or pick a model with a known size.</li>
+<li>On Android, Assistant settings shows the Local models page, but local models don&#x27;t run on phones.</li>
+</ul>
+<h2 id="131-2026-10-18" tabindex="-1">1.3.1 — 2026-10-18</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.302 (desktop review); Android bundles v2.1.300.</p>
+<p>Changes since 1.3.0: built-in Office editing, the assistant&#x27;s browser, expanded Pages capabilities, a rebuilt Android backend, and improvements to appearance, conversation continuity and performance.</p>
+<h3 id="office-editing-desktop" tabindex="-1">Office editing — desktop</h3>
+<ul>
+<li>Create and edit Word (<code>.docx</code>), Excel (<code>.xlsx</code>) and PowerPoint (<code>.pptx</code>) files inside YouCoded.</li>
+<li>Autosave, crash recovery, kept versions, Save As, PDF export and printing.</li>
+<li>Assistant comments on files open in Office go through the editor, so the next editor save does not overwrite them.</li>
+<li>Office editing is desktop-only; Android and remote browsers do not offer the built-in editors. Older Office formats and OpenDocument files are not opened for editing.</li>
+</ul>
+<h3 id="the-assistantx27s-browser-desktop" tabindex="-1">The assistant&#x27;s browser — desktop</h3>
+<ul>
+<li>Native and Claude Code conversations can use the same browser tools to read pages, click, type and navigate.</li>
+<li>Follow along or interact yourself in the Browser panel, with tabs, navigation and shared page zoom.</li>
+<li>Browser permission cards ask before interacting with a site, with separate confirmation for final actions such as submitting a form.</li>
+<li>Browser configuration is available in Assistant settings. The assistant&#x27;s browser is not available on Android or through remote access.</li>
+</ul>
+<h3 id="pages-and-connections" tabindex="-1">Pages and connections</h3>
+<ul>
+<li>Pages can declare approved connections, restricted by host, request method and write paths; permission changes require approval again.</li>
+<li>Added device socket requests, live connections and camera video played by the app.</li>
+<li>A page can open the new-conversation window with a proposed message visible for review before sending.</li>
+<li>Pages can access approved conversation information and run explicitly approved local program files, with file-content checks before execution.</li>
+<li>Added app-style building blocks and a control for showing the theme background behind pages.</li>
+<li>Added Plaid connection support for personal finance pages. Home Assistant and Money dashboards are personal, hand-installed pages, not dashboards bundled with the app.</li>
+</ul>
+<h3 id="android" tabindex="-1">Android</h3>
+<ul>
+<li>Replaced the separate Kotlin backend with the desktop backend running headlessly in bundled Node. The Android shell retains phone-specific services such as file picking, microphone access, notifications and opening links.</li>
+<li>Bundles its own shell, Git, search tools and unmodified Claude Code. Unsupported desktop-only features remain gated by the phone&#x27;s capabilities.</li>
+<li>The runtime source build currently requires a Linux x64 environment; updated the build documentation with its prerequisites.</li>
+<li>The matching runtime source, patches, build inputs and instructions are distributed as <code>YouCoded-1.3.1-android-corresponding-source.tar.xz</code> with its checksum beside the APK/AAB. GitHub&#x27;s automatic app-source archives do not replace this runtime source archive.</li>
+</ul>
+<h3 id="appearance-and-interface" tabindex="-1">Appearance and interface</h3>
+<ul>
+<li>Added YouCoded and YouCoded Night themes, refreshed app icons and a glass buddy look.</li>
+<li>New installations use the new default; existing users who never explicitly selected a theme retain Midnight.</li>
+<li>Floating controls, global Look settings and theme-controlled roundness, with more consistent dialogs, error notices and file-viewer controls.</li>
+</ul>
+<h3 id="models-and-conversation-continuity" tabindex="-1">Models and conversation continuity</h3>
+<ul>
+<li>Recommended available plan and OpenRouter models, with improved local-model memory estimates, quantization detection and vision recognition.</li>
+<li>Improved near-limit summarization and restore, preserving recent conversation history and asking before switching to a model too small for the conversation.</li>
+<li>Improved prompt-cache reuse and ChatGPT session routing.</li>
+<li>Provider-specific image limits, downscaling and recovery from oversized-image rejections.</li>
+</ul>
+<h3 id="performance-and-reliability" tabindex="-1">Performance and reliability</h3>
+<ul>
+<li>Reduced background work in hidden chats and terminals and made session switching cheaper.</li>
+<li>Streamed code blocks update in smaller pieces; chat redraws adapt to the display rate, and desktop scrolling stays native.</li>
+<li>CSV and XLSX viewers draw visible cells rather than building the entire sheet at once.</li>
+<li>Improved terminal flow control and preservation of output at process exit.</li>
+<li>Phone reconnects refresh theme, pinned pages and session information.</li>
+</ul>
+<h3 id="security-and-updates" tabindex="-1">Security and updates</h3>
+<ul>
+<li>Tightened remote file and secret access, upload limits and permission checks around sensitive reads and destructive commands.</li>
+<li>Backup staging excludes secrets and protects unmanaged or conflicting local files.</li>
+<li>Linux updates select the installed package format; macOS updates select a compatible architecture.</li>
+<li>Added Azure signing and signature verification to Windows release builds.</li>
+</ul>
+<h3 id="known-limitations" tabindex="-1">Known limitations</h3>
+<ul>
+<li>Mac builds retain ad-hoc signing and are not Developer ID–signed or notarized; macOS may show an unverified-developer warning. Developer ID signing/notarization is deferred to 1.3.2.</li>
+<li>DOCX previews use an older bundled XML parser with reported denial-of-service issues. Opening a crafted document could hang the app window; avoid untrusted DOCX files pending the deferred hardening work. No code-execution or zero-interaction exploit was demonstrated in this review.</li>
+<li>Some reopened conversations can show the reopen time rather than the original message time.</li>
+<li>Large-project search is not exhaustive: file discovery can be truncated, and searching inside files stops at 200 matches without continuation. Tracked files can supplement the discovered list; ordinary folder browsing is separately paginated.</li>
+<li>Native personal and project filesystem skills still use <code>~/.claude/skills</code> and <code>&lt;project&gt;/.claude/skills</code>. Skills work through those locations; a separate YouCoded-owned skills home is not included in this release.</li>
+</ul>
+<h2 id="130-2026-09-20" tabindex="-1">1.3.0 — 2026-09-20</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.278</p>
+<p>Everything between v1.2.4 (18 May) and this release: 3,200-odd commits. The body of this
+entry was written for the 2026-09-11 beta; <strong>Since the beta</strong> below covers the nine days
+of beta builds (1.3.0-beta.72 through 1.3.1-beta.87) that finished it.</p>
+<p>The headline is that YouCoded stopped being only a window onto Claude Code. It now has
+an assistant of its own that can run a conversation, use tools, ask permission, hire
+helpers and work offline on a model running on your own machine — while Claude Code
+sessions keep working exactly as before. Around that: a project workspace with real file
+viewers and editing, conversations that sync between your devices, sign-in with a ChatGPT
+plan, a rebuilt marketplace, a four-game arcade, remote access you can use from a phone, a
+first-run tour, and a security review whose fixes all landed before this build.</p>
+<h3 id="the-assistant-of-your-own" tabindex="-1">The assistant of your own</h3>
+<ul>
+<li><strong>A built-in assistant</strong> — conversations can run inside YouCoded instead of through
+Claude Code, with the same chat, tools and files.</li>
+<li><strong>It asks before it acts</strong> — a permission card names the tool and what allowing it
+permits. &quot;Always allow&quot; is remembered, can be scoped to exactly this command or the
+whole tool, and every standing grant is listed and revocable in Settings.</li>
+<li><strong>Reading never interrupts you</strong> — reading, searching or listing a file outside the
+project no longer stops the assistant with a Yes/No card. Writing and editing still
+ask, and credential files stay blocked outright.</li>
+<li><strong>Helpers (specialists)</strong> — the assistant can hire separate helper sessions with their
+own limited permissions, shown as cards in the chat. They run in the background, survive
+a restart, can be steered mid-run or interrupted, and can be defined by your own files.
+Each hire can use a cheaper or stronger model.</li>
+<li><strong>Web search and page reading</strong> — with your own Tavily or Exa key, entered and tested in
+Settings.</li>
+<li><strong>Tools it can use</strong> — commands (including long-running ones that outlive a single
+step), file search, reading images and PDFs, and tools from connected MCP servers.</li>
+<li><strong>Standing rules</strong> — finish the job, don&#x27;t act on a question, don&#x27;t touch your uncommitted
+edits, look at visual output the way you will, and treat a fetched web page as
+information rather than instructions.</li>
+<li><strong>Skills you can call</strong> — typing a skill name starts it as a labelled card instead of
+pasting thousands of characters into your message. Skills defined inside a project load.</li>
+<li><strong>A step guard you control</strong> — how many steps a session may take is a setting, not a
+hidden rule.</li>
+</ul>
+<h3 id="models-your-own-machine-and-your-own-plans" tabindex="-1">Models: your own machine, and your own plans</h3>
+<ul>
+<li><strong>Local models</strong> — browse a curated catalogue or search Hugging Face, see whether a model
+fits your graphics card, download it (resumable, checksum-verified), and chat fully
+offline. The engine installs, supervises and stops itself.</li>
+<li><strong>Per-model settings</strong> — context length, how long it stays loaded, GPU layers and extra
+engine options, applied without restarting the engine.</li>
+<li><strong>A real memory estimate</strong> — the fit warning reads the model file&#x27;s own structure and
+scores it against the graphics chip actually present, instead of charging every model a
+flat 2 GB.</li>
+<li><strong>Faster, cheaper generation</strong> — speculative decoding on by default (16 → 104 tokens/sec
+on a file rewrite, measured) and 8-bit conversation cache (about +40% speed and half the
+memory at 16k of context).</li>
+<li><strong>Vision models can see</strong> — a model with a vision file downloads into the layout the
+engine will pair, an attached image reaches it, and an earlier download can be moved into
+that layout safely.</li>
+<li><strong>Graphics acceleration</strong> — &quot;Switch to CUDA&quot; works on Windows without NVIDIA&#x27;s toolkit
+installed, and AMD ROCm is an opt-in on Linux and Windows, described by measurement
+rather than a claim (about 20% faster reading a prompt, 24–46% slower writing replies).</li>
+<li><strong>Interrupted downloads</strong> — a partial download is its own row with Resume and Delete, and
+can never be offered in the picker as if it were installed.</li>
+<li><strong>Sign in with ChatGPT</strong> — use a ChatGPT plan&#x27;s own models inside YouCoded, with the plan&#x27;s
+models in the picker, usage bars labelled by the real window, and a card naming the reset
+when the plan runs out, with an Upgrade plan button.</li>
+<li><strong>Cheaper repeat requests</strong> — prompt caching is actually requested from Anthropic,
+OpenRouter conversations are pinned to one session, and long conversations compact before
+anything is trimmed, so small models stop collapsing to the newest message.</li>
+<li><strong>Model names</strong> — version numbers dropped (&quot;Sonnet&quot;, not &quot;Sonnet 4.6&quot;), Fable added,
+and chips for DeepSeek, Meta Llama, Mistral, Perplexity and Cohere.</li>
+<li><strong>Gemini</strong> — removed as a provider.</li>
+</ul>
+<h3 id="chat-1" tabindex="-1">Chat</h3>
+<ul>
+<li><strong>&quot;What the assistant was given&quot;</strong> — a line above every conversation, with a panel behind
+it, showing the instructions, rules, skills and tools it started with and what was left
+out. It turns amber mainly when a small model has had the entire skill list dropped.</li>
+<li><strong>Stop button and a message queue</strong> — messages you send while it is still answering line
+up, where you can edit or cancel them before they go.</li>
+<li><strong>Deliverables</strong> — files the assistant hands you render as a card with previews inside the
+reply; it can also hand you a link that opens in your browser.</li>
+<li><strong>Question cards</strong> — &quot;Other&quot; with your own answer, or a note alongside the option you
+picked. Dismissing one ends the turn instead of telling the model to guess.</li>
+<li><strong>Find in chat</strong> — Ctrl+F searches and highlights the whole conversation.</li>
+<li><strong>Chat Search</strong> — a searchable index of past conversations, with Preview and Resume from a
+result, and tagging, noting and flagging from search.</li>
+<li><strong>Rename a conversation</strong> — from the switcher&#x27;s pencil, its right-click menu or the saved
+list, and a name you choose is never overwritten by automatic naming.</li>
+<li><strong>Automatic naming stops interrupting</strong> — Off and Basic never interrupt a reply; the AI
+setting asks after the 1st, 3rd, then every 25th reply, instead of roughly six times a
+conversation.</li>
+<li><strong>Collapsible thinking</strong>, clickable links and file paths everywhere, a copy button on every
+code block, and tool cards written in plain verbs (&quot;Read foo.ts&quot;, past tense once done).</li>
+<li><strong>Right-click menus and flick scrolling</strong> in the chat and message box.</li>
+<li><strong>App chrome can&#x27;t be selected or copied</strong> — select-all no longer paints titles, chips and
+buttons; file names inside messages stay copyable.</li>
+<li><strong>Fixed:</strong> scrolling up mid-reply no longer yanks you to the bottom; a stalled provider
+parks the turn with a retry instead of losing it; turns no longer end silently empty;
+duplicate and missing messages after a reload or reconnect; approval prompts attaching to
+the wrong tool; the app recovering a conversation, model and permission mode after a
+display crash; the phantom &quot;Compacted&quot; message and the thinking state that never cleared;
+a stray Enter answering prompts for you; typing on a brand-new local-model session being
+told the session is dead.</li>
+</ul>
+<h3 id="sessions" tabindex="-1">Sessions</h3>
+<ul>
+<li><strong>Tags and notes</strong> — your own coloured tags and freeform notes on any session, shown in
+the status bar, the resume list and the closing prompt, and searchable there.</li>
+<li><strong>Conversations that sync between devices</strong> — saved with real titles and dates, resumable
+on another machine, with a clean takeover prompt when one is open elsewhere.</li>
+<li><strong>The resume browser</strong> — a preview pane showing what was actually said before you go back
+in, with rename, tags and complete on a floating card; filter pills for projects and tags;
+chronological by default; year-long history retention.</li>
+<li><strong>Multi-window</strong> — move a session to a new window or another window from its pill&#x27;s menu,
+and on Linux/Wayland by dragging it onto another window&#x27;s chat area. The moved session
+keeps its history.</li>
+<li><strong>Sessions without a folder</strong> — a &quot;No folder&quot; choice that runs in an empty folder the app
+owns.</li>
+<li><strong>Fixed:</strong> resuming opening in the wrong folder, sessions showing &quot;Untitled&quot; despite having
+names, the header stuck on &quot;Resuming…&quot;, a resumed session spinning forever, transcripts
+mis-filed for folders with unusual characters, and a background session repointing the
+conversation you were looking at.</li>
+</ul>
+<h3 id="projects-and-files" tabindex="-1">Projects and files</h3>
+<ul>
+<li><strong>Project View</strong> — a hub per project with Files, Conversations and Instructions &amp; Memories
+tabs, a project switcher, a description that syncs, and live counts that agree with each
+other.</li>
+<li><strong>A session file drawer</strong> — every file a conversation created, edited, read or deleted,
+with previews, rename, find-in-file, reveal in folder, copy path, sort and filters.</li>
+<li><strong>Real file viewers</strong> — spreadsheets (with formats, merged cells, formulas and sheet tabs),
+PDFs, Word documents, images, HTML as live pages, and code with syntax highlighting.
+Pictures and PDFs open up to 50 MB; large text opens as a readable beginning with the rest
+on request.</li>
+<li><strong>Editing in the app</strong> — a real editor with save, unsaved-change warnings and a discard
+guard, plus zoom and a hover magnifier for images and PDFs.</li>
+<li><strong>Search inside files</strong> — across the whole project, grouped by name matches and content
+matches.</li>
+<li><strong>Review and commit</strong> — changed files, include-in-commit, message, commit, or discard with
+an explicit confirmation.</li>
+<li><strong>&quot;Ask about this&quot;</strong> — right-click a selection in a file to ask about it, line numbers
+included.</li>
+<li><strong>Fixed:</strong> importing a file onto itself deleting it; files inside a project being filed as
+outside files; &quot;no longer on disk&quot; flashing while loading; the Conversations and Context
+tabs coming up empty on Windows; file history no longer growing forever (30 days, with the
+10 most recent versions per file always kept).</li>
+</ul>
+<h3 id="backup-and-sync" tabindex="-1">Backup and sync</h3>
+<ul>
+<li><strong>Sync through your own GitHub account</strong> — projects and conversations kept in step between
+your machines, with near-instant change signals, a devices list, dated snapshots and
+automatic pruning.</li>
+<li><strong>Connecting GitHub without the terminal</strong> — sign in with a code; the app installs the
+GitHub tool itself on macOS and Linux where it is needed.</li>
+<li><strong>Honest status</strong> — the panel turns green only on evidence of a completed sync, repairs
+half-finished setup itself, and clears its own stale warnings.</li>
+<li><strong>Removed:</strong> restoring from a backup, pending a redesign.</li>
+</ul>
+<h3 id="marketplace-and-skills" tabindex="-1">Marketplace and skills</h3>
+<ul>
+<li><strong>Rebuilt marketplace</strong> — a real catalogue of 4,100+ listings with origin badges, a &quot;What
+this can do&quot; panel before you install, visible trust information, and 👍/👎 with comments.</li>
+<li><strong>Update actually updates</strong> — both on a card and in the Library&#x27;s Updates tab; bundled
+skills upgrade themselves at launch.</li>
+<li><strong>Its own address</strong> — the service moved to api.youcoded.ai, which also made its rate
+limiting work for the first time. Older installs keep working.</li>
+</ul>
+<h3 id="remote-access" tabindex="-1">Remote access</h3>
+<ul>
+<li><strong>Use the app from a phone or another browser</strong> — with projects and account available, a
+narrow-window layout, compression and caching for a faster first load.</li>
+<li><strong>Security batch 1</strong> — your computer listens only on its Tailscale address, the password is
+always required (the &quot;any tailnet address gets in free&quot; bypass is gone), paired devices are
+named records with Online/Offline and an Unpair that revokes, and the status light reports
+whether the listener is actually up. <strong>Every existing pairing must be re-paired once.</strong></li>
+</ul>
+<h3 id="games" tabindex="-1">Games</h3>
+<ul>
+<li><strong>A four-game arcade</strong> — Connect 4 and chess against friends, Flappy and 2048 solo, with
+leaderboards and head-to-head records. Your player identity comes from your YouCoded
+sign-in.</li>
+<li><strong>Playable without a mouse</strong> — Connect 4 columns are real buttons with announcements for
+assistive tech, and the chess board fits its pane.</li>
+</ul>
+<h3 id="the-buddy" tabindex="-1">The buddy</h3>
+<ul>
+<li><strong>Every mascot redrawn</strong> in the promo film&#x27;s warmer style, with eight expressions each,
+three new characters, a sleep pose, and one for every theme in the registry.</li>
+<li><strong>Better behaviour</strong> — hover-revealed actions, snapping to the screen edge with a peek,
+smoother animation, and an opt-in helper that lets you drag him on KDE Wayland.</li>
+<li><strong>Fixed:</strong> the docked buddy drawing two poses at once, a bad saved position parking him
+behind the taskbar, and the floater&#x27;s Resume Session button being a placeholder.</li>
+</ul>
+<h3 id="getting-started-and-getting-help" tabindex="-1">Getting started, and getting help</h3>
+<ul>
+<li><strong>A first-run tour</strong> — after setup the buddy walks eight stops through the real app, and it
+can be replayed from Settings.</li>
+<li><strong>Tips, empty screens and first-time warnings</strong> — one tip per sitting with a switch to stop
+them, &quot;Start your first session&quot; on a new install, an explained empty Projects screen, and
+an I-understand checkbox the first time you use Skip Permissions or Full auto.</li>
+<li><strong>Help &amp; feedback in Settings</strong> — the tour, the tips switch, r/youcoded, the bug report and
+known issues.</li>
+<li><strong>Bug reports start from the error</strong> you hit, show every piece of evidence before it leaves
+your machine, work with no AI at all, and keep your draft through a failure.</li>
+<li><strong>Crashes and freezes leave a record</strong> on your own machine (never uploaded) and a line in
+the log a bug report attaches.</li>
+<li><strong>Seventeen false error messages fixed</strong> — &quot;Uploaded!&quot; for a failed backup, &quot;Nothing
+installed yet&quot; when the list could not load, &quot;Launch failed&quot; for a failed download. Every
+error state now offers an action, with Retry last.</li>
+<li><strong>The assistant is &quot;your assistant&quot;</strong> — about 45 references to &quot;Claude&quot; in the app&#x27;s own
+wording now name the assistant you chose.</li>
+</ul>
+<h3 id="look-and-feel" tabindex="-1">Look and feel</h3>
+<ul>
+<li><strong>One consistent control set</strong> across the app — buttons, inputs, toggles, dropdowns, empty
+states, loading states, dialogs — and Settings as one uniform list of rows.</li>
+<li><strong>Assistant settings in one place</strong> — Model Providers, Session Defaults, Permissions and
+Specialists became one panel, sitting directly under Account.</li>
+<li><strong>Themes</strong> — preview cards in the picker, readable muted text in every built-in theme,
+correct glass on floating-chrome themes, a terminal that stays readable under wallpapers,
+and Reduced Effects that also stops animation a community theme adds.</li>
+<li><strong>New app and installer icons</strong> — the waving purple mascot across Windows, Mac, Linux and
+Android, with the installer named and marked distinctly from the app.</li>
+</ul>
+<h3 id="speed" tabindex="-1">Speed</h3>
+<ul>
+<li><strong>Huge conversations open fast</strong> — about half a second instead of 20+ seconds, with history
+loaded a page at a time, and far-off messages folded to a placeholder so scrolling stays
+smooth.</li>
+<li><strong>The app stops running out of memory</strong> on long conversations (it crashed six times in one
+day before this).</li>
+<li><strong>Project view stops chugging</strong> — eight rapid tab clicks went from 7.1 seconds of
+unresponsiveness to none; a cold open from 2.1s to about 0.8s.</li>
+<li><strong>Resume browser</strong> — a 42.6 MB conversation previews in 21 ms instead of stalling.</li>
+<li><strong>A six-minute freeze after taking a sync lease</strong> is gone, marketplace, theme preview and
+resume reads no longer block the window, and the live transcript reader is capped so one
+huge conversation cannot stall the app.</li>
+</ul>
+<h3 id="security-and-privacy" tabindex="-1">Security and privacy</h3>
+<ul>
+<li><strong>Pre-launch security review, all fixes in this build</strong> — a community theme or a document
+preview could run code with the app&#x27;s powers; an &quot;Always allow&quot; command grant could be
+chained past; the assistant could read stored-credential files or leak them through
+automatically loaded chat images (now tap-to-show); remote access had no origin check and
+accepted one-character passwords (now an 8-character minimum with a Generate button).</li>
+<li><strong>Signed updates</strong> — the app verifies a signed update before launching it, from the next
+signed release onward, and every download in a release is listed in a signed manifest so it
+can be checked for tampering or corruption.</li>
+<li><strong>The file write-guard ships inside the app</strong> — the old separate plugin is removed on
+launch and never installed for new users.</li>
+</ul>
+<h3 id="installer-and-updates" tabindex="-1">Installer and updates</h3>
+<ul>
+<li><strong>Real Linux installers</strong> — .deb, .rpm and .pacman alongside the AppImage.</li>
+<li><strong>The Update button works again</strong> — GitHub moved where downloads are served from, which had
+been failing for everyone, and the Windows updater stopped re-downloading on every reopen.</li>
+<li><strong>Betas can update to the full release</strong> — a beta now offers 1.3.0 when it ships and
+verifies it before installing. <strong>Betas up to 1.3.0-beta.76 cannot: install this build or
+1.3.0 from youcoded.ai instead.</strong></li>
+<li><strong>macOS signature restored</strong> — lost to a build-tool bump in July, which had made those
+builds unopenable.</li>
+<li><strong>Windows first-run install made resilient</strong> — no duplicate installs from Retry, the
+install found after it completes, downloads retried, and antivirus file locks explained.</li>
+</ul>
+<h3 id="android-1" tabindex="-1">Android</h3>
+<ul>
+<li><strong>Honest builds</strong> — phone builds carry a real version number (every earlier beta shipped as
+1.2.4), the app asks for notification permission after setup (so Android 13+ stops
+silently dropping every prompt), and an unsupported request refuses cleanly instead of
+crashing Project View.</li>
+<li><strong>Parity fixes</strong> — the same conversation history, names and timestamps as desktop, working
+marketplace updates, and presence that no longer flaps.</li>
+<li><strong>Removed:</strong> the phone-only restore-from-backup flow.</li>
+<li><strong>Relicensed from GPLv3 to MIT</strong> — the whole repository is now MIT. The GPL label rested on
+a misreading of Termux&#x27;s licence: its terminal-emulator library (the only Termux code the
+app contains) is carved out as Apache 2.0, and no other Android dependency is copyleft. The
+vendored library keeps its Apache 2.0 LICENSE and NOTICE. No runtime change.</li>
+</ul>
+<h3 id="website" tabindex="-1">Website</h3>
+<ul>
+<li><strong>youcoded.ai rebuilt</strong> for 1.3, with recordings of the real app instead of drawings, a live
+embed of the interface, a phone layout, and scroll motion across the page.</li>
+<li><strong>The right download for your machine</strong> — Mac visitors choose Apple silicon or Intel (an
+Intel Mac cannot open the Apple silicon build), and Linux visitors get their distribution&#x27;s
+package.</li>
+<li><strong>Company and policy details</strong> — Privacy and Terms linked from the site and Settings →
+About, naming Destin&#x27;s Adventures, LLC (Arizona), with support@youcoded.ai as the contact.</li>
+</ul>
+<h3 id="also-changed" tabindex="-1">Also changed</h3>
+<ul>
+<li><strong>Local models are freed less aggressively</strong> — a model sleeps after 15 minutes idle (was 5)
+and the engine shuts down after 25 minutes without requests (was 10). The next message
+wakes either one.</li>
+</ul>
+<h3 id="since-the-beta-1120-september" tabindex="-1">Since the beta (11–20 September)</h3>
+<ul>
+<li><strong>Pages</strong> — a Pages button beside Settings and Projects. Ask the assistant to build a page
+(a tracker, a dashboard, a reference sheet), pin up to four, and open one edge to edge.
+Desktop only.</li>
+<li><strong>Project Files browses one folder at a time</strong>, so a project of any size or depth opens
+with no wait and no limit.</li>
+<li><strong>Sign in with OpenRouter</strong>, and a clear message when an OpenRouter key does not work.</li>
+<li><strong>Get beta builds</strong> (Settings → Development, and under the release notes in the version
+pill) — an opt-in channel that offers pre-release builds. Off for a release build, on for
+a beta build, until you choose.</li>
+<li><strong>Speed</strong> — long lists draw only what is on screen, tab switches no longer pop content in,
+a streamed reply no longer redraws the window for every word, and background timers run
+only while something is listening.</li>
+<li><strong>Fixes</strong> — the status bar&#x27;s numbers stay right after a conversation is compacted;
+ChatGPT-plan chats no longer claim &quot;Claude Code sessions only&quot;; the permission chip shows
+the real mode and keeps it across a resume; a stray Enter cannot answer a card in a chat
+you cannot see; sync refuses over-limit files honestly; Linux recovers sign-in when the
+keychain unlocks late; expanding the file panel no longer blanks another chat; on Windows,
+adding a file over one of the same name no longer silently did nothing.</li>
+<li><strong>Release checks</strong> — the installer launch check now confirms the app&#x27;s window actually
+renders (it had been watching for an unrelated log line, and could not catch a blank
+window), and every build of this release ran its full test suite on Windows, macOS and
+Linux.</li>
+</ul>
+<h2 id="124-2026-05-18" tabindex="-1">1.2.4 — 2026-05-18</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.143</p>
+<ul>
+<li><strong>Bug reports include a system check</strong> — what&#x27;s installed and whether GitHub is reachable,
+with personal paths and tokens removed, shown to you before sending.</li>
+<li><strong>Anonymous usage counts no longer double-count reinstalls.</strong> Still opt-out in Settings → About.</li>
+<li><strong>Privacy policy, terms and security policy</strong> published.</li>
+<li><strong>Fixed:</strong> Claude Code&#x27;s suggested next prompt sometimes sent itself without you typing it;
+Linux gaps (Node.js auto-install, window buttons, installs on minimal, Alpine and fish-shell
+systems); bug-report tools failing on Windows; theme particles drawing under the header.</li>
+</ul>
+<h2 id="123-2026-05-01" tabindex="-1">1.2.3 — 2026-05-01</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.126</p>
+<ul>
+<li><strong>Fixed:</strong> installing any marketplace plugin on Android failed with &quot;Permission denied&quot;
+since 1.2.0; installed plugins sometimes showing as not installed; false &quot;still waiting&quot;
+banners during long replies; skill cards flickering while a reply streamed; long links and
+paths overflowing chat bubbles.</li>
+</ul>
+<h2 id="122-2026-04-29" tabindex="-1">1.2.2 — 2026-04-29</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.123</p>
+<ul>
+<li><strong>Open Tasks</strong> — a status-bar chip listing the session&#x27;s active tasks.</li>
+<li><strong>Context popup</strong> — compact or clear the conversation from the status bar, with a plain
+explanation of what context is.</li>
+<li><strong>Resume browser filters</strong> — by project and tag, with sorting.</li>
+<li><strong>Auto permission mode</strong>, where your plan and model allow it.</li>
+<li><strong>Android</strong> — a new terminal that matches desktop, the back button closes popups first, and a
+phone-friendly marketplace.</li>
+<li><strong>Your own themes</strong> appear in the Library with a &quot;Local&quot; badge.</li>
+<li><strong>Claude Code installs with Anthropic&#x27;s own installer</strong> on desktop.</li>
+<li><strong>Anonymous, opt-out usage counts</strong> (no personal data; turn off in About).</li>
+<li><strong>Report a bug from inside the app</strong> (Settings → Development).</li>
+<li><strong>Long messages send reliably</strong> on Windows, plus about 50 smaller fixes.</li>
+</ul>
+<h2 id="121-2026-04-23" tabindex="-1">1.2.1 — 2026-04-23</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.119</p>
+<ul>
+<li><strong>Android</strong> — the keyboard slides smoothly with the input bar, terminal keys became chips in
+the input bar, <code>git push</code> and Google Drive sign-in work, and the git-branch and model chips
+show correctly.</li>
+<li><strong>Fixed:</strong> projects in folders with spaces or dashes in their names failing to open, sync or
+resume.</li>
+</ul>
+<h2 id="120-2026-04-22" tabindex="-1">1.2.0 — 2026-04-22</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.117</p>
+<ul>
+<li><strong>Update from inside the app</strong> — the version pill shows what&#x27;s new, then downloads and
+launches the installer.</li>
+<li><strong>Esc closes the top popup</strong>, or stops Claude when no popup is open.</li>
+<li><strong>Ctrl+O</strong> expands or collapses every tool card.</li>
+<li><strong>Clearer sync status</strong> — one pill in the status bar, with the most serious problem shown.</li>
+<li><strong>Smoother buddy dragging.</strong></li>
+<li><strong>Fixed:</strong> a crash that could empty the chat; the theme picker flickering after an install.</li>
+</ul>
+<h2 id="112-2026-04-21" tabindex="-1">1.1.2 — 2026-04-21</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.117</p>
+<ul>
+<li><strong>Theme Builder and the marketplace publisher come built in.</strong></li>
+<li><strong>Slash commands in the command drawer</strong>, alongside skills.</li>
+<li><strong>Report a bug, contribute or see known issues</strong> from Settings → Development.</li>
+<li><strong>Sync warnings come with a fix button</strong>, and large uploads no longer time out.</li>
+<li><strong>Fixed:</strong> the Windows app thinking it was Android (hiding theme backgrounds and limiting you
+to one session); Android remote pairing; helper instructions appearing in the chat as if you
+had typed them; several buddy and command-drawer glitches.</li>
+</ul>
+<h2 id="111-2026-04-20" tabindex="-1">1.1.1 — 2026-04-20</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.116</p>
+<ul>
+<li><strong>Desktop installers</strong> — 1.1.0 shipped for Android only; this release adds Windows, Mac and
+Linux.</li>
+<li><strong>A new About popup</strong>, and a restyled package picker on Android.</li>
+</ul>
+<h2 id="110-2026-04-20" tabindex="-1">1.1.0 — 2026-04-20</h2>
+<p><strong>Claude Code CLI baseline:</strong> v2.1.116</p>
+<ul>
+<li><strong>Buddy</strong> — a mascot that floats above your desktop, shows when a session needs you, and opens
+a mini chat. Hidden from screen shares on Windows.</li>
+<li><strong>Helper work shows inside its card</strong> — what a helper did appears as a timeline in the chat.</li>
+<li><strong>Sync warnings with fix buttons.</strong></li>
+<li><strong>Per-reply details</strong> — model, token use and why a reply stopped, optional under each reply.</li>
+<li><strong>Each session keeps its own model.</strong></li>
+<li><strong>Faster with many sessions open.</strong></li>
+<li><strong>Fixed:</strong> long pastes lost on Windows; messages sent twice in a row being dropped; rare lost
+messages; Android marketplace and theme installs.</li>
+</ul>
+<h2 id="101-2026-04-15" tabindex="-1">1.0.1 — 2026-04-15</h2>
+<ul>
+<li><strong>Fixed:</strong> leftover old-name icons, and first-party plugins not recognised as such.</li>
+</ul>
+<h2 id="100-2026-04-15" tabindex="-1">1.0.0 — 2026-04-15</h2>
+<p>First release under the YouCoded name.</p>
+      </article>
+    </div>
+  </div>
+</main>
+<footer class="site-footer">
+  <a href="index.html">← Back to home</a>
+  <nav class="policy-nav" aria-label="Site pages"><a href="privacy.html">Privacy</a>
+<a href="terms.html">Terms</a>
+<a href="security.html">Security</a>
+<a href="changelog.html" aria-current="page">Changelog</a></nav>
+  <a href="https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md">Source Markdown ↗</a>
+</footer>
+</body>
+</html>
