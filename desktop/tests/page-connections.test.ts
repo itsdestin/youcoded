@@ -107,3 +107,10 @@ describe('combinedRisk', () => {
     expect(combinedRisk([chats, session])).toBeNull();
   });
 });
+
+describe('the combined line and remembered websites', () => {
+  it('counts a site the page opens without asking as a way out', () => {
+    expect(combinedRisk([todoist], ['news.example.com'])).toBe('Together, this page could send what it reads from Todoist to news.example.com (opened in your browser).');
+    expect(combinedRisk([todoist], [])).toBeNull();
+  });
+});

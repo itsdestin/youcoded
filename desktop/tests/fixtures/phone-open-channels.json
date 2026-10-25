@@ -1,7 +1,7 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
  "_added_continue_turn": "2026-10-21: native:continue-turn (the chat error card's Try again and the step limit's Keep going) — Destin signed off this widening on 2026-10-21 (\"yes should work on phone\").",
- "total": 281,
+ "total": 283,
  "open": [
   "account:signed-in",
   "account:user",
@@ -137,8 +137,10 @@
   "pages:approve",
   "pages:delete-saved-key",
   "pages:fetch",
+  "pages:forget-open-site",
   "pages:get",
   "pages:list",
+  "pages:open-website",
   "pages:refresh",
   "pages:remove-connection",
   "pages:saved-keys",
@@ -184,7 +186,6 @@
   "session-naming:title",
   "session:browse",
   "session:claude-control",
-  "session:queue-action",
   "session:create",
   "session:destroy",
   "session:get-meta",
@@ -193,6 +194,7 @@
   "session:list",
   "session:menu-lock",
   "session:open",
+  "session:queue-action",
   "session:resize",
   "session:send-outcomes",
   "session:set-flag",
@@ -287,5 +289,6 @@
   "zoom:out",
   "zoom:reset"
  ],
- "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video)."
+ "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video).",
+ "_added_open_website": "2026-10-24: pages:open-website and pages:forget-open-site (a page's \"Open this website?\" and Page settings' remembered sites). Destin signed off this widening on 2026-10-24 (\"ok\", to: should \"Don't ask again for this site\" work from your phone too — recommended yes). A phone only records the site; it opens the address itself (open:false is forced for the phone door in main/ipc/pages.ts)."
 }

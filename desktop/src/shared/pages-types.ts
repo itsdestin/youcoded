@@ -442,6 +442,12 @@ export type PageApproveResult =
   | { ok: true; pages: PageSummary[] }
   | { ok: false; message: string };
 
+/** Opening a website for a page: the fresh list either way (a remembered site may
+ *  have been recorded), and the reason when the address could not be opened. */
+export type PageOpenResult =
+  | { ok: true; pages: PageSummary[] }
+  | { ok: false; message: string; pages: PageSummary[] };
+
 export interface PageSummary {
   /** `personal:<slug>` or `project:<project name>:<slug>` — the same on every
    *  device, so a synced pin matches (design review F3). */
@@ -546,11 +552,11 @@ export interface PagesBridge {
   approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => Promise<PageApproveResult>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
-  /** DESIGN STAGE (mock-only.ts): opens `url` in the browser for the page after
-   *  the person said yes; `remember` adds its site to the page's `openSites`. */
-  openWebsite?: (id: string, url: string, remember: boolean) => Promise<PageSummary[]>;
-  /** DESIGN STAGE (mock-only.ts): takes a site back off `openSites`, so links to
-   *  it ask again. */
+  /** Opens `url` in the browser for the page (main re-checks it); `remember` adds
+   *  its site to the page's `openSites`; `open: false` only records — the asking
+   *  screen (a phone's own browser) opens the address itself. */
+  openWebsite?: (id: string, url: string, remember: boolean, open: boolean) => Promise<PageOpenResult>;
+  /** Takes a site back off `openSites`, so links to it ask again. */
   forgetOpenSite?: (id: string, site: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */
   refresh?: (id: string) => Promise<PageSummary[]>;

@@ -31,6 +31,8 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     // the rule holds even if this file is bypassed entirely.
     approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => invoke('pages:approve', { id, keys, addresses }),
     removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
+    openWebsite: (id: string, url: string, remember: boolean, open: boolean) => invoke('pages:open-website', { id, url, remember, open }),
+    forgetOpenSite: (id: string, site: string) => invoke('pages:forget-open-site', { id, site }),
     refresh: (id: string) => invoke('pages:refresh', { id }),
     savedKeys: () => invoke('pages:saved-keys'),
     deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),

@@ -367,6 +367,8 @@ const IPC = {
   PAGES_CHANGED: 'pages:changed',
   PAGES_APPROVE: 'pages:approve',
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_OPEN_WEBSITE: 'pages:open-website',
+  PAGES_FORGET_OPEN_SITE: 'pages:forget-open-site',
   PAGES_REFRESH: 'pages:refresh',
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
@@ -2496,6 +2498,8 @@ contextBridge.exposeInMainWorld('claude', {
     // key from a phone is refused there rather than here.
     approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys, addresses }),
     removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, { id, connectionId }),
+    openWebsite: (id: string, url: string, remember: boolean, open: boolean) => ipcRenderer.invoke(IPC.PAGES_OPEN_WEBSITE, { id, url, remember, open }),
+    forgetOpenSite: (id: string, site: string) => ipcRenderer.invoke(IPC.PAGES_FORGET_OPEN_SITE, { id, site }),
     refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, { id }),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
     // Both parts: a key is identified by service AND address.

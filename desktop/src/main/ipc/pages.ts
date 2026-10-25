@@ -87,6 +87,20 @@ export const pagesChannels: MainChannelDef[] = [
     name: IPC.PAGES_REMOVE_CONNECTION, kind: 'handle', remoteOnError: failure,
     handler: async (p) => (await getPagesService()?.removeConnection(str(p?.id), str(p?.connectionId))) ?? [],
   }),
+  // "Open this website?" (pages-finish step 1). Both doors: a phone records "Don't ask
+  // again" too (Destin, 2026-10-24), and opens the address itself (`open: false`) so it
+  // appears on the phone, never on this computer's screen.
+  defineChannel({
+    name: IPC.PAGES_OPEN_WEBSITE, kind: 'handle',
+    remoteOnError: (e) => ({ ok: false as const, message: msg(e), pages: [] }),
+    handler: async (p, ctx) =>
+      (await getPagesService()?.openWebsite(str(p?.id), str(p?.url), p?.remember === true, ctx.door === 'remote' ? false : p?.open !== false))
+        ?? { ok: false as const, message: NOT_AVAILABLE, pages: [] },
+  }),
+  defineChannel({
+    name: IPC.PAGES_FORGET_OPEN_SITE, kind: 'handle', remoteOnError: failure,
+    handler: async (p) => (await getPagesService()?.forgetOpenSite(str(p?.id), str(p?.site))) ?? [],
+  }),
   defineChannel({
     name: IPC.PAGES_REFRESH, kind: 'handle', remoteOnError: failure,
     handler: async (p) => (await getPagesService()?.refresh(str(p?.id))) ?? [],

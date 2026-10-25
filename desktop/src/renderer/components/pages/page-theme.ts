@@ -75,6 +75,10 @@ export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
 /** Page start session (spec 2026-10-14). Page → host: `{ id, prompt, project? }`;
  *  host → page: `{ id, result: { ok } }` once the new-conversation window is
  *  open (not "a conversation started" — the person still presses Start). */
+/** Page → host: `{ url }` — open this address in the browser (pages-finish step 1). The
+ *  host decides whether to open it at once or ask first (shared/page-open-rule.ts); the
+ *  page hears nothing back, so it cannot tell which. */
+export const PAGE_OPEN_MESSAGE = 'youcoded:open';
 export const PAGE_SESSION_START_MESSAGE = 'youcoded:session:start';
 export const PAGE_SESSION_START_RESULT_MESSAGE = 'youcoded:session:start:result';
 /** Page chats (spec 2026-10-16). Page → host: `{ id, request: { op, … } }`; host → page: `{ id, result }`
@@ -166,6 +170,7 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
   var V_STOP = ${JSON.stringify(PAGE_VIDEO_STOP_MESSAGE)};
   var V_ACK = ${JSON.stringify(PAGE_VIDEO_ACK_MESSAGE)};
   var V_EVENT = ${JSON.stringify(PAGE_VIDEO_EVENT_MESSAGE)};
+  var OPEN = ${JSON.stringify(PAGE_OPEN_MESSAGE)};
   var SESSION = ${JSON.stringify(PAGE_SESSION_START_MESSAGE)};
   var SESSION_RESULT = ${JSON.stringify(PAGE_SESSION_START_RESULT_MESSAGE)};
   var MAX_PROMPT = ${MAX_PAGE_SESSION_PROMPT};
@@ -200,8 +205,33 @@ function bootstrap(dataJson: string, devicesJson = '{}', canStartSession = false
       try { parent.postMessage({ type: ESC }, '*'); } catch (err) {}
     }, 0);
   });
+  // Opening a website (pages-finish step 1). The frame no longer has popups at all,
+  // so links and window.open come here and the APP decides: open at once for a site
+  // the person already allowed, otherwise "Open this website?". Only http(s) and
+  // mailto: travel; the host checks every address again.
+  function askOpen(url) {
+    if (url === undefined || url === null || String(url) === '') return;
+    try { parent.postMessage({ type: OPEN, url: new URL(String(url), document.baseURI).href }, '*'); } catch (e) {}
+  }
+  try { window.open = function (url) { askOpen(url); return null; }; } catch (e) {}
+  // A link the page did not handle itself: never followed inside the frame (that
+  // would replace the page, and the address could carry what the page knows).
+  // Bubble phase on window, so a page that handles its own clicks (preventDefault)
+  // keeps them; a page that stops the click entirely is caught by the app's
+  // frame-navigation guard instead.
+  window.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0) return;
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.href;
+    if (!/^(https?:|mailto:)/i.test(href)) return;
+    e.preventDefault();
+    askOpen(href);
+  });
   window.youcoded = {
     data: ${dataJson},
+    /** Ask the app to open an address in the browser. */
+    open: function (url) { askOpen(url); },
     // Home-device deck, Q-address: the page suggested an address but the
     // person may have allowed another, so the page asks here where its device
     // is. Only ALLOWED devices appear; a page waiting for a yes sees none.

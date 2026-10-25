@@ -119,6 +119,7 @@ export class PagesStore {
         const updated = Math.max(htmlStat.mtimeMs, jsonStat?.mtimeMs ?? 0);
         next.set(id, { id, dir, slug: e.name, home: h.home });
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
+        const openSites = saved.openSites[approvalKey(h.home, e.name)] ?? [];
         // WHY a program line is approved only while its FILE still hashes to what was allowed (spec
         // 2026-10-16, program card: "If the file changes, the page asks again"). A missing file is not
         // approved either. Read once per program line per listing, and the file itself only when it moved.
@@ -159,6 +160,8 @@ export class PagesStore {
           updatedAt: new Date(updated).toISOString(),
           htmlStamp: Math.round(htmlStat.mtimeMs),
           ...(connections.length ? { connections } : {}),
+          // Sites the person told this page not to ask about (pages-finish step 1).
+          ...(openSites.length ? { openSites } : {}),
           // The band only appears once the page can actually reach something:
           // a time beside a paused page would be a time for nothing.
           // WHY a network line too: a page whose only line opens a new

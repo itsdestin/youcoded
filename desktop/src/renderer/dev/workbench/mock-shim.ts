@@ -4568,12 +4568,12 @@ function createPagesMock(scenario: string): PagesBridge {
     // Finishing Pages, step 1: opening records the site when the person said
     // not to ask again (nothing opens in the workbench); the bin forgets it.
     openWebsite: async (id, url, remember) => {
-      if (remember) {
+      if (remember && /^https?:/i.test(url)) {
         const host = new URL(url).hostname;
         pages = pages.map((p) => (p.id !== id || p.openSites?.includes(host) ? p : { ...p, openSites: [...(p.openSites ?? []), host] }));
         publish();
       }
-      return summaries();
+      return { ok: true as const, pages: summaries() };
     },
     forgetOpenSite: async (id, site) => {
       pages = pages.map((p) => (p.id !== id ? p : { ...p, openSites: (p.openSites ?? []).filter((s) => s !== site) }));

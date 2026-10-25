@@ -592,6 +592,8 @@ export const IPC = {
   // ---- Phase 2: connections, keys and the one door out of a page ----
   PAGES_APPROVE: 'pages:approve',
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_OPEN_WEBSITE: 'pages:open-website',
+  PAGES_FORGET_OPEN_SITE: 'pages:forget-open-site',
   PAGES_REFRESH: 'pages:refresh',
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',

@@ -1,9 +1,10 @@
 // PageHost — a page open inside the app (Phase 1 shell).
 //
-// The page runs in an iframe with the SAME sandbox HtmlView.tsx uses for HTML
-// previews — `allow-scripts allow-popups allow-forms`, never
+// The page runs in a sandboxed iframe — `allow-scripts allow-forms`, never
 // `allow-same-origin` — so it is an opaque origin that cannot script the app
-// (scope §4). Phase 1 adds no bridge into the frame; the only message that
+// (scope §4). No `allow-popups` since finishing Pages step 1: a page's links and
+// window.open come to the host as `youcoded:open`, which opens a site the person
+// already allowed or asks "Open this website?" first. Phase 1 adds no bridge into the frame; the only message that
 // crosses is the theme.
 //
 // Theme: page-theme.ts bakes the current tokens and the style kit into the
@@ -54,7 +55,9 @@ import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import type { PageStartSessionRequest } from './PageCreateDialog';
-import { usePages, setPagePinned, refreshPages } from './use-pages';
+import { usePages, setPagePinned, refreshPages, publishPages } from './use-pages';
+import { decidePageOpen, PAGE_FRAME_NAME } from '../../../shared/page-open-rule';
+import { getCapabilities } from '../../platform';
 import { usePageSockets } from './use-page-sockets';
 import { PAGE_EDGES_MESSAGE, PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
@@ -69,7 +72,7 @@ import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_CHATS_MESSAGE, PAGE_CHATS_RESULT_MESSAGE, PAGE_PROGRAM_MESSAGE, PAGE_PROGRAM_RESULT_MESSAGE,
   PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE,
-  PAGE_REFRESH_MESSAGE, PAGE_SESSION_START_MESSAGE, PAGE_SESSION_START_RESULT_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
+  PAGE_OPEN_MESSAGE, PAGE_REFRESH_MESSAGE, PAGE_SESSION_START_MESSAGE, PAGE_SESSION_START_RESULT_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -140,6 +143,9 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
+/** How long a page's further "Open this website?" asks are ignored after a Cancel. */
+const OPEN_QUIET_MS = 30_000;
+
 export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
@@ -189,7 +195,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Page settings from the band, and the "Open this website?" ask (pages-finish
   // step 1). Both are about the page on screen.
   const [pageSettingsOpen, setPageSettingsOpen] = useState(false);
-  const [openAsk, setOpenAsk] = useState<string | null>(null);
+  const [openAsk, setOpenAskState] = useState<string | null>(null);
+  // WHY a ref too (design review 1, finding 13): "one ask at a time" must hold
+  // between two messages in the same tick, before React has drawn the first.
+  const openAskRef = useRef<string | null>(null);
+  const setOpenAsk = (url: string | null) => { openAskRef.current = url; setOpenAskState(url); };
+  // After a Cancel a page's asks are ignored for a while, so a page cannot raise
+  // the question again the moment the person says no.
+  const quietUntilRef = useRef(new Map<string, number>());
   // The ask in the photo-only build: the analytics practice page (allowed to reach
   // YouCoded's service, not GitHub) wanting to open a GitHub address whose end
   // carries more than a plain link would.
@@ -208,6 +221,34 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
   const htmlStamp = summary?.htmlStamp ?? 0;
+
+  // A page asked to open an address (its link, window.open or youcoded.open).
+  // shared/page-open-rule.ts decides; a screen that cannot open addresses on
+  // this computer (a phone's own browser) always asks, because only a press on
+  // the question lets it open the address itself.
+  const requestOpenRef = useRef<(raw: unknown) => void>(() => {});
+  requestOpenRef.current = (raw) => {
+    if (!summary || !pageId) return;
+    const decision = decidePageOpen(raw, summary.connections ?? [], summary.openSites ?? []);
+    if (decision.action === 'refuse') return;
+    if (decision.action === 'open' && getCapabilities().openExternal) {
+      void pagesBridge()?.openWebsite?.(pageId, decision.url, false, true).then((r) => publishPages(r.pages)).catch(() => {});
+      return;
+    }
+    if (openAskRef.current !== null || (quietUntilRef.current.get(pageId) ?? 0) > Date.now()) return;
+    setOpenAsk(decision.url);
+  };
+  // Opening once the person said yes. A phone's own browser opens the address
+  // itself, inside this click (a browser only lets a click open a window), and
+  // main only records "Don't ask again".
+  const confirmOpen = async (url: string, remember: boolean): Promise<string | null> => {
+    const here = getCapabilities().openExternal;
+    if (!here) window.open(url, '_blank', 'noopener,noreferrer');
+    const r = await pagesBridge()?.openWebsite?.(pageId ?? '', url, remember, here);
+    if (!r) return here ? 'Opening addresses is not available here.' : null;
+    publishPages(r.pages);
+    return r.ok ? null : r.message;
+  };
 
   // What the LIST says about this page's approvals. It is not what the gate
   // reads (finding 17 — that is the loaded document, below), but a change to it
@@ -337,6 +378,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
+      if (d.type === PAGE_OPEN_MESSAGE) { requestOpenRef.current(d.url); return; }
       if (d.type === PAGE_SESSION_START_MESSAGE) {
         // Page start session (spec 2026-10-14, §4). Checked HERE, not trusted
         // from the bootstrap: page code can post this itself. Needs an approved
@@ -733,7 +775,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             <iframe
               ref={frameRef}
               srcDoc={load.doc}
-              sandbox="allow-scripts allow-popups allow-forms"
+              // WHY the name: main's frame guard (page-frame-guard.ts) learns which frames are
+              // pages by it, and refuses to let one navigate itself away (design §4).
+              name={PAGE_FRAME_NAME}
+              sandbox="allow-scripts allow-forms"
               className={`scroll-mask-frame absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
               title={title}
             />
@@ -744,7 +789,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     </div>
     <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
       onEdit={onEditPage ? (p) => { setPageSettingsOpen(false); onEditPage(p); } : undefined} />
-    <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onClose={() => setOpenAsk(null)} />
+    <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onConfirm={confirmOpen}
+      onClose={(cancelled) => { if (cancelled && pageId) quietUntilRef.current.set(pageId, Date.now() + OPEN_QUIET_MS); setOpenAsk(null); }} />
     </>
   );
 }

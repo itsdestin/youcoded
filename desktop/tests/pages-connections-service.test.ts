@@ -448,3 +448,34 @@ describe('a page that runs a program', () => {
     expect(await b).toMatchObject({ ok: false, reason: expect.stringContaining('stopped') });
   });
 });
+
+describe('opening a website for a page', () => {
+  it('opens through the injected opener and remembers the site only when asked', async () => {
+    const opened: string[] = [];
+    service.stop();
+    start({ openExternal: (url) => { opened.push(url); } });
+    await writePage('news', [{ id: 'feed', kind: 'public', address: 'hnrss.org' }]);
+    await service.listAndWatch();
+    const r = await service.openWebsite('personal:news', 'https://news.example.com/a?b=1', true, true);
+    expect(r.ok).toBe(true);
+    expect(opened).toEqual(['https://news.example.com/a?b=1']);
+    expect(r.pages[0].openSites).toEqual(['news.example.com']);
+    // A phone opens it itself: main only records.
+    await service.openWebsite('personal:news', 'https://other.example.com/', false, false);
+    expect(opened).toHaveLength(1);
+    expect((await service.forgetOpenSite('personal:news', 'news.example.com'))[0].openSites).toBeUndefined();
+  });
+
+  it('refuses anything that is not a web or mail address, and never remembers mail', async () => {
+    const opened: string[] = [];
+    service.stop();
+    start({ openExternal: (url) => { opened.push(url); } });
+    await writePage('news', [{ id: 'feed', kind: 'public', address: 'hnrss.org' }]);
+    await service.listAndWatch();
+    expect(await service.openWebsite('personal:news', 'javascript:alert(1)', true, true)).toMatchObject({ ok: false });
+    const mail = await service.openWebsite('personal:news', 'mailto:a@example.com', true, true);
+    expect(mail.ok).toBe(true);
+    expect(mail.pages[0].openSites).toBeUndefined();
+    expect(opened).toEqual(['mailto:a@example.com']);
+  });
+});

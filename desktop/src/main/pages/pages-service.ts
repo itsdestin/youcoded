@@ -11,6 +11,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
 import { fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
 import { kindOf } from './page-kinds';
+import { decidePageOpen } from '../../shared/page-open-rule';
 import { partsLayout } from './page-connection-fields';
 import { log } from '../logger';
 import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
@@ -24,7 +25,7 @@ import { PageLiveSockets, type LiveWsLike } from './page-live-socket';
 import { PageLiveVideos } from './page-live-video';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
-  PageApproveResult, PageConnection, PageFetchRequest, PageFetchResult,
+  PageApproveResult, PageConnection, PageOpenResult, PageFetchRequest, PageFetchResult,
   PageProgramResult, PageRefreshState, PageSummary, PlaidResult, SavedPageKey,
 } from '../../shared/pages-types';
 import { MAX_PAGE_PROGRAM_INPUT, PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
@@ -358,6 +359,40 @@ class PagesService {
     return { ok: true, pages };
   }
 
+  /**
+   * `pages:open-website` — the person said yes to "Open this website?", or the page
+   * asked for a site it may open without asking (pages-finish step 1). Re-checked here,
+   * whatever the screen decided: http(s) or mailto only, no user name or password in the
+   * address, at most 2,000 characters. `remember` records the site for this page (never
+   * for mailto); `open` is false when the asking screen opens the address itself (a
+   * phone's own browser — it must open on the phone, not on this computer).
+   */
+  async openWebsite(id: string, url: string, remember: boolean, open: boolean): Promise<PageOpenResult> {
+    const decision = decidePageOpen(url, [], []);
+    const pageKey = await this.store.approvalKeyFor(id);
+    if (decision.action === 'refuse' || !pageKey) {
+      return { ok: false, message: pageKey ? 'The app does not open that kind of address.' : 'This page is no longer in your library.', pages: await this.listAndWatch() };
+    }
+    if (remember && decision.site && this.deps.connections) {
+      try { await this.deps.connections.addOpenSite(pageKey, decision.site); }
+      catch (e) { return { ok: false, message: messageOf(e), pages: await this.listAndWatch() }; }
+    }
+    if (open) {
+      try { await (this.deps.openExternal ?? openInSystemBrowser)(decision.url); }
+      // The opener's own words: an Android app refuses mailto:, a computer with no
+      // mail program has nothing to open it with. Nothing else is guessed.
+      catch (e) { return { ok: false, message: `The address could not be opened. ${messageOf(e)}`, pages: await this.listAndWatch() }; }
+    }
+    return { ok: true, pages: await this.listAndWatch() };
+  }
+
+  /** `pages:forget-open-site` — links from this page to that site ask again. */
+  async forgetOpenSite(id: string, site: string): Promise<PageSummary[]> {
+    const pageKey = await this.store.approvalKeyFor(id);
+    if (pageKey && this.deps.connections) await this.deps.connections.removeOpenSite(pageKey, site).catch(() => { /* already gone */ });
+    return this.listAndWatch();
+  }
+
   /** Stop using one connection. The band goes with it: a time for a page that
    *  can no longer reach anything would be a time for nothing. */
   async removeConnection(id: string, connectionId: string): Promise<PageSummary[]> {
@@ -671,6 +706,14 @@ function partsComplete(typed: string, parts: ReadonlyArray<{ id: string; in: str
     const x = o[p.id];
     return typeof x === 'string' && x.trim() !== '' && x.length <= 1000 && !/[\r\n]/.test(x) && !(p.in === 'basic-user' && x.includes(':'));
   });
+}
+
+/** The system browser (or mail program), through Electron's shell — which on the
+ *  phone's headless backend is the shim that asks the Android app (the same route
+ *  openPlaidLink takes). Loaded on first use so tests never touch it. */
+async function openInSystemBrowser(url: string): Promise<void> {
+  const { shell } = await import('electron');
+  await shell.openExternal(url);
 }
 
 function messageOf(e: unknown): string {

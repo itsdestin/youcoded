@@ -73,7 +73,7 @@ function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onCo
         <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
           {list.length === 0 && <div className="text-xs text-fg-muted">This page reaches nothing outside itself.</div>}
           {list.map((c) => <ReachRow key={c.id} page={page} c={c} onConnect={onConnect} />)}
-          <CombinedRisk connections={list} />
+          <CombinedRisk connections={list} openSites={sites} />
           {list.length > 0 && (
             <div className="text-xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected services.</div>
           )}

@@ -174,8 +174,13 @@ function wayOut(c: PageConnection): { words: string; site?: string } | null {
  *  to the other. One sentence for the whole page, or null. A service reading and
  *  sending to ITSELF is not counted: that is just using it. Starting a
  *  conversation is not a way out — you see and send that message yourself. */
-export function combinedRisk(all: PageConnection[]): string | null {
-  const outs = all.map(wayOut).filter((o): o is NonNullable<typeof o> => o !== null);
+export function combinedRisk(all: PageConnection[], openSites: readonly string[] = []): string | null {
+  // WHY remembered sites count (design review 1, finding 14): a page may open
+  // them without asking, and an address can carry what the page read.
+  const outs = [
+    ...all.map(wayOut).filter((o): o is NonNullable<typeof o> => o !== null),
+    ...openSites.map((site) => ({ words: `to ${site} (opened in your browser)`, site: splitAddress(site).site })),
+  ];
   const reads = all.map(privateSource).filter((s): s is NonNullable<typeof s> => s !== null)
     .filter((s) => outs.some((o) => !o.site || o.site !== s.site));
   if (reads.length === 0) return null;
@@ -185,8 +190,8 @@ export function combinedRisk(all: PageConnection[]): string | null {
 
 /** The combined line as the app's notice box (amber: a warning about fit, not
  *  an error). Under the list it is about, never inside one line. */
-export function CombinedRisk({ connections }: { connections: PageConnection[] }) {
-  const words = combinedRisk(connections);
+export function CombinedRisk({ connections, openSites }: { connections: PageConnection[]; openSites?: readonly string[] }) {
+  const words = combinedRisk(connections, openSites);
   return words ? <div data-combined-risk><Callout tone="warning" compact>{words}</Callout></div> : null;
 }
 
@@ -652,7 +657,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           Q-combined): the risk is two lines together, any two, so it is said
           once about the page — and on a re-ask it counts what was already
           allowed, because the new line may be the second half. */}
-      <CombinedRisk connections={shown.concat(already)} />
+      <CombinedRisk connections={shown.concat(already)} openSites={page.openSites} />
     </div>
 
     {failureState}
