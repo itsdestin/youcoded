@@ -18,7 +18,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { PageFileEntry, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { fileKind } from '../../../shared/artifacts/categorization';
-import { Button, CARD_LEVEL_1, ErrorState, LoadingState, SearchFilterPill, SectionLabel, SegmentedTabs, TextInput, Tooltip } from '../ui';
+import { Button, CARD_LEVEL_1, ErrorState, LoadingState, Menu, MenuRadioItem, SearchFilterPill, SectionLabel, SegmentedTabs, TextInput, Tooltip } from '../ui';
+import { ChevronDown } from '../ui/ChevronDown';
 import { Dialog } from '../ui/Dialog';
 import { FileKindIcon, FolderIcon, GridViewIcon, ListViewIcon } from '../project-view/icons';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
@@ -78,10 +79,16 @@ export function PageFileChooser({ page, mode, onChoose, onClose }: {
 
 function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mode: FileChooserMode; onChoose: (c: { folder: string; file: string }) => void; onClose: () => void }) {
   const narrow = useNarrowViewport();
-  const layout: 'top' | 'side' = workbenchParam('pagesChooserLayout') === 'side' && !narrow ? 'side' : 'top';
+  // Round 3 (Destin, 2026-10-24): the places column won ("i like side"), narrower; and a
+  // concept to compare — the places in a menu on a folder button that starts the path,
+  // which takes no room of its own. A phone always uses the menu or the row.
+  const asked = workbenchParam('pagesChooserLayout');
+  const layout: 'top' | 'side' | 'menu' = asked === 'menu' ? 'menu' : asked === 'side' && !narrow ? 'side' : asked === 'side' ? 'menu' : 'top';
+  const [placesOpen, setPlacesOpen] = useState(() => workbenchParam('pagesChooserPlaces') === 'open');
   // The folder shown, as path segments under Home ([] = Home itself).
   const [trail, setTrail] = useState<string[]>(() => (workbenchParam('pagesChooserAt') ?? '').split('/').filter(Boolean));
-  const [view, setView] = useState<View>(() => (workbenchParam('pagesChooserView') === 'tiles' ? 'tiles' : 'list'));
+  // Tiles first for someone new (Destin: "we should default to tiles for new users").
+  const [view, setView] = useState<View>(() => (workbenchParam('pagesChooserView') === 'list' ? 'list' : 'tiles'));
   const [sort, setSort] = useState<{ by: Sort; up: boolean }>({ by: 'name', up: true });
   const [query, setQuery] = useState('');
   const [entries, setEntries] = useState<PageFileEntry[] | null>(null);
@@ -137,18 +144,32 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
   );
 
   const places = (asColumn: boolean) => (
-    <div className={asColumn ? 'flex flex-col gap-0.5 w-36 shrink-0' : 'scroll-mask-x overflow-x-auto flex items-center gap-1 py-0.5'} role="navigation" aria-label="Places on your computer" data-file-chooser-places={asColumn ? 'side' : 'top'}>
+    <div className={asColumn ? 'flex flex-col gap-0.5 w-28 shrink-0' : 'scroll-mask-x overflow-x-auto flex items-center gap-1 py-0.5'} role="navigation" aria-label="Places on your computer" data-file-chooser-places={asColumn ? 'side' : 'top'}>
       {PLACES.map((p) => {
         const here = p.trail.join('/') === folder;
         return (
           <Button key={p.label} size="sm" variant={here ? 'secondary' : 'ghost'} onClick={() => { setTrail(p.trail); setPicked(null); }}
-            className={asColumn ? 'w-full justify-start gap-2' : 'shrink-0 gap-1.5'}>
+            className={asColumn ? 'w-full justify-start gap-1.5 px-2' : 'shrink-0 gap-1.5'}>
             <FolderIcon size={14} />{p.label}
           </Button>
         );
       })}
     </div>
   );
+
+  // Outside the path's sideways scroll, so the menu is never clipped by it.
+  const placesMenu = layout === 'menu' && (
+        <Menu open={placesOpen} onOpenChange={setPlacesOpen} label="Places on your computer"
+          trigger={(
+            <Button size="sm" variant="secondary" aria-label="Places on your computer" aria-expanded={placesOpen} className="shrink-0 gap-1 px-2" onClick={() => setPlacesOpen(!placesOpen)}>
+              <FolderIcon size={14} /><ChevronDown className="w-3 h-3" />
+            </Button>
+          )}>
+          {PLACES.map((p) => (
+            <MenuRadioItem key={p.label} checked={p.trail.join('/') === (trail[0] ?? '')} onSelect={() => { setTrail(p.trail); setPicked(null); }}>{p.label}</MenuRadioItem>
+          ))}
+        </Menu>
+      );
 
   const trailRow = (
     <div className="scroll-mask-x overflow-x-auto flex items-center gap-1 min-w-0 flex-1" data-file-chooser-trail>
@@ -213,6 +234,7 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
   const filesMain = (
     <div className="flex flex-col gap-1.5 min-w-0 flex-1">
       <div className="flex items-center gap-2 px-0.5">
+        {placesMenu}
         {trailRow}
         <SegmentedTabs aria-label="File view" value={view} onChange={(v) => setView(v as View)}
           tabs={[{ id: 'list', label: <ListViewIcon size={14} />, title: 'List' }, { id: 'tiles', label: <GridViewIcon size={14} />, title: 'Tiles' }]} />
@@ -230,7 +252,7 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
   // One card holds the places and the files (guide: nothing bare on the popup).
   const filesCard = (
     <div className={`${CARD_LEVEL_1} p-1.5 flex ${layout === 'side' ? 'flex-row items-start gap-3' : 'flex-col gap-1.5'}`}>
-      {places(layout === 'side')}
+      {layout !== 'menu' && places(layout === 'side')}
       {filesMain}
     </div>
   );
