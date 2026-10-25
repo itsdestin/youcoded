@@ -12,9 +12,8 @@
 // tiles/list view kinda like project view… project view prob has too much stuff/too
 // big. we should be able to fit a lot of files"): a tiles / list switch as in Projects →
 // Files, but compact — small tiles, dense rows with when each file changed and its
-// size, sortable columns, search inside the folder, and quick places. Two layouts are
-// on the review deck: the places as a row of chips over the files ('top'), or as a
-// column beside them ('side', wide windows only).
+// size, sortable columns, search inside the folder, and quick places — which ended up
+// (round 3) in a menu on the first item of the path. Tiles first for someone new.
 import React, { useEffect, useMemo, useState } from 'react';
 import type { PageFileEntry, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { fileKind } from '../../../shared/artifacts/categorization';
@@ -79,11 +78,9 @@ export function PageFileChooser({ page, mode, onChoose, onClose }: {
 
 function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mode: FileChooserMode; onChoose: (c: { folder: string; file: string }) => void; onClose: () => void }) {
   const narrow = useNarrowViewport();
-  // Round 3 (Destin, 2026-10-24): the places column won ("i like side"), narrower; and a
-  // concept to compare — the places in a menu on a folder button that starts the path,
-  // which takes no room of its own. A phone always uses the menu or the row.
-  const asked = workbenchParam('pagesChooserLayout');
-  const layout: 'top' | 'side' | 'menu' = asked === 'menu' ? 'menu' : asked === 'side' && !narrow ? 'side' : asked === 'side' ? 'menu' : 'top';
+  // Round 3 (Destin, 2026-10-24, step 2e deck): the places live in a menu on the first
+  // item of the path — "the name of the folder should be in the dropdown as the first
+  // breadcrumb item" — so they take no row or column, and a phone shows the same.
   const [placesOpen, setPlacesOpen] = useState(() => workbenchParam('pagesChooserPlaces') === 'open');
   // The folder shown, as path segments under Home ([] = Home itself).
   const [trail, setTrail] = useState<string[]>(() => (workbenchParam('pagesChooserAt') ?? '').split('/').filter(Boolean));
@@ -143,41 +140,32 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
     </div>
   );
 
-  const places = (asColumn: boolean) => (
-    <div className={asColumn ? 'flex flex-col gap-0.5 w-28 shrink-0' : 'scroll-mask-x overflow-x-auto flex items-center gap-1 py-0.5'} role="navigation" aria-label="Places on your computer" data-file-chooser-places={asColumn ? 'side' : 'top'}>
-      {PLACES.map((p) => {
-        const here = p.trail.join('/') === folder;
-        return (
-          <Button key={p.label} size="sm" variant={here ? 'secondary' : 'ghost'} onClick={() => { setTrail(p.trail); setPicked(null); }}
-            className={asColumn ? 'w-full justify-start gap-1.5 px-2' : 'shrink-0 gap-1.5'}>
-            <FolderIcon size={14} />{p.label}
-          </Button>
-        );
-      })}
-    </div>
+  // The first item of the path is the place you are in (Home, Documents, Pictures…), and
+  // it IS the menu of places. The rest of the path follows it. Kept outside the path's
+  // sideways scroll, so the menu is never clipped by it.
+  const root = PLACES.some((p) => p.trail[0] === trail[0] && p.trail.length === 1) ? trail[0] : null;
+  const rest = root ? trail.slice(1) : trail;
+  const placesMenu = (
+    <Menu open={placesOpen} onOpenChange={setPlacesOpen} label="Places on your computer"
+      trigger={(
+        <Button size="sm" variant="secondary" aria-label={`${root ?? 'Home'} — places on your computer`} aria-expanded={placesOpen}
+          className="shrink-0 gap-1.5 px-2" onClick={() => setPlacesOpen(!placesOpen)}>
+          <FolderIcon size={14} /><span className={rest.length === 0 ? 'text-fg font-medium' : ''}>{root ?? 'Home'}</span><ChevronDown className="w-3 h-3" />
+        </Button>
+      )}>
+      {PLACES.map((p) => (
+        <MenuRadioItem key={p.label} checked={(p.trail[0] ?? null) === root} onSelect={() => { setTrail(p.trail); setPicked(null); }}>{p.label}</MenuRadioItem>
+      ))}
+    </Menu>
   );
-
-  // Outside the path's sideways scroll, so the menu is never clipped by it.
-  const placesMenu = layout === 'menu' && (
-        <Menu open={placesOpen} onOpenChange={setPlacesOpen} label="Places on your computer"
-          trigger={(
-            <Button size="sm" variant="secondary" aria-label="Places on your computer" aria-expanded={placesOpen} className="shrink-0 gap-1 px-2" onClick={() => setPlacesOpen(!placesOpen)}>
-              <FolderIcon size={14} /><ChevronDown className="w-3 h-3" />
-            </Button>
-          )}>
-          {PLACES.map((p) => (
-            <MenuRadioItem key={p.label} checked={p.trail.join('/') === (trail[0] ?? '')} onSelect={() => { setTrail(p.trail); setPicked(null); }}>{p.label}</MenuRadioItem>
-          ))}
-        </Menu>
-      );
 
   const trailRow = (
     <div className="scroll-mask-x overflow-x-auto flex items-center gap-1 min-w-0 flex-1" data-file-chooser-trail>
-      {['Home', ...trail].map((seg, i) => (
+      {rest.map((seg, i) => (
         <React.Fragment key={`${i}-${seg}`}>
-          {i > 0 && <span aria-hidden="true" className="text-fg-faint text-xs">›</span>}
-          <button type="button" onClick={() => { setTrail(trail.slice(0, i)); setPicked(null); }}
-            className={`shrink-0 px-1.5 py-0.5 rounded-md text-xs transition-colors ${i === trail.length ? 'text-fg font-medium' : 'text-fg-muted hover:text-fg hover:bg-inset'}`}>
+          <span aria-hidden="true" className="text-fg-faint text-xs">›</span>
+          <button type="button" onClick={() => { setTrail(trail.slice(0, trail.length - rest.length + i + 1)); setPicked(null); }}
+            className={`shrink-0 px-1.5 py-0.5 rounded-md text-xs transition-colors ${i === rest.length - 1 ? 'text-fg font-medium' : 'text-fg-muted hover:text-fg hover:bg-inset'}`}>
             {seg}
           </button>
         </React.Fragment>
@@ -249,10 +237,9 @@ function ChooserBody({ page, mode, onChoose, onClose }: { page: PageSummary; mod
       )}
     </div>
   );
-  // One card holds the places and the files (guide: nothing bare on the popup).
+  // One card holds the path, the places menu and the files (guide: nothing bare on the popup).
   const filesCard = (
-    <div className={`${CARD_LEVEL_1} p-1.5 flex ${layout === 'side' ? 'flex-row items-start gap-3' : 'flex-col gap-1.5'}`}>
-      {layout !== 'menu' && places(layout === 'side')}
+    <div className={`${CARD_LEVEL_1} p-1.5 flex flex-col gap-1.5`}>
       {filesMain}
     </div>
   );
