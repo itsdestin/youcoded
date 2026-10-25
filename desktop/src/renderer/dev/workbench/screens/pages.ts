@@ -108,6 +108,11 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-photo-board#chosen', 'view', 'approval'), open: ['Choose folder…'], newIn: 'after' },
   { ...pg('pages/page/page-budget', 'view', 'approval'), newIn: 'after' },
   { ...pg('pages/page/page-file-browser', 'view', 'approval'), newIn: 'after' },
+  // YouCoded's own file chooser for a phone's browser (step 2 deck, Q-remote-pick).
+  { ...pg('pages/page/file-chooser', 'dialog'), newIn: 'after' },
+  { ...pg('pages/page/file-chooser#budgets', 'dialog'), params: { pagesChooserAt: 'Documents/Budgets' }, open: [{ do: 'click', target: { role: 'option', labelStarts: 'Budget 2026.xlsx', nth: 1 } }], newIn: 'after' },
+  { ...pg('pages/page/file-chooser#save', 'dialog'), params: { pagesChooser: 'save', pagesChooserAt: 'Documents/Budgets' }, newIn: 'after' },
+  { ...pg('pages/page/file-chooser#phone', 'dialog', 'narrow'), params: { pagesChooserAt: 'Documents/Budgets' }, viewport: PHONE, newIn: 'after' },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on

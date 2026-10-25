@@ -44,7 +44,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
-import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
+import { isWorkbenchDocument, isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageHome, PageLoadFailure, PageProgramResult, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
@@ -66,6 +66,7 @@ import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
 import { PageSettingsDialog } from './PageSettings';
 import { PageOpenWebsite } from './PageOpenWebsite';
+import { PageFileChooser, type FileChooserMode } from './PageFileChooser';
 import { CogIcon } from '../project-view/icons';
 import { usePaneGlass } from './use-pane-glass';
 import {
@@ -206,6 +207,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The ask in the photo-only build: the analytics practice page (allowed to reach
   // YouCoded's service, not GitHub) wanting to open a GitHub address whose end
   // carries more than a plain link would.
+  // YouCoded's own file chooser (pages-finish step 2), shown to a page used from a
+  // phone's browser; in the photo-only build, on the Budget practice page.
+  const [chooser, setChooser] = useState<FileChooserMode | null>(null);
+  useScreenOpen('pages/page/file-chooser', () => {
+    dispatch({ type: 'PAGE_OPENED', pageId: 'page-budget' });
+    const save = isWorkbenchMode() && new URLSearchParams(location.search).get('pagesChooser') === 'save';
+    setChooser(save ? { kind: 'save', suggestedName: 'Budget 2026 (October).xlsx', types: ['.xlsx', '.csv'] } : { kind: 'open', types: ['.xlsx', '.csv'] });
+  });
   useScreenOpen('pages/page/open-website', () => {
     dispatch({ type: 'PAGE_OPENED', pageId: 'page-analytics' });
     setOpenAsk('https://github.com/itsdestin/youcoded/releases/tag/v1.3.2?from=analytics&today=412&month=2186');
@@ -795,6 +804,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     </div>
     <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
       onEdit={onEditPage ? (p) => { setPageSettingsOpen(false); onEditPage(p); } : undefined} />
+    <PageFileChooser page={chooser ? summary : null} mode={chooser} onChoose={() => setChooser(null)} onClose={() => setChooser(null)} />
     <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onConfirm={confirmOpen}
       onClose={(cancelled) => { if (cancelled && pageId) quietUntilRef.current.set(pageId, Date.now() + OPEN_QUIET_MS); setOpenAsk(null); }} />
     </>

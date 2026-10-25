@@ -204,6 +204,11 @@ export type PageConnection =
   | { id: string; kind: 'files'; level: PageFileLevel; access: PageFileAccess; types?: string[] };
 
 export type PageFileLevel = 'pick' | 'remember' | 'folder' | 'all';
+
+/** One row of YouCoded's own file chooser (a page used from a phone's browser):
+ *  a folder or a file in a folder under the computer's home, never a password or
+ *  key file. */
+export interface PageFileEntry { name: string; kind: 'folder' | 'file'; size?: number }
 export type PageFileAccess = 'read' | 'write' | 'readwrite';
 
 /** Which chats a `chats` connection covers. */
@@ -586,6 +591,10 @@ export interface PagesBridge {
    *  folder window. Answers a token main keeps the real path behind, and the folder
    *  as the person reads it (`~/Pictures/Family`). Desktop only. */
   chooseFolder?: () => Promise<{ ok: true; token: string; display: string } | { ok: false }>;
+  /** DESIGN STAGE (mock-only.ts, step 2): one folder of the computer, under its home,
+   *  for YouCoded's own file chooser on a phone (`folder` is `Documents/Budgets`;
+   *  '' is home). Password and key files are never listed. */
+  listFolder?: (folder: string) => Promise<{ ok: true; entries: PageFileEntry[] } | { ok: false; message: string }>;
   /** DESIGN STAGE (mock-only.ts, step 2): change the folder an approved folder line
    *  reaches, from Page settings. */
   setFolder?: (id: string, connectionId: string, token: string) => Promise<PageSummary[]>;

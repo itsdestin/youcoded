@@ -249,7 +249,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
   'pages.openWebsite', 'pages.forgetOpenSite',
   // Finishing Pages, step 2 (files): designed ahead of the backend; rows in mock-only.ts.
-  'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile',
+  'pages.chooseFolder', 'pages.setFolder', 'pages.forgetFile', 'pages.listFolder',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
@@ -4582,6 +4582,17 @@ function createPagesMock(scenario: string): PagesBridge {
     // Step 2 (files): the Choose folder window answers one practice folder; the
     // token stands for it the way main's would stand for a real path.
     chooseFolder: async () => ({ ok: true as const, token: 'tok-family', display: '~/Pictures/Family' }),
+    // A small practice home for YouCoded's own file chooser (no real disk here).
+    listFolder: async (folder: string) => {
+      const tree: Record<string, Array<{ name: string; kind: 'folder' | 'file'; size?: number }>> = {
+        '': [{ name: 'Desktop', kind: 'folder' }, { name: 'Documents', kind: 'folder' }, { name: 'Downloads', kind: 'folder' }, { name: 'Pictures', kind: 'folder' }, { name: 'notes.txt', kind: 'file', size: 2140 }],
+        Documents: [{ name: 'Budgets', kind: 'folder' }, { name: 'Recipes', kind: 'folder' }, { name: 'Lease 2026.pdf', kind: 'file', size: 482113 }, { name: 'Taxes 2025.xlsx', kind: 'file', size: 88230 }],
+        'Documents/Budgets': [{ name: 'Budget 2026.xlsx', kind: 'file', size: 41230 }, { name: 'Budget 2025.xlsx', kind: 'file', size: 39811 }, { name: 'Bills.csv', kind: 'file', size: 3120 }, { name: 'Receipts', kind: 'folder' }, { name: 'Notes about the budget.docx', kind: 'file', size: 18200 }],
+      };
+      await delay(150);
+      const list = tree[folder] ?? [];
+      return { ok: true as const, entries: [...list].sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'folder' ? -1 : 1)) };
+    },
     setFolder: async (id, connectionId, token) => {
       const display = token === 'tok-family' ? '~/Pictures/Family' : token;
       pages = pages.map((p) => (p.id !== id ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, folder: display } : c)) }));
