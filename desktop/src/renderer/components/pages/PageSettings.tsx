@@ -30,22 +30,23 @@ function homeWords(page: PageSummary): string {
   return page.home.kind === 'personal' ? 'Personal' : page.home.kind === 'builtin' ? 'Built in' : page.home.name;
 }
 
-export function PageSettingsDialog({ page, onClose, onConnect }: { page: PageSummary | null; onClose: () => void; onConnect: (pageId: string) => void }) {
+export function PageSettingsDialog({ page, onClose, onConnect, onEdit }: { page: PageSummary | null; onClose: () => void; onConnect: (pageId: string) => void; onEdit?: (page: PageSummary) => void }) {
   return (
     <Dialog screen="pages/library/settings" open={page !== null} onClose={onClose} layer={3} size="document" title="Page settings">
-      {page && <PageSettingsBody page={page} onConnect={onConnect} />}
+      {page && <PageSettingsBody page={page} onConnect={onConnect} onEdit={onEdit} />}
     </Dialog>
   );
 }
 
-function PageSettingsBody({ page, onConnect }: { page: PageSummary; onConnect: (pageId: string) => void }) {
+function PageSettingsBody({ page, onConnect, onEdit }: { page: PageSummary; onConnect: (pageId: string) => void; onEdit?: (page: PageSummary) => void }) {
   const list = page.connections ?? [];
   const sites = page.openSites ?? [];
   return (
     <div className="flex flex-col gap-4" data-page-settings={page.id}>
       {/* The subject card: no label above it (guide "A label comes first" —
           the card about the popup's own subject is the exception). */}
-      <div className={`${CARD_LEVEL_1} p-3 flex items-start gap-3`}>
+      <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-3`}>
+      <div className="flex items-start gap-3">
         <span aria-hidden="true" className="shrink-0 w-10 h-10 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">
           <PageGlyph icon={page.icon} customIcon={page.customIcon} className="w-5 h-5" />
         </span>
@@ -57,6 +58,14 @@ function PageSettingsBody({ page, onConnect }: { page: PageSummary; onConnect: (
           </div>
           {page.description && <div className="text-xs text-fg-muted leading-relaxed">{page.description}</div>}
         </div>
+      </div>
+      {/* WHY here (step 1 review, S-card-gear: "edit could probably become a
+          button within settings instead of its own icon"): the card keeps two
+          quick buttons, and changing the page sits with everything else about it.
+          Outlined: it only opens more (guide "Buttons"). Full width, alone. */}
+      {onEdit && (
+        <Button variant="secondary" className="w-full" data-page-settings-edit onClick={() => onEdit(page)}>Edit in chat</Button>
+      )}
       </div>
 
       <section className="flex flex-col gap-2">

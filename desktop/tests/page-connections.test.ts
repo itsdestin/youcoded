@@ -1,7 +1,7 @@
 // The sentences a person approves are the permission model's whole surface,
 // so the wording rules decided on the Phase 2 questions decks are pinned here.
 import { describe, expect, it } from 'vitest';
-import { describeConnection, needsApproval, splitAddress } from '../src/renderer/components/pages/page-connections';
+import { combinedRisk, describeConnection, needsApproval, splitAddress } from '../src/renderer/components/pages/page-connections';
 import type { PageConnection, PageSummary } from '../src/shared/pages-types';
 
 const ALL: PageConnection[] = [
@@ -74,5 +74,36 @@ describe('needsApproval', () => {
   it('is true while any one line is waiting', () => {
     expect(needsApproval(page([{ id: 'a', kind: 'youcoded', approved: true }, { id: 'd', kind: 'public', address: 'hnrss.org', approved: false }]))).toBe(true);
     expect(needsApproval(page([{ id: 'a', kind: 'youcoded', approved: true }]))).toBe(false);
+  });
+});
+
+// The one "Together, this page could send…" line (pages-finish deck 1, Q-combined).
+// It appears for ANY pair of reads-something-private + can-send-elsewhere, and never
+// for a service reading and sending to itself.
+
+const calendar: PageConnection = { id: 'icloud', kind: 'key', service: 'iCloud Calendar', address: 'caldav.icloud.com', access: 'full' };
+const weather: PageConnection = { id: 'w', kind: 'public', address: 'api.open-meteo.com' };
+const todoist: PageConnection = { id: 't', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full' };
+const chats: PageConnection = { id: 'c', kind: 'chats', access: 'lookup', scope: { all: true } };
+const program: PageConnection = { id: 'p', kind: 'program', file: 'work-items.mjs' };
+const session: PageConnection = { id: 's', kind: 'session' };
+
+describe('combinedRisk', () => {
+  it('names what a keyed service reads and the other site it could reach', () => {
+    expect(combinedRisk([calendar, weather])).toBe('Together, this page could send what it reads from iCloud Calendar to open-meteo.com.');
+  });
+
+  it('counts a program as a way out to anywhere', () => {
+    expect(combinedRisk([chats, program, session])).toBe('Together, this page could send your chat list anywhere, using work-items.mjs.');
+  });
+
+  it('is silent for a service that reads and sends only to itself', () => {
+    expect(combinedRisk([todoist])).toBeNull();
+  });
+
+  it('is silent when nothing private is read, and when there is no way out', () => {
+    expect(combinedRisk([weather])).toBeNull();
+    // Starting a conversation is not a way out: the person sees and sends it.
+    expect(combinedRisk([chats, session])).toBeNull();
   });
 });

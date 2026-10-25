@@ -18,7 +18,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ScreenError, SectionLabel, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
-import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
+import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PageSettingsDialog } from './PageSettings';
 import { CogIcon } from '../project-view/icons';
@@ -109,27 +109,28 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && !failed && builtin.length > 0 && (
             <Section label="Built in">
               {builtin.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
         </div>
       </main>
-      <PageSettingsDialog page={settingsPage} onClose={() => setSettingsFor(null)} onConnect={(id) => { setSettingsFor(null); openPage(id); }} />
+      <PageSettingsDialog page={settingsPage} onClose={() => setSettingsFor(null)} onConnect={(id) => { setSettingsFor(null); openPage(id); }}
+        onEdit={(p) => { setSettingsFor(null); onEditPage(p); }} />
     </div>
   );
 }
@@ -147,7 +148,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function PageCard({ page, onOpen, onEdit, onSettings, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; onSettings: () => void; pinFull: boolean }) {
+function PageCard({ page, onOpen, onSettings, pinFull }: { page: PageSummary; onOpen: () => void; onSettings: () => void; pinFull: boolean }) {
   // The card is one button (open); the pin is a second control INSIDE it, so
   // it stops propagation. The pin is always visible — unlike a theme card's
   // favourite star it sits on text, not on a picture (guide §4.4).
@@ -170,18 +171,7 @@ function PageCard({ page, onOpen, onEdit, onSettings, pinFull }: { page: PageSum
           <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
-        {/* A built-in page is part of the app: nothing to edit in chat. */}
-        {page.home.kind !== 'builtin' && <Tooltip text="Edit in chat" placement="bottom">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={`Edit ${page.name} in chat`}
-            onClick={(e) => { e.stopPropagation(); onEdit(); }}
-          >
-            {/* Colour on the glyph, not the Button: the primitive owns its own text colour. */}
-            <span className="text-fg-muted"><EditGlyph /></span>
-          </Button>
-        </Tooltip>}
+        {/* Edit in chat moved into Page settings (step 1 review, S-card-gear). */}
         {/* Page settings (pages-finish deck 2, Q-settingswindow): one window per
             page, opened here and from the page's band. A built-in page has no
             settings of its own. */}

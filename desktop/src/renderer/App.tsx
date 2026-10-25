@@ -4,6 +4,7 @@
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import type { PageSummary } from '../shared/pages-types';
 import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
 import { sendClaudeCommand, stopClaudeTurn } from './state/claude-control';
 import { createConversationQueueActions } from './state/conversation-queue-actions';
@@ -759,6 +760,13 @@ function AppInner() {
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate, offerPageSession] = usePageCreate();
+  // Edit in chat for a page, from Page settings in the library or on an open page.
+  // A project page starts in its project so the creator skill finds the folder.
+  const editPage = useCallback((page: PageSummary) => setPageCreate({
+    title: `Edit ${page.name}`,
+    initialInput: `/page-builder edit "${page.name}" `,
+    cwd: page.home.kind === 'project' ? page.home.path : undefined,
+  }), [setPageCreate]);
   // Document comments' Ask Your Assistant on the Projects screen (review deck
   // Q-1): the same new-session dialog, started in that file's project with the
   // request waiting in the composer (FilesTab raises the event).
@@ -4095,11 +4103,7 @@ function AppInner() {
         // names the page; a project page starts in its project so the skill
         // finds the folder. The dialog leaves pages once the session exists.
         onMakePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
-        onEditPage={(page) => setPageCreate({
-          title: `Edit ${page.name}`,
-          initialInput: `/page-builder edit "${page.name}" `,
-          cwd: page.home.kind === 'project' ? page.home.path : undefined,
-        })}
+        onEditPage={editPage}
       />
       <PageHost
         load={screensReady || artifactState.pageViewOpen}
@@ -4110,6 +4114,8 @@ function AppInner() {
         onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
         // WHY (page start session, spec 2026-10-14): a page's button opens this SAME window, its message waiting; nothing is sent until Start, then Enter. Refused while it is open (review F2).
         onStartSession={offerPageSession}
+        // Page settings' Edit in chat, opened from an open page's top bar.
+        onEditPage={editPage}
       />
       <PageCreateDialog
         request={pageCreate}

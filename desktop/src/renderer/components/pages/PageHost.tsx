@@ -130,6 +130,8 @@ interface PageHostProps {
    *  new-session window with the message waiting, and returns false when that
    *  window is already open (review F2). Absent = refused. */
   onStartSession?: (req: PageStartSessionRequest) => boolean;
+  /** Page settings' Edit in chat, the same as the library's (step 1 review). */
+  onEditPage?: (page: PageSummary) => void;
 }
 
 type Load =
@@ -138,7 +140,7 @@ type Load =
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
-export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession }: PageHostProps) {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage, projectRoot = null, onStartSession, onEditPage }: PageHostProps) {
   // Narrow selectors (perf, 2026-09-23): only the page flags this host shows.
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pageViewOpen);
@@ -740,7 +742,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </div>
       </div>
     </div>
-    <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)} />
+    <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)}
+      onEdit={onEditPage ? (p) => { setPageSettingsOpen(false); onEditPage(p); } : undefined} />
     <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onClose={() => setOpenAsk(null)} />
     </>
   );
