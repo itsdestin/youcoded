@@ -211,9 +211,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // phone's browser; in the photo-only build, on the Budget practice page.
   const [chooser, setChooser] = useState<FileChooserMode | null>(null);
   useScreenOpen('pages/page/file-chooser', () => {
-    dispatch({ type: 'PAGE_OPENED', pageId: 'page-budget' });
-    const save = isWorkbenchMode() && new URLSearchParams(location.search).get('pagesChooser') === 'save';
-    setChooser(save ? { kind: 'save', suggestedName: 'Budget 2026 (October).xlsx', types: ['.xlsx', '.csv'] } : { kind: 'open', types: ['.xlsx', '.csv'] });
+    const params = new URLSearchParams(isWorkbenchMode() ? location.search : '');
+    // Pictures belong to the Photo board practice page, spreadsheets to Budget.
+    const photos = (params.get('pagesChooserAt') ?? '').startsWith('Pictures');
+    dispatch({ type: 'PAGE_OPENED', pageId: photos ? 'page-photo-board' : 'page-budget' });
+    const types = photos ? ['.jpg', '.png'] : ['.xlsx', '.csv'];
+    setChooser(params.get('pagesChooser') === 'save' ? { kind: 'save', suggestedName: 'Budget 2026 (October).xlsx', types } : { kind: 'open', types });
   });
   useScreenOpen('pages/page/open-website', () => {
     dispatch({ type: 'PAGE_OPENED', pageId: 'page-analytics' });

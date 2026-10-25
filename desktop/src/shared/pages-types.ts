@@ -208,7 +208,14 @@ export type PageFileLevel = 'pick' | 'remember' | 'folder' | 'all';
 /** One row of YouCoded's own file chooser (a page used from a phone's browser):
  *  a folder or a file in a folder under the computer's home, never a password or
  *  key file. */
-export interface PageFileEntry { name: string; kind: 'folder' | 'file'; size?: number }
+export interface PageFileEntry {
+  name: string; kind: 'folder' | 'file'; size?: number;
+  /** When it last changed (ISO). */
+  modified?: string;
+  /** A small picture of the file (a data: link), for pictures only — made on the
+   *  computer, so the phone never downloads the full file to show a tile. */
+  thumb?: string;
+}
 export type PageFileAccess = 'read' | 'write' | 'readwrite';
 
 /** Which chats a `chats` connection covers. */

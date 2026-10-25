@@ -4584,14 +4584,27 @@ function createPagesMock(scenario: string): PagesBridge {
     chooseFolder: async () => ({ ok: true as const, token: 'tok-family', display: '~/Pictures/Family' }),
     // A small practice home for YouCoded's own file chooser (no real disk here).
     listFolder: async (folder: string) => {
-      const tree: Record<string, Array<{ name: string; kind: 'folder' | 'file'; size?: number }>> = {
-        '': [{ name: 'Desktop', kind: 'folder' }, { name: 'Documents', kind: 'folder' }, { name: 'Downloads', kind: 'folder' }, { name: 'Pictures', kind: 'folder' }, { name: 'notes.txt', kind: 'file', size: 2140 }],
-        Documents: [{ name: 'Budgets', kind: 'folder' }, { name: 'Recipes', kind: 'folder' }, { name: 'Lease 2026.pdf', kind: 'file', size: 482113 }, { name: 'Taxes 2025.xlsx', kind: 'file', size: 88230 }],
-        'Documents/Budgets': [{ name: 'Budget 2026.xlsx', kind: 'file', size: 41230 }, { name: 'Budget 2025.xlsx', kind: 'file', size: 39811 }, { name: 'Bills.csv', kind: 'file', size: 3120 }, { name: 'Receipts', kind: 'folder' }, { name: 'Notes about the budget.docx', kind: 'file', size: 18200 }],
+      // Dates a few days back from now, so the Changed column reads naturally.
+      const ago = (days: number, h = 10) => new Date(Date.now() - days * 86_400_000 - h * 3_600_000).toISOString();
+      // A soft two-colour picture per photo, standing in for a real thumbnail.
+      const thumb = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="40" height="30" fill="url(#g)"/><circle cx="29" cy="9" r="4" fill="#fff" opacity=".6"/><path d="M0 30 L14 14 L24 24 L30 18 L40 28 V30Z" fill="#000" opacity=".25"/></svg>`)}`;
+      const pal = [['#f6a96b', '#c4547a'], ['#7ec8e3', '#3a6ea5'], ['#9bd77e', '#3e8d5a'], ['#f5d76e', '#e08e45'], ['#c39be3', '#6a4c93'], ['#f28b82', '#b23a48']];
+      const photos = Array.from({ length: 24 }, (_, i) => ({ name: `IMG_${2401 + i}.jpg`, kind: 'file' as const, size: 2_100_000 + i * 73_000, modified: ago(i * 2), thumb: thumb(pal[i % 6][0], pal[i % 6][1]) }));
+      const tree: Record<string, Array<{ name: string; kind: 'folder' | 'file'; size?: number; modified?: string; thumb?: string }>> = {
+        '': [{ name: 'Desktop', kind: 'folder' }, { name: 'Documents', kind: 'folder' }, { name: 'Downloads', kind: 'folder' }, { name: 'Pictures', kind: 'folder' }, { name: 'notes.txt', kind: 'file', size: 2140, modified: ago(1) }],
+        Documents: [{ name: 'Budgets', kind: 'folder' }, { name: 'Recipes', kind: 'folder' }, { name: 'Lease 2026.pdf', kind: 'file', size: 482113, modified: ago(40) }, { name: 'Taxes 2025.xlsx', kind: 'file', size: 88230, modified: ago(200) }],
+        'Documents/Budgets': [
+          { name: 'Receipts', kind: 'folder' }, { name: 'Archive', kind: 'folder' },
+          { name: 'Budget 2026.xlsx', kind: 'file', size: 41230, modified: ago(0, 2) }, { name: 'Budget 2025.xlsx', kind: 'file', size: 39811, modified: ago(300) },
+          { name: 'Budget 2024.xlsx', kind: 'file', size: 37120, modified: ago(660) }, { name: 'Bills.csv', kind: 'file', size: 3120, modified: ago(3) },
+          { name: 'Groceries by week.csv', kind: 'file', size: 9800, modified: ago(5) }, { name: 'Holiday savings.xlsx', kind: 'file', size: 15400, modified: ago(12) },
+          { name: 'Car loan payments.csv', kind: 'file', size: 4200, modified: ago(20) }, { name: 'Utilities 2026.csv', kind: 'file', size: 6100, modified: ago(8) },
+          { name: 'Subscriptions.xlsx', kind: 'file', size: 12100, modified: ago(30) }, { name: 'Notes about the budget.docx', kind: 'file', size: 18200, modified: ago(9) },
+        ],
+        Pictures: [{ name: 'Family', kind: 'folder' }, { name: 'Screenshots', kind: 'folder' }, ...photos],
       };
       await delay(150);
-      const list = tree[folder] ?? [];
-      return { ok: true as const, entries: [...list].sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'folder' ? -1 : 1)) };
+      return { ok: true as const, entries: tree[folder] ?? [] };
     },
     setFolder: async (id, connectionId, token) => {
       const display = token === 'tok-family' ? '~/Pictures/Family' : token;

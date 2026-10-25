@@ -109,10 +109,13 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-budget', 'view', 'approval'), newIn: 'after' },
   { ...pg('pages/page/page-file-browser', 'view', 'approval'), newIn: 'after' },
   // YouCoded's own file chooser for a phone's browser (step 2 deck, Q-remote-pick).
-  { ...pg('pages/page/file-chooser', 'dialog'), newIn: 'after' },
-  { ...pg('pages/page/file-chooser#budgets', 'dialog'), params: { pagesChooserAt: 'Documents/Budgets' }, open: [{ do: 'click', target: { role: 'option', labelStarts: 'Budget 2026.xlsx', nth: 1 } }], newIn: 'after' },
+  { ...pg('pages/page/file-chooser', 'dialog'), params: { pagesChooserAt: 'Documents/Budgets', pagesChooserPick: 'Budget 2026.xlsx' }, newIn: 'after' },
+  { ...pg('pages/page/file-chooser#tiles', 'dialog'), params: { pagesChooserAt: 'Pictures', pagesChooserView: 'tiles', pagesChooserPick: 'IMG_2403.jpg' }, newIn: 'after' },
+  { ...pg('pages/page/file-chooser#side', 'dialog'), params: { pagesChooserAt: 'Documents/Budgets', pagesChooserLayout: 'side', pagesChooserPick: 'Budget 2026.xlsx' }, newIn: 'after' },
+  { ...pg('pages/page/file-chooser#side-tiles', 'dialog'), params: { pagesChooserAt: 'Pictures', pagesChooserLayout: 'side', pagesChooserView: 'tiles', pagesChooserPick: 'IMG_2403.jpg' }, newIn: 'after' },
   { ...pg('pages/page/file-chooser#save', 'dialog'), params: { pagesChooser: 'save', pagesChooserAt: 'Documents/Budgets' }, newIn: 'after' },
   { ...pg('pages/page/file-chooser#phone', 'dialog', 'narrow'), params: { pagesChooserAt: 'Documents/Budgets' }, viewport: PHONE, newIn: 'after' },
+  { ...pg('pages/page/file-chooser#phone-tiles', 'dialog', 'narrow'), params: { pagesChooserAt: 'Pictures', pagesChooserView: 'tiles' }, viewport: PHONE, newIn: 'after' },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on
