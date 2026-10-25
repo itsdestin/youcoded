@@ -77,7 +77,7 @@ interface ConnectionsFile {
 }
 
 /** At most this many remembered sites per page. */
-export const MAX_OPEN_SITES = 50;
+const MAX_OPEN_SITES = 50;
 
 export const UNKNOWN_VERSION_MESSAGE =
   'The saved page connections on this computer were written by a newer version of YouCoded, so they cannot be read here. Nothing was changed.';
@@ -320,7 +320,7 @@ function parseFile(raw: string): ConnectionsSnapshot {
 
 /** A remembered site: a hostname, lower case, no trailing dot, plain characters.
  *  Re-checked on every read, so a hand-edited file cannot store anything else. */
-export function cleanSite(raw: unknown): string | null {
+function cleanSite(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const host = raw.trim().replace(/\.$/, '').toLowerCase();
   return host.length > 0 && host.length <= 253 && /^[a-z0-9.-]+$/.test(host) && !host.startsWith('.') ? host : null;

@@ -137,8 +137,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
   const entries = CHANNEL_TABLE.filter((d) => inFamily(d.name));
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;
 
-  it('the table holds all 60 channels of the group', () => {
-    expect(entries).toHaveLength(60); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 20 pages (10 + 4 socket + 3 video + plaid + 2 program) + 3 singles
+  it('the table holds all 62 channels of the group', () => {
+    expect(entries).toHaveLength(62); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 22 pages (12 + 4 socket + 3 video + plaid + 2 program) + 3 singles
   });
 
   it('exactly these are open to a phone; everything else is refused', () => {
@@ -147,7 +147,7 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'artifacts:list-project', 'artifacts:list-projects-index', 'artifacts:list-session', 'artifacts:read-binary',
       'artifacts:resolve-path', 'artifacts:search-content', 'artifacts:unwatch-project', 'artifacts:watch-project',
       'chatsearch:read', 'chatsearch:resolve', 'file:upload', 'fs:read-head', 'get-home-path',
-      'pages:approve', 'pages:delete-saved-key', 'pages:fetch', 'pages:get', 'pages:list', 'pages:refresh',
+      'pages:approve', 'pages:delete-saved-key', 'pages:fetch', 'pages:forget-open-site', 'pages:get', 'pages:list', 'pages:open-website', 'pages:refresh',
       'pages:remove-connection', 'pages:saved-keys', 'pages:set-data', 'pages:set-pinned',
       // The live socket and camera video (HA-pages branch): open to a phone, each owned by the phone that opened it.
       'pages:socket-close', 'pages:socket-open', 'pages:socket-ping', 'pages:socket-send', 'pages:video-ping', 'pages:video-start', 'pages:video-stop',

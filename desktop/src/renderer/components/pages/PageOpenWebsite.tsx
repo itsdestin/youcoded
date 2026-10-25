@@ -34,7 +34,7 @@ function FullAddress({ url }: { url: URL }) {
   const rest = `${url.port ? `:${url.port}` : ''}${url.pathname === '/' && !url.search && !url.hash ? '' : url.pathname}${url.search}${url.hash}`;
   return (
     <div className={`${CARD_LEVEL_2} px-3 py-2 text-sm leading-relaxed break-all select-text max-h-32 overflow-y-auto scroll-mask`} data-open-address={url.hostname}>
-      <span className="text-fg-dim">{url.protocol}//{prefix}</span>
+      <span className="text-fg-dim">{`${url.protocol}//${prefix}`}</span>
       <span className="text-fg font-medium">{site}</span>
       <span className="text-fg-dim">{rest}</span>
     </div>
