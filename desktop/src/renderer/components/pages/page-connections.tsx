@@ -443,13 +443,33 @@ function KeyHelp({ c }: { c: KeyedLine }) {
  *  it and never sees its path: YouCoded keeps it. Shown the way the person reads it.
  *  On a phone the window cannot appear, so the card says where to finish instead —
  *  the same treatment as typing a key. Also used by Page settings to change it. */
-export function FolderField({ folder, onChoose, canChoose, label = 'Choose folder…' }: { folder: string | undefined; onChoose: () => void; canChoose: boolean; label?: string }) {
+export function FolderField({ folder, onChoose, canChoose, label = 'Choose folder…' }: {
+  folder: string | undefined;
+  /** Opens the computer's Choose folder window; answers why a folder was refused, if it was. */
+  onChoose: () => Promise<string | undefined>;
+  canChoose: boolean;
+  label?: string;
+}) {
+  // WHY a waiting line (Destin, 2026-10-25, dev window: "seemed to get stuck loading"): the
+  // folder window is the computer's own and can open behind YouCoded, so the card says what it is
+  // waiting for; and a refused folder (home itself, a hidden or passwords folder) says why, instead
+  // of the card silently staying as it was.
+  const [choosing, setChoosing] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const choose = async () => {
+    setChoosing(true); setProblem(null);
+    try { setProblem((await onChoose()) ?? null); }
+    catch { setProblem('The folder window could not be opened.'); }
+    finally { setChoosing(false); }
+  };
   return (
     <div className="flex flex-col gap-1.5" data-folder-field>
       <div className={`${CARD_LEVEL_2} flex items-center gap-2 pl-3 pr-1.5 py-1.5`}>
         <span className={`min-w-0 flex-1 truncate text-sm ${folder ? 'text-fg' : 'text-fg-muted'}`} title={folder}>{folder ?? 'No folder chosen yet'}</span>
-        {canChoose && <Button variant="secondary" size="sm" onClick={onChoose}>{folder ? 'Change…' : label}</Button>}
+        {canChoose && <Button variant="secondary" size="sm" disabled={choosing} onClick={() => { void choose(); }}>{choosing ? 'Choosing…' : folder ? 'Change…' : label}</Button>}
       </div>
+      {choosing && <div className="text-xs text-fg-muted leading-relaxed" data-folder-waiting>Choose the folder in the window that opened. If you can't see it, it may be behind YouCoded.</div>}
+      {problem && <div className="text-xs text-destructive-fg leading-relaxed" data-folder-problem>{problem}</div>}
       {!canChoose && <div className="text-xs text-fg-muted leading-relaxed">Choose the folder on your computer: the folder window cannot open on a phone.</div>}
     </div>
   );
@@ -549,9 +569,10 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   // The Android app's own pages cannot use files yet (card #203): its files are the phone's,
   // which need Android's own permissions. Said on the button, like "Finish on your computer".
   const filesUnavailable = shown.some((c) => c.kind === 'files') && !getCapabilities().pageFiles;
-  const chooseFolder = async (id: string) => {
+  const chooseFolder = async (id: string): Promise<string | undefined> => {
     const r = await bridge()?.chooseFolder?.();
-    if (r?.ok) setFolders((m) => ({ ...m, [id]: { token: r.token, display: r.display } }));
+    if (r?.ok) { setFolders((m) => ({ ...m, [id]: { token: r.token, display: r.display } })); return undefined; }
+    return r && 'message' in r ? r.message : undefined;
   };
 
   const keyLines: KeyedLine[] = shown.flatMap((c): KeyedLine[] =>
@@ -703,7 +724,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />
             )}
             {c.kind === 'files' && c.level === 'folder' && (
-              <FolderField folder={folders[c.id]?.display} canChoose={here} onChoose={() => { void chooseFolder(c.id); }} />
+              <FolderField folder={folders[c.id]?.display} canChoose={here} onChoose={() => chooseFolder(c.id)} />
             )}
             {c.kind === 'files' && c.level === 'all' && (
               <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-all-files-means>

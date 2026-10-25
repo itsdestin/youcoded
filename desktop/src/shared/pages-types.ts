@@ -630,7 +630,7 @@ export interface PagesBridge {
   /** The computer's own Choose
    *  folder window. Answers a token main keeps the real path behind, and the folder
    *  as the person reads it (`~/Pictures/Family`). Desktop only. */
-  chooseFolder?: () => Promise<{ ok: true; token: string; display: string } | { ok: false }>;
+  chooseFolder?: () => Promise<{ ok: true; token: string; display: string } | { ok: false; message?: string }>;
   /** One folder of the computer, under its home, for YouCoded's own file chooser on a
    *  phone (`folder` is `Documents/Budgets`; '' is home). Answered only while that page
    *  has an `ask` waiting for this same screen. Password and key files are never listed. */

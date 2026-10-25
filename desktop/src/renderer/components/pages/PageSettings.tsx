@@ -123,10 +123,11 @@ function ReachRow({ page, c, onConnect }: { page: PageSummary; c: NonNullable<Pa
   const [confirming, setConfirming] = useState(false);
   // Files (step 2): change the folder, or forget one remembered file. Neither can
   // widen what the page reaches, so neither asks first.
-  const changeFolder = async () => {
+  const changeFolder = async (): Promise<string | undefined> => {
     const b = bridge();
     const r = await b?.chooseFolder?.();
-    if (r?.ok && b?.setFolder) publishPages(await b.setFolder(page.id, c.id, r.token));
+    if (r?.ok && b?.setFolder) { publishPages(await b.setFolder(page.id, c.id, r.token)); return undefined; }
+    return r && 'message' in r ? r.message : undefined;
   };
   const forgetFile = async (fileId: string) => {
     const b = bridge();
@@ -142,7 +143,7 @@ function ReachRow({ page, c, onConnect }: { page: PageSummary; c: NonNullable<Pa
     <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-2`} data-reach-row={c.kind}>
       <ConnectionLine c={c} small />
       {c.kind === 'files' && c.level === 'folder' && c.approved && (
-        <FolderField folder={c.folder} canChoose={getCapabilities().openInOs} onChoose={() => { void changeFolder(); }} />
+        <FolderField folder={c.folder} canChoose={getCapabilities().openInOs} onChoose={changeFolder} />
       )}
       {c.kind === 'files' && c.level === 'remember' && c.approved && (
         (c.remembered ?? []).length === 0
