@@ -91,6 +91,9 @@ const FILES_READ_DENY_BASENAMES = new Set(['wallet.dat', '.bashrc', '.zshrc', '.
 
 export function isReadDenied(canonical: string, ctx: GuardContext): boolean {
   if (isPhoneDeniedPath(canonical, ctx.home)) return true;
+  // YouCoded's own folders (its settings, other pages' folders and data) are never read by a
+  // page either, not only never written (code review 1, finding 3).
+  if (ctx.protectedRoots.some((r) => within(canonical, r))) return true;
   const c = canonical.toLowerCase();
   const parts = c.split('/');
   const base = parts[parts.length - 1] ?? '';
@@ -107,8 +110,12 @@ const WRITE_DENY_UNDER_HOME = [
   '.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.xprofile', '.xinitrc', '.xsession',
   '.config/fish/', '.config/autostart/', '.config/systemd/', '.config/environment.d/', '.config/plasma-workspace/', '.local/bin/',
   '.local/share/applications/', '.claude/', '.ssh/', 'library/launchagents/', 'library/application support/youcoded',
-  'appdata/roaming/microsoft/windows/start menu/programs/startup/', '.gitconfig', '.npmrc',
+  'appdata/roaming/microsoft/windows/start menu/programs/startup/', '.gitconfig', '.npmrc', 'bin/', 'go/bin/',
 ];
+/** At the `all` level, whole trees of app and system settings: on Windows `AppData` (Start Menu,
+ *  npm's folder on PATH, WindowsApps…), on macOS `Library` — a write there can run later (code
+ *  review 1, finding 1). */
+const ALL_LEVEL_WRITE_DENY_TREES = ['appdata/', 'library/'];
 
 /** How a write was reached: a file the person `chosen` in an Open/Save window, inside an
  *  approved `folder`, or anywhere at the `all` level. Only `all` is confined to home: a
@@ -121,8 +128,10 @@ export function isWriteDenied(canonical: string, ctx: GuardContext, level: Write
   if (!within(canonical, ctx.home)) return level !== 'chosen';
   const rel = canonical.slice(ctx.home.replace(/\/+$/, '').length + 1).toLowerCase();
   if (WRITE_DENY_UNDER_HOME.some((p) => (p.endsWith('/') ? `${rel}/`.startsWith(p) : rel === p || rel.startsWith(`${p}/`)))) return true;
-  // At `all`, every hidden folder (or file) directly under home is configuration: never written.
-  if (level === 'all' && rel.startsWith('.')) return true;
+  // Every hidden folder or file directly under home is configuration (.vimrc, .bash_logout,
+  // .config…): never written, at any level — a Save window included (code review 1, finding 2).
+  if (rel.startsWith('.')) return true;
+  if (level === 'all' && ALL_LEVEL_WRITE_DENY_TREES.some((t) => `${rel}/`.startsWith(t))) return true;
   return false;
 }
 
@@ -142,6 +151,9 @@ export function folderChoiceProblem(canonical: string, ctx: GuardContext): strin
 // ── Opening, confined ───────────────────────────────────────────────────────────────
 
 const NOFOLLOW = (fs.constants as Record<string, number | undefined>).O_NOFOLLOW ?? 0;
+/** WHY non-blocking: a file swapped for a pipe between the check and the open would otherwise
+ *  hang a worker thread forever (code review 1, finding 10). Harmless for a regular file. */
+const NONBLOCK = (fs.constants as Record<string, number | undefined>).O_NONBLOCK ?? 0;
 
 export type Refused = { refused: string };
 const refuse = (refused: string): Refused => ({ refused });
@@ -165,11 +177,14 @@ export async function resolveInside(root: string, segs: string[]): Promise<{ roo
   return { rootReal, real: `${p.replace(/\/+$/, '')}/${segs[segs.length - 1]}`, exists: false };
 }
 
-export interface Opened { fh: fs.promises.FileHandle; real: string; size: number; dev: number; ino: number }
+/** `created`: the file was made just now (empty), so a failed write may remove it again. */
+export interface Opened { fh: fs.promises.FileHandle; real: string; size: number; dev: number; ino: number; created?: boolean }
 
 /** Open an existing regular file inside `root` for reading. */
-export async function openForRead(root: string, segs: string[], ctx: GuardContext, folderLevel: boolean): Promise<Opened | Refused> {
-  if (segs.some(badSegment)) return refuse('That name cannot be used.');
+/** `named`: false for a file the person chose themselves (its real name may hold a `:` or a
+ *  trailing dot), true for a path the page wrote, whose every segment must be clean. */
+export async function openForRead(root: string, segs: string[], ctx: GuardContext, folderLevel: boolean, named = true): Promise<Opened | Refused> {
+  if (named && segs.some(badSegment)) return refuse('That name cannot be used.');
   const r = await resolveInside(root, segs);
   if ('refused' in r) return r;
   if (!r.exists) return refuse('That file is not there any more.');
@@ -190,7 +205,7 @@ export async function openForWrite(root: string, segs: string[], ctx: GuardConte
     try { fh = await fs.promises.open(r.real, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o644); }
     catch { return refuse('The file could not be created there.'); }
     const st = await fh.stat();
-    return { fh, real: r.real, size: 0, dev: st.dev, ino: st.ino };
+    return { fh, real: r.real, size: 0, dev: st.dev, ino: st.ino, created: true };
   }
   if (!r.exists) return refuse('That file is not there any more.');
   return openChecked(r.real, fs.constants.O_WRONLY | NOFOLLOW, level === 'folder');
@@ -201,7 +216,7 @@ async function openChecked(real: string, flags: number, folderLevel: boolean): P
   const before = await fs.promises.lstat(real).catch(() => null);
   if (!before?.isFile()) return refuse('Only ordinary files can be opened by a page.');
   let fh: fs.promises.FileHandle;
-  try { fh = await fs.promises.open(real, flags | NOFOLLOW); } catch { return refuse('That file could not be opened.'); }
+  try { fh = await fs.promises.open(real, flags | NOFOLLOW | NONBLOCK); } catch { return refuse('That file could not be opened.'); }
   const st = await fh.stat().catch(() => null);
   if (!st || !st.isFile() || st.dev !== before.dev || st.ino !== before.ino || (folderLevel && st.nlink > 1)) {
     await fh.close().catch(() => {});

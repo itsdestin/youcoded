@@ -35,13 +35,15 @@ export async function addThumbs(dir: string, entries: Array<{ name: string; kind
 }
 
 async function thumbBytes(file: string, size: number, type: string): Promise<{ data: Buffer; type: string; length: number } | null> {
-  if (size <= SMALL_IMAGE_BYTES) {
-    const data = await fs.promises.readFile(file);
-    return data.length <= SMALL_IMAGE_BYTES ? { data, type, length: data.length } : null;
-  }
-  if (type !== 'image/jpeg') return null;
+  if (size > SMALL_IMAGE_BYTES && type !== 'image/jpeg') return null;
   const fh = await fs.promises.open(file, 'r');
   try {
+    if (size <= SMALL_IMAGE_BYTES) {
+      // At most one byte past the limit is read: a file that grew since it was listed is skipped, never read whole.
+      const buf = Buffer.alloc(SMALL_IMAGE_BYTES + 1);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      return bytesRead <= SMALL_IMAGE_BYTES ? { data: buf.subarray(0, bytesRead), type, length: bytesRead } : null;
+    }
     const head = Buffer.alloc(Math.min(size, EXIF_HEAD_BYTES));
     const { bytesRead } = await fh.read(head, 0, head.length, 0);
     const preview = exifPreview(head.subarray(0, bytesRead));

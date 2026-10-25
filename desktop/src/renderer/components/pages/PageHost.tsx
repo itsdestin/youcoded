@@ -508,6 +508,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         }
         // Only the host's own ops reach main: a page cannot answer an ask for itself.
         if (op === 'choose' || op === 'cancel' || op === 'close') { answer({ ok: false, op, code: 'BAD_REQUEST', message: 'The page asked for something the app does not do.' }); return; }
+        // An Open or Save window only from a real press in THIS page (the bootstrap checks too, but
+        // page code can post on its own): no windows on a timer (code review 1, finding 4).
+        if (op === 'pick' || op === 'saveAs') {
+          const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+          if (!ua?.isActive || document.activeElement !== frameRef.current) {
+            answer({ ok: false, op, code: 'NOT_ALLOWED', message: 'Open and Save windows open only when you press something on the page.' }); return;
+          }
+        }
         bridge.files(pageId, request).then((r) => {
           if (r.ok && r.ask) {
             // Keep Save as's contents here, so they cross to the computer once, with the choice.
@@ -636,6 +644,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }, [runsPrograms, pageId, programFrame]);
   // Files a page picked are let go when its frame goes away (closed, switched, rebuilt), so a
   // handle never outlives the page that was given it (files design review 1, finding 7).
+  // A chooser left open belongs to the page that asked: switching pages closes it, so it never
+  // shows another page's name over an ask main would refuse (code review 1, finding 11).
+  useEffect(() => () => {
+    const call = chooserCallRef.current;
+    if (!call) return;
+    chooserCallRef.current = null;
+    setChooser(null);
+    call.answer({ ok: false, op: 'cancel', code: 'CANCELLED', message: 'The page was closed.' });
+  }, [pageId]);
   const usesFiles = open && load.state === 'ready' && !awaitingApproval && !!loadedPage?.connections?.some((c) => c.kind === 'files' && c.approved);
   useEffect(() => {
     if (!usesFiles || pageId === null || !getCapabilities().pageFiles) return;

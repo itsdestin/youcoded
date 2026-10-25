@@ -90,6 +90,9 @@ export class PageFiles {
   private readonly asks = new Map<string, Ask>();
   private readonly folderTokens = new Map<string, { path: string; ownerKey: string; expires: number }>();
   private inFlight = 0;
+  /** Pages (per window) with an Open or Save window showing: one at a time, so a page cannot
+   *  stack windows or reopen them in a loop behind the person's back (code review 1, finding 4). */
+  private readonly windowOpen = new Set<string>();
 
   constructor(private readonly deps: PageFilesDeps) {}
 
@@ -184,7 +187,7 @@ export class PageFiles {
         const line = this.chooserLine(access, 'read');
         const types = cleanTypes(req.types ?? line.types);
         if (caller.remote || !this.deps.showOpen) return { ok: true, op: req.op, ask: this.newAsk(caller, pageId, line, 'open', !!req.multiple, types) };
-        const paths = await this.deps.showOpen(caller.sender, { types, multiple: !!req.multiple });
+        const paths = await this.oneWindow(caller, pageId, () => this.deps.showOpen!(caller.sender, { types, multiple: !!req.multiple }));
         if (!paths?.length) no('CANCELLED', 'Nothing was chosen.');
         const files: PageFileHandle[] = [];
         for (const p of paths!) {
@@ -201,7 +204,7 @@ export class PageFiles {
         const suggestedName = cleanSuggested(req.suggestedName);
         if (caller.remote || !this.deps.showSave) return { ok: true, op: req.op, ask: { ...this.newAsk(caller, pageId, line, 'save', false, types), suggestedName } };
         const data = decode(req.data ?? '', req.encoding, cap);
-        const target = await this.deps.showSave(caller.sender, { suggestedName, types });
+        const target = await this.oneWindow(caller, pageId, () => this.deps.showSave!(caller.sender, { suggestedName, types }));
         if (!target) no('CANCELLED', 'Nothing was saved.');
         // The Save window already asked before replacing an existing file.
         const real = await this.writeChosen(target!, data, ctx, true);
@@ -213,7 +216,7 @@ export class PageFiles {
         if (!ask || ask.pageId !== pageId || ask.ownerKey !== caller.ownerKey || ask.expires < Date.now()) no('CANCELLED', 'This file window has closed. Ask again.');
         const line = access.lines.find((l) => l.id === ask!.lineId) ?? no('NOT_ALLOWED', 'This page is no longer allowed to use your files.');
         const segs = cleanRelative(req.folder);
-        if (!segs || segs.some((x) => x.startsWith('.')) || badSegment(req.file)) no('BAD_REQUEST', 'That name cannot be used.');
+        if (!segs || segs.some((x) => x.startsWith('.')) || badSegment(req.file) || req.file.startsWith('.')) no('BAD_REQUEST', 'That name cannot be used.');
         const target = `${ctx.home.replace(/\/+$/, '')}/${[...segs!, req.file].join('/')}`;
         if (ask!.kind === 'open') {
           const real = canonicalize(await fs.promises.realpath(target).catch(() => no('REFUSED', 'That file is not there any more.')), null);
@@ -221,8 +224,9 @@ export class PageFiles {
           return { ok: true, op: req.op, files: [await this.hold(caller, pageId, access, line, real)] };
         }
         const data = decode(req.data ?? '', req.encoding, cap);
-        // YouCoded's own chooser does not ask before replacing, so it never replaces.
-        const real = await this.writeChosen(target, data, ctx, false);
+        // YouCoded's own chooser does not ask before replacing, so it never replaces; and with no
+        // system Save window, the `all` level's settings-folder rules apply (code review 1, finding 2).
+        const real = await this.writeChosen(target, data, ctx, false, 'all');
         return { ok: true, op: req.op, files: [await this.hold(caller, pageId, access, line, real)] };
       }
       case 'read': {
@@ -238,7 +242,8 @@ export class PageFiles {
       }
       case 'recent': {
         const files: PageFileHandle[] = [];
-        for (const line of access.lines.filter((l) => l.level === 'remember' && readable(l.access))) {
+        // Write-only lines too: a page that only saves can save to its remembered files again.
+        for (const line of access.lines.filter((l) => l.level === 'remember')) {
           for (const f of access.remembered[line.id] ?? []) {
             const st = await fs.promises.stat(f.path).catch(() => null);
             if (!st?.isFile()) continue;
@@ -248,29 +253,29 @@ export class PageFiles {
         return { ok: true, op: req.op, files };
       }
       case 'list': {
-        const { root, segs } = this.pathTarget(caller, access, req.path, 'read');
+        const { root, segs } = await this.pathTarget(ctx, caller, access, req.path, 'read');
         const r = await listInside(root, segs, ctx, FILE_LIMITS.listEntries);
         if ('refused' in r) no('REFUSED', r.refused);
         const ok = r as Exclude<typeof r, Refused>;
         return { ok: true, op: req.op, entries: ok.entries, more: ok.more };
       }
       case 'readPath': {
-        const { root, segs, level } = this.pathTarget(caller, access, req.path, 'read');
+        const { root, segs, level } = await this.pathTarget(ctx, caller, access, req.path, 'read');
         const opened = await openForRead(root, segs, ctx, level === 'folder');
         if ('refused' in opened) no('REFUSED', opened.refused);
         return { ok: true, op: req.op, ...(await this.readOpened(opened as Opened, req.as, cap)) };
       }
       case 'writePath': {
-        const { root, segs, level } = this.pathTarget(caller, access, req.path, 'write');
+        const { root, segs, level } = await this.pathTarget(ctx, caller, access, req.path, 'write');
         const data = decode(req.data, req.encoding, cap);
         const r = await resolveInside(root, segs);
         if ('refused' in r) no('REFUSED', r.refused);
         const mode = (r as Exclude<typeof r, Refused>).exists ? (req.replace ? 'replace' : no('REFUSED', 'A file with that name is already there.')) : 'new';
-        await this.writeOpened(await openForWrite(root, segs, ctx, level, mode), data);
+        await this.writeAt(root, segs, ctx, level, mode, data);
         return { ok: true, op: req.op };
       }
       case 'makeFolder': {
-        const { root, segs, level } = this.pathTarget(caller, access, req.path, 'write');
+        const { root, segs, level } = await this.pathTarget(ctx, caller, access, req.path, 'write');
         const r = await resolveInside(root, segs);
         if ('refused' in r) no('REFUSED', r.refused);
         const t = r as Exclude<typeof r, Refused>;
@@ -280,7 +285,7 @@ export class PageFiles {
         return { ok: true, op: req.op };
       }
       case 'remove': {
-        const { root, segs, level } = this.pathTarget(caller, access, req.path, 'write');
+        const { root, segs, level } = await this.pathTarget(ctx, caller, access, req.path, 'write');
         if (segs.length === 0) no('REFUSED', 'A page cannot remove the folder it was given.');
         if (!this.deps.trash) no('UNSUPPORTED', 'Removing files is not available here, so nothing was removed.');
         const r = await resolveInside(root, segs);
@@ -323,14 +328,28 @@ export class PageFiles {
     const st = await fs.promises.stat(real).catch(() => no('REFUSED', 'That file is not there any more.'));
     if (!st.isFile()) no('REFUSED', 'Only ordinary files can be opened by a page.');
     const name = path.basename(real);
+    // The handle cap first, so a refused file is never remembered either (code review 1, finding 11).
+    this.checkHandleRoom(pageId);
     const rememberedId = line.level === 'remember' ? (await this.deps.rememberFile(access.pageKey, line.id, name, real)) ?? undefined : undefined;
     return this.holdKnown(caller, pageId, line.id, real, name, st, rememberedId);
   }
 
-  private holdKnown(caller: FilesCaller, pageId: string, lineId: string, real: string, name: string, st: fs.Stats, rememberedId?: string): PageFileHandle {
+  private checkHandleRoom(pageId: string): void {
     let count = 0;
     for (const h of this.held.values()) if (h.pageId === pageId) count++;
     if (count >= FILE_LIMITS.handlesPerPage) no('TOO_MANY', 'This page has too many files open. Close the page and open it again.');
+  }
+
+  private holdKnown(caller: FilesCaller, pageId: string, lineId: string, real: string, name: string, st: fs.Stats, rememberedId?: string): PageFileHandle {
+    // The same file for the same page, window and line keeps its handle: a page that asks for
+    // recent() on every load must not run out of handles (code review 1, finding 5).
+    for (const [k, h] of this.held) {
+      if (h.pageId === pageId && h.ownerKey === caller.ownerKey && h.lineId === lineId && h.path === real) {
+        if (rememberedId) h.rememberedId = rememberedId;
+        return { handle: k, name, size: st.size, modified: st.mtime.toISOString() };
+      }
+    }
+    this.checkHandleRoom(pageId);
     const handle = newId();
     this.held.set(handle, { pageId, ownerKey: caller.ownerKey, lineId, path: real, name, ...(rememberedId ? { rememberedId } : {}) });
     return { handle, name, size: st.size, modified: st.mtime.toISOString() };
@@ -352,7 +371,7 @@ export class PageFiles {
   }
 
   /** A path a folder or all line reaches: relative to the folder, or `~/` under home. */
-  private pathTarget(caller: FilesCaller, access: FilesAccess, raw: unknown, need: 'read' | 'write'): { root: string; segs: string[]; level: WriteLevel } {
+  private async pathTarget(ctx: GuardContext, caller: FilesCaller, access: FilesAccess, raw: unknown, need: 'read' | 'write'): Promise<{ root: string; segs: string[]; level: WriteLevel }> {
     const home = typeof raw === 'string' && (raw === '~' || raw.startsWith('~/') || raw.startsWith('/') || /^[a-z]:/i.test(raw));
     const ok = (l: FileLine) => (need === 'read' ? readable(l.access) : writable(l.access));
     const line = access.lines.find((l) => l.level === (home ? 'all' : 'folder') && ok(l));
@@ -368,15 +387,20 @@ export class PageFiles {
       return { root: homeDir, segs: segs!, level: 'all' };
     }
     const folder = access.folders[line.id] ?? no('NOT_ALLOWED', 'Choose the folder for this page in its settings first.');
+    // The folder itself is re-checked every call: one later swapped for a link to home, or to
+    // YouCoded's own folder, stops working instead of leading there (code review 1, finding 7).
+    const real = canonicalize(await fs.promises.realpath(folder).catch(() => no('REFUSED', 'The folder this page was given is no longer there. Choose it again in the page’s settings.')), null);
+    const problem = folderChoiceProblem(real, ctx);
+    if (problem) no('REFUSED', problem);
     const segs = cleanRelative(raw);
     if (!segs) no('BAD_REQUEST', 'That path cannot be used.');
-    return { root: folder, segs: segs!, level: 'folder' };
+    return { root: real, segs: segs!, level: 'folder' };
   }
 
   // ── Bytes ─────────────────────────────────────────────────────────────────────
 
   private async openHeldForRead(h: Held, ctx: GuardContext): Promise<Opened> {
-    const opened = await openForRead(path.dirname(h.path), [path.basename(h.path)], ctx, false);
+    const opened = await openForRead(path.dirname(h.path), [path.basename(h.path)], ctx, false, false);
     if ('refused' in opened) no('REFUSED', opened.refused);
     return opened as Opened;
   }
@@ -400,28 +424,52 @@ export class PageFiles {
   }
 
   /** Write a file the person chose: replace it when it exists (and `mayReplace`), else make it. */
-  private async writeChosen(target: string, data: Buffer, ctx: GuardContext, mayReplace: boolean): Promise<string> {
+  private async writeChosen(target: string, data: Buffer, ctx: GuardContext, mayReplace: boolean, level: WriteLevel = 'chosen'): Promise<string> {
     const dir = path.dirname(target);
     const base = path.basename(target);
     const r = await resolveInside(dir, [base]);
     if ('refused' in r) no('REFUSED', r.refused);
     const t = r as Exclude<typeof r, Refused>;
     if (t.exists && !mayReplace) no('REFUSED', 'A file with that name is already there. Choose another name.');
-    await this.writeOpened(await openForWrite(dir, [base], ctx, 'chosen', t.exists ? 'replace' : 'new'), data);
+    await this.writeAt(dir, [base], ctx, level, t.exists ? 'replace' : 'new', data);
     return t.real;
   }
 
-  private async writeOpened(opened: Opened | Refused, data: Buffer): Promise<void> {
-    if ('refused' in opened) no('REFUSED', opened.refused);
-    const o = opened as Opened;
-    try {
-      await this.withBudget(data.length, async () => {
-        await o.fh.truncate(0);
-        await o.fh.write(data, 0, data.length, 0);
-      });
-    } finally {
+  /** Write `data` to a file inside `root`. The memory budget is taken BEFORE anything is
+   *  created (code review 1, finding 8); a new file that fails to fill is removed again; an
+   *  existing file is replaced whole by renaming a finished copy over it, so a failed write never
+   *  leaves it half-written. */
+  private async writeAt(root: string, segs: string[], ctx: GuardContext, level: WriteLevel, mode: 'new' | 'replace', data: Buffer): Promise<void> {
+    await this.withBudget(data.length, async () => {
+      const opened = await openForWrite(root, segs, ctx, level, mode);
+      if ('refused' in opened) no('REFUSED', opened.refused);
+      const o = opened as Opened;
+      if (o.created) {
+        try { await o.fh.write(data, 0, data.length, 0); await o.fh.close(); }
+        catch { await o.fh.close().catch(() => {}); await fs.promises.unlink(o.real).catch(() => {}); no('FAILED', 'The file could not be saved.'); }
+        return;
+      }
+      // The file was proven to be the regular file inside `root` (openForWrite); its copy goes
+      // beside it, made with `wx` so nothing already at that name is followed or reused.
+      const mode0 = (await o.fh.stat().catch(() => null))?.mode;
       await o.fh.close().catch(() => {});
-    }
+      const tmp = path.join(path.dirname(o.real), `.${path.basename(o.real)}.youcoded-${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
+      try {
+        const t = await fs.promises.open(tmp, 'wx', mode0 !== undefined ? mode0 & 0o777 : 0o644);
+        try { await t.write(data, 0, data.length, 0); await t.sync().catch(() => {}); } finally { await t.close().catch(() => {}); }
+        await fs.promises.rename(tmp, o.real);
+      } catch {
+        await fs.promises.unlink(tmp).catch(() => {});
+        no('FAILED', 'The file could not be saved.');
+      }
+    });
+  }
+
+  private async oneWindow<T>(caller: FilesCaller, pageId: string, show: () => Promise<T>): Promise<T> {
+    const key = `${caller.ownerKey}\n${pageId}`;
+    if (this.windowOpen.has(key)) no('TOO_MANY', 'A file window for this page is already open.');
+    this.windowOpen.add(key);
+    try { return await show(); } finally { this.windowOpen.delete(key); }
   }
 
   private async withBudget<T>(bytes: number, fn: () => Promise<T>): Promise<T> {
@@ -461,7 +509,7 @@ function decode(data: unknown, encoding: PageFileEncoding | undefined, cap: numb
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data)) no('BAD_REQUEST', 'The page sent file contents the app could not read.');
     return Buffer.from(data, 'base64');
   }
-  const buf = Buffer.from(data, 'utf8');
-  if (buf.length > cap) no('TOO_BIG', `That file is larger than ${Math.round(cap / MB)} MB, which is more than a page may save.`);
-  return buf;
+  // Measured before the bytes are made: a string of 25 million characters can be 75 MB of bytes.
+  if (Buffer.byteLength(data, 'utf8') > cap) no('TOO_BIG', `That file is larger than ${Math.round(cap / MB)} MB, which is more than a page may save.`);
+  return Buffer.from(data, 'utf8');
 }

@@ -274,3 +274,85 @@ describe("the phone's chooser stays out of hidden folders", () => {
     expect(await files.call(phone, PAGE, { op: 'choose', ask: askId, folder: '.config/app', file: 'settings.json' })).toMatchObject({ ok: false });
   });
 });
+
+describe('the gaps a code review found stay closed', () => {
+  it('never writes app and system settings trees at the all level, nor hidden files anywhere under home', async () => {
+    access.lines = [line('a', 'all', 'readwrite')];
+    for (const p of ['~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/x.lnk', '~/AppData/Roaming/npm/x.cmd', '~/Library/Preferences/x.plist', '~/bin/x', '~/go/bin/x', '~/.vimrc', '~/.bash_logout']) {
+      expect((await files.call(win, PAGE, { op: 'writePath', path: p, data: 'x' })).ok, p).toBe(false);
+    }
+    access.lines = [line('f', 'pick', 'readwrite')];
+    saveTo = `${home}/.bash_logout`;
+    expect(await files.call(win, PAGE, { op: 'saveAs', suggestedName: '.bash_logout', data: 'x' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(`${home}/.bash_logout`)).toBe(false);
+  });
+
+  it("never lets a phone's Save as make a hidden file", async () => {
+    access.lines = [line('f', 'pick', 'readwrite')];
+    const ask = ok(await files.call(phone, PAGE, { op: 'saveAs', suggestedName: 'x.txt' })).ask!.id;
+    expect(await files.call(phone, PAGE, { op: 'choose', ask, folder: '', file: '.bash_logout', data: 'x' })).toMatchObject({ ok: false });
+    expect(fs.existsSync(`${home}/.bash_logout`)).toBe(false);
+  });
+
+  it("never reads YouCoded's own folders", async () => {
+    fs.writeFileSync(`${home}/app-data/settings.json`, '{"secret":1}');
+    access.lines = [line('a', 'all', 'read')];
+    expect(await files.call(win, PAGE, { op: 'readPath', path: '~/app-data/settings.json' })).toMatchObject({ ok: false });
+    expect(await files.call(win, PAGE, { op: 'list', path: '~/app-data' })).toMatchObject({ ok: false });
+  });
+
+  it('shows one Open window at a time for a page', async () => {
+    access.lines = [line('f', 'pick', 'read')];
+    let release: (v: string[] | null) => void = () => {};
+    const slow = make({ showOpen: () => new Promise((r) => { release = r; }) });
+    const first = slow.call(win, PAGE, { op: 'pick' });
+    // settle: let the first call reach its window
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await slow.call(win, PAGE, { op: 'pick' })).toMatchObject({ ok: false, code: 'TOO_MANY' });
+    release(null);
+    expect(await first).toMatchObject({ code: 'CANCELLED' });
+  });
+
+  it('hands the same handle back for the same remembered file', async () => {
+    access.lines = [line('r', 'remember', 'read')];
+    opened = [`${home}/Documents/notes.txt`];
+    ok(await files.call(win, PAGE, { op: 'pick' }));
+    const a = ok(await files.call(win, PAGE, { op: 'recent' })).files![0].handle;
+    const b = ok(await files.call(win, PAGE, { op: 'recent' })).files![0].handle;
+    expect(a).toBe(b);
+  });
+
+  it.runIf(process.platform !== 'win32')('reads a chosen file whose name has a colon', async () => {
+    access.lines = [line('f', 'pick', 'read')];
+    fs.writeFileSync(`${home}/Documents/Shot 12:30.txt`, 'shot');
+    opened = [`${home}/Documents/Shot 12:30.txt`];
+    const h = ok(await files.call(win, PAGE, { op: 'pick' })).files![0].handle;
+    expect(ok(await files.call(win, PAGE, { op: 'read', handle: h })).data).toBe('shot');
+  });
+
+  it.runIf(process.platform !== 'win32')('stops using a folder later swapped for a link to home', async () => {
+    fs.mkdirSync(`${home}/Shared`);
+    access.lines = [line('d', 'folder', 'read')];
+    access.folders = { d: `${home}/Shared` };
+    ok(await files.call(win, PAGE, { op: 'list', path: '' }));
+    fs.rmdirSync(`${home}/Shared`);
+    fs.symlinkSync(home, `${home}/Shared`);
+    expect(await files.call(win, PAGE, { op: 'list', path: '' })).toMatchObject({ ok: false, code: 'REFUSED' });
+  });
+
+  it('measures text in bytes, not characters, before saving', async () => {
+    access.lines = [line('d', 'folder', 'write')];
+    access.folders = { d: `${home}/Documents` };
+    const wide = 'é'.repeat(Math.ceil(FILE_LIMITS.fileBytes / 2) + 1); // under the cap in characters, over it in bytes
+    expect(await files.call(win, PAGE, { op: 'writePath', path: 'wide.txt', data: wide })).toMatchObject({ ok: false, code: 'TOO_BIG' });
+    expect(fs.existsSync(`${home}/Documents/wide.txt`)).toBe(false);
+  });
+
+  it('replaces a file whole, leaving no copy behind', async () => {
+    access.lines = [line('d', 'folder', 'readwrite')];
+    access.folders = { d: `${home}/Documents` };
+    ok(await files.call(win, PAGE, { op: 'writePath', path: 'notes.txt', data: 'new notes', replace: true }));
+    expect(fs.readFileSync(`${home}/Documents/notes.txt`, 'utf8')).toBe('new notes');
+    expect(fs.readdirSync(`${home}/Documents`).filter((n) => n.includes('youcoded'))).toEqual([]);
+  });
+});
