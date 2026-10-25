@@ -5,7 +5,7 @@
 // screen makes: it reaches exactly what its approval lists, and nothing else —
 // and whatever comes back never carries the key that fetched it.
 import { describe, it, expect, vi } from 'vitest';
-import { performPageFetch, PageRateGate, MAX_PER_PAGE_PER_MINUTE, MAX_CONCURRENT_PER_PAGE, MAX_WAITING_PER_PAGE, REDACTED, redact } from '../src/main/pages/page-fetch';
+import { performPageFetch, type PageCredential, PageRateGate, MAX_PER_PAGE_PER_MINUTE, MAX_CONCURRENT_PER_PAGE, MAX_WAITING_PER_PAGE, REDACTED, redact } from '../src/main/pages/page-fetch';
 import { fingerprint, parseConnections } from '../src/main/pages/page-connections';
 import type { PageConnection, PageFetchRequest } from '../src/shared/pages-types';
 
@@ -222,7 +222,7 @@ describe('a service recipe', () => {
   const basic = Buffer.from(`${USER}:${PASS}`).toString('base64');
   const recipeCtx = (fetchImpl: unknown) => ({
     ...ctx([calendar], fetchImpl),
-    credential: async () => ({ in: 'multi', headers: { authorization: `Basic ${basic}` }, query: {}, secrets: [USER, PASS, basic, `Basic ${basic}`] } as const),
+    credential: async (): Promise<PageCredential> => ({ in: 'multi', headers: { authorization: `Basic ${basic}` }, query: {}, secrets: [USER, PASS, basic, `Basic ${basic}`] }),
   });
 
   it('lets through only the methods and paths the card listed', async () => {
