@@ -144,7 +144,7 @@ describe('the time on the band', () => {
     await service.fetch('personal:weather', { url: 'https://api.openweathermap.org/data' });
     const saved = JSON.parse(readFileSync(path.join(userData, CONNECTIONS_FILE), 'utf8'));
     expect(JSON.stringify(saved)).not.toContain('failed');
-    expect(Object.keys(saved)).toEqual(['version', 'pages', 'keys', 'openSites']);
+    expect(Object.keys(saved)).toEqual(['version', 'pages', 'keys', 'openSites', 'folders', 'remembered']);
   });
 });
 

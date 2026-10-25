@@ -94,8 +94,8 @@ export class PagesStore {
     // ONE read of the approvals file per listing, not one per page. An
     // unreadable one (a newer version's file) reads as "nothing is approved",
     // which pauses every connected page rather than guessing at a grant.
-    let saved: ConnectionsSnapshot = { pages: {}, keys: {}, openSites: {} };
-    try { saved = (await this.deps.connections?.read()) ?? saved; } catch { saved = { pages: {}, keys: {}, openSites: {} }; }
+    let saved: ConnectionsSnapshot = { pages: {}, keys: {}, openSites: {}, folders: {}, remembered: {} };
+    try { saved = (await this.deps.connections?.read()) ?? saved; } catch { saved = { pages: {}, keys: {}, openSites: {}, folders: {}, remembered: {} }; }
     const out: PageSummary[] = [...builtins];
     const next = new Map<string, Located>();
     for (const h of homes) {

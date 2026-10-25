@@ -68,7 +68,7 @@ describe('reading a file this build does not understand', () => {
   });
 
   it('reads a missing file as nothing approved', async () => {
-    expect(await store.read()).toEqual({ pages: {}, keys: {}, openSites: {} });
+    expect(await store.read()).toEqual({ pages: {}, keys: {}, openSites: {}, folders: {}, remembered: {} });
   });
 });
 
@@ -178,3 +178,49 @@ describe('websites a page opens without asking', () => {
   });
 });
 
+
+describe('a files line keeps its folder and remembered files beside the approval', () => {
+  const key = 'personal:photos';
+
+  it('records a folder and remembered files, and reads them back after a restart', async () => {
+    await store.recordApprovals(key, { f: approval('files|folder|read') });
+    await store.setFolder(key, 'f', '/home/d/Pictures');
+    const id = await store.rememberFile(key, 'r', 'budget.xlsx', '/home/d/Documents/budget.xlsx');
+    expect(id).toMatch(/^[0-9a-f]{16}$/);
+    // The same file twice keeps one entry.
+    expect(await store.rememberFile(key, 'r', 'budget.xlsx', '/home/d/Documents/budget.xlsx')).toBe(id);
+    const again = new PageConnectionsStore(dir, secrets);
+    expect(await again.filesFor(key)).toEqual({
+      folders: { f: '/home/d/Pictures' },
+      remembered: { r: [{ id, name: 'budget.xlsx', path: '/home/d/Documents/budget.xlsx' }] },
+    });
+  });
+
+  it('refuses a relative or dotted path rather than storing it', async () => {
+    await expect(store.setFolder(key, 'f', 'Pictures')).rejects.toThrow();
+    expect(await store.rememberFile(key, 'r', 'x', '../x')).toBeNull();
+  });
+
+  it('forgets one file, and everything when the line is removed', async () => {
+    await store.recordApprovals(key, { f: approval('files|folder|read'), r: approval('files|remember|read') });
+    await store.setFolder(key, 'f', '/home/d/Pictures');
+    const a = await store.rememberFile(key, 'r', 'a.txt', '/home/d/a.txt');
+    await store.rememberFile(key, 'r', 'b.txt', '/home/d/b.txt');
+    await store.forgetFile(key, 'r', a!);
+    expect((await store.filesFor(key)).remembered.r.map((f) => f.name)).toEqual(['b.txt']);
+    await store.removeApproval(key, 'r');
+    await store.removeApproval(key, 'f');
+    expect(await store.filesFor(key)).toEqual({ folders: {}, remembered: {} });
+  });
+
+  it('drops a damaged entry on read instead of trusting it', async () => {
+    writeFileSync(path.join(dir, CONNECTIONS_FILE), JSON.stringify({
+      version: 1, pages: {}, keys: {},
+      folders: { [key]: { f: 'relative/path', g: '/ok' } },
+      remembered: { [key]: { r: [{ id: 'x', name: 'n', path: 'nope' }, { id: '0123456789abcdef', name: 'n', path: '/fine' }] } },
+    }));
+    const got = await store.filesFor(key);
+    expect(got.folders).toEqual({ g: '/ok' });
+    expect(got.remembered.r?.map((f) => f.path)).toEqual(['/fine']);
+  });
+});

@@ -20,7 +20,7 @@
 // Freshness is deliberately NOT here: a fetch can happen 60x a minute and
 // approvals must not share a hot write path. It lives in memory, in
 // pages-service.ts.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
@@ -74,7 +74,18 @@ interface ConnectionsFile {
    *  step 1, "Open this website?"). Optional and unversioned on purpose: an older
    *  app ignores it, and at worst a site asks again. */
   openSites?: Record<string, string[]>;
+  /** Per page, per files line at `folder` level: the folder the person chose (canonical
+   *  real path), pages-finish step 2. Like a device's address, beside the approval. */
+  folders?: Record<string, Record<string, string>>;
+  /** Per page, per files line at `remember` level: the files picked there. The path
+   *  stays on this computer; screens see the name only. */
+  remembered?: Record<string, Record<string, RememberedFile[]>>;
 }
+
+/** One remembered file of a page (pages-finish step 2). */
+export interface RememberedFile { id: string; name: string; path: string }
+/** At most this many remembered files per line. */
+const MAX_REMEMBERED = 200;
 
 /** At most this many remembered sites per page. */
 const MAX_OPEN_SITES = 50;
@@ -109,6 +120,13 @@ export interface ConnectionsSnapshot {
   pages: Record<string, Record<string, PageApproval>>;
   keys: Record<string, PageKeyRecord>;
   openSites: Record<string, string[]>;
+  folders: Record<string, Record<string, string>>;
+  remembered: Record<string, Record<string, RememberedFile[]>>;
+}
+
+/** A snapshot with nothing in it. */
+function emptySnapshot(): ConnectionsSnapshot {
+  return { pages: {}, keys: {}, openSites: {}, folders: {}, remembered: {} };
 }
 
 export class PageConnectionsStore {
@@ -130,7 +148,7 @@ export class PageConnectionsStore {
     let raw: string;
     try { raw = await fs.readFile(this.file, 'utf8'); }
     catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { pages: {}, keys: {}, openSites: {} };
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return emptySnapshot();
       throw e;
     }
     return parseFile(raw);
@@ -208,6 +226,45 @@ export class PageConnectionsStore {
     });
   }
 
+  /** A page's chosen folders and remembered files, by line (pages-finish step 2). */
+  async filesFor(pageKey: string): Promise<{ folders: Record<string, string>; remembered: Record<string, RememberedFile[]> }> {
+    const cur = await this.read();
+    return { folders: { ...cur.folders[pageKey] }, remembered: { ...cur.remembered[pageKey] } };
+  }
+
+  /** Record (or change) the folder a folder-level files line reaches. */
+  async setFolder(pageKey: string, connectionId: string, folder: string): Promise<void> {
+    if (!isCleanAbsolute(folder)) throw new Error('That folder could not be recorded.');
+    await this.mutate((cur) => { ((cur.folders ??= {})[pageKey] ??= {})[connectionId] = folder; return true; });
+  }
+
+  /** Remember a picked file for a remember-level line; answers its id. The same path
+   *  twice keeps the first id; a full list keeps its first files. */
+  async rememberFile(pageKey: string, connectionId: string, name: string, filePath: string): Promise<string | null> {
+    if (!isCleanAbsolute(filePath)) return null;
+    let id: string | null = null;
+    await this.mutate((cur) => {
+      const list = ((cur.remembered ??= {})[pageKey] ??= {})[connectionId] ??= [];
+      const had = list.find((f) => f.path === filePath);
+      if (had) { id = had.id; return false; }
+      if (list.length >= MAX_REMEMBERED) return false;
+      id = randomBytes(8).toString('hex');
+      list.push({ id, name: cleanName(name), path: filePath });
+      return true;
+    });
+    return id;
+  }
+
+  /** Forget one remembered file; the page must ask for it again. */
+  async forgetFile(pageKey: string, connectionId: string, fileId: string): Promise<void> {
+    await this.mutate((cur) => {
+      const list = cur.remembered?.[pageKey]?.[connectionId];
+      if (!list?.some((f) => f.id === fileId)) return false;
+      cur.remembered![pageKey][connectionId] = list.filter((f) => f.id !== fileId);
+      return true;
+    });
+  }
+
   /** Stop future use of one connection; the page asks again next time. */
   async removeApproval(pageKey: string, connectionId: string): Promise<void> {
     await this.mutate((cur) => {
@@ -215,6 +272,10 @@ export class PageConnectionsStore {
       if (!page || !(connectionId in page)) return false;
       delete page[connectionId];
       if (Object.keys(page).length === 0) delete cur.pages[pageKey];
+      // Removing a files line forgets its folder and its remembered files too: a later
+      // yes starts from nothing, never from what was allowed before (step 2).
+      delete cur.folders?.[pageKey]?.[connectionId];
+      delete cur.remembered?.[pageKey]?.[connectionId];
       return true;
     });
   }
@@ -266,10 +327,12 @@ export class PageConnectionsStore {
         delete cur.pages[pageKey];
         changed = true;
       }
-      for (const pageKey of Object.keys(cur.openSites ?? {})) {
-        if (livePageKeys.has(pageKey)) continue;
-        delete cur.openSites![pageKey];
-        changed = true;
+      for (const map of [cur.openSites, cur.folders, cur.remembered]) {
+        for (const pageKey of Object.keys(map ?? {})) {
+          if (livePageKeys.has(pageKey)) continue;
+          delete (map as Record<string, unknown>)[pageKey];
+          changed = true;
+        }
       }
       for (const [id, record] of Object.entries(cur.keys)) {
         if (usedKeyIds.has(id)) continue;
@@ -292,7 +355,7 @@ export class PageConnectionsStore {
     let refused: string | null = null;
     const ok = await mutateFileUnderLock(this.file, (onDisk) => {
       let cur: ConnectionsFile;
-      try { cur = onDisk === null ? { version: VERSION, pages: {}, keys: {}, openSites: {} } : toFile(parseFile(onDisk)); }
+      try { cur = onDisk === null ? toFile(emptySnapshot()) : toFile(parseFile(onDisk)); }
       catch (e) { refused = e instanceof ConnectionsUnreadableError ? e.message : UNKNOWN_VERSION_MESSAGE; return null; }
       return mutate(cur) ? JSON.stringify(cur, null, 2) : null;
     });
@@ -302,20 +365,20 @@ export class PageConnectionsStore {
 }
 
 function toFile(snapshot: ConnectionsSnapshot): ConnectionsFile {
-  return { version: VERSION, pages: snapshot.pages, keys: snapshot.keys, openSites: snapshot.openSites };
+  return { version: VERSION, pages: snapshot.pages, keys: snapshot.keys, openSites: snapshot.openSites, folders: snapshot.folders, remembered: snapshot.remembered };
 }
 
 /** One parser, shared by read() and mutate(), so their tolerance cannot drift. */
 function parseFile(raw: string): ConnectionsSnapshot {
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return { pages: {}, keys: {}, openSites: {} }; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { pages: {}, keys: {}, openSites: {} };
+  try { parsed = JSON.parse(raw); } catch { return emptySnapshot(); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptySnapshot();
   const o = parsed as Partial<ConnectionsFile>;
   // finding 10: a version we do not know refuses EVERYTHING with a plain
   // sentence. Reading the parts that happen to look familiar would be exactly
   // the half-understanding the refusal exists to prevent.
   if (o.version !== VERSION) throw new ConnectionsUnreadableError(UNKNOWN_VERSION_MESSAGE);
-  return { pages: cleanPages(o.pages), keys: cleanKeys(o.keys), openSites: cleanOpenSites(o.openSites) };
+  return { pages: cleanPages(o.pages), keys: cleanKeys(o.keys), openSites: cleanOpenSites(o.openSites), folders: cleanFolders(o.folders), remembered: cleanRemembered(o.remembered) };
 }
 
 /** A remembered site: a hostname, lower case, no trailing dot, plain characters.
@@ -324,6 +387,48 @@ function cleanSite(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const host = raw.trim().replace(/\.$/, '').toLowerCase();
   return host.length > 0 && host.length <= 253 && /^[a-z0-9.-]+$/.test(host) && !host.startsWith('.') ? host : null;
+}
+
+/** An absolute path in the app's canonical spelling (forward slashes, no `..`).
+ *  Anything else in the file is dropped on read: a hand-edited file must not widen
+ *  what a page reaches. */
+function isCleanAbsolute(p: unknown): p is string {
+  return typeof p === 'string' && p.length > 0 && p.length <= 4096 && (p.startsWith('/') || /^[a-z]:\//i.test(p))
+    && !p.split('/').some((seg) => seg === '..' || seg === '.') && !p.includes('\0');
+}
+
+/** A file's display name: one line, at most 255 characters. */
+function cleanName(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/[\r\n]/g, ' ').slice(0, 255) : '';
+}
+
+function cleanFolders(raw: unknown): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [pageKey, lines] of Object.entries(raw as Record<string, unknown>)) {
+    if (!lines || typeof lines !== 'object') continue;
+    const kept: Record<string, string> = {};
+    for (const [id, folder] of Object.entries(lines as Record<string, unknown>)) if (isCleanAbsolute(folder)) kept[id] = folder;
+    if (Object.keys(kept).length) out[pageKey] = kept;
+  }
+  return out;
+}
+
+function cleanRemembered(raw: unknown): Record<string, Record<string, RememberedFile[]>> {
+  const out: Record<string, Record<string, RememberedFile[]>> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [pageKey, lines] of Object.entries(raw as Record<string, unknown>)) {
+    if (!lines || typeof lines !== 'object') continue;
+    const kept: Record<string, RememberedFile[]> = {};
+    for (const [id, list] of Object.entries(lines as Record<string, unknown>)) {
+      if (!Array.isArray(list)) continue;
+      const files = list.filter((f): f is RememberedFile => !!f && typeof f.id === 'string' && /^[0-9a-f]{16}$/.test(f.id) && isCleanAbsolute(f.path))
+        .map((f) => ({ id: f.id, name: cleanName(f.name), path: f.path })).slice(0, MAX_REMEMBERED);
+      if (files.length) kept[id] = files;
+    }
+    if (Object.keys(kept).length) out[pageKey] = kept;
+  }
+  return out;
 }
 
 function cleanOpenSites(raw: unknown): Record<string, string[]> {
