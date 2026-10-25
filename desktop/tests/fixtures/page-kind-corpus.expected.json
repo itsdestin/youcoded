@@ -1,0 +1,712 @@
+{
+ "youcoded": [
+  {
+   "c": {
+    "id": "a",
+    "kind": "youcoded"
+   },
+   "fp": "youcoded",
+   "covers": [
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "youcodedWrite": [
+  {
+   "c": {
+    "id": "a",
+    "kind": "youcoded",
+    "writePaths": [
+     "/b",
+     "/campaigns"
+    ]
+   },
+   "fp": "youcoded|write:/b,/campaigns",
+   "covers": [
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    true,
+    true,
+    false,
+    false,
+    true,
+    false
+   ]
+  }
+ ],
+ "open": [
+  {
+   "c": {
+    "id": "o",
+    "kind": "open"
+   },
+   "fp": "open",
+   "covers": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  },
+  {
+   "c": {
+    "id": "s",
+    "kind": "session"
+   },
+   "fp": "session",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "openPlusKey": [],
+ "github": [
+  {
+   "c": {
+    "id": "g",
+    "kind": "github",
+    "access": "full"
+   },
+   "fp": "github|full",
+   "covers": [
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  },
+  {
+   "c": {
+    "id": "h",
+    "kind": "github",
+    "access": "lookup"
+   },
+   "fp": "github|lookup",
+   "covers": [
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "public": [
+  {
+   "c": {
+    "id": "p",
+    "kind": "public",
+    "address": "feeds.bbci.co.uk"
+   },
+   "fp": "public|feeds.bbci.co.uk",
+   "covers": [
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "key": [
+  {
+   "c": {
+    "id": "k",
+    "kind": "key",
+    "service": "Todoist",
+    "address": "api.todoist.com",
+    "access": "full",
+    "keyHelp": {
+     "steps": [
+      "a"
+     ]
+    }
+   },
+   "fp": "key|Todoist|api.todoist.com|full",
+   "covers": [
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ],
+ "keyLookup": [
+  {
+   "c": {
+    "id": "k",
+    "kind": "key",
+    "service": "OpenWeather",
+    "address": "api.openweathermap.org",
+    "access": "lookup",
+    "keyIn": "query",
+    "keyParam": "appid"
+   },
+   "fp": "key|OpenWeather|api.openweathermap.org|lookup|query:appid",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "keyHeader": [
+  {
+   "c": {
+    "id": "k",
+    "kind": "key",
+    "service": "S",
+    "address": "api.s.com",
+    "access": "lookup",
+    "keyIn": "header",
+    "keyParam": "x-api-key",
+    "keyScheme": "none"
+   },
+   "fp": "key|S|api.s.com|lookup|header:x-api-key",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "keyToken": [
+  {
+   "c": {
+    "id": "k",
+    "kind": "key",
+    "service": "S",
+    "address": "api.s.com",
+    "access": "lookup",
+    "keyScheme": "token"
+   },
+   "fp": "key|S|api.s.com|lookup",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "device": [
+  {
+   "c": {
+    "id": "d",
+    "kind": "device",
+    "service": "Home Assistant",
+    "address": "192.168.1.20:8123",
+    "access": "full",
+    "needsKey": true,
+    "keyPage": "/profile/security",
+    "socketHello": "{\"type\":\"auth\",\"access_token\":\"{{key}}\"}",
+    "socketReady": "auth_ok",
+    "socketAuthFailed": "auth_invalid",
+    "socketDeny": [
+     "auth/",
+     "config/"
+    ],
+    "videoProfile": {
+     "targetPrefix": "camera.",
+     "send": "{\"type\":\"camera/webrtc/offer\"}",
+     "answer": "event.answer",
+     "candidate": "event.candidate",
+     "failed": "event.error"
+    }
+   },
+   "fp": "device|Home Assistant|full|key|profile:{\"socketAuthFailed\":\"auth_invalid\",\"socketDeny\":[\"auth/\",\"config/\"],\"socketHello\":\"{\\\"type\\\":\\\"auth\\\",\\\"access_token\\\":\\\"{{key}}\\\"}\",\"socketReady\":\"auth_ok\",\"videoProfile\":{\"answer\":\"event.answer\",\"candidate\":\"event.candidate\",\"failed\":\"event.error\",\"send\":\"{\\\"type\\\":\\\"camera/webrtc/offer\\\"}\",\"targetPrefix\":\"camera.\"}}",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ],
+ "deviceNoKey": [
+  {
+   "c": {
+    "id": "d",
+    "kind": "device",
+    "service": "Printer",
+    "address": "printer.local",
+    "access": "lookup",
+    "needsKey": false
+   },
+   "fp": "device|Printer|lookup|nokey",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "deviceBadReady": [],
+ "plaid": [
+  {
+   "c": {
+    "id": "p",
+    "kind": "plaid",
+    "environment": "sandbox"
+   },
+   "fp": "plaid|sandbox",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ],
+ "plaidProd": [
+  {
+   "c": {
+    "id": "p",
+    "kind": "plaid",
+    "environment": "production"
+   },
+   "fp": "plaid|production",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ],
+ "chats": [
+  {
+   "c": {
+    "id": "c",
+    "kind": "chats",
+    "access": "lookup",
+    "scope": {
+     "all": true
+    }
+   },
+   "fp": "chats|lookup|all",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "chatsProjects": [
+  {
+   "c": {
+    "id": "c",
+    "kind": "chats",
+    "access": "full",
+    "scope": {
+     "projects": [
+      "b",
+      "a"
+     ]
+    }
+   },
+   "fp": "chats|full|projects:a,b",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "chatsTag": [
+  {
+   "c": {
+    "id": "c",
+    "kind": "chats",
+    "access": "lookup",
+    "scope": {
+     "tag": "work"
+    }
+   },
+   "fp": "chats|lookup|tag:work",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "chatsBad": [],
+ "program": [
+  {
+   "c": {
+    "id": "p",
+    "kind": "program",
+    "file": "work-items.mjs"
+   },
+   "fp": "program|work-items.mjs",
+   "covers": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "methods": [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ]
+  }
+ ],
+ "dupIds": [
+  {
+   "c": {
+    "id": "x",
+    "kind": "open"
+   },
+   "fp": "open",
+   "covers": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "methods": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ]
+}

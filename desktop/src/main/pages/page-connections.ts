@@ -15,190 +15,28 @@
 // An approval is recorded against a FINGERPRINT, not an id: widen the access or
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
-import type { KeyScheme, PageAccess, PageChatScope, PageConnection, VideoProfile } from '../../shared/pages-types';
-import { PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
-import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
+//
+// The rules for each KIND of line live in page-kinds.ts (one entry per kind);
+// this file keeps the names every caller already imports and the rules that span
+// a whole list (ids, the cap, never "open" beside private data).
+import type { PageConnection } from '../../shared/pages-types';
+import { cleanDeviceAddress } from '../../shared/page-device-address';
+import { MAX_CONNECTIONS } from './page-connection-fields';
+import { KINDS, kindOf } from './page-kinds';
 
-/** Where a key connection's key is attached when the manifest does not say.
- *  A header is the common case and the safer one: a key in a query string is
- *  written into the service's own access logs. */
-const DEFAULT_KEY_PLACEMENT = { in: 'header', param: 'authorization', scheme: 'bearer' } as const;
-
-export interface KeyPlacement { in: 'header' | 'query'; param: string; scheme: KeyScheme; }
-
-/** Where this connection wants its key, and the word before it. Always
- *  answers — an author who says nothing gets `Authorization: Bearer <key>`,
- *  the most common shape (Todoist, OpenAI-style APIs, most modern services).
- *  WHY a scheme at all: a bare key in an Authorization header is rejected by
- *  most services, so without it the commonest kind of key never worked. */
-export function keyPlacement(c: PageConnection): KeyPlacement {
-  if (c.kind !== 'key' && c.kind !== 'device') return { ...DEFAULT_KEY_PLACEMENT };
-  const inQuery = !!c.keyParam && c.keyIn === 'query';
-  const param = c.keyParam ?? DEFAULT_KEY_PLACEMENT.param;
-  // A query parameter never carries a word; a header takes the author's word,
-  // else "Bearer" for Authorization and nothing for any other header.
-  const scheme: KeyScheme = inQuery ? 'none' : (c.keyScheme ?? (param === 'authorization' ? 'bearer' : 'none'));
-  return { in: inQuery ? 'query' : 'header', param, scheme };
-}
+export { applyScheme, keyPlacement, SOCKET_KEY_TOKEN } from './page-connection-fields';
+export type { KeyPlacement } from './page-connection-fields';
 
 /** The saved key a connection stands on, as service + address, or null for a
  *  kind that holds no pasted key. One place, so approval, the settings list,
  *  pruning and deletion agree on which connections own a key. */
 export function savedKeyTarget(c: PageConnection): { service: string; address: string } | null {
-  if (c.kind === 'key') return { service: c.service, address: c.address };
-  if (c.kind === 'device') return c.needsKey ? { service: c.service, address: c.address } : null;
-  if (c.kind === 'plaid') return { service: PLAID_SERVICE, address: plaidAddress(c.environment) };
-  return null;
-}
-
-/** The header value for a key under a scheme. */
-export function applyScheme(scheme: KeyScheme, key: string): string {
-  return scheme === 'bearer' ? `Bearer ${key}` : scheme === 'token' ? `token ${key}` : key;
-}
-
-/** Caps. A manifest is written by an assistant or a stranger, so every string
- *  is bounded before it reaches a screen or a request. */
-const MAX_CONNECTIONS = 8;
-const MAX_SERVICE = 40;
-const MAX_ADDRESS = 253;   // the longest legal hostname
-const MAX_STEPS = 6;
-const MAX_STEP = 200;
-
-/** A bare hostname: no scheme, port, path, wildcard, userinfo or space. Lower
- *  case is not required of the author but is what we store and compare. */
-function cleanAddress(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  // A trailing dot is the same host to DNS but a different string to a naive
-  // comparison, so it is stripped here rather than at match time.
-  const host = raw.trim().replace(/\.$/, '').toLowerCase();
-  if (!host || host.length > MAX_ADDRESS) return null;
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) return null;
-  const labels = host.split('.');
-  // Every label of a real hostname is at most 63 characters.
-  if (labels.some((l) => l.length > 63)) return null;
-  // A NAME, never an address literal: 10.0.0.1 satisfies the shape above but
-  // no real top-level name is all digits. net-guard refuses private addresses
-  // at request time too; this refuses them a manifest entry at all, so the
-  // approval screen never shows one.
-  if (/^\d+$/.test(labels[labels.length - 1])) return null;
-  return host;
-}
-
-function cleanAccess(raw: unknown): PageAccess {
-  // Anything unrecognised means look-up only: the narrower reading of an
-  // unclear manifest is the safe one.
-  return raw === 'full' ? 'full' : 'lookup';
-}
-
-/** A header name or query-parameter name: RFC 7230 token characters only, so
- *  nothing an author writes can smuggle a second header or a URL fragment in.
- *  Lower-cased, because it is compared against our own header allowlist. */
-function cleanParam(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const name = raw.trim().toLowerCase();
-  if (!name || name.length > 64 || !/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return null;
-  return name;
-}
-
-/** A path on a device where its key is made (Home Assistant:
- *  `/profile/security`). Plain path characters only, so the Open button can
- *  never be pointed anywhere but the allowed device. */
-function cleanKeyPage(raw: unknown): string | undefined {
-  if (typeof raw !== 'string') return undefined;
-  const p = raw.trim();
-  return /^(\/[A-Za-z0-9_.-]+)+\/?$/.test(p) && p.length <= 120 && !p.includes('..') ? p : undefined;
-}
-
-/** A device's socket greeting. Bounded, and the key token at most once: the
- *  app substitutes the key into this one message only, so it is the single
- *  place a key ever enters a socket. Dropped (not trimmed) when it breaks a
- *  rule, so a half-greeting is never sent. */
-const MAX_SOCKET_HELLO = 512;
-export const SOCKET_KEY_TOKEN = '{{key}}';
-function cleanSocketHello(raw: unknown): string | undefined {
-  if (typeof raw !== 'string' || !raw.trim() || raw.length > MAX_SOCKET_HELLO) return undefined;
-  return raw.split(SOCKET_KEY_TOKEN).length <= 2 ? raw : undefined;
-}
-
-/** Device-profile cleaning (spec 2026-10-04). Every string is short and plain
- *  so nothing a manifest writes can become a pattern main would run. Anything
- *  that breaks a rule is DROPPED, never trimmed into something else. */
-const MAX_PROFILE_WORD = 64;
-const MAX_VIDEO_SEND = 2048;
-const MAX_SOCKET_DENY = 16;
-/** A reply type, e.g. `auth_ok`. */
-function cleanReplyType(raw: unknown): string | undefined {
-  return typeof raw === 'string' && /^[A-Za-z0-9_./-]{1,64}$/.test(raw) ? raw : undefined;
-}
-/** The manifest's extra denied message-type prefixes (e.g. `config/`), lower-
- *  cased, sorted and de-duplicated so order never changes the fingerprint.
- *  WHY strict: the approval card lists exactly this list and main enforces
- *  exactly this list, so a list that is not wholly valid (wrong type, an
- *  odd entry, more than MAX_SOCKET_DENY) must never be half-kept. Returns
- *  `undefined` when the manifest has none, `null` when it is invalid, and the
- *  caller then drops the WHOLE connection (nothing runs on a profile the
- *  person was not shown accurately). */
-function cleanSocketDeny(raw: unknown): string[] | undefined | null {
-  if (raw === undefined) return undefined;
-  if (!Array.isArray(raw) || raw.length > MAX_SOCKET_DENY) return null;
-  const out = new Set<string>();
-  for (const p of raw) {
-    const v = typeof p === 'string' ? p.trim().toLowerCase() : '';
-    if (!/^[a-z0-9_./-]{1,64}$/.test(v)) return null;
-    out.add(v);
-  }
-  return out.size ? [...out].sort() : undefined;
-}
-/** A dotted path into a reply (`event.answer`). */
-function cleanDotted(raw: unknown): string | undefined {
-  return typeof raw === 'string' && raw.length <= MAX_PROFILE_WORD && /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(raw) ? raw : undefined;
-}
-function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const o = raw as Record<string, unknown>;
-  // WHY must end with ".": the device's form is `domain.`; a bare letter or word
-  // would widen "a camera" to "anything the device has" (step-1 code review, item 5).
-  const targetPrefix = typeof o.targetPrefix === 'string' && /^[a-z0-9_.]{1,64}$/.test(o.targetPrefix) && o.targetPrefix.endsWith('.') ? o.targetPrefix : undefined;
-  // Where main opens ITS OWN socket for a video; absent means the Home Assistant path.
-  const socketPath = typeof o.socketPath === 'string' && /^\/[A-Za-z0-9_./-]{0,127}$/.test(o.socketPath) && !o.socketPath.includes('..') ? o.socketPath : undefined;
-  // WHY no {{key}}: the key may enter a socket only through the greeting.
-  const send = typeof o.send === 'string' && o.send.length > 0 && Buffer.byteLength(o.send) <= MAX_VIDEO_SEND
-    && !o.send.includes(SOCKET_KEY_TOKEN) ? o.send : undefined;
-  const answer = cleanDotted(o.answer);
-  const candidate = cleanDotted(o.candidate);
-  const failed = cleanDotted(o.failed);
-  if (!targetPrefix || !send || !answer || !candidate || !failed) return undefined;
-  return { targetPrefix, ...(socketPath ? { socketPath } : {}), send, answer, candidate, failed };
-}
-
-function cleanSteps(raw: unknown): { steps: string[] } | undefined {
-  const list = (raw as { steps?: unknown } | null)?.steps;
-  if (!Array.isArray(list)) return undefined;
-  const steps = list.filter((s): s is string => typeof s === 'string')
-    .map((s) => s.trim().slice(0, MAX_STEP)).filter(Boolean).slice(0, MAX_STEPS);
-  return steps.length ? { steps } : undefined;
-}
-
-/** Places on YouCoded's own service where a page may make changes. Each is a
- *  plain path — letters, digits, `-`, `_` and `/` only — so nothing encoded,
- *  no `..`, no query. At most four, sorted, so their order never changes the
- *  fingerprint. (A campaign builder needs one; Destin, 2026-09-23.) */
-function cleanWritePaths(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out = new Set<string>();
-  for (const p of raw) {
-    if (typeof p !== 'string') continue;
-    const path = p.trim().replace(/\/+$/, '');
-    if (!/^(\/[A-Za-z0-9_-]+)+$/.test(path) || path.length > 120) continue;
-    out.add(path);
-    if (out.size >= 4) break;
-  }
-  return [...out].sort();
+  return kindOf(c).savedKeyTarget?.(c) ?? null;
 }
 
 /** Parse `connections` out of a page.json object. Never throws. An entry it
- *  cannot vouch for is dropped; a list that mixes `open` with a credentialled
- *  connection is dropped WHOLE (rule 2 above). */
+ *  cannot vouch for is dropped; a list that mixes `open` with a line holding
+ *  private data is dropped WHOLE (rule 2 above). */
 export function parseConnections(raw: unknown): PageConnection[] {
   if (!Array.isArray(raw)) return [];
   const out: PageConnection[] = [];
@@ -208,218 +46,25 @@ export function parseConnections(raw: unknown): PageConnection[] {
     const o = item as Record<string, unknown>;
     const id = typeof o.id === 'string' ? o.id.trim().slice(0, 40) : '';
     if (!id || ids.has(id)) continue;
-    let c: PageConnection | null = null;
-    switch (o.kind) {
-      case 'youcoded': {
-        c = { id, kind: 'youcoded' };
-        const writePaths = cleanWritePaths(o.writePaths);
-        if (writePaths.length) c.writePaths = writePaths;
-        break;
-      }
-      case 'open': c = { id, kind: 'open' }; break;
-      case 'github': c = { id, kind: 'github', access: cleanAccess(o.access) }; break;
-      case 'public': {
-        const address = cleanAddress(o.address);
-        if (address) c = { id, kind: 'public', address };
-        break;
-      }
-      case 'key': {
-        const address = cleanAddress(o.address);
-        const service = typeof o.service === 'string' ? o.service.trim().slice(0, MAX_SERVICE) : '';
-        if (address && service) {
-          c = { id, kind: 'key', service, address, access: cleanAccess(o.access), keyHelp: cleanSteps(o.keyHelp) };
-          // Where the service takes the key. A bad name is DROPPED rather than
-          // corrected, so the default (an Authorization header) applies: a
-          // header or parameter name we cannot vouch for must never reach a
-          // request, and a page whose key lands in the wrong place simply
-          // fails to authenticate — it does not leak the key somewhere else.
-          const param = cleanParam(o.keyParam);
-          if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
-          if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
-        }
-        break;
-      }
-      // Home-device deck (2026-10-01). The address is the page's SUGGESTION:
-      // the person may change it on the approval card, and the approval records
-      // what they allowed. A suggestion that is not a home address is dropped,
-      // so the card never offers a website in a device's clothing.
-      case 'device': {
-        const address = cleanDeviceAddress(o.address);
-        const service = typeof o.service === 'string' ? o.service.trim().slice(0, MAX_SERVICE) : '';
-        if (address && service) {
-          c = { id, kind: 'device', service, address, access: cleanAccess(o.access), needsKey: o.needsKey !== false, keyHelp: cleanSteps(o.keyHelp) };
-          const keyPage = cleanKeyPage(o.keyPage);
-          if (keyPage) c.keyPage = keyPage;
-          const param = cleanParam(o.keyParam);
-          if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
-          if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
-          const hello = cleanSocketHello(o.socketHello);
-          if (hello) c.socketHello = hello;
-          // WHY strict, like socketDeny: a bad socketAuthFailed silently dropped meant a wrong key was never
-          // recognised, so the socket retried logins for ten minutes (Home Assistant bans an address after a
-          // few failed logins). A reply type that is present but invalid drops the whole connection.
-          const ready = cleanReplyType(o.socketReady);
-          if (o.socketReady !== undefined && !ready) { c = null; break; }
-          if (ready) c.socketReady = ready;
-          const authFailed = cleanReplyType(o.socketAuthFailed);
-          if (o.socketAuthFailed !== undefined && !authFailed) { c = null; break; }
-          if (authFailed) c.socketAuthFailed = authFailed;
-          const deny = cleanSocketDeny(o.socketDeny);
-          if (deny === null) { c = null; break; }
-          if (deny) c.socketDeny = deny;
-          const video = cleanVideoProfile(o.videoProfile);
-          if (video) c.videoProfile = video;
-        }
-        break;
-      }
-      // Finance dashboard (2026-10-05): bank balances through Plaid. One per
-      // page; the environment decides which saved key and which Plaid host.
-      case 'plaid': {
-        if (out.some((x) => x.kind === 'plaid')) break;
-        const environment = o.environment === 'production' ? 'production' : o.environment === 'sandbox' ? 'sandbox' : null;
-        if (environment) c = { id, kind: 'plaid', environment, keyHelp: cleanSteps(o.keyHelp) };
-        break;
-      }
-      // Page start session (spec 2026-10-14): open the new-conversation window
-      // with a message waiting. No settings, so nothing else the manifest wrote
-      // on the line is kept. One per page: a second would be a second card line
-      // for the same thing.
-      case 'session': {
-        if (out.some((x) => x.kind === 'session')) break;
-        c = { id, kind: 'session' };
-        break;
-      }
-      // Pages read and change chats (spec 2026-10-16). One per page, like
-      // session: two lines would be two cards for the same list. A scope the
-      // parser cannot vouch for drops the line rather than widening to "all".
-      case 'chats': {
-        if (out.some((x) => x.kind === 'chats')) break;
-        const scope = cleanChatScope(o.scope);
-        if (scope) c = { id, kind: 'chats', access: cleanAccess(o.access), scope };
-        break;
-      }
-      // Computer programs (Pages scope §9). The file is a bare name inside the
-      // page's own folder — no folders, no "..", nothing hidden — so the card's
-      // "Run work-items.mjs" names the only thing that can run.
-      case 'program': {
-        const file = cleanProgramFile(o.file);
-        if (file && !out.some((x) => x.kind === 'program' && x.file === file)) c = { id, kind: 'program', file };
-        break;
-      }
-      default: break;
-    }
+    const def = typeof o.kind === 'string' && Object.hasOwn(KINDS, o.kind) ? KINDS[o.kind as PageConnection['kind']] : null;
+    if (!def) continue;
+    if (def.onePerPage && out.some((x) => x.kind === o.kind)) continue;
+    const c = (def.parse as (o: Record<string, unknown>, id: string, sofar: readonly PageConnection[]) => PageConnection | null)(o, id, out);
     if (!c) continue;
     ids.add(id);
     out.push(c);
     if (out.length >= MAX_CONNECTIONS) break;
   }
   const hasOpen = out.some((c) => c.kind === 'open');
-  // A device counts as credentialled even without a key: a page that could
-  // read the home AND send anywhere is the bridge the block exists to stop.
-  // WHY chats too (spec 2026-10-16): a chat list is private like a sign-in, and
-  // a page that could read it AND send anywhere is the same bridge.
-  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device' || c.kind === 'plaid' || c.kind === 'chats');
-  if (hasOpen && hasCredential) return [];
+  if (hasOpen && out.some((c) => KINDS[c.kind].privateData)) return [];
   return out;
-}
-
-/** The cleaned device profile as JSON with sorted keys (so key order in the
- *  manifest never matters), or '' when the connection has none. */
-function profileSegment(c: Extract<PageConnection, { kind: 'device' }>): string {
-  const profile: Record<string, unknown> = {};
-  if (c.socketHello) profile.socketHello = c.socketHello;
-  if (c.socketReady) profile.socketReady = c.socketReady;
-  if (c.socketAuthFailed) profile.socketAuthFailed = c.socketAuthFailed;
-  if (c.socketDeny?.length) profile.socketDeny = c.socketDeny;
-  if (c.videoProfile) profile.videoProfile = c.videoProfile;
-  if (!Object.keys(profile).length) return '';
-  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
-    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
-  return `|profile:${JSON.stringify(sorted(profile))}`;
 }
 
 /** What an approval is recorded against. Access and address are in it because
  *  widening either must ask again; `keyHelp` and the id are not, because
  *  neither changes what the page can reach. */
 export function fingerprint(c: PageConnection): string {
-  switch (c.kind) {
-    // Adding or changing a place the page may make changes asks again; a
-    // look-up-only YouCoded connection keeps its original fingerprint.
-    case 'youcoded': return c.writePaths?.length ? `youcoded|write:${c.writePaths.join(',')}` : 'youcoded';
-    case 'open': return 'open';
-    case 'github': return `github|${c.access}`;
-    case 'public': return `public|${c.address}`;
-    case 'key': {
-      // The placement rides the fingerprint only when it is NOT the default, so
-      // the ordinary key connection keeps the plain four-part string. Moving a
-      // key from a header into the URL changes who can see it — the service
-      // writes query strings into its own access logs — so that edit lapses the
-      // approval and the page asks again.
-      const p = keyPlacement(c);
-      const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param
-        ? '' : `|${p.in}:${p.param}`;
-      return `key|${c.service}|${c.address}|${c.access}${moved}`;
-    }
-    // No address: the person chooses it, and it is recorded beside the
-    // approval (see withApprovedAddress). A page whose author later suggests a
-    // different address therefore does not re-ask — the one allowed stands.
-    // Placement and needsKey are in it because both change what is sent.
-    case 'device': {
-      const p = keyPlacement(c);
-      const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param ? '' : `|${p.in}:${p.param}`;
-      // WHY one `|profile:` segment: the greeting and every other device-profile
-      // field (what "logged in" looks like, what is refused, how video is
-      // asked for) decide what the page can do through the socket, so changing
-      // any of them asks again. It rides only when something is present, so a
-      // device page without any keeps the fingerprint it always had.
-      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${profileSegment(c)}`;
-    }
-    // Switching practice → real banks changes which money the page can see, so
-    // it asks again.
-    case 'plaid': return `plaid|${c.environment}`;
-    // A constant: the approval is keyed to the declaration alone (spec
-    // 2026-10-14, §3, Q-7), so no edit to the page can make it ask again.
-    case 'session': return 'session';
-    // Widening read → change, or the chats covered, asks again (deck Q-1/Q-2).
-    case 'chats': return `chats|${c.access}|${chatScopeKey(c.scope)}`;
-    // The file's CONTENTS are not in here (fingerprint is manifest-only); the
-    // approval records the program's hash beside it and the listing re-asks
-    // when the file changes (Pages scope §9: changed code never inherits trust).
-    case 'program': return `program|${c.file}`;
-  }
-}
-
-/** A chat scope as one stable string: projects sorted, so their order in the
- *  manifest never re-asks. */
-function chatScopeKey(s: PageChatScope): string {
-  return 'all' in s ? 'all' : 'projects' in s ? `projects:${[...s.projects].sort().join(',')}` : `tag:${s.tag}`;
-}
-
-const MAX_SCOPE_ITEMS = 10;
-const MAX_SCOPE_NAME = 80;
-
-/** `"all"`, absent, `{ projects: [...] }` or `{ tag: "..." }`; anything else is
- *  null so the line is dropped (a typo must never read as "every chat"). */
-function cleanChatScope(raw: unknown): PageChatScope | null {
-  if (raw === undefined || raw === 'all') return { all: true };
-  if (!raw || typeof raw !== 'object') return null;
-  const o = raw as Record<string, unknown>;
-  if (Array.isArray(o.projects)) {
-    const projects = [...new Set(o.projects.filter((p): p is string => typeof p === 'string').map((p) => p.trim()).filter((p) => p && p.length <= MAX_SCOPE_NAME))];
-    return projects.length && projects.length <= MAX_SCOPE_ITEMS ? { projects } : null;
-  }
-  if (typeof o.tag === 'string' && o.tag.trim() && o.tag.trim().length <= MAX_SCOPE_NAME) return { tag: o.tag.trim() };
-  return null;
-}
-
-/** A bare file name inside the page's folder: letters, digits, dot, dash and
- *  underscore; not hidden; not page.html/page.json/data.json (the page's own
- *  files are never programs). */
-function cleanProgramFile(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const f = raw.trim();
-  if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(f) || f.includes('..')) return null;
-  return ['page.html', 'page.json', 'data.json'].includes(f.toLowerCase()) ? null : f;
+  return kindOf(c).fingerprint(c);
 }
 
 /** A device connection carries the address the person ALLOWED once approved,
@@ -438,54 +83,12 @@ export function withApprovedAddress(c: PageConnection, approvedAddress: string |
  *  suffix test would let `api.example.com.attacker.test` pass for
  *  `api.example.com`. `open` covers anything the network guard allows. */
 export function covers(c: PageConnection, target: string | URL): boolean {
-  const hostname = typeof target === 'string' ? target : target.hostname;
-  const host = hostname.trim().replace(/\.$/, '').toLowerCase();
-  switch (c.kind) {
-    // A device is host AND port: another service on the same box is not the
-    // device that was allowed. A bare hostname (no URL) cannot prove its port,
-    // so it never matches.
-    case 'device': return typeof target !== 'string' && urlMatchesDevice(target, c.address);
-    case 'open': return true;
-    case 'public': return c.address === host;
-    case 'key': return c.address === host;
-    case 'youcoded': return host === YOUCODED_HOST;
-    case 'github': return host === GITHUB_HOST;
-    // Never reachable through youcoded.fetch: Plaid is only ever called by main
-    // (plaid.ts), so a page cannot aim the Plaid keys at an address of its own.
-    case 'plaid': return false;
-    // Not a network destination: opening a conversation window reaches nothing.
-    // Chats and programs are app abilities, never an address for youcoded.fetch.
-    case 'session':
-    case 'chats':
-    case 'program':
-      return false;
-  }
+  return kindOf(c).covers(c, target);
 }
-
-/** The one address each built-in sign-in may be used with. Fixed here, never
- *  taken from the manifest, so a page cannot point the app's own credential at
- *  a host of its choosing. */
-const YOUCODED_HOST = 'api.youcoded.ai';
-const GITHUB_HOST = 'api.github.com';
 
 /** Look-up only means the app sends look-ups only; this is the check that
  *  makes "Cannot change anything there" true rather than decorative.
- *  `pathname` is the request's own (already dot-normalised by URL parsing):
- *  a YouCoded connection may change things only at a path it listed, matched
- *  exactly or at a `/` boundary, and never through an encoded path. */
+ *  `pathname` is the request's own (already dot-normalised by URL parsing). */
 export function methodAllowed(c: PageConnection, method: string, pathname = '/'): boolean {
-  const m = method.toUpperCase();
-  // WHY explicit: covers() already refuses every address for it, but a kind
-  // that is not a network connection must not read as "every method allowed"
-  // to any later caller that checks this alone.
-  if (c.kind === 'session' || c.kind === 'chats' || c.kind === 'program') return false;
-  if (c.kind === 'youcoded') {
-    if (m === 'GET' || m === 'HEAD') return true;
-    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(m) || pathname.includes('%')) return false;
-    return (c.writePaths ?? []).some((p) => pathname === p || pathname.startsWith(p + '/'));
-  }
-  const lookupOnly = c.kind === 'public'
-    || ((c.kind === 'key' || c.kind === 'github' || c.kind === 'device') && c.access === 'lookup');
-  if (!lookupOnly) return ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(m);
-  return m === 'GET' || m === 'HEAD';
+  return kindOf(c).methodAllowed(c, method, pathname);
 }

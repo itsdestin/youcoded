@@ -9,7 +9,8 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
-import { applyScheme, fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
+import { fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
+import { kindOf } from './page-kinds';
 import { log } from '../logger';
 import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
@@ -596,43 +597,10 @@ class PagesService {
   }
 
   /** Resolve what this connection sends. Nothing is decrypted until the host
-   *  match and the method check have already passed. */
+   *  match and the method check have already passed. Each kind's own rule
+   *  (page-kinds.ts) decides; app abilities and Plaid hold none for a fetch. */
   private async credentialFor(c: PageConnection): Promise<PageCredential | null> {
-    const store = this.deps.connections;
-    switch (c.kind) {
-      // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
-      // Opening a conversation window (session), reading chats and running a program hold no credential at all:
-      // they are app abilities, never a fetch destination (covers() refuses them first).
-      case 'public':
-      case 'open':
-      case 'plaid':
-      case 'session':
-      case 'chats':
-      case 'program':
-        return null;
-      case 'device':
-      case 'key': {
-        // A keyed device is a saved key at the ALLOWED address (c.address is
-        // already the approved one by the time the door asks).
-        if (!store || (c.kind === 'device' && !c.needsKey)) return null;
-        const record = await store.savedKey(c.service, c.address);
-        if (!record) return null;
-        const value = await store.keyValue(record).catch(() => null);
-        // The RECORDED placement, not the manifest's current one: the recorded
-        // one is what the person approved.
-        // The raw key rides as `secret` too, so redaction also catches a service
-        // that echoes the bare key back without its "Bearer" word.
-        return value ? { in: record.in, param: record.param, value: record.in === 'header' ? applyScheme(record.scheme, value) : value, secret: value } : null;
-      }
-      case 'youcoded': {
-        const token = await this.deps.youcodedToken?.();
-        return token ? { in: 'header', param: 'authorization', value: `Bearer ${token}` } : null;
-      }
-      case 'github': {
-        const token = await this.deps.githubToken?.();
-        return token ? { in: 'header', param: 'authorization', value: `token ${token}` } : null;
-      }
-    }
+    return kindOf(c).credential(c, { store: this.deps.connections ?? undefined, youcodedToken: this.deps.youcodedToken, githubToken: this.deps.githubToken });
   }
 
   /**
