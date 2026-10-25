@@ -17,8 +17,7 @@ import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } f
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, CARD_LEVEL_1, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
-import { Dialog } from '../ui/Dialog';
+import { Button, Callout, ErrorState, FieldError, SectionLabel, TextInput } from '../ui';
 import { PageGlyph } from './page-icons';
 import { cleanDeviceAddress, deviceAddressProblem } from '../../../shared/page-device-address';
 import { publishPages } from './use-pages';
@@ -57,6 +56,13 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
       }
       return { what: "Look things up on YouCoded's own service using your YouCoded sign-in.", limit: LOOKUP_LIMIT };
     case 'key':
+      // WHY a list instead of the general sentence (pages-finish step 1, deck 1
+      // Q-recipes): a service recipe names each thing the page may do there, and
+      // main allows only those, so the card can say exactly that.
+      if (c.does?.length) {
+        const using = c.parts?.length ? `your ${c.service} sign-in` : `your ${c.service} key`;
+        return { what: `Use ${c.service} at ${c.address} with ${using}, only to:`, limit: 'Nothing else there can be reached.' };
+      }
       return c.access === 'lookup'
         ? { what: `Look things up on ${c.address} using your ${c.service} key.`, limit: LOOKUP_LIMIT }
         : { what: `Look up and change things on ${c.address} using your ${c.service} key.`, limit: 'It can do whatever that key allows.' };
@@ -123,14 +129,55 @@ const PROGRAM_MEANS = [
   'Closing the page stops it running, but cannot undo what it already did.',
 ];
 
-/** Pages scope §6, "explain combined access": a page that can see chats and
- *  also reach somewhere else could carry the chat list there. Shown once, under
- *  the chats line, only when such a second connection exists. A program counts:
- *  it can reach the internet. Starting a conversation does not: you see and
- *  send that message yourself. */
-const CHATS_COMBINED = 'With its other permissions, this page could send your chat list outside this computer.';
-function reachesOutside(c: PageConnection): boolean {
-  return c.kind !== 'chats' && c.kind !== 'session';
+/** What a line lets the page read that is the person's own, and the site it
+ *  comes from. Null for a line that reads nothing private (public information,
+ *  the whole internet, starting a conversation, a program — which is a way OUT,
+ *  below). */
+function privateSource(c: PageConnection): { words: string; site?: string } | null {
+  switch (c.kind) {
+    case 'chats': return { words: 'your chat list' };
+    case 'key': return { words: `what it reads from ${c.service}`, site: splitAddress(c.address).site };
+    case 'device': return c.needsKey ? { words: `what it reads from your ${c.service}`, site: c.address } : null;
+    case 'github': return { words: 'what it reads from GitHub', site: 'github.com' };
+    case 'youcoded': return { words: 'what it reads from your YouCoded account', site: 'youcoded' };
+    case 'plaid': return { words: 'your bank balances' };
+    default: return null;
+  }
+}
+
+/** Where a line lets the page send things, written to follow "could send X". */
+function wayOut(c: PageConnection): { words: string; site?: string } | null {
+  switch (c.kind) {
+    case 'public': case 'key': { const site = splitAddress(c.address).site; return { words: `to ${site}`, site }; }
+    case 'device': return { words: `to your ${c.service}`, site: c.address };
+    case 'github': return { words: 'to GitHub', site: 'github.com' };
+    case 'youcoded': return { words: "to YouCoded's service", site: 'youcoded' };
+    case 'open': return { words: 'to any website' };
+    case 'program': return { words: `anywhere, using ${c.file}` };
+    default: return null;
+  }
+}
+
+/** Pages scope §6, "explain combined access", made general (pages-finish deck 1,
+ *  Q-combined: "Yes adds the line"). Each line alone can look harmless; a page
+ *  that reads something private AND can send somewhere else could carry the one
+ *  to the other. One sentence for the whole page, or null. A service reading and
+ *  sending to ITSELF is not counted: that is just using it. Starting a
+ *  conversation is not a way out — you see and send that message yourself. */
+export function combinedRisk(all: PageConnection[]): string | null {
+  const outs = all.map(wayOut).filter((o): o is NonNullable<typeof o> => o !== null);
+  const reads = all.map(privateSource).filter((s): s is NonNullable<typeof s> => s !== null)
+    .filter((s) => outs.some((o) => !o.site || o.site !== s.site));
+  if (reads.length === 0) return null;
+  const elsewhere = outs.filter((o) => reads.some((s) => !o.site || o.site !== s.site));
+  return `Together, this page could send ${listWords([...new Set(reads.map((s) => s.words))])} ${[...new Set(elsewhere.map((o) => o.words))].join(' or ')}.`;
+}
+
+/** The combined line as the app's notice box (amber: a warning about fit, not
+ *  an error). Under the list it is about, never inside one line. */
+export function CombinedRisk({ connections }: { connections: PageConnection[] }) {
+  const words = combinedRisk(connections);
+  return words ? <div data-combined-risk><Callout tone="warning" compact>{words}</Callout></div> : null;
 }
 
 /** Extra plain lines for a device whose manifest asks for more than ordinary look-ups: a live connection
@@ -232,13 +279,23 @@ const OPEN_INTERNET_MEANS = [
 
 /** No glyph beside the sentence (review round 1: "remove the key symbol",
  *  "drop icon") — the words carry it. */
-function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; children?: React.ReactNode; small?: boolean }) {
+export function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; children?: React.ReactNode; small?: boolean }) {
   const words = describeConnection(c);
+  const does = c.kind === 'key' ? c.does ?? [] : [];
   return (
     <div className="flex flex-col gap-1.5" data-page-connection={c.kind}>
+      {does.length > 0 ? (<>
+        {/* A recipe's allowed actions, one per line, then what stays out of reach. */}
+        <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>{withAddress(words.what, addressOf(c))}</div>
+        <ul className={`list-disc pl-5 ${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed flex flex-col gap-0.5`} data-recipe-does>
+          {does.map((t) => <li key={t}>{t}</li>)}
+        </ul>
+        <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-dim leading-relaxed`}>{words.limit}</div>
+      </>) : (
       <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
         {withAddress(words.what, addressOf(c), c.kind === 'device')} <span className="text-fg-dim">{words.limit}</span>
       </div>
+      )}
       {deviceExtraLines(c).map((line) => <div key={line} className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`} data-device-extra>{line}</div>)}
       {children}
     </div>
@@ -256,6 +313,18 @@ type KeyedLine = (PageConnectionStatus & { kind: 'key' | 'device' })
 
 function plaidKeyed(c: PageConnectionStatus & { kind: 'plaid' }): KeyedLine {
   return { ...c, service: PLAID_SERVICE, address: plaidAddress(c.environment) };
+}
+
+/** The boxes a key step shows for one line: the recipe's named parts, Plaid's
+ *  two (written here until Plaid itself becomes a bundled recipe), or none for
+ *  an ordinary single key. Part ids are the saved key's JSON field names, so
+ *  Plaid's stay `clientId` and `secret` as main already reads them. */
+function partsOf(c: KeyedLine): NonNullable<Extract<PageConnection, { kind: 'key' }>['parts']> {
+  if (c.kind === 'plaid') {
+    const env = c.environment === 'sandbox' ? 'Sandbox' : 'Production';
+    return [{ id: 'clientId', label: 'Client ID' }, { id: 'secret', label: `${env} secret`, secret: true }];
+  }
+  return c.kind === 'key' ? c.parts ?? [] : [];
 }
 
 /** Plaid's own dashboard page where both keys are shown. */
@@ -364,12 +433,17 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const [step, setStep] = useState<'what' | 'keys'>(() =>
     isWorkbenchMode() && new URLSearchParams(location.search).get('pagesStep') === 'keys' ? 'keys' : 'what');
   const [keys, setKeys] = useState<Record<string, string>>({});
-  // Plaid takes two values; they are joined into the one saved key here.
-  const [plaidParts, setPlaidParts] = useState<Record<string, { clientId: string; secret: string }>>({});
-  const setPlaidPart = (id: string, part: 'clientId' | 'secret', v: string) => setPlaidParts((m) => {
-    const next = { ...(m[id] ?? { clientId: '', secret: '' }), [part]: v };
-    setKeys((k) => ({ ...k, [id]: next.clientId.trim() && next.secret.trim() ? JSON.stringify({ clientId: next.clientId.trim(), secret: next.secret.trim() }) : '' }));
-    return { ...m, [id]: next };
+  // A service that signs in with several values (Plaid's client ID and secret,
+  // an Apple ID and app password): one box per part, joined into the one saved
+  // key here once every box is filled.
+  // WHY general (pages-finish step 1, recipes): this was Plaid's own pair of
+  // boxes; any recipe may now name its parts, so no service needs its own step.
+  const [partValues, setPartValues] = useState<Record<string, Record<string, string>>>({});
+  const setPart = (c: KeyedLine, part: string, v: string) => setPartValues((m) => {
+    const next = { ...(m[c.id] ?? {}), [part]: v };
+    const all = partsOf(c);
+    setKeys((k) => ({ ...k, [c.id]: all.every((p) => (next[p.id] ?? '').trim()) ? JSON.stringify(Object.fromEntries(all.map((p) => [p.id, next[p.id].trim()]))) : '' }));
+    return { ...m, [c.id]: next };
   });
   const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
@@ -455,32 +529,31 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
 
   if (step === 'keys') {
     const names = toType.map((c) => c.service);
+    // A recipe that signs in with named parts (an Apple ID and a password) is a
+    // sign-in to the person, not "a key".
+    const signIn = toType.length === 1 && toType[0].kind === 'key' && partsOf(toType[0]).length > 0;
     return shell(<>
-      {heading('One more step', names.length === 1 ? `Add your ${names[0]} key` : 'Add your keys')}
+      {heading('One more step', signIn ? `Sign in to ${names[0]}` : names.length === 1 ? `Add your ${names[0]} key` : 'Add your keys')}
       {toType.map((c) => (
         <div key={c.id} className="flex flex-col gap-3" data-page-key-step={c.service}>
           {toType.length > 1 && <div className="text-sm font-medium text-fg">{c.service}</div>}
           <KeyHelp c={c} />
-          {c.kind === 'plaid' ? (<>
-            <TextInput
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Your Plaid client ID"
-              placeholder="Client ID"
-              value={plaidParts[c.id]?.clientId ?? ''}
-              onChange={(e) => setPlaidPart(c.id, 'clientId', e.target.value)}
-              className="select-text"
-            />
-            <TextInput
-              type="password"
-              autoComplete="off"
-              aria-label={`Your Plaid ${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
-              placeholder={`${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
-              value={plaidParts[c.id]?.secret ?? ''}
-              onChange={(e) => setPlaidPart(c.id, 'secret', e.target.value)}
-              className="select-text"
-            />
-          </>) : (
+          {partsOf(c).length > 0 ? partsOf(c).map((p) => (
+            // Guide "Text and numbers": a box's name above it, its grey words under it.
+            <div key={p.id} className="flex flex-col gap-1.5" data-key-part={p.id}>
+              <label htmlFor={`key-part-${c.id}-${p.id}`} className="text-xs font-medium text-fg">{p.label}</label>
+              <TextInput
+                id={`key-part-${c.id}-${p.id}`}
+                type={p.secret ? 'password' : 'text'}
+                autoComplete="off"
+                spellCheck={false}
+                value={partValues[c.id]?.[p.id] ?? ''}
+                onChange={(e) => setPart(c, p.id, e.target.value)}
+                className="select-text"
+              />
+              {p.hint && <div className="text-xs text-fg-muted leading-relaxed">{p.hint}</div>}
+            </div>
+          )) : (
           <TextInput
             type="password"
             autoComplete="off"
@@ -500,7 +573,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           sync never touches. The key does leave the machine — to its own
           service — so that is said too, never "not accessible to anyone". */}
       <div className="text-xs text-fg-muted leading-relaxed" data-key-storage-note>
-        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? <Address address={toType[0].address} device={toType[0].kind === 'device'} /> : 'the service it belongs to'}.
+        {signIn ? 'These are' : 'Your key is'} stored encrypted on this computer only. {signIn ? "They aren't" : "It isn't"} backed up or synced, and YouCoded sends {signIn ? 'them' : 'it'} only to {toType.length === 1 ? <Address address={toType[0].address} device={toType[0].kind === 'device'} /> : 'the service it belongs to'}.
       </div>
       {failureState}
       <div className="flex flex-col gap-2">
@@ -538,9 +611,6 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
                 {PROGRAM_MEANS.map((t) => <li key={t}>{t}</li>)}
               </ul>
             )}
-            {c.kind === 'chats' && all.some(reachesOutside) && (
-              <div className="text-xs text-fg-muted leading-relaxed" data-chats-combined>{CHATS_COMBINED}</div>
-            )}
             {c.kind === 'device' && (
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />
             )}
@@ -568,6 +638,11 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           </div>
         </div>
       )}
+      {/* WHY over the whole list, not under the chats line (pages-finish deck 1,
+          Q-combined): the risk is two lines together, any two, so it is said
+          once about the page — and on a re-ask it counts what was already
+          allowed, because the new line may be the second half. */}
+      <CombinedRisk connections={shown.concat(already)} />
     </div>
 
     {failureState}
@@ -594,54 +669,4 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
       <Button variant="secondary" onClick={onNotNow} className="w-full">Not now</Button>
     </div>
   </>);
-}
-
-/** One page's connections, opened from its library card (deck Q-manage). */
-export function PageConnectionsDialog({ page, onClose, onConnect }: { page: PageSummary | null; onClose: () => void; onConnect: (pageId: string) => void }) {
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const remove = async (connectionId: string) => {
-    const b = bridge();
-    if (!page || !b?.removeConnection) return;
-    publishPages(await b.removeConnection(page.id, connectionId));
-    setConfirming(null);
-  };
-  const list = page?.connections ?? [];
-  return (
-    // WHY the saved-keys line moved to the title's second line, and the cards are the shared
-    // first-level card (final-review#ST-21/#PR-7, the one popup rule): the line floated bare
-    // under the last card (guide: no loose lines between cards), and each card hand-typed a
-    // fainter look than every other popup's.
-    <Dialog screen="pages/library/connections" open={page !== null} onClose={onClose} layer={3} size="panel" title={page ? `${page.name} · connections` : ''}
-      subtitle={list.length > 0 ? 'Saved keys are kept under Settings › Account › Connected services.' : undefined}>
-      <div className="flex flex-col gap-3">
-        {list.length === 0 && <div className="text-sm text-fg-muted">This page reaches nothing outside itself.</div>}
-        {list.map((c) => (
-          <div key={c.id} className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`}>
-            <ConnectionLine c={c} small />
-            {confirming === c.id ? (
-              <div className="flex flex-col gap-2">
-                <div className="text-2xs text-fg-2 leading-relaxed" data-remove-confirm>
-                  This stops future use. It cannot undo anything the page already sent or received. The page will ask again next time it opens.
-                </div>
-                {/* Right-aligned, Remove rightmost (review round 1, C-10). */}
-                <div className="flex items-center justify-end gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setConfirming(null)}>Never mind</Button>
-                  <Button variant="danger" size="sm" onClick={() => { void remove(c.id); }}>Remove</Button>
-                </div>
-              </div>
-            ) : (
-              // Not connected yet: offer to connect, bottom right, instead of a
-              // "waiting" label (review round 1, C-9). It opens the page, whose
-              // approval card is the one place a connection is agreed to.
-              <div className="flex justify-end">
-                {c.approved
-                  ? <Button variant="secondary" size="sm" onClick={() => setConfirming(c.id)}>Remove</Button>
-                  : <Button variant="primary" size="sm" data-connect onClick={() => { if (page) onConnect(page.id); }}>Connect</Button>}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Dialog>
-  );
 }

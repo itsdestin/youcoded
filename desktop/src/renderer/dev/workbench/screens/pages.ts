@@ -98,6 +98,11 @@ export const PAGES: readonly ScreenEntry[] = [
   // Redesign options, one screen each (fixtures/home-variants/), listed from the registry so
   // a helper adding an option never edits this file.
   ...homeVariantEntries().map(([k, v]) => ({ ...pg(`pages/page/page-home#v-${k}`, 'view', 'redesign'), params: { pagesHome: `v-${k}` }, ...(v.sameAs ? { sameAs: v.sameAs } : {}) })),
+  // Finishing Pages, step 1 (2026-10-24): a recipe page (what it may do, two-part sign-in,
+  // the "together" line); the "Open this website?" ask; Page settings for three pages.
+  { ...pg('pages/page/page-family-calendar', 'view', 'approval'), newIn: 'after' },
+  { ...pg('pages/page/page-family-calendar#key', 'view', 'approval'), params: { pagesStep: 'keys' }, newIn: 'after' },
+  { ...pg('pages/page/open-website', 'dialog'), newIn: 'after' },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on
@@ -112,7 +117,12 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('office/spreadsheet-comments', 'view', 'office'),
   pg('office/versions', 'dialog', 'office'),
   pg('pages/library', 'view'),
-  pg('pages/library/connections', 'dialog'),
+  // Page settings replaced the connections window (pages-finish deck 2, Q-settingswindow).
+  { ...pg('pages/library/settings', 'dialog'), newIn: 'after' },
+  { ...pg('pages/library/settings#calendar', 'dialog'), params: { pagesSettings: 'page-family-calendar' }, newIn: 'after' },
+  { ...pg('pages/library/settings#work-board', 'dialog'), params: { pagesSettings: 'page-work-board' }, newIn: 'after' },
+  { ...pg('pages/library/settings#phone', 'dialog', 'narrow'), params: { pagesSettings: 'page-family-calendar' }, viewport: PHONE, newIn: 'after' },
+  { ...pg('pages/page/open-website#phone', 'dialog', 'narrow'), viewport: PHONE, newIn: 'after' },
   pg('pages/library/edit', 'dialog'),
   pg('pages/create', 'dialog'),
   // At phone size.

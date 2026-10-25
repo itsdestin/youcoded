@@ -61,6 +61,9 @@ import { PageApproval, needsApproval } from './page-connections';
 import { answerPageChats } from './page-chats';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
+import { PageSettingsDialog } from './PageSettings';
+import { PageOpenWebsite } from './PageOpenWebsite';
+import { CogIcon } from '../project-view/icons';
 import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
@@ -181,6 +184,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Office's own comments panel, restyled to match the app's comment cards (finish plan Task 6).
   useScreenOpen('office/document-comments', () => { previewOfficeComments('document'); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/spreadsheet-comments', () => { previewOfficeComments('spreadsheet'); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  // Page settings from the band, and the "Open this website?" ask (pages-finish
+  // step 1). Both are about the page on screen.
+  const [pageSettingsOpen, setPageSettingsOpen] = useState(false);
+  const [openAsk, setOpenAsk] = useState<string | null>(null);
+  // The ask in the photo-only build: the analytics practice page (allowed to reach
+  // YouCoded's service, not GitHub) wanting to open a GitHub address whose end
+  // carries more than a plain link would.
+  useScreenOpen('pages/page/open-website', () => {
+    dispatch({ type: 'PAGE_OPENED', pageId: 'page-analytics' });
+    setOpenAsk('https://github.com/itsdestin/youcoded/releases/tag/v1.3.2?from=analytics&today=412&month=2186');
+  });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like
@@ -585,6 +599,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               the request. Hidden until the page is approved. */}
           {summary && !awaitingApproval && <PageFreshness page={summary} onRefresh={askPageToRefresh} />}
           {summary && !awaitingApproval && <PageCodeChanged page={summary} />}
+          {/* The page's Settings window (pages-finish deck 2, Q-settingswindow:
+              "opened from its card and its top band"). Not on a built-in page. */}
+          {summary && summary.home.kind !== 'builtin' && (
+            <Tooltip text="Page settings" placement="bottom">
+              <Button size="icon-sm" variant="ghost" aria-label={`Settings for ${summary.name}`} className="w-6 h-6 shrink-0"
+                data-page-band-settings onClick={() => setPageSettingsOpen(true)} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+                <span className="text-fg-muted"><CogIcon size={14} /></span>
+              </Button>
+            </Tooltip>
+          )}
         </>}
       />}
 
@@ -716,6 +740,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </div>
       </div>
     </div>
+    <PageSettingsDialog page={pageSettingsOpen ? summary : null} onClose={() => setPageSettingsOpen(false)} onConnect={() => setPageSettingsOpen(false)} />
+    <PageOpenWebsite page={openAsk ? summary : null} url={openAsk} onClose={() => setOpenAsk(null)} />
     </>
   );
 }

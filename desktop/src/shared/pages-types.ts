@@ -77,6 +77,17 @@ export type PageConnection =
       /** What goes before the key in a header. Absent means the usual word for
        *  an Authorization header ("Bearer") and nothing for any other header. */
       keyScheme?: KeyScheme;
+      /** DESIGN STAGE (pages-finish step 1, service recipes): the plain words for
+       *  each thing the recipe allows there ("See your calendars and events"),
+       *  one per allowed method + path. When present the approval card lists them
+       *  instead of the general "look up and change things" sentence, so the
+       *  person approves exactly what the page may do. */
+      does?: string[];
+      /** DESIGN STAGE (recipes, multi-part sign-in): a service that signs in with
+       *  more than one value (an Apple ID and an app password; Plaid's client ID
+       *  and secret). One box per part on the key step, each named; they are
+       *  saved together as the one key. Absent: a single pasted key. */
+      parts?: Array<{ id: string; label: string; hint?: string; secret?: boolean }>;
     }
   /** Public information: an approved address, nothing secret. */
   | { id: string; kind: 'public'; address: string }
@@ -440,6 +451,10 @@ export interface PageSummary {
    *  are. It still opens and still reaches only what was allowed; the band
    *  says so quietly until the person dismisses it (deck 3, Q-code-change). */
   codeChanged?: boolean;
+  /** DESIGN STAGE (pages-finish step 1, deck 1 Q-popups): sites the person said
+   *  this page may open in the browser without asking. A link to any other site
+   *  that the page cannot already reach shows "Open this website?" first. */
+  openSites?: string[];
 }
 
 /** A page's working version, ready to show. `html` is a complete document;
@@ -513,6 +528,12 @@ export interface PagesBridge {
   approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => Promise<PageApproveResult>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
+  /** DESIGN STAGE (mock-only.ts): opens `url` in the browser for the page after
+   *  the person said yes; `remember` adds its site to the page's `openSites`. */
+  openWebsite?: (id: string, url: string, remember: boolean) => Promise<PageSummary[]>;
+  /** DESIGN STAGE (mock-only.ts): takes a site back off `openSites`, so links to
+   *  it ask again. */
+  forgetOpenSite?: (id: string, site: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */
   refresh?: (id: string) => Promise<PageSummary[]>;
   savedKeys?: () => Promise<SavedPageKey[]>;

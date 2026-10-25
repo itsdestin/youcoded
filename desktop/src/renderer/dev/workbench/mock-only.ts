@@ -108,6 +108,11 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Finishing Pages, step 1 (docs/active/specs/2026-10-24-pages-finish-architecture.md): the
+  // "Open this website?" ask and Page settings' list of sites opened without asking. Delete both
+  // rows when main answers them (the popup handler in main.ts, the per-page site list).
+  { channel: 'pages.openWebsite', feature: 'Pages: ask before a page opens a website' },
+  { channel: 'pages.forgetOpenSite', feature: 'Pages: sites a page opens without asking' },
   // Automatic updates (#183): its last row (update.restartToUpdate) is GONE (T3): main + preload +
   // remote-shim carry the real channel; the hand-written mock in mock-shim.ts stays.
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE

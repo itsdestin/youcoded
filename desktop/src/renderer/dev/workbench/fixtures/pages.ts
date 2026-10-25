@@ -238,7 +238,9 @@ function connectedPages(): PageDocument[] {
       html: simplePage('Todoist', 'Task board', [['Draft fiscal note', 'Today'], ['Reply to Sarah', 'Today'], ['Renew domain', 'Mon']]),
       // First ask, fresh key, FULL access: the blunter sentence and the key box.
       connections: [{ id: 'todoist', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full', approved: false, savedKey: false,
-        keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] } }],
+        keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] },
+        // Finishing Pages step 1: written as a service recipe, so the card lists what it may do.
+        does: ['See your tasks and projects', 'Add, complete and move tasks'] }],
     },
     {
       ...base, id: 'page-headlines', name: 'Headlines (second website added)', icon: 'notes',
@@ -250,6 +252,8 @@ function connectedPages(): PageDocument[] {
         { id: 'bbc', kind: 'public', address: 'feeds.bbci.co.uk', approved: true },
         { id: 'hn', kind: 'public', address: 'hnrss.org', approved: false },
       ],
+      // One site it may open without asking, for Page settings' list.
+      openSites: ['news.ycombinator.com'],
       refresh: { at: minutesAgo(12), failed: false },
     },
     {
@@ -282,6 +286,27 @@ function connectedPages(): PageDocument[] {
       refresh: { at: minutesAgo(1), failed: false },
       // Rewritten since it was allowed: the band shows the quiet note.
       codeChanged: true,
+    },
+    {
+      // Finishing Pages step 1 (2026-10-24): a service no one built into the app,
+      // described by a recipe — iCloud's calendar server, signed in with an Apple
+      // ID and an app password (two parts), allowed only the calendar actions it
+      // names — plus a public weather address. Together they make the
+      // "could send what it reads… to api.open-meteo.com" line.
+      ...base, id: 'page-family-calendar', name: 'Family calendar', icon: 'calendar',
+      description: 'Everyone\'s events for the week, with the forecast for each day.',
+      updatedAt: '2026-10-24T09:00:00.000Z', htmlStamp: 1792832400000,
+      html: simplePage('This week', 'Family calendar', [['Mon 26', 'Dentist 15:00 · 22° clear'], ['Wed 28', 'Parent evening 18:30 · 19° rain'], ['Sat 31', 'Halloween party · 17° cloud']]),
+      connections: [
+        { id: 'icloud', kind: 'key', service: 'iCloud Calendar', address: 'caldav.icloud.com', access: 'full', approved: false, savedKey: false,
+          does: ['See your calendars and events', 'Add, change and remove events'],
+          parts: [
+            { id: 'appleId', label: 'Apple ID email' },
+            { id: 'password', label: 'App password', secret: true, hint: 'An app password, not your Apple ID password. Apple shows it once, when you make it.' },
+          ],
+          keyHelp: { steps: ['Sign in at account.apple.com.', 'Open Sign-In and Security, then App-Specific Passwords.', 'Make one called "YouCoded calendar" and copy it into the box below.'] } },
+        { id: 'weather', kind: 'public', address: 'api.open-meteo.com', approved: false },
+      ],
     },
     {
       // Page start session (spec 2026-10-14): a project page that may open the

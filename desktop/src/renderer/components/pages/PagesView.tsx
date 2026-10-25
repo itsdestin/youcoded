@@ -20,7 +20,9 @@ import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
-import { PageConnectionsDialog } from './page-connections';
+import { PageSettingsDialog } from './PageSettings';
+import { CogIcon } from '../project-view/icons';
+import { isWorkbenchMode } from '../../workbench-mode';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 // WHY (Office fix round 5): Retry reloads the window, so any open Office document saves first.
 import { reloadAfterOfficeSave } from '../office/office-store';
@@ -42,9 +44,10 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const { pages, loaded, failed, pinnedTotal } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
-  const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
-  // Photo-only build: `shoot` opens a page's connections, or its editor (fixture pages).
-  useScreenOpen('pages/library/connections', () => setConnectionsFor('page-headlines'));
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
+  // Photo-only build: `shoot` opens a page's settings (`?pagesSettings=<id>` picks
+  // which fixture page), or its editor.
+  useScreenOpen('pages/library/settings', () => setSettingsFor((isWorkbenchMode() && new URLSearchParams(location.search).get('pagesSettings')) || 'page-headlines'));
   useScreenOpen('pages/library/edit', () => { const p = pages.find((x) => x.id === 'page-paint') ?? pages[0]; if (p) onEditPage(p); });
   if (!open) return null;
 
@@ -61,7 +64,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   }
   const pinnedCount = pinnedTotal ?? pages.filter((p) => p.pinned).length; // hidden Office pins count too (use-pages)
   // By id, so the dialog follows the live list when a connection is removed.
-  const connectionsPage = pages.find((p) => p.id === connectionsFor) ?? null;
+  const settingsPage = pages.find((p) => p.id === settingsFor) ?? null;
 
   return (
     // z-50: above the page view (z-40) it opens from.
@@ -106,27 +109,27 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && !failed && builtin.length > 0 && (
             <Section label="Built in">
               {builtin.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onSettings={() => setSettingsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
         </div>
       </main>
-      <PageConnectionsDialog page={connectionsPage} onClose={() => setConnectionsFor(null)} onConnect={(id) => { setConnectionsFor(null); openPage(id); }} />
+      <PageSettingsDialog page={settingsPage} onClose={() => setSettingsFor(null)} onConnect={(id) => { setSettingsFor(null); openPage(id); }} />
     </div>
   );
 }
@@ -144,7 +147,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; onConnections: () => void; pinFull: boolean }) {
+function PageCard({ page, onOpen, onEdit, onSettings, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; onSettings: () => void; pinFull: boolean }) {
   // The card is one button (open); the pin is a second control INSIDE it, so
   // it stops propagation. The pin is always visible — unlike a theme card's
   // favourite star it sits on text, not on a picture (guide §4.4).
@@ -179,6 +182,20 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
             <span className="text-fg-muted"><EditGlyph /></span>
           </Button>
         </Tooltip>}
+        {/* Page settings (pages-finish deck 2, Q-settingswindow): one window per
+            page, opened here and from the page's band. A built-in page has no
+            settings of its own. */}
+        {page.home.kind !== 'builtin' && <Tooltip text="Page settings" placement="bottom">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Settings for ${page.name}`}
+            data-page-settings-button
+            onClick={(e) => { e.stopPropagation(); onSettings(); }}
+          >
+            <span className="text-fg-muted"><CogIcon size={16} /></span>
+          </Button>
+        </Tooltip>}
         <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
           <Button
             size="icon-sm"
@@ -207,7 +224,7 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
               variant="ghost"
               size="sm"
               data-page-connections-link
-              onClick={(e) => { e.stopPropagation(); onConnections(); }}
+              onClick={(e) => { e.stopPropagation(); onSettings(); }}
             >
               {connectionCount === 1 ? '1 connection' : `${connectionCount} connections`}
             </Button>

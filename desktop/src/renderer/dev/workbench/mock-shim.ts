@@ -246,6 +246,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
+  // Finishing Pages, step 1 (2026-10-24): "Open this website?" and Page settings' site list.
+  'pages.openWebsite', 'pages.forgetOpenSite',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
   // workbench has files to list and versions to show without the add-on or a disk.
   'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
@@ -4560,6 +4562,21 @@ function createPagesMock(scenario: string): PagesBridge {
     // again next time it opens (deck S-remove).
     removeConnection: async (id, connectionId) => {
       pages = pages.map((p) => (p.id !== id ? p : { ...p, refresh: undefined, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, approved: false } : c)) }));
+      publish();
+      return summaries();
+    },
+    // Finishing Pages, step 1: opening records the site when the person said
+    // not to ask again (nothing opens in the workbench); the bin forgets it.
+    openWebsite: async (id, url, remember) => {
+      if (remember) {
+        const host = new URL(url).hostname;
+        pages = pages.map((p) => (p.id !== id || p.openSites?.includes(host) ? p : { ...p, openSites: [...(p.openSites ?? []), host] }));
+        publish();
+      }
+      return summaries();
+    },
+    forgetOpenSite: async (id, site) => {
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, openSites: (p.openSites ?? []).filter((s) => s !== site) }));
       publish();
       return summaries();
     },
