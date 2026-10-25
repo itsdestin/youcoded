@@ -68,7 +68,7 @@ describe('reading a file this build does not understand', () => {
   });
 
   it('reads a missing file as nothing approved', async () => {
-    expect(await store.read()).toEqual({ pages: {}, keys: {} });
+    expect(await store.read()).toEqual({ pages: {}, keys: {}, openSites: {} });
   });
 });
 
@@ -157,3 +157,24 @@ describe('a file written by another process', () => {
     expect(Object.keys((await store.read()).pages).sort()).toEqual(['personal:other', 'personal:weather']);
   });
 });
+
+describe('websites a page opens without asking', () => {
+  it('survives approving and removing connections, and goes with its page', async () => {
+    await store.addOpenSite('personal:news', 'News.YCombinator.com.');
+    await store.addOpenSite('personal:news', 'news.ycombinator.com');
+    await store.recordApprovals('personal:news', { feed: approval('public|hnrss.org') });
+    await store.removeApproval('personal:news', 'feed');
+    expect(await store.openSitesFor('personal:news')).toEqual(['news.ycombinator.com']);
+    await store.removeOpenSite('personal:news', 'news.ycombinator.com');
+    expect(await store.openSitesFor('personal:news')).toEqual([]);
+    await store.addOpenSite('personal:gone', 'example.com');
+    await store.prune(new Set(['personal:news']), new Set());
+    expect((await store.read()).openSites).toEqual({});
+  });
+
+  it('keeps only plain hostnames from a hand-edited file', async () => {
+    writeFileSync(path.join(dir, CONNECTIONS_FILE), JSON.stringify({ version: 1, pages: {}, keys: {}, openSites: { 'personal:x': ['ok.example', 'bad host', 'https://x.example/', 7] } }));
+    expect(await store.openSitesFor('personal:x')).toEqual(['ok.example']);
+  });
+});
+
