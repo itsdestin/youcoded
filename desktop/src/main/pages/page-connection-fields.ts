@@ -2,7 +2,7 @@
 // (page-kinds.ts). Moved verbatim from page-connections.ts when the kinds became a
 // registry (pages-finish step 1): nothing here decides WHICH kind a line is, only
 // whether a value written by a page's author can be trusted.
-import type { KeyScheme, PageAccess, PageChatScope, PageConnection, VideoProfile } from '../../shared/pages-types';
+import type { KeyScheme, PageAccess, PageAllowRule, PageChatScope, PageConnection, PageKeyPart, VideoProfile } from '../../shared/pages-types';
 
 /** Where a key connection's key is attached when the manifest does not say.
  *  A header is the common case and the safer one: a key in a query string is
@@ -225,3 +225,99 @@ export function cleanProgramFile(raw: unknown): string | null {
  *  a host of its choosing. */
 export const YOUCODED_HOST = 'api.youcoded.ai';
 export const GITHUB_HOST = 'api.github.com';
+
+// ── Service recipes (pages-finish step 1, technical design §2) ─────────────────
+
+const MAX_ALLOW = 16;
+const MAX_DOES = 80;
+/** Methods a recipe may never name: CONNECT opens a tunnel, TRACE/TRACK echo the
+ *  request (credentials included) back to the page. */
+const NEVER_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK']);
+
+/** A recipe path: plain segments only — no `%`, no `..`, no query — so what the card
+ *  shows is the only thing that can match. `/` alone means the whole service. */
+function cleanRecipePath(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const p = raw.trim();
+  if (p === '/') return '/';
+  const path = p.replace(/\/+$/, '');
+  if (path.length > 200 || !/^(\/[A-Za-z0-9_.~@:-]+)+$/.test(path)) return null;
+  return path.split('/').some((seg) => seg === '.' || seg === '..') ? null : path;
+}
+
+/** A recipe's `allow` list. `undefined` when the manifest has none, `null` when any
+ *  entry is invalid — the caller then drops the WHOLE line, because the card must
+ *  show exactly what main enforces (the same rule as `socketDeny`). */
+export function cleanAllow(raw: unknown): PageAllowRule[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_ALLOW) return null;
+  const out: PageAllowRule[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') return null;
+    const o = r as Record<string, unknown>;
+    const method = typeof o.method === 'string' ? o.method.trim().toUpperCase() : '';
+    const path = cleanRecipePath(o.path);
+    const does = typeof o.does === 'string' ? o.does.trim() : '';
+    if (!/^[A-Z]{3,16}$/.test(method) || NEVER_METHODS.has(method) || !path || !does || does.length > MAX_DOES) return null;
+    out.push({ method, path, does });
+  }
+  return out;
+}
+
+/** The allow list as it rides a fingerprint: method + path pairs, sorted and
+ *  de-duplicated, WITHOUT the `does` words — rewording does not re-ask; changing what
+ *  is allowed does. '' when there is none, so a line without one keeps its old string. */
+export function allowSegment(allow: readonly PageAllowRule[] | undefined): string {
+  if (!allow?.length) return '';
+  return `|allow:${[...new Set(allow.map((r) => `${r.method} ${r.path}`))].sort().join(',')}`;
+}
+
+/** Does a request fit one of the recipe's rules? Same method, and the request's own
+ *  path (already dot-normalised by URL parsing) equal to the rule's or under it at a
+ *  `/` boundary. An encoded slash, dot or backslash is refused outright: a server may
+ *  decode it into a path the rule does not cover. */
+export function allowMatches(allow: readonly PageAllowRule[], method: string, pathname: string): boolean {
+  const m = method.toUpperCase();
+  if (/%(2f|2e|5c)/i.test(pathname)) return false;
+  return allow.some((r) => r.method === m && (r.path === '/' || pathname === r.path || pathname.startsWith(r.path + '/')));
+}
+
+const PART_IN = new Set(['header', 'query', 'basic-user', 'basic-password']);
+
+/** A multi-part sign-in. `undefined` when absent, `null` (drop the line) when it
+ *  breaks a rule: 2–4 parts, unique plain ids, a named header or parameter for the
+ *  ones that need one, and Basic's two halves both present or both absent. */
+export function cleanParts(raw: unknown): PageKeyPart[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 4) return null;
+  const out: PageKeyPart[] = [];
+  const ids = new Set<string>();
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') return null;
+    const o = r as Record<string, unknown>;
+    const id = typeof o.id === 'string' ? o.id.trim() : '';
+    const label = typeof o.label === 'string' ? o.label.trim() : '';
+    const where = typeof o.in === 'string' ? o.in : '';
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(id) || ids.has(id) || !label || label.length > 40 || !PART_IN.has(where)) return null;
+    const part: PageKeyPart = { id, label, in: where as PageKeyPart['in'] };
+    if (where === 'header' || where === 'query') {
+      const param = cleanParam(o.param);
+      if (!param) return null;
+      part.param = param;
+    }
+    if (typeof o.hint === 'string' && o.hint.trim()) part.hint = o.hint.trim().slice(0, 160);
+    if (o.secret === true) part.secret = true;
+    ids.add(id);
+    out.push(part);
+  }
+  const users = out.filter((p) => p.in === 'basic-user').length;
+  const passwords = out.filter((p) => p.in === 'basic-password').length;
+  if (users > 1 || passwords > 1 || users !== passwords) return null;
+  return out;
+}
+
+/** The parts as they ride a fingerprint: where each value goes, never its label. */
+export function partsSegment(parts: readonly PageKeyPart[] | undefined): string {
+  if (!parts?.length) return '';
+  return `|parts:${parts.map((p) => `${p.id}:${p.in}${p.param ? `:${p.param}` : ''}`).sort().join(',')}`;
+}

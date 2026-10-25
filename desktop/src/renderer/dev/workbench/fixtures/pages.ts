@@ -240,7 +240,11 @@ function connectedPages(): PageDocument[] {
       connections: [{ id: 'todoist', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full', approved: false, savedKey: false,
         keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] },
         // Finishing Pages step 1: written as a service recipe, so the card lists what it may do.
-        does: ['See your tasks and projects', 'Add, complete and move tasks'] }],
+        allow: [
+          { method: 'GET', path: '/rest/v2/tasks', does: 'See your tasks and projects' },
+          { method: 'GET', path: '/rest/v2/projects', does: 'See your tasks and projects' },
+          { method: 'POST', path: '/rest/v2/tasks', does: 'Add, complete and move tasks' },
+        ] }],
     },
     {
       ...base, id: 'page-headlines', name: 'Headlines (second website added)', icon: 'notes',
@@ -299,10 +303,16 @@ function connectedPages(): PageDocument[] {
       html: simplePage('This week', 'Family calendar', [['Mon 26', 'Dentist 15:00 · 22° clear'], ['Wed 28', 'Parent evening 18:30 · 19° rain'], ['Sat 31', 'Halloween party · 17° cloud']]),
       connections: [
         { id: 'icloud', kind: 'key', service: 'iCloud Calendar', address: 'caldav.icloud.com', access: 'full', approved: false, savedKey: false,
-          does: ['See your calendars and events', 'Add, change and remove events'],
+          allow: [
+            // A calendar server speaks WebDAV: PROPFIND lists calendars, REPORT reads events.
+            { method: 'PROPFIND', path: '/', does: 'See your calendars and events' },
+            { method: 'REPORT', path: '/', does: 'See your calendars and events' },
+            { method: 'PUT', path: '/', does: 'Add, change and remove events' },
+            { method: 'DELETE', path: '/', does: 'Add, change and remove events' },
+          ],
           parts: [
-            { id: 'appleId', label: 'Apple ID email' },
-            { id: 'password', label: 'App password', secret: true, hint: 'An app password, not your Apple ID password. Apple shows it once, when you make it.' },
+            { id: 'appleId', label: 'Apple ID email', in: 'basic-user' },
+            { id: 'password', label: 'App password', secret: true, in: 'basic-password', hint: 'An app password, not your Apple ID password. Apple shows it once, when you make it.' },
           ],
           keyHelp: { steps: ['Sign in at account.apple.com.', 'Open Sign-In and Security, then App-Specific Passwords.', 'Make one called "YouCoded calendar" and copy it into the box below.'] } },
         { id: 'weather', kind: 'public', address: 'api.open-meteo.com', approved: false },

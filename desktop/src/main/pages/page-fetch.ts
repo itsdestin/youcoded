@@ -71,7 +71,10 @@ const REQUEST_HEADER_ALLOWLIST = ['accept', 'accept-language', 'content-type'];
 /** How a credential is attached, resolved by the caller from the approval. */
 export type PageCredential =
   | { in: 'header'; param: string; value: string; secret?: string }
-  | { in: 'query'; param: string; value: string; secret?: string };
+  | { in: 'query'; param: string; value: string; secret?: string }
+  /** A service recipe's sign-in of several values (page-kinds.ts partsCredential):
+   *  every header and query value attached, every raw value redacted. */
+  | { in: 'multi'; headers: Record<string, string>; query: Record<string, string>; secrets: string[] };
 
 export interface PageFetchContext {
   /** Every connection the page's manifest lists, already parsed. */
@@ -211,7 +214,11 @@ async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchCon
   const credentialHeaders: Record<string, string> = {};
   const credentialQueryParams: string[] = [];
   const secrets: string[] = [];
-  if (credential) {
+  if (credential?.in === 'multi') {
+    secrets.push(...credential.secrets);
+    Object.assign(credentialHeaders, credential.headers);
+    for (const [param, value] of Object.entries(credential.query)) { url.searchParams.set(param, value); credentialQueryParams.push(param); }
+  } else if (credential) {
     secrets.push(credential.value);
     // The bare key too, when the value wraps it ("Bearer <key>"): a service
     // that echoes the key without the word must not hand it back to the page.

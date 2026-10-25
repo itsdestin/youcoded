@@ -247,3 +247,38 @@ describe('a page that runs a program', () => {
     expect(parseConnections([program, { id: 'o', kind: 'open' }])).toHaveLength(2);
   });
 });
+
+describe('service recipes in a manifest', () => {
+  const base = { id: 'k', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full' };
+  const allow = [{ method: 'get', path: '/rest/v2/tasks/', does: 'See your tasks' }, { method: 'POST', path: '/rest/v2/tasks', does: 'Add tasks' }];
+
+  it('keeps an allow list, and its fingerprint names what is allowed but not the words', () => {
+    const [c] = parseConnections([{ ...base, allow }]);
+    expect(c).toMatchObject({ allow: [{ method: 'GET', path: '/rest/v2/tasks' }, { method: 'POST', path: '/rest/v2/tasks' }] });
+    expect(fingerprint(c)).toBe('key|Todoist|api.todoist.com|full|allow:GET /rest/v2/tasks,POST /rest/v2/tasks');
+    const [reworded] = parseConnections([{ ...base, allow: allow.map((r) => ({ ...r, does: 'Something else' })) }]);
+    expect(fingerprint(reworded)).toBe(fingerprint(c));
+  });
+
+  it('drops the whole line when any allow entry is invalid', () => {
+    for (const bad of [
+      [{ method: 'GET', path: '/a/../b', does: 'x' }], [{ method: 'TRACE', path: '/a', does: 'x' }],
+      [{ method: 'GET', path: '/a?b=1', does: 'x' }], [{ method: 'GET', path: '/a', does: '' }], [],
+    ]) expect(parseConnections([{ ...base, allow: bad }]), JSON.stringify(bad)).toEqual([]);
+  });
+
+  it('keeps a Basic sign-in only with both halves, and pins where each part goes', () => {
+    const parts = [{ id: 'user', label: 'Email', in: 'basic-user' }, { id: 'pass', label: 'Password', in: 'basic-password', secret: true }];
+    const [c] = parseConnections([{ ...base, parts }]);
+    expect(fingerprint(c)).toBe('key|Todoist|api.todoist.com|full|parts:pass:basic-password,user:basic-user');
+    expect(parseConnections([{ ...base, parts: [parts[0], { id: 'x', label: 'X', in: 'header', param: 'X-Key' }] }])).toEqual([]);
+    expect(parseConnections([{ ...base, parts: [parts[0], parts[0]] }])).toEqual([]);
+  });
+
+  it('lets a recipe decide methods instead of the general access word', () => {
+    const [c] = parseConnections([{ ...base, access: 'lookup', allow: [{ method: 'POST', path: '/rest/v2/tasks', does: 'Add tasks' }] }]);
+    expect(methodAllowed(c, 'POST', '/rest/v2/tasks/1')).toBe(true);
+    expect(methodAllowed(c, 'GET', '/rest/v2/tasks')).toBe(false);
+  });
+});
+

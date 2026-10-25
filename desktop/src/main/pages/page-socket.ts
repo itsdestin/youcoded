@@ -121,9 +121,12 @@ export function checkOutgoingSocketMessage(text: string, extraDeny: readonly str
  *  address, a `device` connection that covers host AND port, approved at the
  *  current fingerprint, full access, a saved key when the greeting needs one,
  *  and the home-address check (re-resolved every call). */
+/** A one-value credential: what a device's socket can carry. */
+type SingleCredential = Exclude<PageCredential, { in: 'multi' }>;
+
 export type DeviceSocketAccess =
   | { ok: false; refusal: PageFetchResult }
-  | { ok: true; connection: DeviceConnection; httpUrl: URL; credential: PageCredential | null; secrets: string[]; hello: string | undefined };
+  | { ok: true; connection: DeviceConnection; httpUrl: URL; credential: SingleCredential | null; secrets: string[]; hello: string | undefined };
 type DeviceConnection = Extract<PageConnection, { kind: 'device' }>;
 
 export async function checkDeviceSocketAccess(
@@ -158,7 +161,10 @@ export async function checkDeviceSocketAccess(
     return no(refuse('method-not-allowed', `This page may only look things up at ${httpUrl.hostname}; it cannot send changes there.`));
   }
 
-  const credential = await ctx.credential(connection);
+  // A device holds one key, never a recipe's several parts (only `key` lines have
+  // parts), so a multi-part answer cannot occur here; treat it as no key at all.
+  const answered = await ctx.credential(connection);
+  const credential = answered && answered.in !== 'multi' ? answered : null;
   const secrets: string[] = [];
   if (credential) {
     secrets.push(credential.value);

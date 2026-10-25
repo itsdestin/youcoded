@@ -205,3 +205,44 @@ describe('a recorded clip is only for a device', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('a service recipe', () => {
+  // iCloud's calendar server, signed in with an Apple ID and an app password,
+  // allowed only the calendar methods the approval card listed.
+  const calendar = parseConnections([{
+    id: 'cal', kind: 'key', service: 'iCloud Calendar', address: 'caldav.icloud.com', access: 'full',
+    allow: [
+      { method: 'PROPFIND', path: '/calendars', does: 'See your calendars and events' },
+      { method: 'PUT', path: '/calendars', does: 'Add and change events' },
+    ],
+    parts: [{ id: 'user', label: 'Apple ID', in: 'basic-user' }, { id: 'pass', label: 'App password', in: 'basic-password', secret: true }],
+  }])[0];
+  const USER = 'destin@example.com';
+  const PASS = 'abcd-efgh-ijkl-mnop';
+  const basic = Buffer.from(`${USER}:${PASS}`).toString('base64');
+  const recipeCtx = (fetchImpl: unknown) => ({
+    ...ctx([calendar], fetchImpl),
+    credential: async () => ({ in: 'multi', headers: { authorization: `Basic ${basic}` }, query: {}, secrets: [USER, PASS, basic, `Basic ${basic}`] } as const),
+  });
+
+  it('lets through only the methods and paths the card listed', async () => {
+    const fetchMock = ok();
+    const allowed = await performPageFetch(get('https://caldav.icloud.com/calendars/home/', { method: 'PROPFIND' }), recipeCtx(fetchMock));
+    expect(allowed).toMatchObject({ ok: true });
+    for (const [method, path] of [['DELETE', '/calendars/home/'], ['PROPFIND', '/contacts/'], ['PUT', '/calendarsX'], ['PUT', '/calendars%2f..%2fcontacts']]) {
+      const res = await performPageFetch(get(`https://caldav.icloud.com${path}`, { method }), recipeCtx(fetchMock));
+      expect(res, `${method} ${path}`).toMatchObject({ ok: false, reason: 'method-not-allowed' });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the sign-in as Basic and hides every part of it from the answer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(`echo ${USER} ${PASS} ${basic}`, { status: 200 }));
+    const res = await performPageFetch(get('https://caldav.icloud.com/calendars/', { method: 'PROPFIND' }), recipeCtx(fetchMock));
+    const sent = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
+    expect(sent.headers.authorization).toBe(`Basic ${basic}`);
+    expect(res).toMatchObject({ ok: true });
+    const body = (res as { body: string }).body;
+    for (const secret of [USER, PASS, basic]) expect(body).not.toContain(secret);
+  });
+});

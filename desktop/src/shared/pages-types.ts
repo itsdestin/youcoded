@@ -52,6 +52,25 @@ export type KeyScheme = 'bearer' | 'token' | 'none';
 
 export type PageAccess = 'lookup' | 'full';
 
+/** One thing a service recipe lets a page do: a method on a path (and everything
+ *  under it, at a `/` boundary), with the plain words the approval card shows. */
+export interface PageAllowRule {
+  /** An HTTP method in capitals. Any method a service uses (a calendar server's
+   *  PROPFIND and REPORT too) except CONNECT, TRACE and TRACK. */
+  method: string;
+  path: string;
+  does: string;
+}
+
+/** One value of a multi-part sign-in, and where main attaches it. `basic-user` and
+ *  `basic-password` together become an `Authorization: Basic …` header. */
+export interface PageKeyPart {
+  id: string; label: string; hint?: string; secret?: boolean;
+  in: 'header' | 'query' | 'basic-user' | 'basic-password';
+  /** The header or query-parameter name, for `header` / `query`. */
+  param?: string;
+}
+
 export type PageConnection =
   /** YouCoded's own service, as the signed-in person. */
   | {
@@ -77,20 +96,19 @@ export type PageConnection =
       /** What goes before the key in a header. Absent means the usual word for
        *  an Authorization header ("Bearer") and nothing for any other header. */
       keyScheme?: KeyScheme;
-      /** DESIGN STAGE (pages-finish step 1, service recipes): the plain words for
-       *  each thing the recipe allows there ("See your calendars and events"),
-       *  one per allowed method + path. When present the approval card lists them
-       *  instead of the general "look up and change things" sentence, so the
-       *  person approves exactly what the page may do. */
-      does?: string[];
-      /** DESIGN STAGE (recipes, multi-part sign-in): a service that signs in with
-       *  more than one value (an Apple ID and an app password; Plaid's client ID
-       *  and secret). One box per part on the key step, each named; they are
-       *  saved together as the one key. Absent: a single pasted key. */
-      parts?: Array<{ id: string; label: string; hint?: string; secret?: boolean }>;
+      /** A service recipe's exact list of what the page may do there (pages-finish
+       *  step 1, technical design §2). When present, main allows ONLY these method +
+       *  path pairs and the approval card lists their `does` words instead of the
+       *  general "look up and change things" sentence. */
+      allow?: PageAllowRule[];
+      /** A sign-in made of several values (an Apple ID and an app password): one
+       *  named box each on the key step, saved together as the one key, each
+       *  attached where `in` says. Absent: a single pasted key. */
+      parts?: PageKeyPart[];
     }
-  /** Public information: an approved address, nothing secret. */
-  | { id: string; kind: 'public'; address: string }
+  /** Public information: an approved address, nothing secret. `allow` narrows
+   *  it to named paths, like a key recipe's. */
+  | { id: string; kind: 'public'; address: string; allow?: PageAllowRule[] }
   /** The GitHub sign-in the app already holds. */
   | { id: string; kind: 'github'; access: PageAccess }
   /** The whole internet — its own blunt approval, never combined with a key

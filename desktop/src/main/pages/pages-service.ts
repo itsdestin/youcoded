@@ -309,6 +309,12 @@ class PagesService {
       if (!reuseSaved && c.kind === 'plaid' && !parseCredentials(typed)) {
         return { ok: false, message: 'Paste both the Plaid client ID and the secret to connect.' };
       }
+      // A recipe's sign-in of several values arrives as one JSON object keyed by
+      // part id (the card builds it); refuse a missing box rather than save a
+      // sign-in that can never work.
+      if (!reuseSaved && c.kind === 'key' && c.parts && !partsComplete(typed, c.parts.map((p) => p.id))) {
+        return { ok: false, message: `Fill in every box to sign in to ${c.service}.` };
+      }
       try {
         if (reuseSaved) {
           if (!(await store.savedKey(target.service, target.address))) {
@@ -643,6 +649,14 @@ class PagesService {
 /** A thrown store failure already carries a sentence the person can act on
  *  (an unreadable file, a busy lock, a computer with no keychain). Never
  *  replace it with a guess — docs/error-message-standards.md. */
+/** True when a typed multi-part sign-in names a non-empty value for every part. */
+function partsComplete(typed: string, ids: readonly string[]): boolean {
+  try {
+    const v = JSON.parse(typed) as Record<string, unknown>;
+    return !!v && typeof v === 'object' && ids.every((id) => typeof v[id] === 'string' && (v[id] as string).trim() !== '');
+  } catch { return false; }
+}
+
 function messageOf(e: unknown): string {
   const text = e instanceof Error ? e.message : String(e);
   return text.trim() || 'The app could not save this approval.';

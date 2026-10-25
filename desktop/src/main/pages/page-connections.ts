@@ -25,7 +25,6 @@ import { MAX_CONNECTIONS } from './page-connection-fields';
 import { KINDS, kindOf } from './page-kinds';
 
 export { applyScheme, keyPlacement, SOCKET_KEY_TOKEN } from './page-connection-fields';
-export type { KeyPlacement } from './page-connection-fields';
 
 /** The saved key a connection stands on, as service + address, or null for a
  *  kind that holds no pasted key. One place, so approval, the settings list,

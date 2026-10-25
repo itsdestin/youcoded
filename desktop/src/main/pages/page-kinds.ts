@@ -14,9 +14,10 @@ import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-a
 import type { PageConnectionsStore } from './connections-store';
 import type { PageCredential } from './page-fetch';
 import {
-  DEFAULT_KEY_PLACEMENT, GITHUB_HOST, MAX_SERVICE, YOUCODED_HOST, applyScheme, chatScopeKey, cleanAccess,
-  cleanAddress, cleanChatScope, cleanKeyPage, cleanParam, cleanProgramFile, cleanReplyType, cleanSocketDeny,
-  cleanSocketHello, cleanSteps, cleanVideoProfile, cleanWritePaths, keyPlacement, profileSegment,
+  DEFAULT_KEY_PLACEMENT, GITHUB_HOST, MAX_SERVICE, YOUCODED_HOST, allowMatches, allowSegment, applyScheme,
+  chatScopeKey, cleanAccess, cleanAddress, cleanAllow, cleanChatScope, cleanKeyPage, cleanParam, cleanParts,
+  cleanProgramFile, cleanReplyType, cleanSocketDeny, cleanSocketHello, cleanSteps, cleanVideoProfile,
+  cleanWritePaths, keyPlacement, partsSegment, profileSegment,
 } from './page-connection-fields';
 
 type Kind = PageConnection['kind'];
@@ -24,7 +25,7 @@ type Of<K extends Kind> = Extract<PageConnection, { kind: K }>;
 
 /** What the credential lookup may use. Nothing is decrypted until the door has
  *  already matched the host and the method. */
-export interface CredentialDeps {
+interface CredentialDeps {
   store?: Pick<PageConnectionsStore, 'savedKey' | 'keyValue'>;
   // The app's own sign-ins, as pages-service is handed them (sync or async).
   youcodedToken?: () => string | null | undefined | Promise<string | null | undefined>;
@@ -89,6 +90,40 @@ async function savedKeyCredential(deps: CredentialDeps, service: string, address
   return value ? { in: record.in, param: record.param, value: record.in === 'header' ? applyScheme(record.scheme, value) : value, secret: value } : null;
 }
 
+/** A multi-part sign-in, from the one saved value (JSON keyed by part id, as the
+ *  approval card builds it). Each part goes where the recipe says; Basic's two
+ *  halves become one Authorization header. Every raw value, and the Basic string,
+ *  is a secret to redact. A saved value missing any part answers null — the door
+ *  then sends nothing rather than half a sign-in. */
+async function partsCredential(deps: CredentialDeps, c: Of<'key'>): Promise<PageCredential | null> {
+  if (!deps.store || !c.parts) return null;
+  const record = await deps.store.savedKey(c.service, c.address);
+  if (!record) return null;
+  const raw = await deps.store.keyValue(record).catch(() => null);
+  let values: Record<string, unknown>;
+  try { values = raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { return null; }
+  const headers: Record<string, string> = {};
+  const query: Record<string, string> = {};
+  const secrets: string[] = [];
+  let user: string | null = null;
+  let password: string | null = null;
+  for (const p of c.parts) {
+    const v = values[p.id];
+    if (typeof v !== 'string' || !v) return null;
+    secrets.push(v);
+    if (p.in === 'basic-user') user = v;
+    else if (p.in === 'basic-password') password = v;
+    else if (p.in === 'header' && p.param) headers[p.param] = v;
+    else if (p.in === 'query' && p.param) query[p.param] = v;
+  }
+  if (user !== null && password !== null) {
+    const basic = Buffer.from(`${user}:${password}`, 'utf8').toString('base64');
+    headers.authorization = `Basic ${basic}`;
+    secrets.push(basic, headers.authorization);
+  }
+  return { in: 'multi', headers, query, secrets };
+}
+
 function cleanService(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim().slice(0, MAX_SERVICE) : '';
 }
@@ -145,11 +180,14 @@ export const KINDS: { [K in Kind]: KindDef<K> } = {
   public: {
     parse: (o, id) => {
       const address = cleanAddress(o.address);
-      return address ? { id, kind: 'public', address } : null;
+      const allow = cleanAllow(o.allow);
+      if (!address || allow === null) return null;
+      return allow ? { id, kind: 'public', address, allow } : { id, kind: 'public', address };
     },
-    fingerprint: (c) => `public|${c.address}`,
+    fingerprint: (c) => `public|${c.address}${allowSegment(c.allow)}`,
     covers: (c, target) => c.address === hostOf(target),
-    methodAllowed: (_c, method) => accessAllows(true, method),
+    // Public stays look-up only whatever the recipe says; a recipe narrows it to its paths.
+    methodAllowed: (c, method, pathname) => accessAllows(true, method) && (!c.allow || allowMatches(c.allow, method, pathname)),
     credential: async () => null,
     privateData: false,
   },
@@ -168,12 +206,23 @@ export const KINDS: { [K in Kind]: KindDef<K> } = {
       const param = cleanParam(o.keyParam);
       if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
       if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
+      // A service recipe (pages-finish step 1): the exact things the page may do,
+      // and a sign-in of several values. Either one invalid drops the line.
+      const allow = cleanAllow(o.allow);
+      const parts = cleanParts(o.parts);
+      if (allow === null || parts === null) return null;
+      if (allow) c.allow = allow;
+      if (parts) c.parts = parts;
       return c;
     },
-    fingerprint: (c) => `key|${c.service}|${c.address}|${c.access}${movedSegment(c)}`,
+    // The recipe segments ride only when present, so every key line written
+    // before recipes keeps the string its approval was recorded against.
+    fingerprint: (c) => `key|${c.service}|${c.address}|${c.access}${movedSegment(c)}${allowSegment(c.allow)}${partsSegment(c.parts)}`,
     covers: (c, target) => c.address === hostOf(target),
-    methodAllowed: (c, method) => accessAllows(c.access === 'lookup', method),
-    credential: (c, deps) => savedKeyCredential(deps, c.service, c.address),
+    // A recipe's list REPLACES the general look-up / full rule: the card listed
+    // exactly these, so exactly these are what main lets through.
+    methodAllowed: (c, method, pathname) => (c.allow ? allowMatches(c.allow, method, pathname) : accessAllows(c.access === 'lookup', method)),
+    credential: (c, deps) => (c.parts ? partsCredential(deps, c) : savedKeyCredential(deps, c.service, c.address)),
     savedKeyTarget: (c) => ({ service: c.service, address: c.address }),
     privateData: true,
   },

@@ -13,7 +13,7 @@
 //   - Remove "stops future use", never "revokes": the app cannot take back
 //     what a service already received.
 import React, { useState } from 'react';
-import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
+import type { PageConnection, PageConnectionStatus, PageKeyPart, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
@@ -59,7 +59,7 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
       // WHY a list instead of the general sentence (pages-finish step 1, deck 1
       // Q-recipes): a service recipe names each thing the page may do there, and
       // main allows only those, so the card can say exactly that.
-      if (c.does?.length) {
+      if (doesOf(c).length) {
         const using = c.parts?.length ? `your ${c.service} sign-in` : `your ${c.service} key`;
         return { what: `Use ${c.service} at ${c.address} with ${using}, only to:`, limit: 'Nothing else there can be reached.' };
       }
@@ -67,6 +67,8 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
         ? { what: `Look things up on ${c.address} using your ${c.service} key.`, limit: LOOKUP_LIMIT }
         : { what: `Look up and change things on ${c.address} using your ${c.service} key.`, limit: 'It can do whatever that key allows.' };
     case 'public':
+      // A recipe that names its paths lists them, like a key recipe.
+      if (doesOf(c).length) return { what: `Read public information from ${c.address}, only to:`, limit: 'No key or sign-in is used. Nothing else there can be reached.' };
       return { what: `Read public information from ${c.address}.`, limit: 'No key or sign-in is used. The page decides what it sends to this address.' };
     case 'github':
       return c.access === 'lookup'
@@ -112,6 +114,14 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
     case 'program':
       return { what: `Run ${c.file} on this computer.`, limit: 'It can do anything your account on this computer can.' };
   }
+}
+
+/** The plain words for what a service recipe allows, each once, in the order the
+ *  recipe lists them (several method + path pairs may share one sentence). Empty
+ *  for a line with no recipe list. */
+export function doesOf(c: PageConnection): string[] {
+  const rules = c.kind === 'key' || c.kind === 'public' ? c.allow ?? [] : [];
+  return [...new Set(rules.map((r) => r.does))];
 }
 
 /** "a", "a and b", "a, b and c" — a page's named projects, as read aloud. */
@@ -281,7 +291,7 @@ const OPEN_INTERNET_MEANS = [
  *  "drop icon") — the words carry it. */
 export function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; children?: React.ReactNode; small?: boolean }) {
   const words = describeConnection(c);
-  const does = c.kind === 'key' ? c.does ?? [] : [];
+  const does = doesOf(c);
   return (
     <div className="flex flex-col gap-1.5" data-page-connection={c.kind}>
       {does.length > 0 ? (<>
@@ -319,7 +329,7 @@ function plaidKeyed(c: PageConnectionStatus & { kind: 'plaid' }): KeyedLine {
  *  two (written here until Plaid itself becomes a bundled recipe), or none for
  *  an ordinary single key. Part ids are the saved key's JSON field names, so
  *  Plaid's stay `clientId` and `secret` as main already reads them. */
-function partsOf(c: KeyedLine): NonNullable<Extract<PageConnection, { kind: 'key' }>['parts']> {
+function partsOf(c: KeyedLine): Array<Pick<PageKeyPart, 'id' | 'label' | 'hint' | 'secret'>> {
   if (c.kind === 'plaid') {
     const env = c.environment === 'sandbox' ? 'Sandbox' : 'Production';
     return [{ id: 'clientId', label: 'Client ID' }, { id: 'secret', label: `${env} secret`, secret: true }];
