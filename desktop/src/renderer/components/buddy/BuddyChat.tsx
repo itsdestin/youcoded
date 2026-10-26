@@ -15,7 +15,8 @@ import { useBuddyActions, CaptureButton, SizeButton, OpenMainButton, HideBuddyBu
 
 /** Where the buddy's actions (screenshot, size, open YouCoded, hide) live — buddy-rebuild-questions#Q-5 and
  *  buddy-rebuild-review#C-1 ("i want to see more options"), chosen from pictures:
- *  'beside'      today's round buttons next to the mascot (their own window, BuddyBarApp); only Size in here.
+ *  'beside'      round buttons next to the mascot (their own window, BuddyBarApp), size included — CHOSEN
+ *                (buddy-rebuild-review2#C-2); the others stay for comparison until the contract settles.
  *  'header'      four icons beside the session strip.
  *  'composer'    screenshot beside Attach; size, open, hide as icons in the header.
  *  'menu'        one "⋯" in the header holding all four.
@@ -33,9 +34,10 @@ export type BuddyActionsAt = 'beside' | 'header' | 'composer' | 'menu' | 'mascot
  * that fills this window's chat store (useBuddyFeed — in the main window App does that), and the
  * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css).
  */
-export function BuddyChat({ actionsAt = 'beside', tools = 'slim' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools'] } = {}) {
+export function BuddyChat({ actionsAt = 'beside', tools = 'summary', summaryLook = 'row' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools']; summaryLook?: CompactSurface['summaryLook'] } = {}) {
   // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
-  const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
+  // 'summary' was chosen (buddy-rebuild-review2#D-1).
+  const compactSurface = useMemo<CompactSurface>(() => ({ tools, summaryLook }), [tools, summaryLook]);
   const [viewedSession, setViewedSession] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   // WHY the shared hook (#S-1): it PULLS the summary on mount, then listens. The buddy used to only
@@ -157,7 +159,8 @@ export function BuddyChat({ actionsAt = 'beside', tools = 'slim' }: { actionsAt?
               onOpenResumeBrowser={openResume}
               viewer
             />
-            {actionsAt !== 'toolbar' && (
+            {/* 'beside': all four, size included, are the round buttons next to the mascot (BuddyBarApp). */}
+            {actionsAt !== 'toolbar' && actionsAt !== 'beside' && (
               <div className={`buddy-header-actions${actionsAt === 'hover' ? ' buddy-header-actions--hover' : ''}`}>
                 {actionsAt === 'menu' ? (
                   <MoreMenuButton a={actions} />

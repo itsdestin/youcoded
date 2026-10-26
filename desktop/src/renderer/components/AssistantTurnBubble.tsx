@@ -7,7 +7,7 @@ import { buildToolGroupHeadline } from '../utils/tool-group-summary';
 import MarkdownContent from './MarkdownContent';
 import { SessionRefsEnabled } from './session-refs-context';
 import ToolCard, { StackedSkillsCard } from './ToolCard';
-import { DeliverablesCard, isSentFilesTool, isSentLinksTool, SENT_FILES_TOOL } from './DeliverablesCard';
+import { DeliverablesCard, FilesGlyph, isSentFilesTool, isSentLinksTool, SENT_FILES_TOOL } from './DeliverablesCard';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, StoppedIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
@@ -467,7 +467,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   const { showTurnMetadata } = useTheme();
   // The buddy's small window draws a reply's steps, files and skills smaller, or as one line, or not at all
   // (state/compact-surface-context.ts). null = the full cards, everywhere else.
-  const toolMode = useCompactSurface()?.tools ?? null;
+  const compactSurface = useCompactSurface();
+  const toolMode = compactSurface?.tools ?? null;
+  const summaryLook = compactSurface?.summaryLook ?? 'row';
   // splitIntoBubbles is pure over the turn's SEGMENTS, so cache it on those.
   // Perf (cycle 1, N3): this used to key on `turn`, but the reducer mints a new
   // turn object for every change to the turn — a streamed delta, but also a
@@ -613,7 +615,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
               {/* A reply's steps, sent files and skills (`extras`, built above): the full cards, or — in the buddy's small
                   window — one line that opens them ('summary'), or nothing ('hidden'). 'slim' is drawn by the cards. */}
               {toolMode === 'summary'
-                ? <ReplySteps toolCount={countBubbleSteps(bubble.toolGroupIds, toolGroups, toolCalls)} fileCount={sentFiles.length} skillCount={isLastBubble ? turnSkills.length : 0}>{extras}</ReplySteps>
+                ? <ReplySteps steps={bubbleSteps(bubble.toolGroupIds, toolGroups, toolCalls)} fileCount={sentFiles.length} skillCount={isLastBubble ? turnSkills.length : 0} look={summaryLook}>{extras}</ReplySteps>
                 : toolMode !== 'hidden' && extras}
               {/* Opt-in metadata strip. Renders once per turn (last bubble only) and
                   only when the user has enabled `showTurnMetadata`. Placed above the
@@ -636,35 +638,72 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   );
 }, assistantTurnPropsAreEqual);
 
-/** How many steps a bubble's tool groups show (the same filter as ToolGroupInline: no Skill, no sent files, no ask). */
-function countBubbleSteps(groupIds: string[], toolGroups: Map<string, ToolGroupState>, toolCalls: Map<string, ToolCallState>): number {
-  let n = 0;
+/** The steps a bubble's tool groups show (the same filter as ToolGroupInline: no Skill, no sent files, no ask). */
+function bubbleSteps(groupIds: string[], toolGroups: Map<string, ToolGroupState>, toolCalls: Map<string, ToolCallState>): ToolCallState[] {
+  const out: ToolCallState[] = [];
   for (const gid of groupIds) {
     for (const id of toolGroups.get(gid)?.toolIds ?? []) {
       const t = toolCalls.get(id);
       if (!t || t.toolName === 'Skill' || t.status === 'awaiting-approval') continue;
-      if (!isSentFilesTool(t) && !isSentLinksTool(t)) n++;
+      if (!isSentFilesTool(t) && !isSentLinksTool(t)) out.push(t);
     }
   }
-  return n;
+  return out;
 }
 
-/** The buddy's 'summary' mode: everything a reply did beyond its words, as ONE quiet line ("3 steps · 1 file") that
- *  opens the usual cards in place. WHY (buddy-rebuild-review#B-1): in a 320 px window the cards covered most of it. */
-function ReplySteps({ toolCount, fileCount, skillCount, children }: { toolCount: number; fileCount: number; skillCount: number; children: React.ReactNode }) {
+/** The buddy's 'summary' mode: everything a reply did beyond its words, as ONE line that opens the usual cards in
+ *  place. WHY (buddy-rebuild-review#B-1): in a 320 px window the cards covered most of it. Its look is one of three
+ *  styles chosen on a deck (buddy-rebuild-review2#D-1, "summary is good, but fix styling to make more youcoded-esque"),
+ *  each borrowed from a main-window pattern: 'row' = the tool group's own header row, 'pill' = the app's status pills,
+ *  'footer' = the tapered divider the menus use, with the counts under it. */
+function ReplySteps({ steps, fileCount, skillCount, look, children }: { steps: ToolCallState[]; fileCount: number; skillCount: number; look: 'row' | 'pill' | 'footer'; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  const parts = [
+  const toolCount = steps.length;
+  if (!toolCount && !fileCount && !skillCount) return null;
+  const outcomes = steps.map(toolOutcome);
+  const status = outcomes.includes('running')
+    ? <BrailleSpinner size="sm" />
+    : outcomes.at(-1) === 'failed' ? <FailIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+    : <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />;
+  const words = [
     toolCount ? `${toolCount} step${toolCount === 1 ? '' : 's'}` : '',
     fileCount ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '',
     skillCount ? `${skillCount} skill${skillCount === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  if (parts.length === 0) return null;
-  return (
-    <div className="mt-1">
-      <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-2">
-        <ChevronIcon className="w-3 h-3" expanded={open} />
-        {parts.join(' · ')}
+  ].filter(Boolean).join(' · ');
+  const chevron = <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted" expanded={open} />;
+  const toggle = () => setOpen((v) => !v);
+  let head: React.ReactNode;
+  if (look === 'pill') {
+    head = (
+      <button type="button" onClick={toggle} className="reply-steps inline-flex items-center gap-1.5 rounded-full border border-edge-dim bg-well px-2.5 py-0.5 text-2xs text-fg-dim hover:text-fg-2 hover:border-edge transition-colors">
+        {toolCount > 0 && <span className="inline-flex items-center gap-1">{status}{toolCount}</span>}
+        {fileCount > 0 && <span className="inline-flex items-center gap-1"><FilesGlyph className="w-3 h-3" />{fileCount}</span>}
+        {skillCount > 0 && <span>{skillCount} skill{skillCount === 1 ? '' : 's'}</span>}
+        {chevron}
       </button>
+    );
+  } else if (look === 'footer') {
+    head = (
+      <>
+        <div aria-hidden className="h-px mt-1.5 mb-1" style={{ background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)' }} />
+        <button type="button" onClick={toggle} className="reply-steps w-full flex items-center gap-1.5 text-xs text-fg-dim hover:text-fg-2 transition-colors">
+          {status}<span className="flex-1 text-left">{words}</span>{chevron}
+        </button>
+      </>
+    );
+  } else {
+    head = (
+      <button type="button" onClick={toggle} className="reply-steps w-full flex items-center gap-1.5 rounded-lg border border-edge px-3 py-1.5 text-left hover:bg-inset/50 transition-colors">
+        {status}
+        <span className="text-fg-faint text-xs select-none">|</span>
+        <span className="text-xs text-fg-dim flex-1">{words}</span>
+        {chevron}
+      </button>
+    );
+  }
+  return (
+    <div className={look === 'pill' ? 'mt-1.5' : 'mt-1'}>
+      {head}
       {open && <div className="mt-1">{children}</div>}
     </div>
   );

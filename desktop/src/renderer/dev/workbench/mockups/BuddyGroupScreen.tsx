@@ -21,7 +21,7 @@ try {
   }
 } catch { /* private mode */ }
 
-const DESK = { x: 0, y: 0, width: 560, height: 680 };
+const DESK = { x: 0, y: 0, width: 640, height: 680 };
 
 export function BuddyGroupScreen() {
   const params = new URLSearchParams(window.location.search);
@@ -29,7 +29,7 @@ export function BuddyGroupScreen() {
   const theme = params.get('theme') ?? '';
   const motionRef = useRef<RigMotion>({ vx: 0, vy: 0, dragging: false });
   // The mascot low on the right, as most people park him; the layout puts the chat above.
-  const mascotBounds = { x: 360, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
+  const mascotBounds = { x: 230, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
   const layout = computeGroupLayout(mascotBounds, DESK);
   const bar = computeBarContentRect({ ...mascotBounds, x: layout.mascot.x, y: layout.mascot.y });
   // The chat's own photo switches ride along (?menu=1, ?hovered=1).
@@ -47,9 +47,10 @@ export function BuddyGroupScreen() {
         style={{ position: 'absolute', left: layout.chat.x, top: layout.chat.y, width: CHAT_SIZE.width, height: CHAT_SIZE.height, border: 0, background: 'transparent', colorScheme: 'normal' }}
       />
       {actions === 'beside' && (
-        <div className="buddy-bar-root" data-visible="1" style={{
-          position: 'absolute', left: bar.x, top: bar.y, width: bar.width, height: bar.height,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        // Left-aligned where the bar's row starts today (beside his hands), sized to its content: the row grows with the style picked
+        // (?bar=circles|pill|labelled), and main's bar geometry follows the pick once it is made.
+        <div className="buddy-bar-root" data-style={params.get('bar') ?? 'circles'} data-visible="1" style={{
+          position: 'absolute', left: bar.x, top: bar.y - 10, width: 'auto', height: bar.height + 20,
         }}>
           <BuddyBarButtons />
         </div>

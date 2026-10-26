@@ -15,7 +15,7 @@ const ICON = {
   stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
 } as const;
 
-function CameraIcon() {
+export function CameraIcon() {
   return (
     <svg {...ICON}>
       <path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
@@ -24,17 +24,17 @@ function CameraIcon() {
   );
 }
 /** A window with an arrow leaving it: "open the app". Not the diagonal arrows, which mean the size below. */
-function OpenIcon() {
+export function OpenIcon() {
   return (
     <svg {...ICON}>
       <rect x="3" y="4" width="14" height="14" rx="2" /><path d="M3 8h14M14 3h7v7M21 3l-8 8" />
     </svg>
   );
 }
-function SizeIcon() {
+export function SizeIcon() {
   return <svg {...ICON}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>;
 }
-function HideIcon() {
+export function HideIcon() {
   return (
     <svg {...ICON}>
       <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
