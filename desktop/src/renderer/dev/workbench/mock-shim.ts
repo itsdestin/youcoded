@@ -3472,7 +3472,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // WHY the buddy chat view gets the sessions (buddy rebuild, 2026-10-25): its session switcher lists the
     // directory, so an empty one drew a buddy with nothing to switch to. App's own window never reads its own row.
     getDirectory: async () => (new URLSearchParams(location.search).get('view') === 'buddy-chat'
-      ? { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [{ window: { id: WORKBENCH_WINDOW_ID }, sessions: store.getState().sessions }] }
+      ? { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [{ window: { id: WORKBENCH_WINDOW_ID, label: 'Window 1', createdAt: 0 }, sessions: store.getState().sessions as any }] }
       : { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
     // The first page of a RESUMED session's history (App.tsx loadFirstPage).
     // The catch-all's `[]` has no `.events`, so a resume in the workbench used
@@ -3942,7 +3942,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // WHY (buddy rebuild, 2026-10-25): the buddy CHAT window's own calls, so `?view=buddy-chat` can draw the
     // shipping chat against the workbench's conversations. The buddy views the first session unless told otherwise;
     // subscribing is a no-op because the workbench's chat is seeded in place, never streamed per window.
-    getViewedSession: async () => buddyViewed ?? store.getState().sessions[0]?.id ?? null,
+    getViewedSession: async () => buddyViewed ?? new URLSearchParams(location.search).get('buddySession') ?? store.getState().sessions[0]?.id ?? null,
     setSession: async (sessionId: string) => { buddyViewed = sessionId; },
     subscribe: async () => {},
     unsubscribe: async () => {},
@@ -4125,6 +4125,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
+    // WHY only on the buddy chat view (buddy rebuild, 2026-10-25): the buddy draws every dot from main's merged summary, and its
+    // review needs each colour on screen. The main window computes its own dots and is left exactly as it was.
+    ...(new URLSearchParams(location.search).get('view') === 'buddy-chat' ? { attention: { getSummary: async () => {
+      const colours = ['green', 'red', 'blue', 'amber'];
+      const perSession: Record<string, { status: string }> = {};
+      store.getState().sessions.forEach((x: any, i: number) => { perSession[x.id] = { status: colours[i] ?? 'gray' }; });
+      return { anyNeedsAttention: true, perSession };
+    } } } : {}),
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, integrations, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario),

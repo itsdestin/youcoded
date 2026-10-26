@@ -475,3 +475,107 @@ body[data-mode="buddy-chat"] .buddy-chat-exit {
   from { opacity: 1; transform: scale(1); }
   to { opacity: 0; transform: scale(0.95); }
 }
+
+/* ── The small main chat (buddy rebuild, 2026-10-25) ──
+   The buddy hosts the main window's ChatView, SessionStrip and InputBar
+   (BuddyChat.tsx). Destin's note on buddy-rebuild-questions#Q-2: "super
+   optimized for the small window … maximize visible text and reduce scroll
+   burden". So everything below SHRINKS SPACE, never text: the 13px chat size
+   above stays, the gutters, bubble padding, row gaps and the chrome around
+   them get smaller. Scoped to the buddy chat window; the main window is
+   untouched. */
+html[data-mode="buddy-chat"] .buddy-chat-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  /* The window's own glass, fading out downward, so messages slide under the
+     session strip instead of showing through between its pills. */
+  background: linear-gradient(to bottom, var(--panel) 70%, transparent);
+  padding-bottom: 6px;
+}
+html[data-mode="buddy-chat"] .buddy-chat-header .header-bar {
+  /* The main window's .header-bar is absolutely placed over its chrome; here it
+     is the header's only content, so it flows and gives the header its height. */
+  position: relative !important;
+  inset: auto !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 8px;
+}
+html[data-mode="buddy-chat"] .buddy-chat-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 6px 6px;
+  background: transparent !important;
+  z-index: 20;
+}
+/* WHY the scroll's own padding: the main window's chat clears its header and
+   message box with --top/--bottom-chrome-height plus roomy extra space (24px
+   top, a float gap below). The buddy keeps the clearance and drops the extra. */
+html[data-mode="buddy-chat"] .chat-scroll {
+  padding-top: calc(var(--top-chrome-height, 34px) + 2px) !important;
+  padding-bottom: calc(var(--bottom-chrome-height, 56px) + var(--queued-strip-height, 0px) + 6px) !important;
+}
+/* Side gutters 16px → 6px: at 320px wide the main window's gutters cost a
+   tenth of every line. */
+html[data-mode="buddy-chat"] .timeline-entry > .px-4,
+html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+html[data-mode="buddy-chat"] .timeline-entry > .py-2 {
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+}
+/* Bubbles use nearly the full row: the main window's 80–85% caps leave
+   a dead column that is wasted width in a small window. */
+html[data-mode="buddy-chat"] .assistant-bubble {
+  max-width: 96% !important;
+}
+html[data-mode="buddy-chat"] .user-bubble {
+  max-width: 88% !important;
+}
+body[data-mode="buddy-chat"] .user-bubble,
+body[data-mode="buddy-chat"] .assistant-bubble {
+  padding: 7px 10px;
+  line-height: 1.45;
+}
+/* The All sessions menu takes the window's whole width (less a 6px margin):
+   at the main window's min(24rem, 88vw) a session name kept ~90px. */
+html[data-mode="buddy-chat"] .session-menu {
+  width: calc(100vw - 12px) !important;
+  left: 6px !important;
+}
+/* A warning with buttons (AttentionBanner): at 320px the buttons beside the
+   sentence squeezed it to two or three words a line. The sentence takes the
+   full row and the buttons wrap beneath it, right-aligned. */
+html[data-mode="buddy-chat"] .attention-bubble {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+html[data-mode="buddy-chat"] .attention-bubble > span:not(:first-child),
+html[data-mode="buddy-chat"] .attention-bubble > span:only-child {
+  flex: 1 1 calc(100% - 24px);
+}
+html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+/* The buddy's actions beside the session strip (BuddyActions.tsx): the strip
+   keeps the room it packs into, the icons sit at the row's right end. */
+html[data-mode="buddy-chat"] .buddy-chat-header .header-bar > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html[data-mode="buddy-chat"] .buddy-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}

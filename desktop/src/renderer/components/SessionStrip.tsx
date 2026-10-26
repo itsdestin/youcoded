@@ -174,6 +174,10 @@ interface Props {
   } | null;
   /** This renderer's own window id — excluded from remote sessions group. */
   myWindowId?: number | null;
+  /** The buddy's chat window (buddy rebuild, 2026-10-25): it SHOWS any window's sessions and owns none. So nothing here
+   *  can be dragged — a reorder would reorder another window's strip, and a tear-off would pull a session out of the
+   *  window that owns it into a new one — the move-to-window menu is off, and the list is titled "All sessions". */
+  viewer?: boolean;
 }
 
 /* Status dot colors. WHY data-status on the dot: float chrome swaps each colour
@@ -354,7 +358,7 @@ export default function SessionStrip({
   onCreateSession, onCloseSession, sessionStatuses,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
-  windowDirectory, myWindowId,
+  windowDirectory, myWindowId, viewer,
 }: Props) {
   // SWITCH MARKS (2026-10-05): every user-driven switch from this strip says WHY and WHEN before it selects, so the hitch recorder
   // can start its clock at the input event itself (state/switch-marks.ts). A press on the already-active session is not a switch
@@ -890,6 +894,8 @@ export default function SessionStrip({
   const handlePointerDown = useCallback((e: React.PointerEvent, sessionId: string, inStrip = false) => {
     // Only primary button
     if (e.button !== 0) return;
+    // A viewer never drags (see `viewer`): no capture, no drag state, so the press is just a click.
+    if (viewer) return;
     // WHY: a finger swipe in the vertical menu belongs to native scrolling,
     // not the pill bar's drag/tear-off path. Use the actual pointer so this
     // also works in remote browsers and on touchscreen laptops. Taps still
@@ -985,7 +991,7 @@ export default function SessionStrip({
     try { captureEl.setPointerCapture(e.pointerId); } catch { /* container not capturable */ }
     pointerCaptureEl.current = captureEl;
     pointerCaptureId.current = e.pointerId;
-  }, [sessions, sessionStatuses, activeSessionId, onSelectSession, metrics, measurementsOf, tearOffModel]);
+  }, [sessions, sessionStatuses, activeSessionId, onSelectSession, metrics, measurementsOf, tearOffModel, viewer]);
 
   // A press whose release never reached handlePointerUp. WHY (Destin,
   // 2026-09-28: pills "stuck to my mouse ... even when i've clicked away"):
@@ -1554,11 +1560,11 @@ export default function SessionStrip({
     // Desktop Electron only. The phone and the remote browser are one window,
     // and their shim stubs every detach call as a no-op — so the function
     // check alone would offer "Move to new window" there and do nothing.
-    if (!getCapabilities().nativeWindows || typeof det?.openDetached !== 'function') return; // R4-1: capability, was a three-way guess; the function check is a feature-detect
+    if (viewer || !getCapabilities().nativeWindows || typeof det?.openDetached !== 'function') return; // viewer: see its prop. R4-1: capability, was a three-way guess; the function check is a feature-detect
     e.preventDefault();
     e.stopPropagation();
     setPillMenu({ x: e.clientX, y: e.clientY, sessionId });
-  }, []);
+  }, [viewer]);
   const pillMenuEntries = useMemo((): MenuEntry[] => {
     if (!pillMenu) return [];
     const det = (window as any).claude?.detach;
@@ -2098,7 +2104,7 @@ export default function SessionStrip({
                 // 'html-drag' only (Linux/Wayland): the browser starts a native
                 // drag from the press. Everywhere else the pointer path owns
                 // the whole gesture and a draggable pill would break it.
-                draggable={tearOffModel === 'html-drag'}
+                draggable={tearOffModel === 'html-drag' && !viewer}
                 onDragStart={(e) => handleDragStart(e, s.id)}
                 onDragEnd={handleDragEnd}
                 // Fix: these used to be `undefined` for pack-expanded pills.
@@ -2314,7 +2320,7 @@ export default function SessionStrip({
                   margin/layout (design lint no-restyle), and margin keeps
                   this a flat sibling of the list below (SessionStrip.test.tsx
                   finds it via `heading.nextElementSibling`). */}
-              <SectionLabel className="mx-3 mt-1.5">Sessions in this window</SectionLabel>
+              <SectionLabel className="mx-3 mt-1.5">{viewer ? 'All sessions' : 'Sessions in this window'}</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
@@ -2458,7 +2464,7 @@ export default function SessionStrip({
                         attribute). Hidden on Android, which has no drag. */}
                     <span
                       data-menu-drag-grip
-                      draggable={!isAndroid()}
+                      draggable={!isAndroid() && !viewer}
                       onDragStart={(e) => {
                         writeSessionDrag(e.dataTransfer, s.id);
                         e.dataTransfer.effectAllowed = 'move';
@@ -2470,7 +2476,7 @@ export default function SessionStrip({
                         setMenuDragId(s.id);
                       }}
                       onDragEnd={endMenuDrag}
-                      className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() ? 'hidden' : 'opacity-0 group-hover/row:opacity-100 cursor-grab active:cursor-grabbing'}`}
+                      className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() || viewer ? 'hidden' : 'opacity-0 group-hover/row:opacity-100 cursor-grab active:cursor-grabbing'}`}
                     >
                       <DragGrip />
                     </span>

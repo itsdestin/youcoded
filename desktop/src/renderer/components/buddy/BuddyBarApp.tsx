@@ -69,7 +69,7 @@ const ICON_PROPS = {
  * second, one-window buddy host; that host was deleted 2026-09-16 and the bar
  * window below is the only caller.)
  */
-function BuddyBarButtons() {
+export function BuddyBarButtons() {
   const [capturing, setCapturing] = useState(false);
 
   const onCapture = useCallback(async () => {

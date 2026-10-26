@@ -33,5 +33,7 @@ function Seed() {
 }
 
 export function BuddyChatScreen() {
-  return <BuddyChatApp seed={<Seed />} />;
+  // ?actions=header|composer|beside — the three placements of buddy-rebuild-questions#Q-5.
+  const actions = (new URLSearchParams(window.location.search).get('actions') ?? 'beside') as any;
+  return <BuddyChatApp seed={<Seed />} actionsAt={actions} />;
 }
