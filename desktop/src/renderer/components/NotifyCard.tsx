@@ -1,31 +1,66 @@
-// NotifyCard — the in-chat card for the assistant's "Notify user" call
-// (shared/notify-user.ts): its short label over its message, in the blue the
-// session list uses for "Response ready". It glows until the person clicks it
-// (Destin, 2026-10-26: "its own clickable element that like glows or something
-// until clicked"). ChatView's "Jump to notification" button scrolls here.
+// The assistant's "Notify user" call in the chat (shared/notify-user.ts).
 //
-// Built from the notice box's shape (Callout: tinted box, matching border) and
-// the status pill's colour (SessionStrip STATUS_PILL blue) — the status hue sits
-// only in the tint, border, dot and glow, never in the words (design guide,
-// Principles 2).
-import { memo, useEffect, useRef } from 'react';
+// Round 2 (Destin, 2026-10-26, deck notify-user-review N-1): the highlight goes
+// around the WHOLE reply, not a box of its own — NotifyBubble is that reply's
+// shell. It is "new" only while its call is the session's latest notification
+// and unseen; it stops being new when the person
+//   - sends a message (the call stops being latest — notify-seen.ts),
+//   - rests the pointer on the reply for a moment, or
+//   - clicks or taps the reply.
+// NotifyCard is the notification itself inside the reply: the label over the
+// message, set off by a divider, never a box.
+//
+// The status hue sits only in the outline, glow, tint and dot, never in the
+// words (design guide, Principles 2).
+import { memo, useEffect, useRef, type ReactNode } from 'react';
 import type { ToolCallState } from '../../shared/types';
 import { notifyFieldsOf } from '../../shared/notify-user';
-import { markNotifySeen, setNotifyOnScreen, useNotifySeen } from '../state/notify-seen';
+import { markNotifySeen, setNotifyOnScreen, useNotifyActive } from '../state/notify-seen';
+import { NOTIFY_STYLE } from './notify-style';
 
-/** The glow while unclicked: the status dot's own blue glow (SessionStrip
- *  GLOW_SHADOW.blue), widened to a card. Static — no animation runs while a
- *  card waits, however long (performance.md rule 6). */
-const UNSEEN_GLOW = '0 0 0 1px rgba(96,165,250,0.45), 0 0 16px rgba(96,165,250,0.35)';
+/** How long the pointer rests on a reply before it counts as seen — long enough
+ *  that sweeping the mouse across the chat does not clear it. */
+const HOVER_SEEN_MS = 600;
+
+export function NotifyBubble({ sessionId, notifies, className, children }: {
+  sessionId: string;
+  notifies: readonly ToolCallState[];
+  className: string;
+  children: ReactNode;
+}) {
+  const ids = notifies.map((t) => t.toolUseId);
+  const active = useNotifyActive(sessionId, ids);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seeAll = () => { for (const id of ids) markNotifySeen(id); };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // Every reply uses this shell, notification or not: swapping a plain div for
+  // it when a call lands mid-reply would remount the whole reply's contents.
+  if (ids.length === 0) return <div className={className}>{children}</div>;
+  return (
+    <div
+      className={`${className} notify-bubble`}
+      data-notify={active ? 'new' : 'seen'}
+      data-notify-style={NOTIFY_STYLE}
+      onPointerEnter={active ? (e) => {
+        // A finger has no hover; a tap arrives as the click below.
+        if (e.pointerType !== 'mouse') return;
+        timer.current = setTimeout(seeAll, HOVER_SEEN_MS);
+      } : undefined}
+      onPointerLeave={() => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } }}
+      onClick={active ? seeAll : undefined}
+    >
+      {children}
+    </div>
+  );
+}
 
 function NotifyCardImpl({ tool }: { tool: ToolCallState }) {
   const { label, message } = notifyFieldsOf(tool.input);
-  const seen = useNotifySeen(tool.toolUseId);
-  const ref = useRef<HTMLButtonElement>(null);
+  const ref = useRef<HTMLDivElement>(null);
 
-  // Report whether this card is on screen, for ChatView's jump button. The
-  // observer's root is the viewport, which still honours the chat scroller's
-  // clipping, so a card scrolled out of the chat reads as off screen.
+  // Report whether this notification is on screen, for ChatView's jump button.
+  // The observer's root is the viewport, which still honours the chat
+  // scroller's clipping, so one scrolled out of the chat reads as off screen.
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
@@ -35,29 +70,13 @@ function NotifyCardImpl({ tool }: { tool: ToolCallState }) {
   }, [tool.toolUseId]);
 
   return (
-    <button
-      ref={ref}
-      type="button"
-      data-notify-id={tool.toolUseId}
-      data-seen={seen ? 'true' : 'false'}
-      onClick={() => markNotifySeen(tool.toolUseId)}
-      aria-label={seen ? `Notification: ${label}` : `New notification: ${label}`}
-      className={`notify-card w-full text-left select-text rounded-lg border px-3 py-2 mt-1.5 transition-shadow ${
-        seen ? 'bg-inset border-edge-dim cursor-default' : 'bg-blue-400/10 border-blue-400/40 cursor-pointer'
-      }`}
-      style={seen ? undefined : { boxShadow: UNSEEN_GLOW }}
-    >
-      <span className="flex items-center gap-1.5 text-xs font-medium text-fg-2">
-        <span
-          data-status="blue"
-          className="w-2 h-2 rounded-full bg-blue-400 shrink-0"
-          // The status dot's own breathing (SessionStrip SessionDot): steps(8), never smooth.
-          style={seen ? { opacity: 0.5 } : { animation: 'breathe 2s steps(8) infinite' }}
-        />
+    <div ref={ref} data-notify-id={tool.toolUseId} className="notify-line mt-3 pt-2.5 border-t border-edge-dim">
+      <div className="notify-label flex items-center gap-1.5 text-xs font-medium text-fg-2">
+        <span data-status="blue" className="notify-dot w-2 h-2 rounded-full bg-blue-400 shrink-0" aria-hidden="true" />
         {label}
-      </span>
-      {message && <span className="block mt-1 text-sm text-fg whitespace-pre-wrap break-words">{message}</span>}
-    </button>
+      </div>
+      {message && <div className="mt-1 text-sm text-fg whitespace-pre-wrap break-words">{message}</div>}
+    </div>
   );
 }
 

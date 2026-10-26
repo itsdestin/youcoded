@@ -19,7 +19,7 @@ import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
-import { useNotifyOnScreen, useNotifySeen } from '../state/notify-seen';
+import { setLatestNotify, useNotifyOnScreen, useNotifySeen } from '../state/notify-seen';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -679,6 +679,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const notifySeen = useNotifySeen(notifyId);
   const notifyOnScreen = useNotifyOnScreen(notifyId);
   const showNotifyJump = !!notifyId && !notifySeen && !notifyOnScreen;
+  // Publish which call is this session's latest, so its reply knows it may glow
+  // (notify-seen.ts useNotifyActive). Null once the person speaks: the glow goes.
+  useEffect(() => { setLatestNotify(sessionId, notifyId); }, [sessionId, notifyId]);
   // Render-phase mirror so the click handler stays one stable function.
   const notifyJumpRef = useRef({ notifyId, presentation, toolGroups: state.toolGroups, revealAndPin: folding.revealAndPin });
   notifyJumpRef.current = { notifyId, presentation, toolGroups: state.toolGroups, revealAndPin: folding.revealAndPin };
@@ -1053,6 +1056,21 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
+          {/* "Jump to notification" (Destin, 2026-10-26): the assistant's latest
+              notification is still new and not on screen. Jump to bottom's look,
+              in the status blue, at the TOP of the chat (deck N-2: "should be at
+              top of screen"). Inside the chat pane, so it centres over the chat
+              when a side panel is open. */}
+          {showNotifyJump && (
+            <button
+              onClick={jumpToNotify}
+              data-notify-jump
+              className="jump-to-notify panel-glass absolute left-1/2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg border border-blue-400/60 rounded-full shadow-lg transition-colors z-10"
+            >
+              <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" aria-hidden="true" />
+              Jump to notification
+            </button>
+          )}
           {visible && <ChatEdgeFade belowFindRow={findOpen} />}
           {/* Center the hint between measured chrome edges, clearing even a
               floating header's extra margin. Use the actual provider name. */}
@@ -1387,23 +1405,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
-        </button>
-      )}
-
-      {/* "Jump to notification" (Destin, 2026-10-26): the assistant's latest
-          "Notify user" card is still unclicked and not on screen. Same float as
-          Jump to bottom, in the status blue of the card it leads to; stacked
-          above Jump to bottom when both show. */}
-      {showNotifyJump && (
-        <button
-          onClick={jumpToNotify}
-          data-state="in"
-          data-notify-jump
-          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-400/15 hover:bg-blue-400/25 text-fg border border-blue-400/40 rounded-full shadow-lg transition-colors z-10"
-          style={{ '--jump-stack': atBottom ? '0px' : '2.25rem' } as React.CSSProperties}
-        >
-          <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" aria-hidden="true" />
-          Jump to notification
         </button>
       )}
 

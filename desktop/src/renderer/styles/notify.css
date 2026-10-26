@@ -1,0 +1,44 @@
+/* notify.css — the assistant's "Notify user" call in the chat: the reply's
+   outline while it is new, and the "Jump to notification" button. Its own
+   file so globals.css stays inside its line budget. */
+
+/* "Jump to notification" (ChatView): the top-of-chat twin of .jump-to-bottom,
+   one shared gap below the header (Destin, 2026-10-26: "should be at top of
+   screen"). Centred and faded in the same way; it slides DOWN into place. */
+.jump-to-notify {
+  top: calc(var(--top-chrome-height, 3rem) + var(--chat-float-gap, 0.375rem));
+  transform: translateX(-50%);
+  animation: jump-to-notify-in 180ms ease-out;
+}
+@keyframes jump-to-notify-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-0.5rem); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+[data-reduced-effects] .jump-to-notify { animation: none; }
+@media (prefers-reduced-motion: reduce) { .jump-to-notify { animation: none; } }
+
+/* "Notify user" (components/NotifyCard.tsx): a reply holding a NEW notification
+   is outlined in the status blue with a soft glow, around the whole reply
+   (Destin, 2026-10-26, deck notify-user-review N-1). Status hue in the outline,
+   glow, tint and dot only — never in the words. !important on the ring: theme
+   bubble styles (bordered, glass) set their own box-shadow. The dot breathes in
+   steps(8), like the session dot (performance.md rule 6). Three candidate looks
+   (notify-style.ts) until one is picked: outline, tint, tab. */
+.notify-bubble[data-notify='new'] {
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.9), 0 0 22px 2px rgba(96, 165, 250, 0.45) !important;
+}
+.notify-bubble[data-notify='new'][data-notify-style='tint'] {
+  background-image: linear-gradient(rgba(96, 165, 250, 0.12), rgba(96, 165, 250, 0.12));
+}
+.notify-bubble[data-notify='new'] .notify-dot { animation: breathe 2s steps(8) infinite; }
+.notify-bubble[data-notify='seen'] .notify-dot { opacity: 0.5; }
+.notify-bubble[data-notify-style='tab'] { position: relative; margin-top: 0.75rem; }
+.notify-bubble[data-notify-style='tab'] .notify-label {
+  position: absolute; top: -0.7rem; left: 1rem;
+  padding: 0.125rem 0.5rem; border-radius: 9999px;
+  border: 1px solid var(--edge-dim); background: var(--inset);
+}
+.notify-bubble[data-notify='new'][data-notify-style='tab'] .notify-label {
+  border-color: rgba(96, 165, 250, 0.6);
+  background: linear-gradient(rgba(96, 165, 250, 0.2), rgba(96, 165, 250, 0.2)), var(--inset);
+}

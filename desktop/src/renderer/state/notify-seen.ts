@@ -71,7 +71,32 @@ export function useNotifyOnScreen(toolUseId: string | null | undefined): boolean
   return useSyncExternalStore(subscribeScreen, () => (toolUseId ? onScreen.has(toolUseId) : false));
 }
 
+// LATEST: each session's latest "Notify user" call since the person last spoke
+// (the reducer's `latestNotify`, published by ChatView). Only that one can be
+// "new": once the person sends a message it stops being latest, so its glow
+// goes without a click (Destin, 2026-10-26: "disappear when i send a message").
+const latest = new Map<string, string>();
+const latestListeners = new Set<() => void>();
+
+export function setLatestNotify(sessionId: string, toolUseId: string | null): void {
+  if ((latest.get(sessionId) ?? null) === toolUseId) return;
+  if (toolUseId) latest.set(sessionId, toolUseId); else latest.delete(sessionId);
+  for (const l of latestListeners) l();
+}
+
+function subscribeLatest(cb: () => void): () => void {
+  latestListeners.add(cb);
+  return () => { latestListeners.delete(cb); };
+}
+
+/** True while one of `toolUseIds` is its session's latest notification and has not been seen. */
+export function useNotifyActive(sessionId: string, toolUseIds: readonly string[]): boolean {
+  const current = useSyncExternalStore(subscribeLatest, () => latest.get(sessionId) ?? null);
+  const mine = current && toolUseIds.includes(current) ? current : null;
+  return !useNotifySeen(mine);
+}
+
 /** Tests only: forget everything this module holds in memory. */
 export function resetNotifyStoresForTest(): void {
-  seen = null; seenOrder = null; onScreen.clear();
+  seen = null; seenOrder = null; onScreen.clear(); latest.clear();
 }

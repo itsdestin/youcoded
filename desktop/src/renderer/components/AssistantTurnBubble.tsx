@@ -10,7 +10,7 @@ import ToolCard, { StackedSkillsCard } from './ToolCard';
 import { DeliverablesCard, isSentFilesTool, isSentLinksTool, SENT_FILES_TOOL } from './DeliverablesCard';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
 import { isNotifyUserToolName } from '../../shared/notify-user';
-import { NotifyCard } from './NotifyCard';
+import { NotifyBubble, NotifyCard } from './NotifyCard';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, StoppedIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
@@ -562,7 +562,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
         const isLastBubble = i === shown.length - 1;
         return (
           <div key={bubble.key} className="flex justify-start px-4 py-0.5">
-            <div className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
+            {/* A reply holding a notification gets NotifyBubble's shell: the outline
+                and glow go around the whole reply while it is new (NotifyCard.tsx). */}
+            <NotifyBubble sessionId={sessionId} notifies={notifies} className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
               {/* Fixed order, one of each (Destin, 2026-09-02): the reasoning
                   section, the message, the tool group. */}
               {bubble.reasoning && (
@@ -640,7 +642,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   {formatBubbleTime(turn.timestamp)}
                 </div>
               )}
-            </div>
+            </NotifyBubble>
           </div>
         );
       })}

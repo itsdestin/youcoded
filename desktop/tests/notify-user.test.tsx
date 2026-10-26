@@ -4,14 +4,14 @@
 // record's summary through statusFromSummary — both must reach the same colour and label at every step.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { queueBrowserStorage } from './helpers/queue-browser-storage';
-import { renderHook, act, render, screen, fireEvent } from '@testing-library/react';
+import { renderHook, act, render, fireEvent, cleanup } from '@testing-library/react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
 import { useSessionAttention, statusFromSummary } from '../src/renderer/hooks/useSessionAttention';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { SessionRecords } from '../src/main/session-record';
 import { ev } from './helpers/transcript-events';
-import { NotifyCard } from '../src/renderer/components/NotifyCard';
-import { resetNotifyStoresForTest } from '../src/renderer/state/notify-seen';
+import { NotifyBubble, NotifyCard } from '../src/renderer/components/NotifyCard';
+import { resetNotifyStoresForTest, setLatestNotify } from '../src/renderer/state/notify-seen';
 import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_USER_TOOL, shortNotifyLabel } from '../src/shared/notify-user';
 import { NotifyUserTool } from '../src/main/harness/tools/notify-user';
 import type { TranscriptEvent } from '../src/shared/types';
@@ -90,26 +90,53 @@ describe('the label as the status pill shows it', () => {
   });
 });
 
-describe('NotifyCard', () => {
+describe('a reply holding a notification', () => {
   // Explicit storage: Node's own localStorage can mask jsdom's (queue-browser-storage.ts).
   beforeEach(() => { vi.stubGlobal('localStorage', queueBrowserStorage()); resetNotifyStoresForTest(); });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
   const tool = { toolUseId: 'c1', toolName: NOTIFY_USER_TOOL, input: { label: 'Draft ready', message: 'Pick a headline.' }, status: 'complete' } as unknown as ToolCallState;
+  const reply = () => render(
+    <NotifyBubble sessionId={S} notifies={[tool]} className="assistant-bubble"><p>The draft.</p><NotifyCard tool={tool} /></NotifyBubble>,
+  ).container.querySelector<HTMLElement>('.notify-bubble')!;
 
-  it('shows the label and message, glows until clicked, and remembers the click', () => {
-    const { unmount } = render(<NotifyCard tool={tool} />);
-    const card = screen.getByRole('button', { name: 'New notification: Draft ready' });
-    expect(card.textContent).toContain('Pick a headline.');
-    expect(card.dataset.seen).toBe('false');
-    expect(card.style.boxShadow).not.toBe('');
-    fireEvent.click(card);
-    expect(card.dataset.seen).toBe('true');
-    expect(card.style.boxShadow).toBe('');
-    unmount();
-    // A reload reads the click back from storage.
+  it('shows the label and message, and is new only while it is the latest notification', () => {
+    const shell = reply();
+    expect(shell.textContent).toContain('Draft ready');
+    expect(shell.textContent).toContain('Pick a headline.');
+    expect(shell.dataset.notify).toBe('seen');
+    act(() => setLatestNotify(S, 'c1'));
+    expect(shell.dataset.notify).toBe('new');
+    // The person sends a message: the call stops being latest, and the glow goes with no click.
+    act(() => setLatestNotify(S, null));
+    expect(shell.dataset.notify).toBe('seen');
+  });
+
+  it('a click ends it, and the click is remembered after a reload', () => {
+    act(() => setLatestNotify(S, 'c1'));
+    const shell = reply();
+    fireEvent.click(shell);
+    expect(shell.dataset.notify).toBe('seen');
+    cleanup();
     resetNotifyStoresForTest();
-    render(<NotifyCard tool={tool} />);
-    expect(screen.getByRole('button', { name: 'Notification: Draft ready' }).dataset.seen).toBe('true');
+    act(() => setLatestNotify(S, 'c1'));
+    expect(reply().dataset.notify).toBe('seen');
+  });
+
+  it('resting the mouse on it ends it; passing over does not, and a finger never hovers', () => {
+    vi.useFakeTimers();
+    act(() => setLatestNotify(S, 'c1'));
+    const shell = reply();
+    fireEvent.pointerEnter(shell, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(200); });
+    fireEvent.pointerLeave(shell, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(shell.dataset.notify).toBe('new');
+    fireEvent.pointerEnter(shell, { pointerType: 'touch' });
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(shell.dataset.notify).toBe('new');
+    fireEvent.pointerEnter(shell, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(shell.dataset.notify).toBe('seen');
   });
 });
 
