@@ -1,4 +1,4 @@
-// Attaching YouCoded's SendUserLink tool to a CLAUDE CODE session.
+// Attaching YouCoded's SendUserLink and NotifyUser tools to a CLAUDE CODE session.
 //
 // Claude Code ships SendUserFile and no link equivalent, so the app gives each
 // session it launches a one-tool MCP server of its own. Everything here is
@@ -25,6 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_MCP_SERVER_ID } from '../shared/send-user-link';
+import { CLAUDE_CODE_NOTIFY_TOOL } from '../shared/notify-user';
 
 /** The MCP server, verbatim. Held in String.raw so the embedded copy stays
  *  byte-identical to the Android asset — the server source therefore may not
@@ -87,6 +88,47 @@ var TOOL = {
   },
 };
 
+// "Notify user" (shared/notify-user.ts, added 2026-10-26): the assistant tells
+// the person a response is ready or a checkpoint was reached. The app draws the
+// card and relabels the conversation from the call itself; this server only
+// checks the input. Description and field wording mirror the native tool.
+var NOTIFY_TOOL_NAME = 'NotifyUser';
+var NOTIFY_LABEL_MAX = 24;
+
+var NOTIFY_TOOL = {
+  name: NOTIFY_TOOL_NAME,
+  description: [
+    'Tell the user something is ready for them: a response worth reading, or a checkpoint reached in a longer task.',
+    'Their conversation list shows your short label on this conversation, and the chat shows a highlighted card with your message that they can jump to.',
+    'Use it sparingly — when you finish something they asked for, or reach a point they would want to look at while you keep working. Do not use it for every reply, for routine progress, or to ask a question (ask in your reply instead).',
+  ].join(' '),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      label: { type: 'string', description: 'Two or three words shown in the conversation list, e.g. "Draft ready" or "Tests passing". At most ' + NOTIFY_LABEL_MAX + ' characters.' },
+      message: { type: 'string', description: 'One or two sentences saying what is ready and what, if anything, the user should look at.' },
+    },
+    required: ['label', 'message'],
+    additionalProperties: false,
+  },
+};
+
+function callNotify(id, args) {
+  var label = typeof args.label === 'string' ? args.label.trim() : '';
+  var message = typeof args.message === 'string' ? args.message.trim() : '';
+  if (!label || !message) {
+    replyResult(id, {
+      content: [{ type: 'text', text: 'NotifyUser failed — nothing was shown: both label and message must be non-empty strings.' }],
+      isError: true,
+    });
+    return;
+  }
+  var text = label.length > NOTIFY_LABEL_MAX
+    ? 'Notified the user. The label was cut to ' + NOTIFY_LABEL_MAX + ' characters in their list; keep labels to two or three words.'
+    : 'Notified the user.';
+  replyResult(id, { content: [{ type: 'text', text: text }], isError: false });
+}
+
 function write(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n');
 }
@@ -135,6 +177,7 @@ function validate(links) {
 
 function callTool(id, params) {
   var name = params && params.name;
+  if (name === NOTIFY_TOOL_NAME) { callNotify(id, (params && params.arguments) || {}); return; }
   if (name !== TOOL_NAME) {
     replyError(id, -32602, 'Unknown tool: ' + String(name));
     return;
@@ -182,7 +225,7 @@ function handle(msg) {
     return;
   }
   if (method === 'ping') { replyResult(id, {}); return; }
-  if (method === 'tools/list') { replyResult(id, { tools: [TOOL] }); return; }
+  if (method === 'tools/list') { replyResult(id, { tools: [TOOL, NOTIFY_TOOL] }); return; }
   if (method === 'tools/call') { callTool(id, msg.params); return; }
   replyError(id, -32601, 'Unknown method: ' + String(method));
 }
@@ -256,5 +299,7 @@ export function deployClaudeCodeLinkMcp(baseDir: string, nodePath: string): Clau
   // A FILE path, not inline JSON: --mcp-config accepts either, but these args
   // reach node-pty, which re-joins them into a single command line on Windows.
   // A path carries no quotes or braces that have to survive that; JSON does.
-  return { serverPath, configPath, args: ['--mcp-config', configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL] };
+  // Both tools are pre-approved: neither reads or writes anything (a link the
+  // user clicks; a label and card in the app), so neither may raise a prompt.
+  return { serverPath, configPath, args: ['--mcp-config', configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_NOTIFY_TOOL] };
 }

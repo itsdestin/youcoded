@@ -74,7 +74,7 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses, sessionNotesOf } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useSessionSummaries } from './hooks/useSessionSummaries';
 import { useAttentionSound } from './hooks/useAttentionSound';
@@ -1014,6 +1014,10 @@ function AppInner() {
     });
     return mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
   }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId]);
+
+  // "Notify user" labels for the session list's status pill (sessionNotesOf says where each comes from).
+  const sessionNotes = useMemo(() => sessionNotesOf({ attention: sessionAttention, summaries: sessionSummaries, sessionIds: sessions.map((s: any) => s.id), statuses: sessionStatuses, viewedSessions, activeSessionId: sessionId }),
+    [sessionAttention, sessionSummaries, sessions, sessionStatuses, viewedSessions, sessionId]);
 
   // Play the 'attention' sound when any session transitions to red (awaiting approval). WHY once per burst on a phone: a reconnect
   // can report many already-waiting sessions at once; see useAttentionSound. The computer's windows are unchanged.
@@ -3572,6 +3576,7 @@ function AppInner() {
                 settingsBadge={settingsBadge}
                 settingsDangerBadge={settingsDangerBadge}
                 sessionStatuses={sessionStatuses}
+                sessionNotes={sessionNotes}
                 onOpenResumeBrowser={openResumeBrowser}
                 defaultModel={sessionDefaults.model}
                 defaultStartModel={sessionDefaults.startModel}

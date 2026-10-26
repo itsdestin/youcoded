@@ -31,6 +31,7 @@ import type { SessionLive } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 import { isNativeStartupState, type NativeStartupState } from '../shared/native-startup';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
+import { isNotifyUserToolName, notifyFieldsOf } from '../shared/notify-user';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
@@ -126,6 +127,8 @@ export interface SessionFacts {
   /** Asks waiting for an answer, including password asks (counted, never stored). */
   awaitingCount: number;
   hasHistory: boolean;
+  /** The assistant's latest "Notify user" label since the person last spoke (renderer twin: state/notify-fact.ts). */
+  notifyLabel?: string;
   /** Main's clock at the last event. Not part of the summary push: it changes constantly. */
   lastActivityAt: number;
   /** Native sessions: from the host. Others: from the last permission-mode push, else null. */
@@ -251,7 +254,7 @@ export class SessionRecords {
     // The queue length is read through the live source (it is not an event), so a change to it is only seen when something asks; it is in the key
     // so that when a push IS built it counts. (The permission mode and model left the summary in sync-fix3: no screen read them.)
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}`;
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}|${f.notifyLabel ?? ''}`;
   }
 
   /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
@@ -710,6 +713,7 @@ export class SessionRecords {
     return {
       working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? this.attentionOf(rec),
       hasHistory: f.hasHistory, queuedCount: f.queued.length, started: rec.started,
+      ...(f.notifyLabel ? { notifyLabel: f.notifyLabel } : {}),
     };
   }
 
@@ -801,6 +805,8 @@ export class SessionRecords {
         if (!d.text || stamped || !this.firstTime(rec, ev.uuid)) return;
         f.hasHistory = true;
         if (d.slashCommand) return; // a slash command starts no turn (reducer)
+        // The person spoke, so the last notification is answered (a host-injected report is not the person).
+        if (!d.injected) f.notifyLabel = undefined;
         f.working = true;
         f.turnUserUuid = typeof ev.uuid === 'string' ? ev.uuid : undefined;
         f.attention = 'ok';
@@ -809,6 +815,7 @@ export class SessionRecords {
         if (!this.firstTime(rec, ev.uuid)) return;
         f.hasHistory = true; f.working = true; f.attention = 'ok';
         f.turnUserUuid = typeof ev.uuid === 'string' ? ev.uuid : undefined;
+        f.notifyLabel = undefined;
         return;
       case 'assistant-text':
         if (stamped) return;
@@ -838,6 +845,11 @@ export class SessionRecords {
         if (typeof d.toolUseId === 'string' && d.toolUseId) {
           if (ev.type === 'tool-use') { if (rec.runningTools.size < OPEN_ASKS_MAX) rec.runningTools.add(d.toolUseId); }
           else rec.runningTools.delete(d.toolUseId);
+          // "Notify user": the label a phone's status pill shows. Keyed on the tool id through firstTime so a re-delivered old
+          // call cannot bring back a notification the person has since answered.
+          if (ev.type === 'tool-use' && typeof d.toolName === 'string' && isNotifyUserToolName(d.toolName) && this.firstTime(rec, `notify:${d.toolUseId}`)) {
+            f.notifyLabel = notifyFieldsOf(asObject(d.toolInput)).label;
+          }
         }
         return;
       case 'turn-complete':
@@ -851,6 +863,7 @@ export class SessionRecords {
         return;
       case 'context-clear':
         this.endTurn(rec);
+        f.notifyLabel = undefined;
         return;
       case 'session-error':
         this.endTurn(rec, ev.timestamp);

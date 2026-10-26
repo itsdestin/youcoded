@@ -30,6 +30,12 @@ export const CHAT: readonly ScreenEntry[] = [
   }))),
   chat('chat/sessions', 'menu'),
   chat('chat/switcher', 'menu'),
+  // "Notify user" (shared/notify-user.ts): the card in the chat, glowing until clicked; the jump button when the card is
+  // scrolled away while the assistant keeps working; the session list's status pill showing the assistant's label.
+  { ...chat('chat#notify', 'view'), session: 'wb-2', params: { seed: 'bubbles-notify' } },
+  { ...chat('chat#notify-phone', 'view', 'narrow'), session: 'wb-2', params: { seed: 'bubbles-notify' }, viewport: { width: 390, height: 844 } },
+  { ...chat('chat#notify-jump', 'view'), session: 'wb-2', params: { seed: 'bubbles-notify-jump' }, newIn: 'after' as const },
+  { ...chat('chat/switcher#notify', 'menu'), session: 'wb-1', params: { seed: 'bubbles-notify-jump' } },
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
   // The close prompt's other faces (backlog row 17, deck close-session-1): a session

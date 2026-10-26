@@ -236,6 +236,8 @@ interface Props {
   settingsBadge?: boolean;
   settingsDangerBadge?: boolean;
   sessionStatuses?: Map<string, SessionStatusColor>;
+  /** "Notify user" labels by session, shown in the session list's status pill (App.tsx sessionNotes). */
+  sessionNotes?: Map<string, string>;
   // WHY: `onResumeSession` removed — HeaderBar accepted it but never called it.
   // Resuming is owned by ResumeBrowser, opened via `onOpenResumeBrowser` below.
   // App.tsx was still passing it through; that call site is updated too.
@@ -385,7 +387,7 @@ export default React.memo(function HeaderBar({
   sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession,
   viewMode, onToggleView,
   gamePanelOpen, onToggleGamePanel, gameConnected, challengePending,
-  settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, sessionStatuses,
+  settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, sessionStatuses, sessionNotes,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
   windowDirectory, myWindowId,
@@ -589,6 +591,7 @@ export default React.memo(function HeaderBar({
         onCreateSession={onCreateSession}
         onCloseSession={onCloseSession}
         sessionStatuses={sessionStatuses}
+        sessionNotes={sessionNotes}
         onOpenResumeBrowser={onOpenResumeBrowser}
         onReorderSessions={onReorderSessions}
         defaultModel={defaultModel}

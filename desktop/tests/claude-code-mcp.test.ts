@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 import { deployClaudeCodeLinkMcp, CLAUDE_CODE_MCP_DIR, LINK_SERVER_JS } from '../src/main/claude-code-mcp';
 import { CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_MCP_SERVER_ID, SEND_USER_LINK_TOOL } from '../src/shared/send-user-link';
+import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_USER_DESCRIPTION, NOTIFY_USER_TOOL } from '../src/shared/notify-user';
 import { readSource } from './helpers/guard-scope';
 
 // Functional test of the SendUserLink MCP server the app attaches to CLAUDE
@@ -82,7 +83,7 @@ describe('the deployed server over stdio', () => {
     it('returns a config FILE path plus the one pre-approved tool', () => {
       // A path, never inline JSON: these args are re-joined into a command line
       // by node-pty on Windows, where braces and quotes do not survive.
-      expect(deployment.args).toEqual(['--mcp-config', deployment.configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL]);
+      expect(deployment.args).toEqual(['--mcp-config', deployment.configPath, '--allowedTools', CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_NOTIFY_TOOL]);
     });
 
     it('re-deploying is idempotent — an app update just refreshes the files', () => {
@@ -100,9 +101,9 @@ describe('the deployed server over stdio', () => {
       expect(res.result.serverInfo.name).toBe(CLAUDE_CODE_MCP_SERVER_ID);
     });
 
-    it('lists exactly one tool, SendUserLink, with a links array', async () => {
+    it('lists SendUserLink (with a links array) and NotifyUser, nothing else', async () => {
       const res = await request('tools/list');
-      expect(res.result.tools).toHaveLength(1);
+      expect(res.result.tools.map((t: { name: string }) => t.name)).toEqual(['SendUserLink', NOTIFY_USER_TOOL]);
       const tool = res.result.tools[0];
       expect(tool.name).toBe('SendUserLink');
       expect(tool.inputSchema.required).toEqual(['links']);
@@ -110,6 +111,21 @@ describe('the deployed server over stdio', () => {
       // The same guidance the native tool gives, so the model behaves the same
       // in a Claude Code session as in a YouCoded one.
       expect(tool.description).toContain('http://localhost:5173');
+    });
+
+    it('NotifyUser: same description as the native tool, needs a label and a message', async () => {
+      const res = await request('tools/list');
+      const notify = res.result.tools[1];
+      // Identical wording keeps the model's behaviour the same in both session types.
+      expect(notify.description).toBe(NOTIFY_USER_DESCRIPTION);
+      expect(notify.inputSchema.required).toEqual(['label', 'message']);
+      const ok = await request('tools/call', { name: NOTIFY_USER_TOOL, arguments: { label: 'Draft ready', message: 'The draft is done.' } });
+      expect(ok.result).toEqual({ content: [{ type: 'text', text: 'Notified the user.' }], isError: false });
+      const long = await request('tools/call', { name: NOTIFY_USER_TOOL, arguments: { label: 'A label far longer than the list has room for', message: 'x' } });
+      expect(long.result.isError).toBe(false);
+      expect(long.result.content[0].text).toContain('cut to 24 characters');
+      const bad = await request('tools/call', { name: NOTIFY_USER_TOOL, arguments: { label: '', message: 'x' } });
+      expect(bad.result.isError).toBe(true);
     });
 
     it('sends links and reports the count', async () => {

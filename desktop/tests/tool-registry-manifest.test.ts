@@ -144,6 +144,9 @@ const BOUNDS_EXEMPT: Record<string, string> = {
   // one-line-confirmation shape as SendUserFile; it names URLs, it never
   // returns their contents.
   SendUserLink: 'returns a one-line confirmation or a per-URL error list; never HTML or page content',
+  // text is `Notified the user.` (plus one fixed sentence when the label was
+  // long) — it echoes nothing the model sent.
+  NotifyUser: 'returns a fixed one-line acknowledgement; echoes none of its input',
   // T8 (doc-comments build, §5) — ReplyToComment/ResolveComment/ReopenComment/
   // AddComment/MoveComment each return a single fixed-shape confirmation line
   // naming only the path and comment id (never the comment TEXT itself,

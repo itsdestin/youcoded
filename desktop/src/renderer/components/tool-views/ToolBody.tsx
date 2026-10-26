@@ -14,6 +14,8 @@ import { ArtifactThumbnail } from '../ArtifactThumbnail';
 import { matchSessionArtifact } from '../filepath-match';
 import { useSecondsTick } from '../../hooks/useSecondsTick';
 import { DeliverablesCard } from '../DeliverablesCard';
+import { NotifyCard } from '../NotifyCard';
+import { NOTIFY_USER_TOOL, CLAUDE_CODE_NOTIFY_TOOL } from '../../../shared/notify-user';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 // Chatsearch session cards: same parser ToolCard uses for the header label,
 // so the collapsed header and expanded body always agree on what the call is.
@@ -1319,6 +1321,11 @@ export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; ses
       case SEND_USER_LINK_TOOL:
       case CLAUDE_CODE_LINK_TOOL:
         return <DeliverablesCard tools={[tool]} sessionId={sessionId ?? ''} />;
+      // Same reason for "Notify user": normally its own card in the bubble; the
+      // gallery and the buddy strip draw it here instead of raw JSON.
+      case NOTIFY_USER_TOOL:
+      case CLAUDE_CODE_NOTIFY_TOOL:
+        return <NotifyCard tool={tool} />;
       default: {
         // MCP PowerShell is shell-like — reuse ShellView. Other MCP tools fall
         // through to the raw view.

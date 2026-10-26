@@ -194,6 +194,9 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     // shell.openExternal's own scheme allowlist AT CLICK TIME — the model
     // never triggers navigation itself. Nothing to ask about, in any mode.
     { tool: 'SendUserLink', action: 'allow' },
+    // NotifyUser (2026-10-26) only labels the conversation and draws a card in
+    // the chat; it reads and writes nothing. Nothing to ask about, in any mode.
+    { tool: 'NotifyUser', action: 'allow' },
     // The Browser (2026-10-13): never asked HERE in any mode — the Browser asks
     // the person with its own card (site permission, final steps, home-network
     // addresses), the SAME rules for native and Claude Code sessions. Gating it

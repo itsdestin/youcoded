@@ -508,6 +508,14 @@ export interface SessionChatState {
   /** The "Background" chip's list: every background command / watcher of this
    *  session, independent of which cards are loaded. See state/background-commands.ts. */
   backgroundCommands: import('./background-commands').BackgroundCommands;
+  /**
+   * The assistant's most recent "Notify user" call since the person last spoke
+   * (shared/notify-user.ts). Set by the reducer wrapper when the tool call
+   * arrives, cleared when a new user turn starts. WHY a fact of its own rather
+   * than a walk of `toolCalls`: the session list reads it on every store change,
+   * and `toolCalls` never shrinks (performance.md rule 4). Absent = none.
+   */
+  latestNotify?: { toolUseId: string; label: string } | null;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -1273,6 +1281,9 @@ export interface SerializedSessionChatState {
   // Optional so a pre-field snapshot from an older host still deserializes.
   ccBackgroundOutcomes?: Record<string, import('../../shared/types').CcBackgroundRun>;
   backgroundCommands?: import('./background-commands').BackgroundCommands;
+  // Optional so a pre-field snapshot from an older host still deserializes. Carried
+  // so a reconnecting phone still labels a conversation the assistant flagged.
+  latestNotify?: { toolUseId: string; label: string } | null;
 }
 
 export interface SerializedChatState {
@@ -1317,6 +1328,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         sessionContext: s.sessionContext,
         ccBackgroundOutcomes: s.ccBackgroundOutcomes,
         backgroundCommands: s.backgroundCommands,
+        latestNotify: s.latestNotify ?? null,
       },
     ]);
   }
@@ -1386,6 +1398,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       ccBackgroundOutcomes: ser.ccBackgroundOutcomes ?? {},
       // Older hosts predate the command list — start empty.
       backgroundCommands: ser.backgroundCommands ?? {},
+      // Older hosts predate "Notify user" — no notification.
+      latestNotify: ser.latestNotify ?? null,
     });
   }
   return result;

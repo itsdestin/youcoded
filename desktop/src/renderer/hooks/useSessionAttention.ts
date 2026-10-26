@@ -35,6 +35,8 @@ export function statusFromSummary(summary: SessionSummary, unseen: boolean): Ses
   if (summary.awaitingCount > 0) return 'red';
   const attention = attentionDotColor(summary.attention as AttentionState);
   if (attention) return attention;
+  // Same rule as the local derivation: an unseen notification beats green.
+  if (summary.notifyLabel && unseen) return 'blue';
   if (summary.working) return 'green';
   if (summary.hasHistory && unseen) return 'blue';
   return 'gray';
@@ -71,6 +73,30 @@ export function mergeSummaryStatuses(args: {
     const summary = summaries[id];
     if (!summary) continue;
     m.set(id, statusFromSummary(summary, !viewedSessions.has(id) && id !== activeSessionId));
+  }
+  return m;
+}
+
+/**
+ * The assistant's "Notify user" labels by session, for the session list's status pill in place of "Response ready"
+ * (shared/notify-user.ts). Same two sources as the colours: this window's own derivation, and on a phone the computer's
+ * summary for conversations this screen does not hold. Only while the label is what makes the dot blue. Pure so App
+ * stays a caller.
+ */
+export function sessionNotesOf(args: {
+  attention: ReadonlyMap<string, SessionAttentionInfo>;
+  summaries: Record<string, SessionSummary> | null;
+  sessionIds: readonly string[];
+  statuses: ReadonlyMap<string, SessionStatusColor>;
+  viewedSessions: ReadonlySet<string>;
+  activeSessionId: string | null;
+}): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const [id, info] of args.attention) if (info.notifyLabel) m.set(id, info.notifyLabel);
+  if (!args.summaries) return m;
+  for (const id of args.sessionIds) {
+    const label = args.summaries[id]?.notifyLabel;
+    if (label && args.statuses.get(id) === 'blue' && !args.viewedSessions.has(id) && id !== args.activeSessionId) m.set(id, label);
   }
   return m;
 }
@@ -119,6 +145,10 @@ export interface SessionAttentionInfo {
   status: SessionStatusColor;
   attentionState: AttentionState;
   awaitingApproval: boolean;
+  /** The assistant's "Notify user" label, while it is what makes the dot blue
+   *  (shared/notify-user.ts). The session list's status pill shows it in place
+   *  of "Response ready". */
+  notifyLabel?: string;
 }
 
 /** One session's last answer, and every input that answer was derived from. */
@@ -128,6 +158,7 @@ interface SessionMemo {
   attentionState: AttentionState;
   isThinking: boolean;
   hasTimeline: boolean;
+  latestNotify: SessionChatState['latestNotify'];
   /** Not viewed and not active — the only way the arguments reach the colour. */
   unseen: boolean;
   /** Derived by the peer-session branch, whose rules differ (no green/blue). */
@@ -152,6 +183,7 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
     && m.activeTurnToolIds === c.activeTurnToolIds
     && m.attentionState === c.attentionState
     && m.isThinking === c.isThinking
+    && m.latestNotify === c.latestNotify
     && m.hasTimeline === (c.timeline.length > 0)
     && m.unseen === unseen;
 }
@@ -159,7 +191,7 @@ function memoHolds(m: SessionMemo | undefined, c: SessionChatState, unseen: bool
 function memoOf(c: SessionChatState, unseen: boolean, peer: boolean, info: SessionAttentionInfo): SessionMemo {
   return {
     toolCalls: c.toolCalls, activeTurnToolIds: c.activeTurnToolIds, attentionState: c.attentionState,
-    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, unseen, peer, info,
+    isThinking: c.isThinking, hasTimeline: c.timeline.length > 0, latestNotify: c.latestNotify, unseen, peer, info,
   };
 }
 
@@ -228,13 +260,20 @@ export function useSessionAttention(
       // amber ("something may be wrong, I don't know") → green (working) →
       // blue (unseen activity) → gray (idle).
       const attentionColor = attentionDotColor(chatState.attentionState);
+      // A "Notify user" call the person has not looked at yet goes blue even
+      // while the assistant keeps working (Destin, 2026-10-26: blue with the
+      // note beats green until you look) — a mid-task checkpoint is the main
+      // reason the tool exists, and green would hide it. Red and amber still win.
+      const notify = unseen ? chatState.latestNotify : null;
       const status: SessionStatusColor = hasAwaiting ? 'red'
         : attentionColor ?? (
-          (chatState.isThinking || hasRunning) ? 'green'
-          : (chatState.timeline.length > 0 && !viewedSessions.has(s.id) && s.id !== activeSessionId) ? 'blue'
+          notify ? 'blue'
+          : (chatState.isThinking || hasRunning) ? 'green'
+          : (chatState.timeline.length > 0 && unseen) ? 'blue'
           : 'gray'
         );
-      const info = { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting };
+      const info: SessionAttentionInfo = { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting };
+      if (notify && status === 'blue') info.notifyLabel = notify.label;
       next.set(s.id, info);
       nextMemo.set(s.id, memoOf(chatState, unseen, false, info));
     }
@@ -281,7 +320,7 @@ export function useSessionAttention(
       let changed = false;
       for (const [id, info] of next) {
         const p = prev.get(id);
-        if (!p || p.status !== info.status || p.attentionState !== info.attentionState || p.awaitingApproval !== info.awaitingApproval) {
+        if (!p || p.status !== info.status || p.attentionState !== info.attentionState || p.awaitingApproval !== info.awaitingApproval || p.notifyLabel !== info.notifyLabel) {
           changed = true; break;
         }
       }

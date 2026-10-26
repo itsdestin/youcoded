@@ -35,6 +35,7 @@ import { AdminRunStrip } from './permissions/AdminRunStrip';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
+import { CLAUDE_CODE_NOTIFY_TOOL, NOTIFY_USER_TOOL, notifyFieldsOf } from '../../shared/notify-user';
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
 import { ExpiredApprovalActions } from './ExpiredApprovalActions';
@@ -266,6 +267,8 @@ export function friendlyToolDisplay(
       };
     }
 
+    // "Notify user": the chat draws a NotifyCard; this title is for one-line strips.
+    case CLAUDE_CODE_NOTIFY_TOOL: case NOTIFY_USER_TOOL: return { label: 'Notified you', detail: `· ${notifyFieldsOf(input).label}` };
     case 'Write': {
       // Fix: a non-string file_path crashed basename().
       const fp = asString(input.file_path);

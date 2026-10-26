@@ -27,6 +27,7 @@ import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 import { updatePendingSendEntry } from './pending-send-entry';
 import { interruptedAssistantTurns } from './interrupted-turn';
 import { touchTurnTime } from './turn-time';
+import { applyNotifyFact } from './notify-fact';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -948,6 +949,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   next = touchTurnTime(state, next, id, action);
   next = applyParkedSpecialistRuns(state, next, id);
   next = applyParkedShellRuns(state, next, id);
+  // WHY here: the "Notify user" label is one small fact derived from tool cards
+  // and user turns; keeping it in the wrapper covers every path that adds either.
+  next = applyNotifyFact(state, next, id, action);
   const s = next.get(id);
   if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
   const fixed = new Map(next);

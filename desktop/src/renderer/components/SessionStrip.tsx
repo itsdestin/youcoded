@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
+import { pillNotifyLabel as noteLabel } from '../../shared/notify-user';
 import { Button, SectionLabel, Toggle, Tooltip } from './ui';
 import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
@@ -153,6 +154,8 @@ interface Props {
   // in the `sessions` array App.tsx uses to look names up by id.
   onCloseSession: (id: string, name?: string) => void;
   sessionStatuses?: Map<string, SessionStatusColor>;
+  /** "Notify user" labels per session: the blue status pill's words (shared/notify-user.ts). */
+  sessionNotes?: Map<string, string>;
   // WHY: `onResumeSession` is no longer accepted here. The strip never invoked
   // it — resuming is owned by the ResumeBrowser modal, opened via
   // `onOpenResumeBrowser` below. App/HeaderBar were still passing it through;
@@ -237,9 +240,8 @@ const STATUS_PILL: Record<SessionStatusColor, string> = {
   gray: 'bg-gray-500/15 border-gray-500/30',
 };
 
-// `label` exists for ONE caller: the mock-up page that shows two candidate
-// wordings side by side. Everywhere in the app it is omitted, so STATUS_LABEL
-// stays the single source of the words.
+// `label` overrides STATUS_LABEL's word: the session list's "Notify user" label
+// (noteLabel), and the mock-up page comparing wordings. Else STATUS_LABEL.
 export function StatusPill({ color, isActive, label }: { color: SessionStatusColor; isActive: boolean; label?: string }) {
   return (
     <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${STATUS_PILL[color]}`}>
@@ -351,7 +353,7 @@ function blankDragImage(): HTMLCanvasElement {
 
 export default function SessionStrip({
   sessions: sourceSessions, activeSessionId, onSelectSession: selectSession,
-  onCreateSession, onCloseSession, sessionStatuses,
+  onCreateSession, onCloseSession, sessionStatuses, sessionNotes,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
   windowDirectory, myWindowId,
@@ -2535,7 +2537,7 @@ export default function SessionStrip({
                             </span>
                           )}
                           <PinMark sessionId={s.id} />
-                          <StatusPill color={color} isActive={s.id === activeSessionId} />
+                          <StatusPill color={color} isActive={s.id === activeSessionId} label={noteLabel(sessionNotes, s.id, color)} />
                         </span>
                         <span className="flex items-center gap-2 min-w-0">
                           <span className="flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted">
@@ -2674,7 +2676,7 @@ export default function SessionStrip({
                                   </span>
                                 )}
                                 <PinMark sessionId={s.id} />
-                                <StatusPill color={color} isActive={false} />
+                                <StatusPill color={color} isActive={false} label={noteLabel(sessionNotes, s.id, color)} />
                               </span>
                               <span className="flex items-center gap-2 min-w-0">
                                 <span className="flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted">

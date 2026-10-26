@@ -861,7 +861,9 @@ body[data-input-style="floating"]:not([data-chrome-style="floating"]) {
 .jump-to-bottom {
   /* Includes --vvp-offset so the button stays above the soft keyboard
      when it's open (same treatment as .bottom-float). */
-  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px));
+  /* --jump-stack: "Jump to notification" (ChatView) shares this class and sets it
+     to sit one button-height above "Jump to bottom" while both are showing. */
+  bottom: calc(var(--bottom-chrome-height, 5rem) + var(--queued-strip-height, 0px) + var(--model-status-height, 0px) + var(--input-edge-inset, 0px) + var(--chat-float-gap, 0.375rem) + var(--vvp-offset, 0px) + var(--jump-stack, 0px));
   /* Fade + rise in, fade + drop out. The horizontal centering lives here (not in a
      Tailwind -translate-x-1/2) because that utility and this animation both write
      `transform` and would overwrite each other. Colors keep Tailwind's hover fade. */

@@ -19,6 +19,7 @@ import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { planFirstDraw, timelineEntryKey } from '../state/first-draw-plan';
+import { useNotifyOnScreen, useNotifySeen } from '../state/notify-seen';
 import { SessionContextBanner } from './SessionContextBanner';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
@@ -671,6 +672,41 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // turn restarted the fold idle timer so folding could never fire. It made the
   // measured numbers WORSE than doing nothing (2026-08-28).
   const registerFold = folding.registerEntry;
+
+  // "Jump to notification": the latest "Notify user" card since the person last
+  // spoke, while it is unclicked and off screen (NotifyCard reports both).
+  const notifyId = state.latestNotify?.toolUseId ?? null;
+  const notifySeen = useNotifySeen(notifyId);
+  const notifyOnScreen = useNotifyOnScreen(notifyId);
+  const showNotifyJump = !!notifyId && !notifySeen && !notifyOnScreen;
+  // Render-phase mirror so the click handler stays one stable function.
+  const notifyJumpRef = useRef({ notifyId, presentation, toolGroups: state.toolGroups, revealAndPin: folding.revealAndPin });
+  notifyJumpRef.current = { notifyId, presentation, toolGroups: state.toolGroups, revealAndPin: folding.revealAndPin };
+  const jumpToNotify = useCallback(() => {
+    const { notifyId: id, presentation: p, toolGroups, revealAndPin } = notifyJumpRef.current;
+    const scroller = scrollContainerRef.current;
+    if (!id || !scroller) return;
+    // The card's row may be folded into a spacer far up the chat; find its
+    // timeline entry and unfold just that row before scrolling to the card.
+    // Walks the turns once, on a click only.
+    let entryKey: string | null = null;
+    for (const entry of p.timeline) {
+      if (entry.kind !== 'assistant-turn') continue;
+      const turn = p.assistantTurns.get(entry.turnId);
+      const holds = turn?.segments.some((seg) => seg.type === 'tool-group' && toolGroups.get(seg.groupId)?.toolIds.includes(id));
+      if (holds) { entryKey = timelineEntryKey(entry); break; }
+    }
+    // Leaving the bottom on purpose: stop stick-to-bottom pulling the view back down.
+    releaseStick();
+    const release = entryKey ? revealAndPin(entryKey) : () => {};
+    requestAnimationFrame(() => {
+      const card = scroller.querySelector<HTMLElement>(`[data-notify-id="${CSS.escape(id)}"]`)
+        ?? (entryKey ? scroller.querySelector<HTMLElement>(`[data-entry-key="${CSS.escape(entryKey)}"]`) : null);
+      card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // Hold the row unfolded while the smooth scroll lands; ordinary folding resumes after.
+      setTimeout(release, 1500);
+    });
+  }, [releaseStick]);
   // Live entry element per key, for the archived-entry hint, which sits beside
   // its entry rather than wrapping it (TimelineEntryHint.tsx says why).
   const entryElsRef = useRef(new Map<string, HTMLElement>());
@@ -1351,6 +1387,23 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 px-3 py-1.5 text-xs bg-inset hover:bg-edge text-fg-2 border border-edge-dim rounded-full shadow-lg transition-colors z-10"
         >
           Jump to bottom
+        </button>
+      )}
+
+      {/* "Jump to notification" (Destin, 2026-10-26): the assistant's latest
+          "Notify user" card is still unclicked and not on screen. Same float as
+          Jump to bottom, in the status blue of the card it leads to; stacked
+          above Jump to bottom when both show. */}
+      {showNotifyJump && (
+        <button
+          onClick={jumpToNotify}
+          data-state="in"
+          data-notify-jump
+          className="jump-to-bottom panel-glass absolute bottom-4 left-1/2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-400/15 hover:bg-blue-400/25 text-fg border border-blue-400/40 rounded-full shadow-lg transition-colors z-10"
+          style={{ '--jump-stack': atBottom ? '0px' : '2.25rem' } as React.CSSProperties}
+        >
+          <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" aria-hidden="true" />
+          Jump to notification
         </button>
       )}
 

@@ -9,6 +9,8 @@ import { SessionRefsEnabled } from './session-refs-context';
 import ToolCard, { StackedSkillsCard } from './ToolCard';
 import { DeliverablesCard, isSentFilesTool, isSentLinksTool, SENT_FILES_TOOL } from './DeliverablesCard';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
+import { isNotifyUserToolName } from '../../shared/notify-user';
+import { NotifyCard } from './NotifyCard';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, StoppedIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
@@ -252,6 +254,26 @@ function collectBubbleSentFiles(
   return out;
 }
 
+/** The bubble's "Notify user" calls, pulled out of its tool groups to render as
+ *  NotifyCards at the end of the bubble — the notification is a message to the
+ *  person, not a log line, so it never hides inside a collapsed tool group. */
+function collectBubbleNotifies(
+  bubble: VisualBubble,
+  toolGroups: Map<string, ToolGroupState>,
+  toolCalls: Map<string, ToolCallState>,
+): ToolCallState[] {
+  const out: ToolCallState[] = [];
+  for (const groupId of bubble.toolGroupIds) {
+    const group = toolGroups.get(groupId);
+    if (!group) continue;
+    for (const id of group.toolIds) {
+      const t = toolCalls.get(id);
+      if (t && isNotifyUserToolName(t.toolName)) out.push(t);
+    }
+  }
+  return out;
+}
+
 /**
  * Splits a turn's segments into visual bubbles.
  *
@@ -368,7 +390,7 @@ function bubblePaintsSomething(
       // `t` to never on its false branch, which tsc rejects at the next line.
       // A link delivery counts like a file: a bubble whose ONLY content is a
       // link must still paint (it's a deliverable, not a no-op turn).
-      if (!t || t.toolName === 'Skill' || t.toolName === SENT_FILES_TOOL || isSendUserLinkToolName(t.toolName)) continue;
+      if (!t || t.toolName === 'Skill' || t.toolName === SENT_FILES_TOOL || isSendUserLinkToolName(t.toolName) || isNotifyUserToolName(t.toolName)) continue;
       if (t.status !== 'awaiting-approval') return true;
     }
   }
@@ -492,9 +514,11 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   const withFiles = bubbles.map((bubble) => ({
     bubble,
     sentFiles: collectBubbleSentFiles(bubble, toolGroups, toolCalls),
+    notifies: collectBubbleNotifies(bubble, toolGroups, toolCalls),
   }));
-  let shown = withFiles.filter(({ bubble, sentFiles }) =>
-    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length));
+  // A notification card counts like a sent file: a bubble holding only one still paints.
+  let shown = withFiles.filter(({ bubble, sentFiles, notifies }) =>
+    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length + notifies.length));
   if (shown.length === 0 && turnSkills.length > 0) shown = withFiles.slice(-1);
 
   // Empty-step recovery (spec 2026-08-21, decision 4): a fully-contentless
@@ -527,11 +551,11 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
 
   return (
     <>
-      {shown.map(({ bubble, sentFiles }, i) => {
+      {shown.map(({ bubble, sentFiles, notifies }, i) => {
         const hasTools = bubble.toolGroupIds.length > 0;
         // A sent-files card counts as content: a bubble holding only that card
         // must get the prose padding, not the tight tools-only padding.
-        const hasContent = !!(bubble.text || bubble.plan || sentFiles.length);
+        const hasContent = !!(bubble.text || bubble.plan || sentFiles.length || notifies.length);
         const hasReasoning = !!bubble.reasoning;
         const toolsOnly = hasTools && !hasContent && !hasReasoning;
         const reasoningOnly = hasReasoning && !hasContent && !hasTools;
@@ -583,6 +607,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
               {sentFiles.length > 0 && (
                 <DeliverablesCard tools={sentFiles} sessionId={sessionId} />
               )}
+              {/* Notification cards: last in the bubble, after any deliverables —
+                  they say what is ready, so they read after it. Filtered out of
+                  the tool groups above (ToolGroupInline). */}
+              {notifies.map((t) => <NotifyCard key={t.toolUseId} tool={t} />)}
               {/* Trailing-Skills row: Skills are reordered to the end of the turn's
                   last bubble so they read as a status footer rather than co-mingled
                   with substantive tool output. ToolGroupInline filters Skills out
@@ -703,7 +731,7 @@ function ToolGroupInline({
     // SendUserFile/SendUserLink are ALSO pulled out: they render as the
     // DeliverablesCard at the end of the bubble, after the tool cards
     // (collectBubbleSentFiles).
-    .filter((t): t is ToolCallState => t !== undefined && t.toolName !== 'Skill' && !isSentFilesTool(t) && !isSentLinksTool(t));
+    .filter((t): t is ToolCallState => t !== undefined && t.toolName !== 'Skill' && !isNotifyUserToolName(t.toolName) && !isSentFilesTool(t) && !isSentLinksTool(t));
 
   if (tools.length === 0) return null;
 
