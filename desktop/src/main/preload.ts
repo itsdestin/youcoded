@@ -254,8 +254,6 @@ const IPC = {
   BUDDY_HIDE: 'buddy:hide',
   BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
   BUDDY_SET_SESSION: 'buddy:set-session',
-  BUDDY_SUBSCRIBE: 'buddy:subscribe',
-  BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
   BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
   BUDDY_MOVE_MASCOT: 'buddy:move-mascot',
   BUDDY_CAPTURE_DESKTOP: 'buddy:capture-desktop',
@@ -269,6 +267,8 @@ const IPC = {
   BUDDY_BAR_STATE: 'buddy:bar-state',
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   BUDDY_CHAT_STATE: 'buddy:chat-state',
+  BUDDY_TOGGLE_CHAT_SIZE: 'buddy:toggle-chat-size',
+  BUDDY_CHAT_SIZE: 'buddy:chat-size',
   BUDDY_HELPER_STATUS: 'buddy:helper-status',
   BUDDY_INSTALL_HELPER: 'buddy:install-helper',
   BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
@@ -1946,8 +1946,7 @@ contextBridge.exposeInMainWorld('claude', {
     hide: () => ipcRenderer.invoke(IPC.BUDDY_HIDE),
     toggleChat: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT),
     setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, { sessionId }),
-    subscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SUBSCRIBE, { sessionId }),
-    unsubscribe: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_UNSUBSCRIBE, { sessionId }),
+    toggleChatSize: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT_SIZE),
     getViewedSession: () => ipcRenderer.invoke(IPC.BUDDY_GET_VIEWED_SESSION),
     // Fire-and-forget: pointer drag fires ~60 events/sec; invoke() round-trips
     // would starve the renderer. Main clamps target to visible workArea.
@@ -1995,10 +1994,15 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.BUDDY_MASCOT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_MASCOT_STATE, listener);
     },
-    onChatState: (cb: (s: { visible: boolean }) => void) => {
-      const listener = (_: unknown, s: { visible: boolean }) => cb(s);
+    onChatState: (cb: (s: { visible: boolean; mascot?: 'above' | 'below' }) => void) => {
+      const listener = (_: unknown, s: { visible: boolean; mascot?: 'above' | 'below' }) => cb(s);
       ipcRenderer.on(IPC.BUDDY_CHAT_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.BUDDY_CHAT_STATE, listener);
+    },
+    onChatSize: (cb: (size: 'small' | 'large') => void) => {
+      const listener = (_: unknown, size: 'small' | 'large') => cb(size);
+      ipcRenderer.on(IPC.BUDDY_CHAT_SIZE, listener);
+      return () => ipcRenderer.removeListener(IPC.BUDDY_CHAT_SIZE, listener);
     },
     onFocusSession: (cb: (sessionId: string) => void) => {
       const listener = (_: unknown, sessionId: string) => cb(sessionId);

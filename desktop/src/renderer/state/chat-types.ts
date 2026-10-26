@@ -126,9 +126,8 @@ export interface AssistantTurn {
 export function abnormalStopReason(reason: string | null | undefined): boolean {
   return !!reason && reason !== 'end_turn';
 }
-
-/** Timeline render gate shared by ChatView and the buddy BubbleFeed (which
- *  MUST mirror each other): a segment-less turn renders only when it carries
+/** Timeline render gate shared by ChatView (main window and buddy): a segment-less
+ *  turn renders only when it carries
  *  an abnormal stopReason — its footer row is the whole fix for the
  *  empty_response bug (a fully-contentless turn must not end in unexplained
  *  silence). All other segment-less turns drop. */
@@ -253,7 +252,7 @@ export type TimelineEntry =
   // `injected` (2026-08-16): set when the host, not the user, wrote this
   // user-role turn — today only 'specialist-report' (a background specialist's
   // delivered report, or a host follow-up note, harness-session.ts runNotice).
-  // ChatView/BubbleFeed draw such an entry as a compact, collapsed
+  // ChatView (main window and buddy) draw such an entry as a compact, collapsed
   // SpecialistReportCard — never as the user's own bubble and never as a
   // full-width message: the text is what the PARENT MODEL reads, and putting
   // it in the chat as anyone's words showed text nobody actually said
@@ -679,7 +678,7 @@ export type ChatAction =
       // Native runtime only: a provider/stream failure ended the turn.
       // Reducer runs endTurn() then overrides attentionState to 'error' and
       // stashes the message for the AttentionBanner. Fired from a
-      // 'session-error' transcript event (App.tsx / BubbleFeed.tsx).
+      // 'session-error' transcript event (App.tsx / useBuddyFeed.ts).
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;

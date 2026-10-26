@@ -392,8 +392,6 @@ export const IPC = {
   BUDDY_HIDE: 'buddy:hide',
   BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
   BUDDY_SET_SESSION: 'buddy:set-session',
-  BUDDY_SUBSCRIBE: 'buddy:subscribe',
-  BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
   BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
   // Renderer → main drag events. Fire-and-forget because drag generates
   // ~60 events/sec while the pointer moves; invoke() round-trips would
@@ -429,6 +427,10 @@ export const IPC = {
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   // Main → chat renderer: entrance/exit animation cue around show/hide.
   BUDDY_CHAT_STATE: 'buddy:chat-state',
+  // The chat's two sizes (buddy rebuild, 2026-10-25): the bar's size button asks main to switch, and main tells the
+  // chat and the bar which size it now is (so the button's hint says which way it goes).
+  BUDDY_TOGGLE_CHAT_SIZE: 'buddy:toggle-chat-size',
+  BUDDY_CHAT_SIZE: 'buddy:chat-size',
   // ── The Linux/KDE buddy helper (docs/active/design/2026-09-04-linux-buddy-helper/) ──
   // On a native-Wayland desktop an app is not allowed to move its own windows,
   // so the buddy appears but cannot be dragged. A small script that runs inside

@@ -1603,6 +1603,8 @@ void app.whenReady().then(async () => {
   interface BuddyPositionsFile {
     mascot?: { x: number; y: number };
     dock?: 'left' | 'right' | 'top' | 'bottom';
+    /** The chat's size, from the bar's size button (buddy rebuild, 2026-10-25). */
+    chatSize?: 'small' | 'large';
     // A `keepAbove` key may still sit in files written before 2026-09-16 (the
     // deleted overlay's KDE pin preference). It is carried through the
     // parse/save round trip untouched and read by nothing.
@@ -1690,6 +1692,12 @@ void app.whenReady().then(async () => {
         getPersistedPosition: (key) => buddyPositions[key] ?? null,
         setPersistedPosition: (key, pos) => {
           buddyPositions[key] = pos;
+          saveBuddyPositions(buddyPositions);
+        },
+        // The size button's choice (buddy rebuild, 2026-10-25), in the same small file as his position.
+        getPersistedChatSize: () => buddyPositions.chatSize ?? null,
+        setPersistedChatSize: (size) => {
+          buddyPositions.chatSize = size;
           saveBuddyPositions(buddyPositions);
         },
         getPersistedDock: () => buddyPositions.dock ?? null,

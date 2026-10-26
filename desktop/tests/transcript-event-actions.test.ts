@@ -2,7 +2,7 @@
 //
 // tests/fixtures/transcript-event-actions.golden.json was recorded from the OLD
 // code at cfbf69ca5 BEFORE any caller was switched over: App.tsx's live switch
-// (`app`, with the way each action was dispatched), BubbleFeed.tsx's live switch
+// (`app`, with the way each action was dispatched), useBuddyFeed.ts's live switch
 // (`buddy`) and the former singular pageEventToAction (`page`), for every event type x payload variant
 // in tests/helpers/transcript-event-matrix.ts. So these tests prove the merge kept
 // each screen's behaviour, rather than asserting what the new code happens to do.

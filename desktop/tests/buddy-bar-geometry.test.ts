@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  BAR_CONTENT, BAR_PADDING, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
+  BAR_CONTENT, BAR_PADDING, BAR_PADDING_X, BAR_TOOLTIP_ROOM, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
   computeBarContentRect, computeBarPosition, computeGroupLayout, chatOffsetX,
   mascotXRangeForChat, mascotInkRect, computeTrayLayout,
 } from '../src/main/buddy-bar-geometry';
@@ -41,18 +41,18 @@ describe('computeBarContentRect', () => {
     const range = mascotXRangeForChat(mascot(0, 300), SHORT_WA);
     for (let x = range.min; x <= range.max; x += 1) {
       const bar = computeBarContentRect(mascot(x, 300));
-      expect(bar.x - BAR_PADDING).toBeGreaterThanOrEqual(SHORT_WA.x);
-      expect(bar.x + bar.width + BAR_PADDING).toBeLessThanOrEqual(SHORT_WA.x + SHORT_WA.width);
+      expect(bar.x - BAR_PADDING_X).toBeGreaterThanOrEqual(SHORT_WA.x);
+      expect(bar.x + bar.width + BAR_PADDING_X).toBeLessThanOrEqual(SHORT_WA.x + SHORT_WA.width);
     }
   });
 });
 
 describe('computeBarPosition', () => {
-  it('is the content rect grown by BAR_PADDING', () => {
+  it('is the content rect grown by its side padding and the tooltip room above', () => {
     const c = computeBarContentRect(mascot(500, 300));
     expect(computeBarPosition(mascot(500, 300), wa)).toEqual({
-      x: c.x - BAR_PADDING,
-      y: c.y - BAR_PADDING,
+      x: c.x - BAR_PADDING_X,
+      y: c.y - BAR_TOOLTIP_ROOM,
     });
   });
 
@@ -60,9 +60,9 @@ describe('computeBarPosition', () => {
     expect(computeBarPosition(mascot(500, -40), wa).y).toBe(0);
   });
 
-  it('window size accounts for the padding on both sides', () => {
-    expect(BAR_SIZE.width).toBe(BAR_CONTENT.width + BAR_PADDING * 2);
-    expect(BAR_SIZE.height).toBe(BAR_CONTENT.height + BAR_PADDING * 2);
+  it('window size holds the panel, its side padding, the hint room above and the padding below', () => {
+    expect(BAR_SIZE.width).toBe(BAR_CONTENT.width + BAR_PADDING_X * 2);
+    expect(BAR_SIZE.height).toBe(BAR_CONTENT.height + BAR_TOOLTIP_ROOM + BAR_PADDING);
   });
 });
 

@@ -3,7 +3,7 @@ import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BuddyWindowManager, clampToWorkArea, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
 import { buildCaption, parseCaption, type BuddyRole } from '../src/shared/buddy-caption';
-import { MASCOT_SIZE, CHAT_SIZE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
+import { MASCOT_SIZE, CHAT_SIZE, CHAT_SIZE_LARGE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
 import { WorkAreaResolver } from '../src/main/buddy-work-area';
 import { readSource } from './helpers/guard-scope';
 
@@ -77,6 +77,7 @@ function fakeWin(role: BuddyRole, x: number, y: number, nativeSizeDrift = false)
       size.width = bounds.width; size.height = bounds.height;
     }),
     setTitle: vi.fn(),
+    setSize: vi.fn((w: number, h: number) => { size.width = w; size.height = h; }),
     getBounds: vi.fn(() => ({ ...at, ...size })),
     getPosition: vi.fn(() => [at.x, at.y]),
     isDestroyed: () => false,
@@ -126,7 +127,7 @@ interface Harness {
   manager: BuddyWindowManager;
   created: Array<{ variant: BuddyRole; x: number; y: number; title?: string }>;
   wins: Partial<Record<BuddyRole, FakeWin>>;
-  saved: { mascot: { x: number; y: number } | null };
+  saved: { mascot: { x: number; y: number } | null; chatSize: 'small' | 'large' | null };
   /** Every native placement call made by any buddy window. */
   positionCalls: () => number;
   /** Every setTitle call made by any buddy window. */
@@ -141,10 +142,11 @@ function harness(opts: {
   savedPos?: { x: number; y: number } | null;
   tray?: TrayFake;
   nativeSizeDrift?: boolean;
+  chatSize?: 'small' | 'large' | null;
 } = {}): Harness {
   const created: Harness['created'] = [];
   const wins: Partial<Record<BuddyRole, FakeWin>> = {};
-  const saved: Harness['saved'] = { mascot: null };
+  const saved: Harness['saved'] = { mascot: null, chatSize: opts.chatSize ?? null };
   let dock = opts.dock ?? null;
 
   const deps: BuddyWindowManagerDeps = {
@@ -158,6 +160,8 @@ function harness(opts: {
     setPersistedPosition: (_k, pos) => { saved.mascot = pos; },
     getPersistedDock: () => dock,
     setPersistedDock: (edge) => { dock = edge; },
+    getPersistedChatSize: () => saved.chatSize,
+    setPersistedChatSize: (size) => { saved.chatSize = size; },
     registry: { subscribe: vi.fn(), unsubscribe: vi.fn() } as never,
     mainWindow: () => null,
     onStatusChanged: vi.fn(),
@@ -222,17 +226,17 @@ describe('the caption channel', () => {
     const SRC = readSource(join(__dirname, '../src/main/buddy-window-manager.ts'));
     const lines = SRC.split('\n');
 
-    it('every one of the nine write sites and three creation sites is still there', () => {
+    it('every one of the ten write sites and three creation sites is still there', () => {
       // The ast-grep rule buddy-window-move-only-in-place proves nothing moves
       // the buddy EXCEPT through place(). It cannot notice a write path being DELETED — and a deleted one is
       // invisible to the behaviour tests too, because other paths keep the same
       // totals non-zero (the bar, for instance, is also renamed by glideGroup
       // and by showBar's else-branch). Counting the call sites makes a deletion
       // loud. Design §3 fixes these numbers: nine setPosition writes, three
-      // constructor placements.
+      // constructor placements. The tenth write is applyChatSize's (the chat's two sizes, buddy rebuild).
       const calls = (re: RegExp): number =>
         lines.filter((l) => re.test(l) && !l.trimStart().startsWith('//')).length;
-      expect(calls(/this\.place\(/)).toBe(9);
+      expect(calls(/this\.place\(/)).toBe(10);
       expect(calls(/this\.create\(/)).toBe(3);
     });
 
@@ -280,7 +284,7 @@ describe('the caption channel', () => {
         h.manager.toggleChat();
         vi.advanceTimersByTime(70);
         h.manager.toggleChat();
-        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', { visible: true });
+        expect(h.wins.chat!.webContents.send).toHaveBeenLastCalledWith('buddy:chat-state', expect.objectContaining({ visible: true }));
         vi.advanceTimersByTime(200);
         expect(h.wins.chat!.isVisible()).toBe(true);
       } finally {
@@ -867,5 +871,75 @@ describe('taskbar-icon style', () => {
     h.manager.show('tray');
     expect(h.wins.mascot).toBeDefined();
     expect(h.manager.getStatus().style).toBe('floating');
+  });
+});
+
+describe("the chat's two sizes (the bar's size button)", () => {
+  const sentTo = (w: FakeWin | undefined, channel: string) =>
+    (w?.webContents.send.mock.calls ?? []).filter((c) => c[0] === channel).map((c) => c[1]);
+
+  it('switches an open chat to the large size and back, remembers it, and tells the chat and the bar', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat(); // close, so the bar exists and is re-created on the next open
+      vi.advanceTimersByTime(200);
+      h.manager.toggleChat();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      h.manager.toggleChatSize();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+      expect(h.saved.chatSize).toBe('large');
+      expect(sentTo(h.wins.chat, 'buddy:chat-size').at(-1)).toBe('large');
+      expect(sentTo(h.wins.bar, 'buddy:chat-size').at(-1)).toBe('large');
+      h.manager.toggleChatSize();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE);
+      expect(h.saved.chatSize).toBe('small');
+    } finally {
+      h.manager.hide();
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens at the remembered large size', () => {
+    const h = harness({ chatSize: 'large' });
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      expect(h.wins.chat!.getBounds()).toMatchObject(CHAT_SIZE_LARGE);
+    } finally {
+      h.manager.hide();
+    }
+  });
+
+  it('on the rename channel the chat resizes itself, since it cannot be moved by the app', () => {
+    const h = harness({ caption: true });
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChatSize();
+      expect(h.wins.chat!.setSize).toHaveBeenLastCalledWith(CHAT_SIZE_LARGE.width, CHAT_SIZE_LARGE.height);
+    } finally {
+      h.manager.hide();
+    }
+  });
+
+  it("tells the chat which side of it the buddy is on, so it grows out of him", () => {
+    vi.useFakeTimers();
+    const h = harness();
+    try {
+      h.manager.show();
+      h.manager.toggleChat();
+      h.manager.toggleChat();
+      vi.advanceTimersByTime(200);
+      h.manager.toggleChat();
+      const cue = sentTo(h.wins.chat, 'buddy:chat-state').at(-1) as { visible: boolean; mascot: string };
+      expect(cue.visible).toBe(true);
+      expect(['above', 'below']).toContain(cue.mascot);
+    } finally {
+      h.manager.hide();
+      vi.useRealTimers();
+    }
   });
 });

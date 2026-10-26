@@ -19,26 +19,9 @@ export type MenuIconName =
   | 'folder'
   | 'path'
   // The Browser panel's "Stop for this chat" (2026-10-13).
-  | 'stop'
-  // The buddy's actions (buddy rebuild, 2026-10-25): screenshot, bigger/smaller window, hide.
-  | 'camera'
-  | 'resize'
-  | 'hide';
+  | 'stop';
 
 const PATHS: Record<MenuIconName, React.ReactNode> = {
-  camera: (
-    <>
-      <path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
-      <circle cx="12" cy="13" r="4" />
-    </>
-  ),
-  resize: <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />,
-  hide: (
-    <>
-      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22" />
-    </>
-  ),
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   // WHY: renaming needs its own pencil, not the unrelated move-window icon.
   rename: <path d="m16 3 5 5-12 12-6 1 1-6L16 3Zm-2 2 5 5M4 15l5 5" />,

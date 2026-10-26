@@ -11,19 +11,11 @@ import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 import { BuddyWelcome } from './BuddyWelcome';
 import { useBuddyFeed } from './useBuddyFeed';
 import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
-import { useBuddyActions, CaptureButton, SizeButton, OpenMainButton, HideBuddyButton, MoreMenuButton, ActionsToolbar } from './BuddyActions';
-
-/** Where the buddy's actions (screenshot, size, open YouCoded, hide) live — buddy-rebuild-questions#Q-5 and
- *  buddy-rebuild-review#C-1 ("i want to see more options"), chosen from pictures:
- *  'beside'      round buttons next to the mascot (their own window, BuddyBarApp), size included — CHOSEN
- *                (buddy-rebuild-review2#C-2); the others stay for comparison until the contract settles.
- *  'header'      four icons beside the session strip.
- *  'composer'    screenshot beside Attach; size, open, hide as icons in the header.
- *  'menu'        one "⋯" in the header holding all four.
- *  'mascot-menu' screenshot beside Attach, size in the header; open and hide on a right-click of the buddy himself.
- *  'hover'       the four header icons appear only while the pointer is over the top row.
- *  'toolbar'     a thin row of labelled buttons under the message box. */
-export type BuddyActionsAt = 'beside' | 'header' | 'composer' | 'menu' | 'mascot-menu' | 'hover' | 'toolbar';
+import { Toast } from '../ui';
+import { useBlockedSend } from '../../hooks/useBlockedSend';
+import type { BlockedSendToast } from '../../utils/blocked-send-toast';
+import { useChatStore } from '../../state/chat-context';
+import type { SessionChatState } from '../../state/chat-types';
 
 /**
  * The buddy's chat window: the MAIN window's chat, hosted small (buddy rebuild, 2026-10-25 —
@@ -32,11 +24,13 @@ export type BuddyActionsAt = 'beside' | 'header' | 'composer' | 'menu' | 'mascot
  * (question and permission cards, warnings with buttons, scroll-back, skill cards — #Q-3) and the
  * InputBar at the bottom. Only the window's own concerns live here: which session it shows, the feed
  * that fills this window's chat store (useBuddyFeed — in the main window App does that), and the
- * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css).
+ * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css). The buddy's actions
+ * (screenshot, size, open YouCoded, hide) are NOT in here: they are the panel beside the mascot (BuddyBarApp,
+ * buddy-rebuild-review5#C-5).
  */
-export function BuddyChat({ actionsAt = 'beside', tools = 'summary' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools'] } = {}) {
+export function BuddyChat({ tools = 'summary', shown = true }: { tools?: CompactSurface['tools']; /** false while main has the window hidden */ shown?: boolean } = {}) {
   // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
-  // 'summary' was chosen (buddy-rebuild-review2#D-1).
+  // 'summary' — one row for a reply's steps and files — was chosen (buddy-rebuild-review2#D-1, review4#A-2).
   const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
   const [viewedSession, setViewedSession] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -126,14 +120,26 @@ export function BuddyChat({ actionsAt = 'beside', tools = 'summary' }: { actions
 
   const current = sessions.find((s) => s.id === viewedSession);
 
-  // The chat's two sizes (buddy-rebuild-questions#Q-6). Main resizes the window and re-lays out the group; the
-  // renderer only remembers which one it asked for, to word the button.
-  const [large, setLarge] = useState(false);
-  const toggleSize = useCallback(() => {
-    setLarge((was) => { void (window.claude.buddy as any)?.setChatSize?.(!was ? 'large' : 'small'); return !was; });
-  }, []);
-  const actions = useBuddyActions(large, toggleSize);
-  const captureInBox = actionsAt === 'composer' || actionsAt === 'mascot-menu';
+  // A send the session cannot take right now — Claude Code showing a permission, question or plan menu — is refused
+  // with the main window's own toast and "Send anyway", instead of typing into the menu and confirming whatever it
+  // highlights (card 85a; buddy-rebuild-questions#Q-8). The same gate and the same words as App.tsx; the buddy has no
+  // terminal view of its own, so the toast's terminal action opens the main window instead.
+  const chatStore = useChatStore();
+  const chatStateRef = useRef<Map<string, SessionChatState>>(chatStore.getState());
+  useEffect(() => {
+    chatStateRef.current = chatStore.getState();
+    return chatStore.subscribeAll(() => { chatStateRef.current = chatStore.getState(); });
+  }, [chatStore]);
+  const [toast, setToast] = useState<BlockedSendToast | null>(null);
+  const { showBlockedSend } = useBlockedSend({
+    chatState: chatStateRef,
+    showToast: setToast,
+    openTerminal: () => { void window.claude.buddy?.openMain?.(); },
+  });
+  const onSendBlocked = useCallback((retry: () => void, block: Parameters<typeof showBlockedSend>[1]) => {
+    if (viewedSession) showBlockedSend(viewedSession, block, retry);
+  }, [viewedSession, showBlockedSend]);
+  const getSessionState = useCallback((sid: string) => chatStateRef.current.get(sid), []);
 
   if (!viewedSession) {
     return (
@@ -159,23 +165,12 @@ export function BuddyChat({ actionsAt = 'beside', tools = 'summary' }: { actions
               onOpenResumeBrowser={openResume}
               viewer
             />
-            {/* 'beside': all four, size included, are the round buttons next to the mascot (BuddyBarApp). */}
-            {actionsAt !== 'toolbar' && actionsAt !== 'beside' && (
-              <div className={`buddy-header-actions${actionsAt === 'hover' ? ' buddy-header-actions--hover' : ''}`}>
-                {actionsAt === 'menu' ? (
-                  <MoreMenuButton a={actions} />
-                ) : (<>
-                  {(actionsAt === 'header' || actionsAt === 'hover') && <CaptureButton a={actions} />}
-                  <SizeButton a={actions} />
-                  {(actionsAt === 'header' || actionsAt === 'hover' || actionsAt === 'composer') && <><OpenMainButton a={actions} /><HideBuddyButton a={actions} /></>}
-                </>)}
-              </div>
-            )}
           </div>
         </div>
         <ChatView
           sessionId={viewedSession}
-          visible
+          // While the window is hidden ChatView pauses its read of the chat (it catches up on show) — hidden means idle.
+          visible={shown}
           sessionActive
           compact
           cwd={current?.cwd}
@@ -184,15 +179,9 @@ export function BuddyChat({ actionsAt = 'beside', tools = 'summary' }: { actions
           providerType={(current as any)?.providerType}
         />
         <div ref={bottomRef} className="chrome-wrapper chrome-wrapper--bottom bottom-float buddy-chat-bottom">
-          <InputBar
-            sessionId={viewedSession}
-            compact
-            extraTool={captureInBox
-              ? <CaptureButton a={actions} className="shrink-0 text-fg-dim hover:text-fg disabled:opacity-30 transition-colors" />
-              : undefined}
-          />
-          {actionsAt === 'toolbar' && <ActionsToolbar a={actions} />}
+          <InputBar sessionId={viewedSession} compact onSendBlocked={onSendBlocked} getSessionState={getSessionState} />
         </div>
+        {toast && <Toast message={toast.message} durationMs={toast.durationMs} actions={toast.actions} onDismiss={() => setToast(null)} />}
       </div>
       </CompactSurfaceContext.Provider>
     </ArtifactProvider>

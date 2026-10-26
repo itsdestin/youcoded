@@ -1,7 +1,7 @@
 import { BrowserWindow, screen, type Display } from 'electron';
 import type { WindowRegistry } from './window-registry';
 import {
-  BAR_SIZE, MASCOT_SIZE, CHAT_SIZE, computeBarPosition, computeGroupLayout,
+  BAR_SIZE, MASCOT_SIZE, CHAT_SIZE, CHAT_SIZE_LARGE, computeBarPosition, computeGroupLayout,
   mascotXRangeForChat, type GroupLayout,
 } from './buddy-bar-geometry';
 import { BarVisibilityTracker } from './buddy-bar-visibility';
@@ -28,6 +28,7 @@ type BuddyStyle = 'floating' | 'tray';
 const IPC_BAR_STATE = 'buddy:bar-state';
 const IPC_CHAT_STATE = 'buddy:chat-state';
 const IPC_MASCOT_STATE = 'buddy:mascot-state';
+const IPC_CHAT_SIZE = 'buddy:chat-size';
 
 // How close (px) the raw drag target must get to a screen edge, WITH the chat
 // open, to read as "put him away" — close the chat and peek. Deliberately much
@@ -41,7 +42,9 @@ const POSITION_SAVE_DEBOUNCE_MS = 300;
 
 // The size of each buddy window, by role. These are the very constants the
 // BrowserWindows are built with, which is what makes it safe for rectOf() to
-// report a window's rectangle without asking the OS for it.
+// report a window's rectangle without asking the OS for it. The chat's is the
+// SMALL size; its current one is BuddyWindowManager.sizeOf('chat') (two sizes,
+// buddy rebuild 2026-10-25).
 const ROLE_SIZE: Record<BuddyRole, Size> = {
   mascot: MASCOT_SIZE,
   chat: CHAT_SIZE,
@@ -104,6 +107,10 @@ export interface BuddyWindowManagerDeps {
    *  buddy is still docked after a restart (spec §6.1). */
   getPersistedDock(): DockEdge | null;
   setPersistedDock(edge: DockEdge | null): void;
+  /** Persisted chat size (buddy-positions.json `chatSize`), so the size button's choice survives a restart
+   *  (buddy-rebuild-review2#B-2, "remembers your choice"). Optional: absent = always small. */
+  getPersistedChatSize?(): 'small' | 'large' | null;
+  setPersistedChatSize?(size: 'small' | 'large'): void;
   registry: WindowRegistry;
   mainWindow: () => BrowserWindow | null;
   /** Broadcast { dismissed, visible } to all windows (buddy:status-changed). */
@@ -209,11 +216,19 @@ export class BuddyWindowManager {
    * he came back in the corner every launch. Saving from place(), the one place
    * a buddy window is ever moved, works on every platform.
    */
+  /** The chat's size: the size button switches it (toggleChatSize), the persisted choice seeds it. */
+  private chatLarge = false;
+  private sizeOf(role: BuddyRole): Size {
+    return role === 'chat' && this.chatLarge ? CHAT_SIZE_LARGE : ROLE_SIZE[role];
+  }
+
   private readonly persistMascot = debounce(() => {
     this.deps.setPersistedPosition('mascot', { ...this.pos.mascot });
   }, POSITION_SAVE_DEBOUNCE_MS);
 
-  constructor(private readonly deps: BuddyWindowManagerDeps) {}
+  constructor(private readonly deps: BuddyWindowManagerDeps) {
+    this.chatLarge = deps.getPersistedChatSize?.() === 'large';
+  }
 
   // ——— one write path, one read path, one work-area path ————————————————
   // Everything in this block exists so that "where is the buddy" and "move the
@@ -264,7 +279,7 @@ export class BuddyWindowManager {
       const b = win.getBounds();
       return { x: b.x, y: b.y, width: b.width, height: b.height };
     }
-    return { ...this.pos[role], ...ROLE_SIZE[role] };
+    return { ...this.pos[role], ...this.sizeOf(role) };
   }
 
   /** The usable rectangle of one screen — see BuddyWorkAreaSource. */
@@ -328,7 +343,7 @@ export class BuddyWindowManager {
     // WHY: setPosition preserves Electron's rounded native size. On XWayland
     // at 150% scale that round-trip grows the chat on each move/open. These
     // windows have fixed role sizes, so always send those with the position.
-    else win.setBounds({ x, y, ...ROLE_SIZE[role] });
+    else win.setBounds({ x, y, ...this.sizeOf(role) });
     // Only the mascot's position is remembered between runs; the chat and the
     // bar are always re-anchored to him when they open.
     if (role === 'mascot') this.persistMascot();
@@ -769,6 +784,39 @@ export class BuddyWindowManager {
     this.barVisibility.setChatOpen(false);
   }
 
+  /**
+   * The bar's size button: switch the chat between its two sizes (buddy-rebuild-questions#Q-6, review2#B-2) and
+   * remember the choice. The chat is re-laid out WITH the mascot — the group rule: never clamp a buddy window alone —
+   * so a larger chat that no longer fits beside him moves him, exactly as opening it there would.
+   */
+  toggleChatSize(): void {
+    this.chatLarge = !this.chatLarge;
+    this.deps.setPersistedChatSize?.(this.chatLarge ? 'large' : 'small');
+    if (this.chat && !this.chat.isDestroyed() && this.chatOpenIntent) {
+      const layout = this.layoutFor();
+      this.applyChatSize(this.chat, layout.chat);
+      this.raiseSatellites();
+      this.glideGroup(layout.mascot);
+    }
+    this.pushChatSize();
+  }
+
+  /** Give the chat window its current size at `at`. place() sends the size with the position on ordinary desktops; on
+   *  the rename channel (native Wayland) a window may still resize ITSELF, so the size goes through setSize there. */
+  private applyChatSize(win: BrowserWindow, at: Point): void {
+    if (this.captionLive()) {
+      const { width, height } = this.sizeOf('chat');
+      win.setSize(width, height);
+    }
+    this.place('chat', win, at);
+  }
+
+  /** Tell the chat and the bar which size the chat is (the bar words its size button by it). */
+  private pushChatSize(): void {
+    const size = this.chatLarge ? 'large' : 'small';
+    for (const w of [this.chat, this.bar]) if (w && !w.isDestroyed()) w.webContents.send(IPC_CHAT_SIZE, size);
+  }
+
   toggleChat(): void {
     if (!this.chat || this.chat.isDestroyed()) {
       this.createChat();
@@ -790,7 +838,7 @@ export class BuddyWindowManager {
       const layout = this.layoutFor();
       this.place('chat', this.chat, layout.chat);
       this.chat.show();
-      this.chat.webContents.send(IPC_CHAT_STATE, { visible: true });
+      this.chat.webContents.send(IPC_CHAT_STATE, { visible: true, mascot: mascotSide(layout) });
       this.barVisibility.setChatOpen(true);
       // Opening the chat is what actually brings a peeking buddy out — and keeps
       // him out, unlike the hover hop.
@@ -820,11 +868,12 @@ export class BuddyWindowManager {
     }
     if (!mb) {
       const primary = this.primaryWorkArea();
-      const fallback = { x: primary.x + primary.width - CHAT_SIZE.width - 24, y: primary.y + primary.height - CHAT_SIZE.height - 24 };
+      const chat = this.sizeOf('chat');
+      const fallback = { x: primary.x + primary.width - chat.width - 24, y: primary.y + primary.height - chat.height - 24 };
       return { mascot: fallback, chat: fallback };
     }
     const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
-    return computeGroupLayout(mb, this.workAreaFor(display));
+    return computeGroupLayout(mb, this.workAreaFor(display), this.sizeOf('chat'));
   }
 
   /** Chat + bar placement for the taskbar style, against the screen the icon
@@ -832,7 +881,7 @@ export class BuddyWindowManager {
   private trayLayout(): { chat: Point; bar: Point } {
     const icon = this.tray?.bounds() ?? null;
     const display = icon ? (screen.getDisplayMatching(icon) ?? screen.getPrimaryDisplay()) : screen.getPrimaryDisplay();
-    return computeTrayLayout(icon, this.workAreaFor(display));
+    return computeTrayLayout(icon, this.workAreaFor(display), this.sizeOf('chat'));
   }
 
   /** Move the chat's subscription from the previous session to the new one. */
@@ -1008,8 +1057,9 @@ export class BuddyWindowManager {
     if ((actualDx !== 0 || actualDy !== 0) && this.chat && !this.chat.isDestroyed() && chatOpen) {
       const cb = this.rectOf(this.chat);
       const chatRaw = { x: cb.x + actualDx, y: cb.y + actualDy };
-      const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...CHAT_SIZE }) ?? screen.getPrimaryDisplay();
-      const chatClamped = clampToWorkArea(chatRaw, CHAT_SIZE, this.workAreaFor(chatDisplay));
+      const chatSize = this.sizeOf('chat');
+      const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...chatSize }) ?? screen.getPrimaryDisplay();
+      const chatClamped = clampToWorkArea(chatRaw, chatSize, this.workAreaFor(chatDisplay));
       this.place('chat', this.chat, chatClamped);
     }
     // Bar follows its own CSS visibility (not Electron isVisible() — the
@@ -1037,6 +1087,8 @@ export class BuddyWindowManager {
       this.bar.webContents.once('did-finish-load', () => {
         if (this.bar && !this.bar.isDestroyed()) {
           this.bar.webContents.send(IPC_BAR_STATE, { visible: this.barCssVisible });
+          // So the size button's hint says which way it goes from the start.
+          this.pushChatSize();
         }
       });
     } else {
@@ -1088,6 +1140,16 @@ export class BuddyWindowManager {
     const layout = this.layoutFor();
     this.chat = this.create('chat', layout.chat);
     this.wireChatLifecycle(this.chat);
+    // The window is built at the small size; a remembered large size is applied at once.
+    if (this.chatLarge) this.applyChatSize(this.chat, layout.chat);
+    // The first open's cue races page load (a send before the page listens is dropped) — re-send it, with the size,
+    // once the renderer is listening, so the very first open also grows from the buddy's side.
+    const chatWin = this.chat;
+    chatWin.webContents.once('did-finish-load', () => {
+      if (chatWin.isDestroyed() || chatWin !== this.chat) return;
+      chatWin.webContents.send(IPC_CHAT_STATE, { visible: true, mascot: mascotSide(this.layoutFor()) });
+      this.pushChatSize();
+    });
     // If a session was already chosen (via setViewedSession) before the
     // chat window was ever opened, subscribe now. Without this, the first
     // render of chat renders empty because no transcript events are
@@ -1174,4 +1236,9 @@ function debounce<T extends (...a: any[]) => void>(fn: T, ms: number): T {
     if (t) clearTimeout(t);
     t = setTimeout(() => fn(...args), ms);
   }) as T;
+}
+
+/** Which side of the chat the mascot is on, so the chat window grows out of him (buddy-rebuild-questions#Q-7). */
+function mascotSide(layout: GroupLayout): 'above' | 'below' {
+  return layout.chat.y >= layout.mascot.y ? 'above' : 'below';
 }

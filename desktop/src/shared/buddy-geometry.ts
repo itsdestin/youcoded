@@ -18,22 +18,30 @@ export function clampToWorkArea(pos: Point, size: Size, workArea: Rect): Point {
 // Every buddy window's size lives here, and main.ts's buddyDimensions imports
 // them, so the BrowserWindows and the positioning math can't drift apart.
 
-// Visible action-bar row: three 44×44 buttons + 2 × 8px gaps = 148 wide.
-export const BAR_CONTENT: Size = { width: 148, height: 44 };
-// The bar WINDOW is padded around that row. The window used to be exactly
-// button-height, which was fine while the buttons were inert — but they now
-// scale on hover (and overshoot on pop-in), and a button growing past 1.0
-// inside a content-sized window clips against the frame (Destin 2026-07-17).
+// Visible action-bar row: the app's popup panel holding four 28px icon buttons
+// (BuddyBarApp; buddy-rebuild-review5#C-5) — 4 × 28 + 3 × 2 gaps + 2 × 4 padding
+// + 2 × 1 border = 128 × 38, measured in the workbench 2026-10-26.
+export const BAR_CONTENT: Size = { width: 128, height: 38 };
+// The bar WINDOW is padded around that row: the press bounce needs a little room
+// all round (Destin 2026-07-17), and the shared Tooltip each button shows needs
+// room ABOVE and to the sides — a drawn tooltip cannot leave its window. The
+// widest hint ("Screenshot desktop") is ~140px centred on the first button,
+// and it sits ~26px above the panel.
 export const BAR_PADDING = 8;
+export const BAR_PADDING_X = 20;
+export const BAR_TOOLTIP_ROOM = 34;
 export const BAR_SIZE: Size = {
-  width: BAR_CONTENT.width + BAR_PADDING * 2,
-  height: BAR_CONTENT.height + BAR_PADDING * 2,
+  width: BAR_CONTENT.width + BAR_PADDING_X * 2,
+  height: BAR_CONTENT.height + BAR_TOOLTIP_ROOM + BAR_PADDING,
 };
 export const BAR_GAP_PX = 6;
 
 // 112 (was 80): Destin's 2026-07-16 dev test — the buddy read too small.
 export const MASCOT_SIZE: Size = { width: 112, height: 112 };
 export const CHAT_SIZE: Size = { width: 320, height: 480 };
+/** The chat's larger size, switched by the bar's size button (buddy rebuild; buddy-rebuild-review#B-1, review2#B-2,
+ *  "440 by 660 px against 320 by 480 px"). Every layout below takes the chat's CURRENT size; CHAT_SIZE is the default. */
+export const CHAT_SIZE_LARGE: Size = { width: 440, height: 660 };
 
 /**
  * The mascot ARTWORK's insets inside his window, as fractions of window height.
@@ -101,7 +109,7 @@ const CHAT_NUDGE_X = 10;
  * while the chat is open (buddy-bar-visibility.ts), and an open chat pins the
  * mascot to an x where the chat itself fits on screen — see
  * mascotXRangeForChat. The chat reaches 303px right of the mascot and the bar
- * window only 274px, so wherever the chat fits, the bar already does. The flip
+ * window only 266px, so wherever the chat fits, the bar already does. The flip
  * was unreachable code that could only make the bar jump for no reason.
  *
  * Pure — unit-tested.
@@ -123,11 +131,11 @@ export function computeBarContentRect(mascotBounds: Rect): Rect {
  * the pair are horizontally RIGID — the mascot sits at the chat's left-hand
  * side and stays there.
  */
-export function chatOffsetX(mascotBounds: Rect): number {
+export function chatOffsetX(mascotBounds: Rect, chat: Size = CHAT_SIZE): number {
   const bar = computeBarContentRect(mascotBounds);
   const groupLeft = Math.min(mascotBounds.x, bar.x);
   const groupRight = Math.max(mascotBounds.x + mascotBounds.width, bar.x + bar.width);
-  const chatX = Math.round((groupLeft + groupRight) / 2) - Math.round(CHAT_SIZE.width / 2) + CHAT_NUDGE_X;
+  const chatX = Math.round((groupLeft + groupRight) / 2) - Math.round(chat.width / 2) + CHAT_NUDGE_X;
   return chatX - mascotBounds.x;
 }
 
@@ -143,18 +151,18 @@ export function chatOffsetX(mascotBounds: Rect): number {
  * area to a sliver. Vertical is handled by the tier-3 bounce in
  * computeGroupLayout instead, at drag-release.
  */
-export function mascotXRangeForChat(mascotBounds: Rect, workArea: Rect): { min: number; max: number } {
-  const dx = chatOffsetX(mascotBounds);
+export function mascotXRangeForChat(mascotBounds: Rect, workArea: Rect, chat: Size = CHAT_SIZE): { min: number; max: number } {
+  const dx = chatOffsetX(mascotBounds, chat);
   const min = workArea.x - dx;
-  const max = workArea.x + workArea.width - CHAT_SIZE.width - dx;
+  const max = workArea.x + workArea.width - chat.width - dx;
   // max < min only if the workArea is narrower than the chat — pin to min.
   return { min, max: Math.max(min, max) };
 }
 
-/** Bar WINDOW position (the content rect grown by BAR_PADDING), clamped. */
+/** Bar WINDOW position (the content rect grown by its padding and the tooltip room above), clamped. */
 export function computeBarPosition(mascotBounds: Rect, workArea: Rect): Point {
   const c = computeBarContentRect(mascotBounds);
-  return clampToWorkArea({ x: c.x - BAR_PADDING, y: c.y - BAR_PADDING }, BAR_SIZE, workArea);
+  return clampToWorkArea({ x: c.x - BAR_PADDING_X, y: c.y - BAR_TOOLTIP_ROOM }, BAR_SIZE, workArea);
 }
 
 export interface GroupLayout {
@@ -198,11 +206,11 @@ export interface GroupLayout {
  *
  * Pure — unit-tested, including "the chat never covers the mascot".
  */
-export function computeGroupLayout(mascotBounds: Rect, workArea: Rect): GroupLayout {
+export function computeGroupLayout(mascotBounds: Rect, workArea: Rect, chat: Size = CHAT_SIZE): GroupLayout {
   // Horizontal: pin the MASCOT so the chat lands on screen, keeping the rigid
   // offset intact rather than sliding the chat relative to him.
-  const dx = chatOffsetX(mascotBounds);
-  const range = mascotXRangeForChat(mascotBounds, workArea);
+  const dx = chatOffsetX(mascotBounds, chat);
+  const range = mascotXRangeForChat(mascotBounds, workArea, chat);
   const mascotX = Math.round(Math.max(range.min, Math.min(mascotBounds.x, range.max)));
   const x = mascotX + dx;
   const mascot: Point = { x: mascotX, y: mascotBounds.y };
@@ -217,10 +225,10 @@ export function computeGroupLayout(mascotBounds: Rect, workArea: Rect): GroupLay
   const gapAbove = CHAT_GAP_PX - Math.round(mascotBounds.height * MASCOT_INK_TOP_INSET);
 
   const belowY = mascotBounds.y + mascotBounds.height + gapBelow;
-  if (belowY + CHAT_SIZE.height <= workArea.y + workArea.height) {
+  if (belowY + chat.height <= workArea.y + workArea.height) {
     return { mascot, chat: { x, y: belowY } };
   }
-  const aboveY = mascotBounds.y - CHAT_SIZE.height - gapAbove;
+  const aboveY = mascotBounds.y - chat.height - gapAbove;
   if (aboveY >= workArea.y) {
     return { mascot, chat: { x, y: aboveY } };
   }
@@ -231,9 +239,9 @@ export function computeGroupLayout(mascotBounds: Rect, workArea: Rect): GroupLay
   const roomAbove = mascotBounds.y - workArea.y;
   const roomBelow = workArea.y + workArea.height - (mascotBounds.y + mascotBounds.height);
   const chatGoesAbove = roomAbove >= roomBelow;
-  const chatY = chatGoesAbove ? workArea.y : workArea.y + workArea.height - CHAT_SIZE.height;
+  const chatY = chatGoesAbove ? workArea.y : workArea.y + workArea.height - chat.height;
   const mascotY = chatGoesAbove
-    ? chatY + CHAT_SIZE.height + gapAbove
+    ? chatY + chat.height + gapAbove
     : chatY - gapBelow - mascotBounds.height;
   const mascotSize: Size = { width: mascotBounds.width, height: mascotBounds.height };
   return {
@@ -262,22 +270,22 @@ const TRAY_EDGE_GAP_PX = 8;
  *
  * Pure — unit-tested.
  */
-export function computeTrayLayout(icon: Rect | null, workArea: Rect): { chat: Point; bar: Point } {
-  const groupHeight = CHAT_SIZE.height + BAR_SIZE.height;
+export function computeTrayLayout(icon: Rect | null, workArea: Rect, chatSize: Size = CHAT_SIZE): { chat: Point; bar: Point } {
+  const groupHeight = chatSize.height + BAR_SIZE.height;
   const atTop = !!icon && icon.y + icon.height / 2 < workArea.y + workArea.height / 2;
   const centreX = icon
     ? icon.x + icon.width / 2
-    : workArea.x + workArea.width - TRAY_EDGE_GAP_PX - CHAT_SIZE.width / 2;
+    : workArea.x + workArea.width - TRAY_EDGE_GAP_PX - chatSize.width / 2;
   const chatY = atTop
     ? workArea.y + TRAY_EDGE_GAP_PX
     : workArea.y + workArea.height - TRAY_EDGE_GAP_PX - groupHeight;
   const chat = clampToWorkArea(
-    { x: Math.round(centreX - CHAT_SIZE.width / 2), y: Math.round(chatY) },
-    CHAT_SIZE,
+    { x: Math.round(centreX - chatSize.width / 2), y: Math.round(chatY) },
+    chatSize,
     workArea,
   );
   const bar = clampToWorkArea(
-    { x: chat.x + Math.round((CHAT_SIZE.width - BAR_SIZE.width) / 2), y: chat.y + CHAT_SIZE.height },
+    { x: chat.x + Math.round((chatSize.width - BAR_SIZE.width) / 2), y: chat.y + chatSize.height },
     BAR_SIZE,
     workArea,
   );

@@ -308,6 +308,11 @@ body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb:hover {
    The root only carries the fade; the pop lives on the buttons. */
 body[data-mode="buddy-bar"] .buddy-bar-root {
   transition: opacity 140ms ease;
+  /* The panel sits at the bottom of its window, beside his hands; the room
+     above it is for the button hints (BAR_TOOLTIP_ROOM in buddy-geometry.ts). */
+  align-items: flex-end;
+  padding-bottom: 8px;
+  box-sizing: border-box;
 }
 body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="0"] {
   opacity: 0;
@@ -374,7 +379,8 @@ body[data-mode="buddy-mascot"] .mascot-wrap:hover { scale: 1.06; }
 body[data-mode="buddy-mascot"] .mascot-wrap.mascot-grabbed { scale: 0.94; }
 
 body[data-mode="buddy-mascot"] .mascot-breathing {
-  animation: buddy-breathe 4s ease-in-out infinite;
+  /* steps(): an infinite loop redraws at the panel's full rate otherwise (performance.md rule 6). */
+  animation: buddy-breathe 4s steps(20) infinite;
 }
 @keyframes buddy-breathe {
   0%, 100% { translate: 0 0; }
@@ -461,18 +467,26 @@ body[data-mode="buddy-mascot"] .mascot-sink[data-swing="left"] .mascot-lean { ro
 
    Close stays quick and non-bouncy: main hides the window 140ms after cueing
    the exit, and anything longer would just get truncated mid-animation. */
+/* The chat grows out of the buddy (buddy-rebuild-questions#Q-7, "the chat grows out of the buddy and tucks back
+   in, quickly"): main says which side of the chat he is on (buddy:chat-state `mascot`), and the panel scales from
+   that edge. 260ms in (was 360), the same spring settle; 120ms out. Transform and opacity only. */
 body[data-mode="buddy-chat"] .buddy-chat-enter {
-  animation: buddy-chat-in 360ms ease-out;
+  animation: buddy-chat-in 260ms ease-out;
   transform-origin: 50% 0%;
 }
 body[data-mode="buddy-chat"] .buddy-chat-exit {
   animation: buddy-chat-out 120ms ease-in forwards;
   transform-origin: 50% 0%;
 }
+body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-enter,
+body[data-mode="buddy-chat"] .buddy-chat-panel[data-mascot="below"].buddy-chat-exit {
+  transform-origin: 50% 100%;
+  --buddy-chat-from: 10px;
+}
 @keyframes buddy-chat-in {
   /* scale is capped at 1.0 (the window edge); the 68%/84% dip-and-recover is
      the spring settle, staying safely inside the window the whole time. */
-  0% { opacity: 0; transform: scale(0.84) translateY(-10px); }
+  0% { opacity: 0; transform: scale(0.84) translateY(var(--buddy-chat-from, -10px)); }
   52% { opacity: 1; transform: scale(1) translateY(0); }
   68% { transform: scale(0.972) translateY(0); }
   84% { transform: scale(0.994) translateY(0); }
@@ -574,73 +588,4 @@ html[data-mode="buddy-chat"] .attention-bubble > span:only-child {
 html[data-mode="buddy-chat"] .chat-scroll .in-view.px-4 {
   padding-left: 6px !important;
   padding-right: 6px !important;
-}
-/* The buddy's actions beside the session strip (BuddyActions.tsx): the strip
-   keeps the room it packs into, the icons sit at the row's right end. */
-html[data-mode="buddy-chat"] .buddy-chat-header .header-bar > :first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-html[data-mode="buddy-chat"] .buddy-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-/* Message times (buddy-rebuild-review#B-1: "hide the date/time in this window,
-   and instead … only appear in the last message or on long hover"). The last
-   message keeps its time; every other one folds its time away and shows it
-   after the pointer has rested on the message for 0.6 s. Folded with height
-   and opacity, not display, so the delay can run. */
-html[data-mode="buddy-chat"] .timeline-entry .bubble-timestamp {
-  max-height: 0;
-  margin-top: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: opacity 120ms ease, max-height 0ms linear 120ms, margin-top 0ms linear 120ms;
-}
-html[data-mode="buddy-chat"] .timeline-entry:hover .bubble-timestamp {
-  max-height: 1em;
-  margin-top: 4px;
-  opacity: 1;
-  transition: opacity 120ms ease 600ms, max-height 0ms linear 600ms, margin-top 0ms linear 600ms;
-}
-html[data-mode="buddy-chat"] .timeline-entry:nth-last-child(1 of .timeline-entry) .bubble-timestamp {
-  max-height: 1em;
-  margin-top: 4px;
-  opacity: 1;
-  transition: none;
-}
-/* Past-conversation rows a reply names (ChatsearchRefBlock): no frame around
-   them in the small window — the rows are already their own little cards. */
-html[data-mode="buddy-chat"] .conv-refs {
-  border: none;
-  background: transparent;
-  margin: 4px 0;
-}
-html[data-mode="buddy-chat"] .conv-refs > ul {
-  padding: 0;
-  gap: 4px;
-}
-/* The warning box: smaller padding and text, so a one-line warning stays one
-   line (buddy-rebuild-review#N-3). */
-html[data-mode="buddy-chat"] .attention-bubble {
-  padding: 6px 10px;
-}
-html[data-mode="buddy-chat"] .attention-bubble > span {
-  font-size: 12px;
-  line-height: 1.4;
-}
-/* 'hover' placement (BuddyChat): the action icons take no room until the
-   pointer is over the top row, so the session strip keeps its full width. */
-html[data-mode="buddy-chat"] .buddy-header-actions--hover {
-  max-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-width 160ms ease, opacity 120ms ease;
-}
-html[data-mode="buddy-chat"] .buddy-chat-header:hover .buddy-header-actions--hover,
-html[data-mode="buddy-chat"][data-buddy-hovered="1"] .buddy-header-actions--hover {
-  max-width: 140px;
-  opacity: 1;
 }

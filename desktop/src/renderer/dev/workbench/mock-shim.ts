@@ -3944,10 +3944,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // subscribing is a no-op because the workbench's chat is seeded in place, never streamed per window.
     getViewedSession: async () => buddyViewed ?? new URLSearchParams(location.search).get('buddySession') ?? store.getState().sessions[0]?.id ?? null,
     setSession: async (sessionId: string) => { buddyViewed = sessionId; },
-    subscribe: async () => {},
-    unsubscribe: async () => {},
+    toggleChatSize: async () => {},
     toggleChat: async () => {},
     onChatState: () => () => {},
+    onChatSize: () => () => {},
     onAttachFile: () => () => {},
     onAttentionSummary: () => () => {},
     onFocusSession: (cb: (sessionId: string) => void) => {

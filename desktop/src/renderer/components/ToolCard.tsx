@@ -67,7 +67,7 @@ function truncate(s: string, max: number): string {
  * management call names (steer / resume / stop read differently — the same
  * card copy for all three was the informed-consent gap in ROADMAP).
  */
-export function taskDisplay(
+function taskDisplay(
   input: Record<string, unknown>,
   ctx?: { title?: string; targetTitle?: string; targetRunning?: boolean; runStatus?: string; active?: boolean },
 ): { label: string; detail: string } {
@@ -105,7 +105,7 @@ export function taskDisplay(
 /** The skill's name as English: the plugin namespace is stripped
  *  ("superpowers:brainstorming" → "brainstorming") so a card reads as a word,
  *  not a technical id. Shared by the single Skill card and StackedSkillsCard. */
-export function skillBareName(input: Record<string, unknown>): string {
+function skillBareName(input: Record<string, unknown>): string {
   // Fix: a non-string skill crashed .includes() — optional chaining doesn't
   // guard objects (they're not nullish). Non-string args rendered as
   // "[object Object]".

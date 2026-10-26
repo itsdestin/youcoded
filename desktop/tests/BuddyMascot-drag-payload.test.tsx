@@ -19,7 +19,7 @@ vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ activeTheme: null, reducedEffects: true }),
 }));
 vi.mock('../src/renderer/hooks/useThemeMascot', () => ({ useThemeMascot: () => null }));
-vi.mock('../src/renderer/hooks/useAnyAttentionNeeded', () => ({ useAnyAttentionNeeded: () => false }));
+vi.mock('../src/renderer/hooks/useAttentionSummary', () => ({ useAttentionSummary: () => ({ anyNeedsAttention: false, perSession: {} }) }));
 vi.mock('../src/renderer/components/mascot/MascotRig', () => ({
   MascotRig: () => (
     <svg data-testid="rig">
