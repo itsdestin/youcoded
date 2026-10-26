@@ -35,5 +35,9 @@ function Seed() {
 export function BuddyChatScreen() {
   // ?actions=header|composer|beside — the three placements of buddy-rebuild-questions#Q-5.
   const actions = (new URLSearchParams(window.location.search).get('actions') ?? 'beside') as any;
-  return <BuddyChatApp seed={<Seed />} actionsAt={actions} />;
+  // ?tools=slim|summary|hidden — how much room a reply's steps and files take (buddy-rebuild-review#B-1).
+  const tools = (new URLSearchParams(window.location.search).get('tools') ?? undefined) as any;
+  // ?hovered=1 photographs the hover-only icons as they look while pointed at.
+  if (new URLSearchParams(window.location.search).get('hovered') === '1') document.documentElement.setAttribute('data-buddy-hovered', '1');
+  return <BuddyChatApp seed={<Seed />} actionsAt={actions} tools={tools} />;
 }

@@ -12,6 +12,7 @@ import { isSendUserLinkToolName } from '../../shared/send-user-link';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, StoppedIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
+import { useCompactSurface } from '../state/compact-surface-context';
 import { useTheme } from '../state/theme-context';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { isPlaceholderModelId } from '../../shared/model-ids';
@@ -158,7 +159,7 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
  * workbench tool gallery (?mode=workbench&view=tools) can render fixtures with
  * the same grouping treatment real chat uses (single visual unit + shared
  * bg-inset on cards). */
-export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[]; sessionId: string }) {
+export function CollapsedToolGroup({ tools, sessionId, slim = false }: { tools: ToolCallState[]; sessionId: string; slim?: boolean }) {
   const [expanded, setExpanded] = useState(() => getInitialExpanded());
   useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
 
@@ -187,10 +188,12 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   const headline = buildToolGroupHeadline(tools);
 
   return (
-    <div className="border border-edge rounded-lg overflow-hidden">
+    // slim: the buddy's small window draws the group as one borderless line (buddy-rebuild-review#B-1, "too much of
+    // this screen still covered with tool/deliverable cards").
+    <div className={slim ? 'overflow-hidden' : 'border border-edge rounded-lg overflow-hidden'}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
+        className={`w-full flex items-center gap-1.5 text-left transition-colors ${slim ? 'py-0.5 rounded-md hover:text-fg' : 'px-3 py-1.5 hover:bg-inset/50'}`}
       >
         {askingCount > 0 ? (
           <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-amber-700" />
@@ -203,8 +206,8 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
         ) : (
           <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
         )}
-        <span className="text-fg-faint text-xs select-none">|</span>
-        <span className="text-xs text-fg-dim flex-1">
+        {!slim && <span className="text-fg-faint text-xs select-none">|</span>}
+        <span className={`text-xs text-fg-dim flex-1${slim ? ' truncate' : ''}`}>
           {headline}
           {/* Q5a folds an already-failed item into the headline itself while
               something else is still running ("+2 completed, 1 failed") — this
@@ -462,6 +465,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
+  // The buddy's small window draws a reply's steps, files and skills smaller, or as one line, or not at all
+  // (state/compact-surface-context.ts). null = the full cards, everywhere else.
+  const toolMode = useCompactSurface()?.tools ?? null;
   // splitIntoBubbles is pure over the turn's SEGMENTS, so cache it on those.
   // Perf (cycle 1, N3): this used to key on `turn`, but the reducer mints a new
   // turn object for every change to the turn — a streamed delta, but also a
@@ -494,8 +500,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
     sentFiles: collectBubbleSentFiles(bubble, toolGroups, toolCalls),
   }));
   let shown = withFiles.filter(({ bubble, sentFiles }) =>
-    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length));
-  if (shown.length === 0 && turnSkills.length > 0) shown = withFiles.slice(-1);
+    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length)
+    // 'hidden' draws text only, so a bubble that held nothing but steps or files draws nothing.
+    && (toolMode !== 'hidden' || !!(bubble.text || bubble.plan || bubble.reasoning)));
+  if (shown.length === 0 && turnSkills.length > 0 && toolMode !== 'hidden') shown = withFiles.slice(-1);
 
   // Empty-step recovery (spec 2026-08-21, decision 4): a fully-contentless
   // turn has ZERO bubbles, so the per-bubble stopReason footer below can never
@@ -536,6 +544,40 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
         const toolsOnly = hasTools && !hasContent && !hasReasoning;
         const reasoningOnly = hasReasoning && !hasContent && !hasTools;
         const isLastBubble = i === shown.length - 1;
+        const extras = (<>
+          {hasTools && (
+            <ToolGroupInline
+              groupIds={bubble.toolGroupIds}
+              toolGroups={toolGroups}
+              toolCalls={toolCalls}
+              sessionId={sessionId}
+              afterText={!!bubble.text}
+              slim={toolMode === 'slim'}
+            />
+          )}
+          {/* Sent-files card: LAST in the bubble, after the tool cards
+              (Destin 2026-08-25). Its calls were filtered out of the groups
+              above, so this is the only place they render. */}
+          {sentFiles.length > 0 && (
+            <DeliverablesCard tools={sentFiles} sessionId={sessionId} />
+          )}
+          {/* Trailing-Skills row: Skills are reordered to the end of the turn's
+              last bubble so they read as a status footer rather than co-mingled
+              with substantive tool output. ToolGroupInline filters Skills out
+              upstream so this is the only place they render. */}
+          {isLastBubble && turnSkills.length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              {/* Two or more skills stack into ONE card ("Invoked 2 skills:
+                  brainstorming and writing-plans") rather than a card per
+                  invocation — Destin, 2026-09-02 (deck B-7). */}
+              {turnSkills.length === 1 ? (
+                <ToolCard key={turnSkills[0].toolUseId} tool={turnSkills[0]} sessionId={sessionId} />
+              ) : (
+                <StackedSkillsCard skills={turnSkills} />
+              )}
+            </div>
+          )}
+        </>);
         return (
           <div key={bubble.key} className="flex justify-start px-4 py-0.5">
             <div className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
@@ -568,37 +610,11 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   allowedPrompts={bubble.plan.allowedPrompts}
                 />
               )}
-              {hasTools && (
-                <ToolGroupInline
-                  groupIds={bubble.toolGroupIds}
-                  toolGroups={toolGroups}
-                  toolCalls={toolCalls}
-                  sessionId={sessionId}
-                  afterText={!!bubble.text}
-                />
-              )}
-              {/* Sent-files card: LAST in the bubble, after the tool cards
-                  (Destin 2026-08-25). Its calls were filtered out of the groups
-                  above, so this is the only place they render. */}
-              {sentFiles.length > 0 && (
-                <DeliverablesCard tools={sentFiles} sessionId={sessionId} />
-              )}
-              {/* Trailing-Skills row: Skills are reordered to the end of the turn's
-                  last bubble so they read as a status footer rather than co-mingled
-                  with substantive tool output. ToolGroupInline filters Skills out
-                  upstream so this is the only place they render. */}
-              {isLastBubble && turnSkills.length > 0 && (
-                <div className="mt-1 space-y-0.5">
-                  {/* Two or more skills stack into ONE card ("Invoked 2 skills:
-                      brainstorming and writing-plans") rather than a card per
-                      invocation — Destin, 2026-09-02 (deck B-7). */}
-                  {turnSkills.length === 1 ? (
-                    <ToolCard key={turnSkills[0].toolUseId} tool={turnSkills[0]} sessionId={sessionId} />
-                  ) : (
-                    <StackedSkillsCard skills={turnSkills} />
-                  )}
-                </div>
-              )}
+              {/* A reply's steps, sent files and skills (`extras`, built above): the full cards, or — in the buddy's small
+                  window — one line that opens them ('summary'), or nothing ('hidden'). 'slim' is drawn by the cards. */}
+              {toolMode === 'summary'
+                ? <ReplySteps toolCount={countBubbleSteps(bubble.toolGroupIds, toolGroups, toolCalls)} fileCount={sentFiles.length} skillCount={isLastBubble ? turnSkills.length : 0}>{extras}</ReplySteps>
+                : toolMode !== 'hidden' && extras}
               {/* Opt-in metadata strip. Renders once per turn (last bubble only) and
                   only when the user has enabled `showTurnMetadata`. Placed above the
                   stopReason footer so a truncated turn still shows both, in that order. */}
@@ -619,6 +635,40 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
     </>
   );
 }, assistantTurnPropsAreEqual);
+
+/** How many steps a bubble's tool groups show (the same filter as ToolGroupInline: no Skill, no sent files, no ask). */
+function countBubbleSteps(groupIds: string[], toolGroups: Map<string, ToolGroupState>, toolCalls: Map<string, ToolCallState>): number {
+  let n = 0;
+  for (const gid of groupIds) {
+    for (const id of toolGroups.get(gid)?.toolIds ?? []) {
+      const t = toolCalls.get(id);
+      if (!t || t.toolName === 'Skill' || t.status === 'awaiting-approval') continue;
+      if (!isSentFilesTool(t) && !isSentLinksTool(t)) n++;
+    }
+  }
+  return n;
+}
+
+/** The buddy's 'summary' mode: everything a reply did beyond its words, as ONE quiet line ("3 steps · 1 file") that
+ *  opens the usual cards in place. WHY (buddy-rebuild-review#B-1): in a 320 px window the cards covered most of it. */
+function ReplySteps({ toolCount, fileCount, skillCount, children }: { toolCount: number; fileCount: number; skillCount: number; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const parts = [
+    toolCount ? `${toolCount} step${toolCount === 1 ? '' : 's'}` : '',
+    fileCount ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '',
+    skillCount ? `${skillCount} skill${skillCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <div className="mt-1">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 text-2xs text-fg-muted hover:text-fg-2">
+        <ChevronIcon className="w-3 h-3" expanded={open} />
+        {parts.join(' · ')}
+      </button>
+      {open && <div className="mt-1">{children}</div>}
+    </div>
+  );
+}
 
 /**
  * Renders a plan-mode plan (from ExitPlanMode tool input) as a distinct section
@@ -683,7 +733,9 @@ function ToolGroupInline({
   toolCalls,
   sessionId,
   afterText = false,
+  slim = false,
 }: {
+  slim?: boolean;
   groupIds: string[];
   toolGroups: Map<string, ToolGroupState>;
   toolCalls: Map<string, ToolCallState>;
@@ -715,10 +767,11 @@ function ToolGroupInline({
 
   return (
     <div className={`my-0.5 space-y-0.5 ${afterText ? 'mt-1.5' : ''}`}>
-      {restTools.length === 1 ? (
+      {/* slim (the buddy): even one step is the one-line group, never a full card. */}
+      {restTools.length === 1 && !slim ? (
         <ToolCard tool={restTools[0]} sessionId={sessionId} />
       ) : (
-        <CollapsedToolGroup tools={restTools} sessionId={sessionId} />
+        <CollapsedToolGroup tools={restTools} sessionId={sessionId} slim={slim} />
       )}
     </div>
   );

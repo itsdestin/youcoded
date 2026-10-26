@@ -579,3 +579,60 @@ html[data-mode="buddy-chat"] .buddy-header-actions {
   gap: 2px;
   flex-shrink: 0;
 }
+/* Message times (buddy-rebuild-review#B-1: "hide the date/time in this window,
+   and instead … only appear in the last message or on long hover"). The last
+   message keeps its time; every other one folds its time away and shows it
+   after the pointer has rested on the message for 0.6 s. Folded with height
+   and opacity, not display, so the delay can run. */
+html[data-mode="buddy-chat"] .timeline-entry .bubble-timestamp {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: opacity 120ms ease, max-height 0ms linear 120ms, margin-top 0ms linear 120ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:hover .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: opacity 120ms ease 600ms, max-height 0ms linear 600ms, margin-top 0ms linear 600ms;
+}
+html[data-mode="buddy-chat"] .timeline-entry:nth-last-child(1 of .timeline-entry) .bubble-timestamp {
+  max-height: 1em;
+  margin-top: 4px;
+  opacity: 1;
+  transition: none;
+}
+/* Past-conversation rows a reply names (ChatsearchRefBlock): no frame around
+   them in the small window — the rows are already their own little cards. */
+html[data-mode="buddy-chat"] .conv-refs {
+  border: none;
+  background: transparent;
+  margin: 4px 0;
+}
+html[data-mode="buddy-chat"] .conv-refs > ul {
+  padding: 0;
+  gap: 4px;
+}
+/* The warning box: smaller padding and text, so a one-line warning stays one
+   line (buddy-rebuild-review#N-3). */
+html[data-mode="buddy-chat"] .attention-bubble {
+  padding: 6px 10px;
+}
+html[data-mode="buddy-chat"] .attention-bubble > span {
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* 'hover' placement (BuddyChat): the action icons take no room until the
+   pointer is over the top row, so the session strip keeps its full width. */
+html[data-mode="buddy-chat"] .buddy-header-actions--hover {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 160ms ease, opacity 120ms ease;
+}
+html[data-mode="buddy-chat"] .buddy-chat-header:hover .buddy-header-actions--hover,
+html[data-mode="buddy-chat"][data-buddy-hovered="1"] .buddy-header-actions--hover {
+  max-width: 140px;
+  opacity: 1;
+}

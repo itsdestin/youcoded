@@ -10,6 +10,7 @@
 import React, { useRef } from 'react';
 import { MascotRig, type RigMotion } from '../../../components/mascot/MascotRig';
 import { BuddyBarButtons } from '../../../components/buddy/BuddyBarApp';
+import { ContextMenu } from '../../../components/context-menu/ContextMenu';
 import { CHAT_SIZE, MASCOT_SIZE, computeGroupLayout, computeBarContentRect } from '../../../../shared/buddy-geometry';
 
 try {
@@ -31,7 +32,9 @@ export function BuddyGroupScreen() {
   const mascotBounds = { x: 360, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
   const layout = computeGroupLayout(mascotBounds, DESK);
   const bar = computeBarContentRect({ ...mascotBounds, x: layout.mascot.x, y: layout.mascot.y });
-  const chatSrc = `?mode=workbench&child=1&view=buddy-chat&actions=${actions}${theme ? `&theme=${theme}` : ''}`;
+  // The chat's own photo switches ride along (?menu=1, ?hovered=1).
+  const extra = ['menu', 'hovered'].filter((k) => params.get(k) === '1').map((k) => `&${k}=1`).join('');
+  const chatSrc = `?mode=workbench&child=1&view=buddy-chat&actions=${actions}${theme ? `&theme=${theme}` : ''}${extra}`;
 
   return (
     <div style={{
@@ -50,6 +53,19 @@ export function BuddyGroupScreen() {
         }}>
           <BuddyBarButtons />
         </div>
+      )}
+      {actions === 'mascot-menu' && (
+        // The right-click menu on the buddy himself, shown open (the real one opens where you click).
+        <ContextMenu
+          x={layout.mascot.x + MASCOT_SIZE.width - 6}
+          y={layout.mascot.y + 18}
+          entries={[
+            { type: 'item', id: 'open', label: 'Open YouCoded', icon: 'open', run: () => {} },
+            { type: 'sep' },
+            { type: 'item', id: 'hide', label: 'Hide buddy until restart', icon: 'hide', run: () => {} },
+          ]}
+          onClose={() => {}}
+        />
       )}
       <div style={{ position: 'absolute', left: layout.mascot.x, top: layout.mascot.y, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height }}>
         <MascotRig svgUrl={null} pose="idle" motionRef={motionRef} reducedEffects={false} />

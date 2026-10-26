@@ -30,6 +30,7 @@
 //     first lines of text / scaled HTML page / letter glyph). Nothing here
 //     re-implements a thumbnail.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCompactSurface } from '../state/compact-surface-context';
 import type { ToolCallState } from '../../shared/types';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { useArtifactSelectorOptional } from '../state/ArtifactContext';
@@ -339,6 +340,7 @@ interface Props {
 
 export function DeliverablesCard({ tools, sessionId }: Props) {
   const narrow = useNarrowViewport();
+  const slim = useCompactSurface()?.tools === 'slim';
   // Closed by default (Destin, 2026-08-25 — asked for this after seeing the
   // card open on a real screen): it now matches the tool cards around it
   // instead of dominating the bubble. getInitialExpanded still seeds from an
@@ -435,15 +437,17 @@ export function DeliverablesCard({ tools, sessionId }: Props) {
   const footCaptions = captions.length > 1 ? captions : [];
 
   return (
-    <div className="mt-2 rounded-lg border border-edge bg-well overflow-hidden" data-testid="deliverables-card">
+    // slim: the buddy's small window draws the card's closed row as one borderless line, like its slim tool line
+    // (state/compact-surface-context.ts; buddy-rebuild-review#B-1). Opened, the tiles are the same.
+    <div className={slim ? 'mt-1 overflow-hidden' : 'mt-2 rounded-lg border border-edge bg-well overflow-hidden'} data-testid="deliverables-card">
       <button
         type="button"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
+        className={`w-full flex items-center gap-2 text-left transition-colors ${slim ? 'py-0.5 hover:text-fg' : 'px-3 py-1.5 hover:bg-inset/50'}`}
       >
         <FilesGlyph className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
-        <span className="text-fg-faint text-xs select-none">|</span>
+        {!slim && <span className="text-fg-faint text-xs select-none">|</span>}
         <span className="text-xs font-semibold text-fg-2">Deliverables</span>
         <span className="text-2xs font-mono text-fg-muted">{entries.length}</span>
         <span className="flex-1 min-w-0 text-2xs text-fg-muted truncate text-right">{headerCaption}</span>

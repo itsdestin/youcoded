@@ -10,12 +10,19 @@ import { useChromeMeasurements } from '../../hooks/useChromeMeasurements';
 import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 import { BuddyWelcome } from './BuddyWelcome';
 import { useBuddyFeed } from './useBuddyFeed';
-import { CaptureButton, OpenMainButton, HideBuddyButton } from './BuddyActions';
+import { CompactSurfaceContext, type CompactSurface } from '../../state/compact-surface-context';
+import { useBuddyActions, CaptureButton, SizeButton, OpenMainButton, HideBuddyButton, MoreMenuButton, ActionsToolbar } from './BuddyActions';
 
-/** Where the buddy's three actions live (buddy-rebuild-questions#Q-5 — shown as pictures before choosing):
- *  'header' = icons beside the session strip; 'composer' = screenshot beside Attach, the other two in the header;
- *  'beside' = today's round buttons next to the mascot (their own window, BuddyBarApp), none in here. */
-export type BuddyActionsAt = 'header' | 'composer' | 'beside';
+/** Where the buddy's actions (screenshot, size, open YouCoded, hide) live — buddy-rebuild-questions#Q-5 and
+ *  buddy-rebuild-review#C-1 ("i want to see more options"), chosen from pictures:
+ *  'beside'      today's round buttons next to the mascot (their own window, BuddyBarApp); only Size in here.
+ *  'header'      four icons beside the session strip.
+ *  'composer'    screenshot beside Attach; size, open, hide as icons in the header.
+ *  'menu'        one "⋯" in the header holding all four.
+ *  'mascot-menu' screenshot beside Attach, size in the header; open and hide on a right-click of the buddy himself.
+ *  'hover'       the four header icons appear only while the pointer is over the top row.
+ *  'toolbar'     a thin row of labelled buttons under the message box. */
+export type BuddyActionsAt = 'beside' | 'header' | 'composer' | 'menu' | 'mascot-menu' | 'hover' | 'toolbar';
 
 /**
  * The buddy's chat window: the MAIN window's chat, hosted small (buddy rebuild, 2026-10-25 —
@@ -26,7 +33,9 @@ export type BuddyActionsAt = 'header' | 'composer' | 'beside';
  * that fills this window's chat store (useBuddyFeed — in the main window App does that), and the
  * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css).
  */
-export function BuddyChat({ actionsAt = 'beside' }: { actionsAt?: BuddyActionsAt } = {}) {
+export function BuddyChat({ actionsAt = 'beside', tools = 'slim' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools'] } = {}) {
+  // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
+  const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
   const [viewedSession, setViewedSession] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   // WHY the shared hook (#S-1): it PULLS the summary on mount, then listens. The buddy used to only
@@ -115,6 +124,15 @@ export function BuddyChat({ actionsAt = 'beside' }: { actionsAt?: BuddyActionsAt
 
   const current = sessions.find((s) => s.id === viewedSession);
 
+  // The chat's two sizes (buddy-rebuild-questions#Q-6). Main resizes the window and re-lays out the group; the
+  // renderer only remembers which one it asked for, to word the button.
+  const [large, setLarge] = useState(false);
+  const toggleSize = useCallback(() => {
+    setLarge((was) => { void (window.claude.buddy as any)?.setChatSize?.(!was ? 'large' : 'small'); return !was; });
+  }, []);
+  const actions = useBuddyActions(large, toggleSize);
+  const captureInBox = actionsAt === 'composer' || actionsAt === 'mascot-menu';
+
   if (!viewedSession) {
     return (
       <div className="buddy-chat-shell" style={{ height: '100vh', padding: '12px 10px' }}>
@@ -125,6 +143,7 @@ export function BuddyChat({ actionsAt = 'beside' }: { actionsAt?: BuddyActionsAt
 
   return (
     <ArtifactProvider store={artifactStore}>
+      <CompactSurfaceContext.Provider value={compactSurface}>
       <div className="buddy-chat-shell relative h-screen overflow-hidden">
         <div ref={headerRef} className="buddy-chat-header">
           <div className="header-bar">
@@ -138,11 +157,15 @@ export function BuddyChat({ actionsAt = 'beside' }: { actionsAt?: BuddyActionsAt
               onOpenResumeBrowser={openResume}
               viewer
             />
-            {actionsAt !== 'beside' && (
-              <div className="buddy-header-actions">
-                {actionsAt === 'header' && <CaptureButton />}
-                <OpenMainButton />
-                <HideBuddyButton />
+            {actionsAt !== 'toolbar' && (
+              <div className={`buddy-header-actions${actionsAt === 'hover' ? ' buddy-header-actions--hover' : ''}`}>
+                {actionsAt === 'menu' ? (
+                  <MoreMenuButton a={actions} />
+                ) : (<>
+                  {(actionsAt === 'header' || actionsAt === 'hover') && <CaptureButton a={actions} />}
+                  <SizeButton a={actions} />
+                  {(actionsAt === 'header' || actionsAt === 'hover' || actionsAt === 'composer') && <><OpenMainButton a={actions} /><HideBuddyButton a={actions} /></>}
+                </>)}
               </div>
             )}
           </div>
@@ -161,12 +184,14 @@ export function BuddyChat({ actionsAt = 'beside' }: { actionsAt?: BuddyActionsAt
           <InputBar
             sessionId={viewedSession}
             compact
-            extraTool={actionsAt === 'composer'
-              ? <CaptureButton className="shrink-0 text-fg-dim hover:text-fg disabled:opacity-30 transition-colors" />
+            extraTool={captureInBox
+              ? <CaptureButton a={actions} className="shrink-0 text-fg-dim hover:text-fg disabled:opacity-30 transition-colors" />
               : undefined}
           />
+          {actionsAt === 'toolbar' && <ActionsToolbar a={actions} />}
         </div>
       </div>
+      </CompactSurfaceContext.Provider>
     </ArtifactProvider>
   );
 }
