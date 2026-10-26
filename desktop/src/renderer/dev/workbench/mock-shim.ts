@@ -3469,7 +3469,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // App.tsx calls this on mount specifically to avoid racing the
     // onDirectoryUpdated push — pulling `leaderWindowId: WORKBENCH_WINDOW_ID`
     // here is what makes `isLeader` resolve true.
-    getDirectory: async () => ({ leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
+    // WHY the buddy chat view gets the sessions (buddy rebuild, 2026-10-25): its session switcher lists the
+    // directory, so an empty one drew a buddy with nothing to switch to. App's own window never reads its own row.
+    getDirectory: async () => (new URLSearchParams(location.search).get('view') === 'buddy-chat'
+      ? { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [{ window: { id: WORKBENCH_WINDOW_ID }, sessions: store.getState().sessions }] }
+      : { leaderWindowId: WORKBENCH_WINDOW_ID, windows: [] }),
     // The first page of a RESUMED session's history (App.tsx loadFirstPage).
     // The catch-all's `[]` has no `.events`, so a resume in the workbench used
     // to show an empty conversation. Student mode answers a resume of the
@@ -3906,6 +3910,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let buddyHelperInstalled = buddyHelperMode === 'installed' || buddyHelperMode === 'not-needed-installed';
   const buddyHelperSupported = buddyHelperNeeded && buddyHelperMode !== 'none';
   let buddyDismissed = false;
+  let buddyViewed: string | null = null;
   const buddyStatusSubs = new Set<(s: unknown) => void>();
   const pushBuddyStatus = () => {
     const snap = { dismissed: buddyDismissed };
@@ -3934,6 +3939,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
     },
+    // WHY (buddy rebuild, 2026-10-25): the buddy CHAT window's own calls, so `?view=buddy-chat` can draw the
+    // shipping chat against the workbench's conversations. The buddy views the first session unless told otherwise;
+    // subscribing is a no-op because the workbench's chat is seeded in place, never streamed per window.
+    getViewedSession: async () => buddyViewed ?? store.getState().sessions[0]?.id ?? null,
+    setSession: async (sessionId: string) => { buddyViewed = sessionId; },
+    subscribe: async () => {},
+    unsubscribe: async () => {},
+    toggleChat: async () => {},
+    onChatState: () => () => {},
+    onAttachFile: () => () => {},
+    onAttentionSummary: () => () => {},
     onFocusSession: (cb: (sessionId: string) => void) => {
       focusSessionSubs.add(cb);
       return () => { focusSessionSubs.delete(cb); };

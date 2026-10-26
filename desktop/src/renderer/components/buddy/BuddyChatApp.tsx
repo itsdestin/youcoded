@@ -3,7 +3,8 @@ import { ThemeProvider } from '../../state/theme-context';
 import { ChatProvider } from '../../state/chat-context';
 import { BuddyChat } from './BuddyChat';
 
-export function BuddyChatApp() {
+// `seed` is the workbench's hook into this window's chat store (dev/workbench/mockups/BuddyChatScreen.tsx); the app passes nothing.
+export function BuddyChatApp({ seed }: { seed?: React.ReactNode } = {}) {
   // Entrance/exit fade+scale (spec §5): first mount plays the entrance;
   // buddy:chat-state pushes replay it on every re-show and play the exit
   // before main hides the window (main delays hide() ~140ms for the fade).
@@ -26,6 +27,7 @@ export function BuddyChatApp() {
           has its own isolated React tree — it does NOT share the main window's
           ChatProvider instance. */}
       <ChatProvider>
+        {seed}
         {/* buddy-chat-panel carries the frosted-glass chrome (buddy.css) — it
             has to be the same element the enter/exit animation scales, or the
             glass rectangle appears instantly and only the contents animate. */}
