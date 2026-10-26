@@ -18,7 +18,7 @@
 
 ## What is YouCoded?
 
-YouCoded is an open-source, multi-model AI assistant that helps you work with files, projects, research, and everyday tasks. Its own permission-based agent can use tools, skills, and specialists; you choose the AI behind it: a local model on your computer, a cloud provider or API key, a ChatGPT plan, or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a first-class integration.
+YouCoded is an open-source, multi-model AI assistant that helps you work with files, projects, research, and everyday tasks. Its own permission-based agent can use tools, skills, and specialists; you choose the AI behind it: a local model on your computer, a cloud provider or API key (Google Gemini and hundreds more through OpenRouter), a ChatGPT plan, or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a first-class integration. It also does coding work: it reads and edits the files in a project and runs commands, with your permission.
 
 It's designed for students, professionals, and anyone who uses AI regularly — not just developers.
 
