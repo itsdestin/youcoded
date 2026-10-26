@@ -339,143 +339,25 @@ body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth
   to { opacity: 1; transform: scale(1); }
 }
 
-/* Hover/press bounce, matching the floater's own feel (Destin 2026-07-17).
-   Uses the independent `scale` property, NOT `transform` — the pop-in above
-   animates `transform`, and the two compose instead of clobbering each other.
-   The bar window is padded (BAR_PADDING in buddy-bar-geometry.ts) so the grown
-   button has room; without that it would clip against the window frame.
-   Scoped to .buddy-bar-root, not the window's body, so the workbench's group
-   picture draws the same buttons. */
+/* The bar's buttons are the app's shared Button and Tooltip, in the popup
+   surface or not (BuddyBarApp; buddy-rebuild-review4#C-4: "it should match
+   other youcoded design standards"). Only two things here are the buddy's own:
+   the root fills the window and centres the row, and the floater's press
+   bounce (Destin 2026-07-17) — the independent `scale` property, so it never
+   fights the pop-in's `transform` above. */
 .buddy-bar-root {
   width: 100vw;
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   background: transparent;
 }
 .buddy-bar-btn {
-  /* The buddy's glass (the chat panel's own recipe, lighter): the theme's
-     panel colour nearly opaque, a rim and a top light-catch, a soft shadow
-     that floats it off the desktop. */
-  --bar-glass: color-mix(in srgb, var(--panel) 92%, transparent);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--edge) 60%, transparent);
-  background: var(--bar-glass);
-  color: var(--fg-2);
-  cursor: pointer;
-  outline: none;
-  -webkit-appearance: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 14px rgba(0, 0, 0, 0.22);
-  transition: scale 160ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-.buddy-bar-btn:hover {
-  scale: 1.1;
-  color: var(--fg);
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  transition: scale 160ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .buddy-bar-btn:active { scale: 0.94; }
-.buddy-bar-btn[data-busy="1"] { scale: 0.92; opacity: 0.7; cursor: default; }
-.buddy-bar-icon { display: inline-flex; }
-.buddy-bar-icon svg { width: 18px; height: 18px; }
-.buddy-bar-word { display: none; }
-
-/* The pill (buddy-rebuild-review3#C-3: "a few pill options where the button
-   explanation expands on hover"): one frosted pill holding all four; the one
-   you point at lights up inside it. Three ways its words appear:
-     'pill-grow'    the pointed-at button widens to show its words beside the icon;
-     'pill-open'    pointing anywhere at the pill opens every button's words;
-     'pill-caption' a small caption appears under the pointed-at button.
-   `.is-hover` / `.is-open` are the workbench's way to photograph those states. */
-.buddy-bar-root[data-style^="pill"] {
-  gap: 0;
-}
-.buddy-bar-root[data-style^="pill"] .buddy-bar-btn {
-  flex-direction: row;
-  gap: 6px;
-  min-width: 38px;
-  height: 38px;
-  padding: 0 10px;
-  border-radius: 0;
-  border-left-width: 0;
-  border-right-width: 0;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 4px 14px rgba(0, 0, 0, 0.18);
-}
-.buddy-bar-root[data-style^="pill"] .buddy-bar-btn:first-child {
-  border-left-width: 1px;
-  border-radius: 999px 0 0 999px;
-  padding-left: 13px;
-}
-.buddy-bar-root[data-style^="pill"] .buddy-bar-btn:last-child {
-  border-right-width: 1px;
-  border-radius: 0 999px 999px 0;
-  padding-right: 13px;
-}
-.buddy-bar-root[data-style^="pill"] .buddy-bar-btn:hover,
-.buddy-bar-root[data-style^="pill"] .buddy-bar-btn.is-hover {
-  scale: 1;
-  color: var(--fg);
-  border-color: color-mix(in srgb, var(--edge) 60%, transparent);
-  background: color-mix(in srgb, var(--inset) 92%, transparent);
-}
-.buddy-bar-root[data-style^="pill"] .buddy-bar-word {
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  color: inherit;
-}
-
-/* 'pill-grow' and 'pill-open': the words fold to nothing beside the icon and
-   unfold (max-width, so the pill grows smoothly instead of jumping). */
-.buddy-bar-root[data-style="pill-grow"] .buddy-bar-word,
-.buddy-bar-root[data-style="pill-open"] .buddy-bar-word {
-  display: block;
-  max-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  margin-left: -6px;
-  transition: max-width 180ms ease, opacity 140ms ease, margin-left 180ms ease;
-}
-.buddy-bar-root[data-style="pill-grow"] .buddy-bar-btn:hover .buddy-bar-word,
-.buddy-bar-root[data-style="pill-grow"] .buddy-bar-btn.is-hover .buddy-bar-word,
-.buddy-bar-root[data-style="pill-open"]:hover .buddy-bar-word,
-.buddy-bar-root[data-style="pill-open"].is-open .buddy-bar-word {
-  max-width: 130px;
-  opacity: 1;
-  margin-left: 0;
-}
-
-/* 'pill-caption': the pill never changes size; a small frosted caption shows
-   under the button you point at. */
-.buddy-bar-root[data-style="pill-caption"] .buddy-bar-btn {
-  position: relative;
-}
-.buddy-bar-root[data-style="pill-caption"] .buddy-bar-word {
-  display: block;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  translate: -50% -2px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  border: 1px solid color-mix(in srgb, var(--edge) 60%, transparent);
-  font-size: 11px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease, translate 120ms ease;
-}
-.buddy-bar-root[data-style="pill-caption"] .buddy-bar-btn:hover .buddy-bar-word,
-.buddy-bar-root[data-style="pill-caption"] .buddy-bar-btn.is-hover .buddy-bar-word {
-  opacity: 1;
-  translate: -50% 0;
-}
+.buddy-bar-btn[data-busy="1"] { scale: 0.92; }
 
 /* ── Alive & responsive (spec §5) ──
    All mascot motion is transforms INSIDE the fixed 80×80 window.

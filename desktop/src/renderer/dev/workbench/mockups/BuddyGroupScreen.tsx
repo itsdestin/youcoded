@@ -28,10 +28,18 @@ export function BuddyGroupScreen() {
   const actions = params.get('actions') ?? 'beside';
   const theme = params.get('theme') ?? '';
   const motionRef = useRef<RigMotion>({ vx: 0, vy: 0, dragging: false });
-  // ?point=N: mark button N as pointed at, so the picture shows its words (a photo cannot hover).
+  // ?point=N: rest a pretend pointer on button N, so the picture shows its explanation (a photo cannot hover).
   useEffect(() => {
     const n = Number(params.get('point'));
-    if (n) document.querySelectorAll('.buddy-bar-btn')[n - 1]?.classList.add('is-hover');
+    const el = n ? document.querySelectorAll('.buddy-bar-btn')[n - 1] : null;
+    if (!el) return;
+    const t = setTimeout(() => {
+      el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      el.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
+      el.dispatchEvent(new MouseEvent('mouseenter'));
+    }, 300);
+    return () => clearTimeout(t);
   }, []);
   // The mascot low on the right, as most people park him; the layout puts the chat above.
   const mascotBounds = { x: 120, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
@@ -53,13 +61,12 @@ export function BuddyGroupScreen() {
       />
       {actions === 'beside' && (
         // Left-aligned where the bar's row starts today (beside his hands), sized to its content: the row grows with the style picked
-        // (?bar=circles|pill|labelled), and main's bar geometry follows the pick once it is made.
-        <div data-style={params.get('bar') ?? 'pill-grow'}
-          // ?point=N photographs the pointer resting on button N (1-4); 'pill-open' opens the whole pill.
-          className={`buddy-bar-root${Number(params.get('point')) > 0 && params.get('bar') === 'pill-open' ? ' is-open' : ''}`} data-visible="1" style={{
+        // (?bar=raised|panel|panel-words), and main's bar geometry follows the pick once it is made.
+        <div data-style={params.get('bar') ?? 'raised'}
+          className="buddy-bar-root" data-visible="1" style={{
           position: 'absolute', left: bar.x, top: bar.y - 10, width: 'auto', height: bar.height + 20,
         }}>
-          <BuddyBarButtons />
+          <BuddyBarButtons barStyle={(params.get('bar') ?? 'raised') as any} />
         </div>
       )}
       {actions === 'mascot-menu' && (
