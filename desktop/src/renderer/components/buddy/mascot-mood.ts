@@ -83,15 +83,15 @@ export function useMascotMood(summary: AttentionSummary | null, reducedEffects: 
       const t = setTimeout(() => {
         const moment = which;
         which = which === 'glance' ? 'stretch' : 'glance';
-        setBeat(moment);
+        // Never over sleep: a moment already queued when he dozed off must not wake him (only a change of colour does).
+        setBeat((b) => (b === 'sleep' ? b : moment));
         timers.push(setTimeout(() => { setBeat((b) => (b === moment ? null : b)); schedule(); }, moment === 'glance' ? GLANCE_MS : STRETCH_MS));
       }, MOMENT_MIN_MS + Math.random() * MOMENT_SPREAD_MS);
       timers.push(t);
     };
     schedule();
     return () => timers.forEach(clearTimeout);
-    // `beat` changes on every moment; only quiet/sleep entry restart this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `beat` changes on every moment; only entering quiet or sleep restarts this.
   }, [quiet, reducedEffects, beat === 'sleep']);
 
   if (status === 'red' || status === 'amber') return 'alert';
