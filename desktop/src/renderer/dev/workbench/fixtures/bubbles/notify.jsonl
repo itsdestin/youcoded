@@ -1,6 +1,6 @@
 {"type":"user_message","text":"draft the launch email and give me three headline options"}
 {"type":"assistant_reasoning","partId":"reasoning-0","text":"Write the email body first, then three headlines at the end for them to pick from."}
 {"type":"assistant_text","partId":"txt-0","text":"I drafted the launch email in `launch-email.md`. It opens with the one-line pitch, then the three features you named, then the sign-up link.\n\nHeadline options:\n\n1. **Your assistant, finally in one place**\n2. **Everything you ask, one app**\n3. **Meet the assistant that keeps up with you**\n\n"}
-{"type":"tool_use","id":"n1","name":"NotifyUser","input":{"label":"Draft ready","message":"The launch email is drafted. Pick one of the three headlines at the bottom and I'll finish it."}}
+{"type":"tool_use","id":"n1","name":"NotifyUser","input":{"label":"Draft ready","message":"Pick a headline and I'll finish it."}}
 {"type":"tool_result","tool_use_id":"n1","content":"Notified the user."}
 {"type":"turn_complete"}

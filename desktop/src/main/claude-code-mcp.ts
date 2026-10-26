@@ -101,12 +101,13 @@ var NOTIFY_TOOL = {
     'Tell the user something is ready for them: a response worth reading, or a checkpoint reached in a longer task.',
     'Their conversation list shows your short label on this conversation, and the chat shows a highlighted card with your message that they can jump to.',
     'Use it sparingly — when you finish something they asked for, or reach a point they would want to look at while you keep working. Do not use it for every reply, for routine progress, or to ask a question (ask in your reply instead).',
+    'The label and message are shown at the top of your reply, right beside it, so do not repeat what the reply says: say only what is ready, or what to look at.',
   ].join(' '),
   inputSchema: {
     type: 'object',
     properties: {
       label: { type: 'string', description: 'Two or three words shown in the conversation list, e.g. "Draft ready" or "Tests passing". At most ' + NOTIFY_LABEL_MAX + ' characters.' },
-      message: { type: 'string', description: 'One or two sentences saying what is ready and what, if anything, the user should look at.' },
+      message: { type: 'string', description: 'One short sentence: what is ready, or what to look at. It sits beside your reply, so never restate the reply.' },
     },
     required: ['label', 'message'],
     additionalProperties: false,
