@@ -12,8 +12,6 @@ export interface CompactSurface {
   /** How much room a reply's tool steps, sent files and skill cards take:
    *  'slim' = each as one borderless line; 'summary' = one line for the whole reply; 'hidden' = none, the text only. */
   tools: 'slim' | 'summary' | 'hidden';
-  /** The summary line's look (AssistantTurnBubble's ReplySteps says what each borrows from the main window). */
-  summaryLook?: 'row' | 'pill' | 'footer';
 }
 
 export const CompactSurfaceContext = createContext<CompactSurface | null>(null);

@@ -7,7 +7,7 @@
 // plain gradient: a real wallpaper is the user's, and the placement is what is being judged.
 // Reached at ?mode=workbench&child=1&view=buddy-group&actions=header|composer|beside. Dev-only.
 
-import React, { useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { MascotRig, type RigMotion } from '../../../components/mascot/MascotRig';
 import { BuddyBarButtons } from '../../../components/buddy/BuddyBarApp';
 import { ContextMenu } from '../../../components/context-menu/ContextMenu';
@@ -21,15 +21,20 @@ try {
   }
 } catch { /* private mode */ }
 
-const DESK = { x: 0, y: 0, width: 640, height: 680 };
+const DESK = { x: 0, y: 0, width: 900, height: 680 };
 
 export function BuddyGroupScreen() {
   const params = new URLSearchParams(window.location.search);
   const actions = params.get('actions') ?? 'beside';
   const theme = params.get('theme') ?? '';
   const motionRef = useRef<RigMotion>({ vx: 0, vy: 0, dragging: false });
+  // ?point=N: mark button N as pointed at, so the picture shows its words (a photo cannot hover).
+  useEffect(() => {
+    const n = Number(params.get('point'));
+    if (n) document.querySelectorAll('.buddy-bar-btn')[n - 1]?.classList.add('is-hover');
+  }, []);
   // The mascot low on the right, as most people park him; the layout puts the chat above.
-  const mascotBounds = { x: 230, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
+  const mascotBounds = { x: 120, y: 540, width: MASCOT_SIZE.width, height: MASCOT_SIZE.height };
   const layout = computeGroupLayout(mascotBounds, DESK);
   const bar = computeBarContentRect({ ...mascotBounds, x: layout.mascot.x, y: layout.mascot.y });
   // The chat's own photo switches ride along (?menu=1, ?hovered=1).
@@ -49,7 +54,9 @@ export function BuddyGroupScreen() {
       {actions === 'beside' && (
         // Left-aligned where the bar's row starts today (beside his hands), sized to its content: the row grows with the style picked
         // (?bar=circles|pill|labelled), and main's bar geometry follows the pick once it is made.
-        <div className="buddy-bar-root" data-style={params.get('bar') ?? 'circles'} data-visible="1" style={{
+        <div data-style={params.get('bar') ?? 'pill-grow'}
+          // ?point=N photographs the pointer resting on button N (1-4); 'pill-open' opens the whole pill.
+          className={`buddy-bar-root${Number(params.get('point')) > 0 && params.get('bar') === 'pill-open' ? ' is-open' : ''}`} data-visible="1" style={{
           position: 'absolute', left: bar.x, top: bar.y - 10, width: 'auto', height: bar.height + 20,
         }}>
           <BuddyBarButtons />

@@ -39,5 +39,5 @@ export function BuddyChatScreen() {
   const tools = (new URLSearchParams(window.location.search).get('tools') ?? undefined) as any;
   // ?hovered=1 photographs the hover-only icons as they look while pointed at.
   if (new URLSearchParams(window.location.search).get('hovered') === '1') document.documentElement.setAttribute('data-buddy-hovered', '1');
-  return <BuddyChatApp seed={<Seed />} actionsAt={actions} tools={tools} summaryLook={(new URLSearchParams(window.location.search).get('look') ?? undefined) as any} />;
+  return <BuddyChatApp seed={<Seed />} actionsAt={actions} tools={tools} />;
 }

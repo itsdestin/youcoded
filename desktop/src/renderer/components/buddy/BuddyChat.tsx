@@ -34,10 +34,10 @@ export type BuddyActionsAt = 'beside' | 'header' | 'composer' | 'menu' | 'mascot
  * that fills this window's chat store (useBuddyFeed — in the main window App does that), and the
  * compact density, which is CSS scoped to html[data-mode="buddy-chat"] (buddy.css).
  */
-export function BuddyChat({ actionsAt = 'beside', tools = 'summary', summaryLook = 'row' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools']; summaryLook?: CompactSurface['summaryLook'] } = {}) {
+export function BuddyChat({ actionsAt = 'beside', tools = 'summary' }: { actionsAt?: BuddyActionsAt; tools?: CompactSurface['tools'] } = {}) {
   // The main window's cards draw themselves for the small window under this (state/compact-surface-context.ts).
   // 'summary' was chosen (buddy-rebuild-review2#D-1).
-  const compactSurface = useMemo<CompactSurface>(() => ({ tools, summaryLook }), [tools, summaryLook]);
+  const compactSurface = useMemo<CompactSurface>(() => ({ tools }), [tools]);
   const [viewedSession, setViewedSession] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   // WHY the shared hook (#S-1): it PULLS the summary on mount, then listens. The buddy used to only

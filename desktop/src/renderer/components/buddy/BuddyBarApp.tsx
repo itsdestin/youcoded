@@ -8,14 +8,14 @@ import { CameraIcon, SizeIcon, OpenIcon, HideIcon } from './BuddyActions';
  *
  * Buddy rebuild (2026-10-25): Destin kept the buttons beside him (buddy-rebuild-review2#C-2, "i liked them as separate
  * buttons by the buddy. i just want to make them nicer/clearer/prettier"), so the size button joined them and their
- * look moved into buddy.css as one of three styles chosen on a deck (`data-style`): 'circles' (separate frosted
- * circles), 'pill' (one frosted pill holding all four) and 'labelled' (circles with a word under each).
+ * look moved into buddy.css: one frosted pill (buddy-rebuild-review3#C-3) whose words appear when pointed at, in one
+ * of three ways chosen on a deck (`data-style`, buddy.css says each).
  *
  * The window is larger than the row it draws so the hover grow has room — sizes and the layout live in
  * main/buddy-bar-geometry.ts. Visibility is CSS-driven via the buddy:bar-state push (the window stays shown so opacity
  * can animate); the bar appears with the chat, not on hover (main/buddy-bar-visibility.ts).
  */
-export type BuddyBarStyle = 'circles' | 'pill' | 'labelled';
+export type BuddyBarStyle = 'pill-grow' | 'pill-open' | 'pill-caption';
 
 function BarButton({ label, word, onClick, busy, children }: {
   label: string;
@@ -65,15 +65,15 @@ export function BuddyBarButtons() {
 
   return (
     <>
-      <BarButton label="Screenshot your desktop into the chat" word="Screenshot" onClick={onCapture} busy={capturing}><CameraIcon /></BarButton>
-      <BarButton label={large ? 'Smaller chat window' : 'Bigger chat window'} word={large ? 'Smaller' : 'Bigger'} onClick={() => { void (window.claude?.buddy as any)?.toggleChatSize?.(); }}><SizeIcon /></BarButton>
-      <BarButton label="Open YouCoded" word="Open app" onClick={() => { void window.claude?.buddy?.openMain?.(); }}><OpenIcon /></BarButton>
-      <BarButton label="Hide the buddy until restart" word="Hide" onClick={() => { void window.claude?.buddy?.dismiss?.(); }}><HideIcon /></BarButton>
+      <BarButton label="Screenshot your desktop into the chat" word="Screenshot desktop" onClick={onCapture} busy={capturing}><CameraIcon /></BarButton>
+      <BarButton label={large ? 'Smaller chat window' : 'Bigger chat window'} word={large ? 'Smaller window' : 'Bigger window'} onClick={() => { void (window.claude?.buddy as any)?.toggleChatSize?.(); }}><SizeIcon /></BarButton>
+      <BarButton label="Open YouCoded" word="Open YouCoded" onClick={() => { void window.claude?.buddy?.openMain?.(); }}><OpenIcon /></BarButton>
+      <BarButton label="Hide the buddy until restart" word="Hide until restart" onClick={() => { void window.claude?.buddy?.dismiss?.(); }}><HideIcon /></BarButton>
     </>
   );
 }
 
-export function BuddyBarApp({ barStyle = 'circles' }: { barStyle?: BuddyBarStyle } = {}) {
+export function BuddyBarApp({ barStyle = 'pill-grow' }: { barStyle?: BuddyBarStyle } = {}) {
   // CSS-driven reveal: main pushes buddy:bar-state; the window itself stays Electron-shown so opacity can animate.
   const [visible, setVisible] = useState(true);
 
