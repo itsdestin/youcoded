@@ -4,6 +4,16 @@
 
 > Built entirely without coding experience, using Claude Code itself. Download the app at https://youcoded.ai.
 
+<!-- WHY: screenshots are of the default YouCoded theme, taken with the workspace's shoot tool (practice data, no real accounts). Retake with: node scripts/shoot/shoot.mjs welcome office/spreadsheet 'pages/focus/page-home#site' 'pages/focus/page-money#site' --themes youcoded --width 1440 --height 900 -->
+<p align="center">
+  <img src="docs/readme/empty-chat.webp" alt="YouCoded's start screen: pick a folder and a model, then start a session" width="49%">
+  <img src="docs/readme/spreadsheet.webp" alt="An Excel spreadsheet open in YouCoded's built-in Office editor" width="49%">
+</p>
+<p align="center">
+  <img src="docs/readme/home.webp" alt="The Home page showing lights, a thermostat and speakers" width="49%">
+  <img src="docs/readme/finance.webp" alt="The Finance page showing net worth, upcoming bills and accounts" width="49%">
+</p>
+
 ---
 
 ## What is YouCoded?
