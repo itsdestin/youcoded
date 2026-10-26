@@ -32,3 +32,14 @@ export function normalizeQuestions(input: Record<string, unknown>): AskQuestion[
 export function isValidQuestions(input: Record<string, unknown>): boolean {
   return normalizeQuestions(input).length > 0;
 }
+
+// The question card's "Other" row and its note box — shared by the full card (ToolCard) and the buddy's small one
+// (AskQuestionCompact). Moved here unchanged from ToolCard.tsx (buddy rebuild, 2026-10-25).
+export const OTHER = '__other__';
+export const OTHER_LABEL = 'Other';
+export const OTHER_DESCRIPTION = 'Type your own answer';
+
+/** What the text box is FOR depends on what is selected — say so in the placeholder. */
+export function textPlaceholder(sel: Set<string> | undefined): string {
+  return sel?.has(OTHER) ? 'Explain…' : 'Add a note…';
+}

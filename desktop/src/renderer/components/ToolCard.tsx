@@ -22,10 +22,11 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
 import { usePopupOpen } from '../hooks/use-esc-close';
 import { useCompactSurface } from '../state/compact-surface-context';
+import { AskQuestionCompact } from './AskQuestionCompact';
 import { asString } from '../utils/tool-input';
 import { managementTargetId, useBackgroundTarget } from '../hooks/useBackgroundTarget';
 import { managementDisplay } from './management-labels';
-import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
+import { normalizeQuestions, isValidQuestions, OTHER, OTHER_LABEL, OTHER_DESCRIPTION, textPlaceholder } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
 import { FullAutoStops, BROAD_ALLOW_COLORS } from './permissions/FullAutoStops';
@@ -989,14 +990,6 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 // The sentinel is an internal selection key only; it never reaches the model.
 // A model-authored option literally labelled "__other__" would collide, which
 // is not a real risk worth a second code path.
-const OTHER = '__other__';
-const OTHER_LABEL = 'Other';
-const OTHER_DESCRIPTION = 'Type your own answer';
-
-/** What the text box is FOR depends on what is selected — say so in the placeholder. */
-function textPlaceholder(sel: Set<string> | undefined): string {
-  return sel?.has(OTHER) ? 'Explain…' : 'Add a note…';
-}
 
 function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   tool: ToolCallState;
@@ -1022,10 +1015,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   const [unconfirmed, setUnconfirmed] = useState(false);
   // Track which question is "active" for keyboard nav, and which option is focused
   const [focusedOption, setFocusedOption] = useState(0);
-  // The buddy's one-question-at-a-time card (below): which question shows, and which notes were opened.
+  // The buddy's small window draws this card one question at a time (AskQuestionCompact).
   const compact = useCompactSurface();
-  const [step, setStep] = useState(0);
-  const [noteOpen, setNoteOpen] = useState<Record<string, boolean>>({});
 
   const allAnswered = questions.every((q, qi) => {
     const sel = answers[keyFor(q.question, qi)];
@@ -1187,90 +1178,13 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   let flatIdx = 0; // Running index across all questions' options for keyboard focus
 
   if (compact) {
-    // The buddy's small window (buddy-rebuild-review#N-2: "i shouldnt have to scroll through a single perm prompt"): ONE
-    // question at a time, its choices as small chips that wrap (the explanation moves into the chip's tooltip), the note
-    // box hidden behind "+ Note" until wanted (Other opens it, since there the text IS the answer). Same answers, same
-    // Submit and Dismiss as the full card above — only the drawing differs.
-    const q = questions[step] ?? questions[0];
-    const qi = Math.min(step, questions.length - 1);
-    const key = keyFor(q.question, qi);
-    const sel = answers[key];
-    const last = qi === questions.length - 1;
-    const thisAnswered = !!sel && sel.size > 0 && !(sel.has(OTHER) && !(text[key] ?? '').trim());
-    const showNote = !!noteOpen[key] || !!sel?.has(OTHER);
-    // The flat keyboard index of this question's first choice, so the focus ring lands on the chip it means.
-    const firstIdx = questions.slice(0, qi).reduce((n, qq) => n + qq.options.length + 1, 0);
+    // The buddy's small window: the same answers through a smaller drawing (AskQuestionCompact.tsx says why).
     return (
-      <div className="question-compact border-t border-edge px-2.5 py-1.5 space-y-1.5">
-        <div className="text-xs font-medium text-fg-2">
-          {questions.length > 1 && <span className="text-fg-muted mr-1">{qi + 1}/{questions.length}</span>}
-          {q.question}
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {[...q.options, { label: OTHER, description: OTHER_DESCRIPTION }].map((opt, oi) => {
-            const selected = sel?.has(opt.label) ?? false;
-            const isOther = opt.label === OTHER;
-            const chip = (
-                <button
-                  disabled={responding}
-                  aria-label={isOther ? `${OTHER_LABEL} — ${OTHER_DESCRIPTION}` : undefined}
-                  onClick={() => {
-                    handleSelect(key, opt.label, q.multiSelect);
-                    // A single answer picked on a question that is not the last moves on by itself.
-                    if (!q.multiSelect && !isOther && !last) setTimeout(() => setStep(qi + 1), 160);
-                  }}
-                  className={`px-2 py-0.5 rounded-full border text-xs transition-colors
-                    ${selected ? 'bg-accent/15 border-accent text-fg' : 'bg-inset/40 border-edge-dim hover:bg-inset/70 text-fg-dim'}
-                    ${firstIdx + oi === focusedOption ? 'ring-1 ring-white/30' : ''} disabled:opacity-50`}
-                >
-                  {isOther ? OTHER_LABEL : opt.label}
-                </button>
-            );
-            return opt.description
-              ? <Tooltip key={oi} text={opt.description}>{chip}</Tooltip>
-              : <React.Fragment key={oi}>{chip}</React.Fragment>;
-          })}
-        </div>
-        {showNote ? (
-          <Textarea
-            ref={(el) => { textRefs.current[key] = el; }}
-            size="sm"
-            rows={1}
-            disabled={responding}
-            value={text[key] ?? ''}
-            placeholder={textPlaceholder(sel)}
-            aria-label={textPlaceholder(sel)}
-            onChange={(e) => {
-              const value = e.target.value;
-              setText(prev => ({ ...prev, [key]: value }));
-              e.target.style.height = 'auto';
-              e.target.style.height = `${e.target.scrollHeight}px`;
-            }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSubmit(); } }}
-            className="w-full text-xs"
-          />
-        ) : (
-          <button
-            type="button"
-            className="text-2xs text-fg-muted hover:text-fg-2"
-            onClick={() => { setNoteOpen(prev => ({ ...prev, [key]: true })); requestAnimationFrame(() => textRefs.current[key]?.focus()); }}
-          >
-            + Note
-          </button>
-        )}
-        <div className="flex items-center gap-1.5">
-          {qi > 0 && <Button size="sm" variant="ghost" disabled={responding} onClick={() => setStep(qi - 1)}>Back</Button>}
-          {last
-            ? <Button size="sm" disabled={!allAnswered || responding} onClick={handleSubmit}>Submit</Button>
-            : <Button size="sm" disabled={!thisAnswered || responding} onClick={() => setStep(qi + 1)}>Next</Button>}
-          <Button size="sm" variant="ghost" disabled={responding} onClick={handleDeny}>Dismiss</Button>
-        </div>
-        {unconfirmed && (
-          <p role="alert" className="text-3xs text-fg-muted leading-relaxed">
-            YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
-          </p>
-        )}
-      </div>
+      <AskQuestionCompact
+        questions={questions} keyFor={keyFor} answers={answers} text={text} setText={setText} textRefs={textRefs}
+        responding={responding} unconfirmed={unconfirmed} focusedOption={focusedOption} allAnswered={allAnswered}
+        onSelect={handleSelect} onSubmit={handleSubmit} onDeny={handleDeny}
+      />
     );
   }
 
