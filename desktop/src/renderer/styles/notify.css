@@ -19,26 +19,28 @@
 
 /* "Notify user" (components/NotifyCard.tsx): a reply holding a NEW notification
    is outlined in the status blue with a soft glow, around the whole reply
-   (Destin, 2026-10-26, deck notify-user-review N-1). Status hue in the outline,
-   glow, tint and dot only — never in the words. !important on the ring: theme
-   bubble styles (bordered, glass) set their own box-shadow. The dot breathes in
-   steps(8), like the session dot (performance.md rule 6). Three candidate looks
-   (notify-style.ts) until one is picked: outline, tint, tab. */
+   (Destin, 2026-10-26, deck notify-user-review N-1), and the notification itself
+   is a TAB on the reply's top edge holding its label and message (round 2 R2-1:
+   picked "tab"; "notification message should go in the pill thing"). Status hue
+   in the outline, glow, tint and dot only — never in the words. !important on
+   the ring: theme bubble styles (bordered, glass) set their own box-shadow. The
+   dot breathes in steps(8), like the session dot (performance.md rule 6). */
 .notify-bubble[data-notify='new'] {
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.9), 0 0 22px 2px rgba(96, 165, 250, 0.45) !important;
 }
-.notify-bubble[data-notify='new'][data-notify-style='tint'] {
-  background-image: linear-gradient(rgba(96, 165, 250, 0.12), rgba(96, 165, 250, 0.12));
-}
 .notify-bubble[data-notify='new'] .notify-dot { animation: breathe 2s steps(8) infinite; }
 .notify-bubble[data-notify='seen'] .notify-dot { opacity: 0.5; }
-.notify-bubble[data-notify-style='tab'] { position: relative; margin-top: 0.75rem; }
-.notify-bubble[data-notify-style='tab'] .notify-label {
-  position: absolute; top: -0.7rem; left: 1rem;
-  padding: 0.125rem 0.5rem; border-radius: 9999px;
+/* Room above the reply for the half of the tab that sits over its edge, and one
+   fixed top padding (the reply's own varies with its contents) so the tab always
+   straddles the edge at the same height. */
+.notify-bubble { margin-top: 0.875rem; padding-top: 1rem; }
+.notify-bubble .notify-tab {
+  margin-top: -1.75rem;
   border: 1px solid var(--edge-dim); background: var(--inset);
 }
-.notify-bubble[data-notify='new'][data-notify-style='tab'] .notify-label {
+.notify-bubble[data-notify='new'] .notify-tab {
   border-color: rgba(96, 165, 250, 0.6);
   background: linear-gradient(rgba(96, 165, 250, 0.2), rgba(96, 165, 250, 0.2)), var(--inset);
 }
+/* Two notifications in one reply (rare): only the first straddles the edge. */
+.notify-bubble .notify-tab + .notify-tab { margin-top: 0; }

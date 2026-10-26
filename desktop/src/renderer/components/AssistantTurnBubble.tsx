@@ -565,6 +565,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
             {/* A reply holding a notification gets NotifyBubble's shell: the outline
                 and glow go around the whole reply while it is new (NotifyCard.tsx). */}
             <NotifyBubble sessionId={sessionId} notifies={notifies} className={`assistant-bubble max-w-[85%] break-words rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : reasoningOnly ? 'py-2.5' : 'py-3.5'}`}>
+              {/* Notification tab: FIRST in the reply, so it straddles the reply's top
+                  edge (NotifyCard.tsx; round 2 R2-1). Filtered out of the tool
+                  groups below (ToolGroupInline). */}
+              {notifies.map((t) => <NotifyCard key={t.toolUseId} tool={t} />)}
               {/* Fixed order, one of each (Destin, 2026-09-02): the reasoning
                   section, the message, the tool group. */}
               {bubble.reasoning && (
@@ -609,10 +613,6 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
               {sentFiles.length > 0 && (
                 <DeliverablesCard tools={sentFiles} sessionId={sessionId} />
               )}
-              {/* Notification cards: last in the bubble, after any deliverables —
-                  they say what is ready, so they read after it. Filtered out of
-                  the tool groups above (ToolGroupInline). */}
-              {notifies.map((t) => <NotifyCard key={t.toolUseId} tool={t} />)}
               {/* Trailing-Skills row: Skills are reordered to the end of the turn's
                   last bubble so they read as a status footer rather than co-mingled
                   with substantive tool output. ToolGroupInline filters Skills out

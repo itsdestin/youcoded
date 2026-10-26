@@ -7,8 +7,9 @@
 //   - sends a message (the call stops being latest — notify-seen.ts),
 //   - rests the pointer on the reply for a moment, or
 //   - clicks or taps the reply.
-// NotifyCard is the notification itself inside the reply: the label over the
-// message, set off by a divider, never a box.
+// NotifyCard is the notification itself: a tab on the reply's top edge holding
+// the label over the message (round 2, R2-1: the "tab" look, with the message
+// inside it). It is the reply's FIRST child, so the tab sits above its text.
 //
 // The status hue sits only in the outline, glow, tint and dot, never in the
 // words (design guide, Principles 2).
@@ -16,7 +17,6 @@ import { memo, useEffect, useRef, type ReactNode } from 'react';
 import type { ToolCallState } from '../../shared/types';
 import { notifyFieldsOf } from '../../shared/notify-user';
 import { markNotifySeen, setNotifyOnScreen, useNotifyActive } from '../state/notify-seen';
-import { NOTIFY_STYLE } from './notify-style';
 
 /** How long the pointer rests on a reply before it counts as seen — long enough
  *  that sweeping the mouse across the chat does not clear it. */
@@ -40,7 +40,6 @@ export function NotifyBubble({ sessionId, notifies, className, children }: {
     <div
       className={`${className} notify-bubble`}
       data-notify={active ? 'new' : 'seen'}
-      data-notify-style={NOTIFY_STYLE}
       onPointerEnter={active ? (e) => {
         // A finger has no hover; a tap arrives as the click below.
         if (e.pointerType !== 'mouse') return;
@@ -70,12 +69,12 @@ function NotifyCardImpl({ tool }: { tool: ToolCallState }) {
   }, [tool.toolUseId]);
 
   return (
-    <div ref={ref} data-notify-id={tool.toolUseId} className="notify-line mt-3 pt-2.5 border-t border-edge-dim">
-      <div className="notify-label flex items-center gap-1.5 text-xs font-medium text-fg-2">
+    <div ref={ref} data-notify-id={tool.toolUseId} className="notify-tab w-fit max-w-full mb-2 px-3 py-1.5 rounded-xl">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-fg-2">
         <span data-status="blue" className="notify-dot w-2 h-2 rounded-full bg-blue-400 shrink-0" aria-hidden="true" />
         {label}
       </div>
-      {message && <div className="mt-1 text-sm text-fg whitespace-pre-wrap break-words">{message}</div>}
+      {message && <div className="mt-0.5 text-sm text-fg whitespace-pre-wrap break-words">{message}</div>}
     </div>
   );
 }
